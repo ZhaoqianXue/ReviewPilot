@@ -222,7 +222,9 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self.verify_timeout = verify_timeout
         self.browser_timeout = browser_timeout
         self.enable_browser_fallback = enable_browser_fallback
-        self.browser_user_data_dir = Path(browser_user_data_dir or ".cache/playwright_fast_pdf_profile")
+        self.sleep_func = sleep_func
+        self.time_func = time_func
+        self.browser_user_data_dir = Path(browser_user_data_dir) if browser_user_data_dir else self._new_browser_profile_dir()
         self.enable_curl_cffi = enable_curl_cffi
         self.curl_cffi_impersonates = curl_cffi_impersonates or ("chrome124", "safari184")
         self.min_request_interval = 0.2
@@ -251,8 +253,6 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self.semantic_scholar_cache = self._load_semantic_scholar_cache()
         self.semantic_scholar_max_retries = semantic_scholar_max_retries if self.semantic_scholar_api_key else 0
         self.semantic_scholar_backoff_seconds = semantic_scholar_backoff_seconds
-        self.sleep_func = sleep_func
-        self.time_func = time_func
         self.domain_cooldown_seconds = domain_cooldown_seconds
         self.batch_workers = batch_workers or _env_int("REVIEWPILOT_FAST_PDF_WORKERS", 8)
         self.domain_concurrency = domain_concurrency or _env_int("REVIEWPILOT_FAST_PDF_DOMAIN_CONCURRENCY", 2)
@@ -262,6 +262,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self._playwright = None
         self._browser = None
         self._browser_context = None
+
+    def _new_browser_profile_dir(self) -> Path:
+        run_id = f"run-{os.getpid()}-{int(self.time_func() * 1000)}-{id(self)}"
+        return Path(".cache/playwright_fast_pdf_profile") / "runs" / run_id
 
     def download(self, paper: Dict) -> Tuple[bool, str, Optional[str]]:
         """Download with HTTP-first ordering and method-level telemetry."""

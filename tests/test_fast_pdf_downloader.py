@@ -80,6 +80,27 @@ class FastPdfDownloaderTests(unittest.TestCase):
             if old_value is not None:
                 os.environ["REVIEWPILOT_FAST_PDF_WORKERS"] = old_value
 
+    def test_fast_downloader_default_browser_profile_is_run_scoped(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        first = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        second = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+
+        self.assertNotEqual(first.browser_user_data_dir, second.browser_user_data_dir)
+        self.assertIn("runs", first.browser_user_data_dir.parts)
+        self.assertIn("runs", second.browser_user_data_dir.parts)
+
+    def test_fast_downloader_preserves_explicit_browser_profile_dir(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        explicit_dir = Path("/tmp/reviewpilot-test-pdfs/explicit-profile")
+        downloader = FastCascadePDFDownloader(
+            output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+            browser_user_data_dir=explicit_dir,
+        )
+
+        self.assertEqual(downloader.browser_user_data_dir, explicit_dir)
+
     def test_extracts_static_pdf_urls_from_meta_and_anchor_tags(self):
         from utils.fast_pdf_downloader import extract_static_pdf_urls
 
