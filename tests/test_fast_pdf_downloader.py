@@ -823,6 +823,43 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(downloader.isolated_calls, 1)
         self.assertEqual(downloader._last_success_class, "article_printable_isolated")
 
+    def test_article_print_candidate_uses_browser_for_normal_html_article_page(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class ArticlePrintNormalHtmlDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    enable_browser_fallback=True,
+                )
+                self.browser_calls = 0
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                self.browser_calls += 1
+                self._last_success_class = "article_printable"
+                return Path("/tmp/reviewpilot-test-pdfs/article-print.pdf")
+
+        downloader = ArticlePrintNormalHtmlDownloader()
+        downloader.session = FakeSession(
+            FakeResponse(
+                "https://ascopubs.org/doi/10.1200/CCI-25-00386",
+                content=b"<!DOCTYPE html><html><title>Case Report Abstracts</title><body>Abstract References</body></html>",
+                headers={"content-type": "text/html; charset=UTF-8"},
+                status_code=200,
+            )
+        )
+
+        result = downloader._download_pdf(
+            "https://ascopubs.org/doi/10.1200/CCI-25-00386",
+            "Large Language Model-Based Classification of Case Report Abstracts",
+            "publisher_asco",
+            "P0007",
+        )
+
+        self.assertEqual(result, Path("/tmp/reviewpilot-test-pdfs/article-print.pdf"))
+        self.assertEqual(downloader.browser_calls, 1)
+        self.assertEqual(downloader._last_success_class, "article_printable")
+
     def test_article_page_browser_and_isolated_failure_classifies_as_article_print_failed(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
@@ -1039,6 +1076,72 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(results["success"], 2)
         self.assertEqual(results["failed"], 0)
         self.assertEqual(results["by_method"]["publisher_asco"], 2)
+
+    def test_batch_article_print_retry_rotates_profile_after_dedicated_failure(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class FakeFailingArticleBrowser:
+            def __init__(self):
+                self.closed = False
+                self._last_success_class = None
+                self._last_failure_class = None
+                self._last_failure_detail = None
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class FakeFreshArticleBrowser:
+            def __init__(self):
+                self.closed = False
+                self._last_success_class = "article_printable"
+                self._last_failure_class = None
+                self._last_failure_detail = None
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                return Path(f"/tmp/reviewpilot-test-pdfs/{paper_id}-fresh.pdf")
+
+            def close(self):
+                self.closed = True
+
+        class RotatingBatchRetryDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+                self.primary_browser = FakeFailingArticleBrowser()
+                self.fresh_browser = FakeFreshArticleBrowser()
+
+            def _create_article_print_retry_downloader(self, domain):
+                return self.primary_browser
+
+            def _create_fresh_article_print_retry_downloader(self, domain):
+                return self.fresh_browser
+
+        downloader = RotatingBatchRetryDownloader()
+        paper = {
+            "paper_id": "P0007",
+            "title": "Large Language Model-Based Classification of Case Report Abstracts",
+            "doi": "10.1200/CCI-25-00386",
+            "journal": "JCO Clinical Cancer Informatics",
+            "pdf_downloaded": False,
+        }
+        results = {
+            "success": 0,
+            "failed": 1,
+            "by_method": {},
+            "downloaded": [],
+            "failed_papers": [{"title": paper["title"], "doi": paper["doi"], "error": "failed"}],
+        }
+
+        downloader._retry_batch_article_print_failures([paper], results, None)
+
+        self.assertTrue(downloader.primary_browser.closed)
+        self.assertTrue(downloader.fresh_browser.closed)
+        self.assertTrue(paper["pdf_downloaded"])
+        self.assertEqual(results["success"], 1)
+        self.assertEqual(results["failed"], 0)
+        self.assertEqual(paper["pdf_path"], "/tmp/reviewpilot-test-pdfs/P0007-fresh.pdf")
 
     def test_batch_worker_defers_article_print_failure_before_slow_generic_fallbacks(self):
         from utils.fast_pdf_downloader import DomainConcurrencyPolicy, FastCascadePDFDownloader

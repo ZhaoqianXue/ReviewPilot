@@ -526,6 +526,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         progress_file: Optional[str],
     ) -> None:
         retry_downloaders = {}
+        rotated_domains = set()
         try:
             for paper in papers:
                 if paper.get("pdf_downloaded"):
@@ -547,6 +548,18 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     method,
                     paper.get("paper_id"),
                 )
+                if not file_path and domain not in rotated_domains:
+                    rotated_domains.add(domain)
+                    self._close_spawned_downloaders([retry_downloader])
+                    retry_downloader = self._create_fresh_article_print_retry_downloader(domain)
+                    retry_downloaders[domain] = retry_downloader
+                    file_path = self._download_article_page_with_dedicated_browser_retry(
+                        retry_downloader,
+                        url,
+                        paper.get("title", "unknown"),
+                        method,
+                        paper.get("paper_id"),
+                    )
                 if not file_path:
                     continue
 
@@ -593,6 +606,16 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return None
 
     def _create_article_print_retry_downloader(self, domain: str):
+        return self._build_article_print_retry_downloader(
+            self._article_print_retry_profile_dir(domain)
+        )
+
+    def _create_fresh_article_print_retry_downloader(self, domain: str):
+        return self._build_article_print_retry_downloader(
+            self._fresh_article_print_retry_profile_dir(domain)
+        )
+
+    def _build_article_print_retry_downloader(self, profile_dir: Path):
         retry_downloader = self.__class__(
             email=self.email,
             output_dir=self.output_dir,
@@ -601,7 +624,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             verify_timeout=self.verify_timeout,
             browser_timeout=max(self.browser_timeout, 20),
             enable_browser_fallback=True,
-            browser_user_data_dir=self._article_print_retry_profile_dir(domain),
+            browser_user_data_dir=profile_dir,
             enable_curl_cffi=self.enable_curl_cffi,
             curl_cffi_impersonates=self.curl_cffi_impersonates,
             semantic_scholar_api_key=self.semantic_scholar_api_key,
@@ -627,6 +650,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     def _article_print_retry_profile_dir(self, domain: str) -> Path:
         safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "_", domain or "unknown").strip("._-") or "unknown"
         return self.browser_user_data_dir / "article-print" / safe_domain[:80]
+
+    def _fresh_article_print_retry_profile_dir(self, domain: str) -> Path:
+        safe_domain = re.sub(r"[^A-Za-z0-9._-]+", "_", domain or "unknown").strip("._-") or "unknown"
+        suffix = f"{safe_domain[:60]}-{os.getpid()}-{int(self.time_func() * 1000)}"
+        return self.browser_user_data_dir / "article-print-fresh" / suffix
 
     def _article_print_retry_target_for_paper(self, paper: Dict) -> Optional[Tuple[str, str]]:
         doi = paper.get("doi")
@@ -1082,7 +1110,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if curl_path:
                 return curl_path
 
-        if is_html_response and self.enable_browser_fallback and self._is_browser_worthy_html(response):
+        should_try_browser = self._is_browser_worthy_html(response) or self._is_article_print_retry_candidate(url, method)
+        if is_html_response and self.enable_browser_fallback and should_try_browser:
             self.browser_fallback_attempts += 1
             browser_path = self._download_pdf_with_browser(url, title, method, paper_id)
             if browser_path:
