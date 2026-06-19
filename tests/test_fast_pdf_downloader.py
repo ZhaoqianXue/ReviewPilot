@@ -68,6 +68,16 @@ class FakeSequenceSession:
         return self.responses.pop(0)
 
 
+class FakeRaisingSession:
+    def __init__(self, exc):
+        self.exc = exc
+        self.get_calls = []
+
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        raise self.exc
+
+
 def make_text_pdf_bytes(text):
     escaped = (
         text.replace("\\", "\\\\")
@@ -161,6 +171,25 @@ class FastPdfDownloaderTests(unittest.TestCase):
             ],
         )
 
+    def test_extracts_static_pdf_urls_keeps_download_pdf_endpoint(self):
+        from utils.fast_pdf_downloader import extract_static_pdf_urls
+
+        html = """
+        <html>
+          <head>
+            <meta name="citation_pdf_url" content="/journal/download_pdf.php?doi=10.4014/jmb.2511.11050">
+          </head>
+          <body>
+            <a href="/journal/download_pdf.php?doi=10.4014/jmb.2511.11050">Download PDF</a>
+          </body>
+        </html>
+        """
+
+        self.assertEqual(
+            extract_static_pdf_urls(html, "https://www.jmb.or.kr/journal/view.html"),
+            ["https://www.jmb.or.kr/journal/download_pdf.php?doi=10.4014/jmb.2511.11050"],
+        )
+
     def test_fast_downloader_does_not_invoke_selenium_for_html_response(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
@@ -230,6 +259,28 @@ class FastPdfDownloaderTests(unittest.TestCase):
             self.assertEqual(downloader._last_failure_class, "pdf_title_mismatch")
             self.assertEqual(list(Path(tmp_dir).glob("*.pdf")), [])
 
+    def test_pdf_title_match_rejects_body_token_overlap_when_front_matter_title_differs(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        expected_title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        wrong_pdf = make_text_pdf_bytes(
+            "A benchmark for large language models in bioinformatics\n"
+            "Varuni Sarwal, Gaia Andreoletti, Viorel Munteanu\n"
+            + ("Unrelated front matter text. " * 160)
+            + "This benchmark discusses datasets, model evaluation, scoring, natural "
+            "language processing, and development of bioinformatics systems."
+        )
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+
+        matches, detail = downloader._pdf_title_match_result(wrong_pdf, expected_title)
+
+        self.assertFalse(matches)
+        self.assertIn("front matter title token coverage", detail)
+
     def test_fast_downloader_accepts_html_pdf_link_when_title_matches_pdf_text(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
@@ -268,6 +319,27 @@ class FastPdfDownloaderTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertEqual(result.read_bytes(), full_text_pdf)
             self.assertEqual(downloader._last_success_class, "html_pdf_link")
+
+    def test_pdf_endpoint_network_error_tries_curl_cffi_fallback(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class CurlFallbackDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+                self.curl_calls = []
+
+            def _download_pdf_with_curl_cffi(self, url, title, method, paper_id=None):
+                self.curl_calls.append((url, title, method, paper_id))
+                return Path("/tmp/reviewpilot-test-pdfs/curl.pdf")
+
+        url = "https://www.jmb.or.kr/journal/download_pdf.php?doi=10.4014/jmb.2511.11050"
+        downloader = CurlFallbackDownloader()
+        downloader.session = FakeRaisingSession(ConnectionError("closed"))
+
+        result = downloader._download_pdf(url, "JMB paper", "doi_static_html", "PTEST")
+
+        self.assertEqual(result, Path("/tmp/reviewpilot-test-pdfs/curl.pdf"))
+        self.assertEqual(downloader.curl_calls, [(url, "JMB paper", "doi_static_html", "PTEST")])
 
     def test_static_html_resolver_does_not_return_verified_article_page_when_pdf_candidates_are_supplements(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -547,6 +619,187 @@ class FastPdfDownloaderTests(unittest.TestCase):
             page_html="<html><body>Cloudflare challenge</body></html>",
             expected_title="Large Language Model-Based Classification of Case Report Abstracts",
         ))
+        self.assertFalse(downloader._is_verified_article_page(
+            url="https://ascopubs.org/doi/10.1200/CCI-25-00386",
+            page_title="Large Language Model-Based Classification of Case Report Abstracts | JCO Clinical Cancer Informatics",
+            page_html="""
+                <html><body>
+                  <h1>Large Language Model-Based Classification of Case Report Abstracts</h1>
+                  <a href="#purchase-options">Get Access</a>
+                  <section>Abstract</section>
+                  <section>Introduction</section>
+                  <section>Methods</section>
+                  <section>Results</section>
+                  <section>References</section>
+                </body></html>
+            """,
+            expected_title="Large Language Model-Based Classification of Case Report Abstracts",
+        ))
+
+    def test_article_print_pdf_rejects_paywalled_access_page_even_when_title_matches(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        title = "Large Language Model-Based Classification of Case Report Abstracts"
+        content = make_text_pdf_bytes(
+            f"{title}\n"
+            "Get Access\n"
+            "View all available purchase options and get full access to this article.\n"
+            "Abstract Introduction Methods Results Discussion References"
+        )
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+
+        self.assertFalse(downloader._article_print_pdf_is_acceptable(content, title))
+        self.assertEqual(downloader._last_failure_class, "article_print_paywalled")
+
+    def test_extracts_article_preprint_doi_from_publisher_html(self):
+        from utils.fast_pdf_downloader import _extract_preprint_dois_from_article_html
+
+        html = """
+        <html><body>
+          <section data-type="preprint-version">
+            <h2>Preprint Version</h2>
+            <div>Preprint version available on medRxiv
+              (<a href="https://doi.org/10.64898/2025.12.22.25342797">
+                https://doi.org/10.64898/2025.12.22.25342797
+              </a>).
+            </div>
+          </section>
+        </body></html>
+        """
+
+        self.assertEqual(
+            _extract_preprint_dois_from_article_html(html),
+            ["10.64898/2025.12.22.25342797"],
+        )
+
+    def test_article_preprint_pdf_runs_before_verified_article_print_fallback(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class ArticlePreprintBeforePrintDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+                self.order = []
+
+            def _try_direct_pdf_url(self, url):
+                return None
+
+            def _get_publisher_method(self, publisher, doi, url):
+                return None
+
+            def _try_static_html_pdf(self, url, title=None):
+                return None
+
+            def _try_unpaywall(self, doi):
+                return None
+
+            def _try_semantic_scholar(self, doi, title):
+                return None
+
+            def _try_arxiv(self, arxiv_id, title):
+                return None
+
+            def _try_biorxiv_medrxiv(self, doi, title):
+                return None
+
+            def _try_find_preprint(self, doi, title):
+                return None
+
+            def _try_pmc(self, pmid, doi):
+                return None
+
+            def _try_europe_pmc(self, pmid, doi):
+                return None
+
+            def _try_doi_redirect(self, doi):
+                return None
+
+            def _try_core(self, doi, title):
+                return None
+
+            def _try_article_preprint_pdf(self, paper):
+                self.order.append("article_preprint_pdf")
+                return "https://www.medrxiv.org/content/10.64898/2025.12.22.25342797.full.pdf"
+
+            def _try_verified_article_print_pdf(self, paper):
+                self.order.append("verified_article_print_pdf")
+                return "https://ascopubs.org/doi/10.1200/CCI-25-00386"
+
+            def _download_pdf(self, url, title, method, paper_id=None):
+                if method == "article_preprint_pdf":
+                    return Path("/tmp/reviewpilot-test-pdfs/article-preprint.pdf")
+                return None
+
+        downloader = ArticlePreprintBeforePrintDownloader()
+        success, method, result = downloader.download({
+            "paper_id": "P0007",
+            "title": "Large Language Model-Based Classification of Case Report Abstracts",
+            "doi": "10.1200/CCI-25-00386",
+            "journal": "JCO Clinical Cancer Informatics",
+        })
+
+        self.assertTrue(success)
+        self.assertEqual(method, "article_preprint_pdf")
+        self.assertEqual(result, "/tmp/reviewpilot-test-pdfs/article-preprint.pdf")
+        self.assertEqual(downloader.order, ["article_preprint_pdf"])
+
+    def test_pmc_direct_oa_runs_before_article_preprint_pdf(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PmcBeforeArticlePreprintDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+                self.order = []
+
+            def _try_direct_pdf_url(self, url):
+                return None
+
+            def _get_publisher_method(self, publisher, doi, url):
+                return None
+
+            def _try_static_html_pdf(self, url, title=None):
+                return None
+
+            def _try_unpaywall(self, doi):
+                return None
+
+            def _try_semantic_scholar(self, doi, title):
+                return None
+
+            def _try_arxiv(self, arxiv_id, title):
+                return None
+
+            def _try_biorxiv_medrxiv(self, doi, title):
+                return None
+
+            def _try_find_preprint(self, doi, title):
+                return None
+
+            def _try_pmc(self, pmid, doi):
+                self.order.append("pmc")
+                return "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/pdf/jmb-36-e2511050.pdf"
+
+            def _try_article_preprint_pdf(self, paper):
+                self.order.append("article_preprint_pdf")
+                return "https://www.medrxiv.org/content/10.1101/example.full.pdf"
+
+            def _download_pdf(self, url, title, method, paper_id=None):
+                if method == "pmc":
+                    return Path("/tmp/reviewpilot-test-pdfs/pmc-direct.pdf")
+                return None
+
+        downloader = PmcBeforeArticlePreprintDownloader()
+        success, method, result = downloader.download({
+            "paper_id": "P0003",
+            "title": "Development of Large Language Model Specialized into Microbiome Datasets",
+            "doi": "10.4014/jmb.2511.11050",
+            "pmid": "42248877",
+            "journal": "Journal of Microbiology and Biotechnology",
+        })
+
+        self.assertTrue(success)
+        self.assertEqual(method, "pmc")
+        self.assertEqual(result, "/tmp/reviewpilot-test-pdfs/pmc-direct.pdf")
+        self.assertEqual(downloader.order, ["pmc"])
 
     def test_classifies_common_download_failure_modes(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -828,6 +1081,61 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(
             result,
             "https://academic.oup.com/gigascience/article-pdf/doi/10.1093/gigascience/giag015/66865299/giag015.pdf",
+        )
+
+    def test_extracts_pmc_article_pdf_before_supplemental_files(self):
+        from utils.fast_pdf_downloader import _extract_pmc_article_pdf_url
+
+        html = """
+        <html><body>
+          <a href="/articles/PMC12868943/pdf/jmb-36-e2511050.pdf">PDF</a>
+          <a href="/articles/instance/12868943/bin/jmb-36-e2511050-supple.pdf">Supplement</a>
+        </body></html>
+        """
+
+        result = _extract_pmc_article_pdf_url(
+            html,
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/",
+            "PMC12868943",
+        )
+
+        self.assertEqual(
+            result,
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/pdf/jmb-36-e2511050.pdf",
+        )
+
+    def test_pmc_uses_named_article_pdf_from_article_html(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PmcNamedPdfDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+                self.fetch_urls = []
+
+            def _resolve_pmcid(self, pmid, doi):
+                return "PMC12868943"
+
+            def _fetch_article_html(self, url):
+                self.fetch_urls.append(url)
+                return (
+                    url,
+                    """
+                    <html><body>
+                      <a href="/articles/PMC12868943/pdf/jmb-36-e2511050.pdf">PDF</a>
+                      <a href="/articles/instance/12868943/bin/jmb-36-e2511050-supple.pdf">Supplement</a>
+                    </body></html>
+                    """,
+                )
+
+        downloader = PmcNamedPdfDownloader()
+
+        self.assertEqual(
+            downloader._try_pmc("42248877", "10.4014/jmb.2511.11050"),
+            "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/pdf/jmb-36-e2511050.pdf",
+        )
+        self.assertEqual(
+            downloader.fetch_urls,
+            ["https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/"],
         )
 
     def test_preprint_doi_tries_biorxiv_before_semantic_scholar_and_pmc(self):
@@ -1284,6 +1592,38 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(downloader.browser_calls, 0)
+
+    def test_pmc_recaptcha_does_not_use_browser_fallback(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PmcRecaptchaDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    enable_browser_fallback=True,
+                )
+                self.browser_calls = 0
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                self.browser_calls += 1
+                return Path("/tmp/reviewpilot-test-pdfs/pmc-browser.pdf")
+
+        url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/pdf/jmb-36-e2511050.pdf"
+        downloader = PmcRecaptchaDownloader()
+        downloader.session = FakeSession(
+            FakeResponse(
+                url,
+                content=b"<html><base href='https://www.google.com/recaptcha/challengepage/'></html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+                status_code=200,
+            )
+        )
+
+        result = downloader._download_pdf(url, "PMC recaptcha paper", "pmc", "PTEST")
+
+        self.assertIsNone(result)
+        self.assertEqual(downloader.browser_calls, 0)
+        self.assertEqual(downloader._last_failure_class, "pmc_recaptcha")
 
     def test_article_page_browser_and_isolated_failure_classifies_as_article_print_failed(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
