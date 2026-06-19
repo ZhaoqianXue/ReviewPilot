@@ -14,6 +14,7 @@ build/
 # Output & Data
 output/
 data/
+writing/
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
 *.csv
