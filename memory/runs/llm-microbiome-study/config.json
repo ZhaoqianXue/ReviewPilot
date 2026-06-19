@@ -1,0 +1,22 @@
+{
+  "project_name": "llm-microbiome-study",
+  "search_terms": "(\"microbiome\" OR \"gut microbiome\" OR \"intestinal microbiome\" OR \"microbial dark matter\") AND (\"LLM\" OR \"large language model\" OR \"GPT\" OR \"ChatGPT\" OR \"Claude\" OR \"gemini\" OR \"qwen\" OR \"deepseek\")",
+  "primary_topic": "large language model for microbiome",
+  "domain": "computational biology",
+  "description": "I want to study large language model for microbiome",
+  "search_queries": [
+    {
+      "name": "query1",
+      "query": "(\"microbiome\" OR \"gut microbiome\" OR \"intestinal microbiome\" OR \"microbial dark matter\") AND (\"LLM\" OR \"large language model\" OR \"GPT\" OR \"ChatGPT\" OR \"Claude\" OR \"gemini\" OR \"qwen\" OR \"deepseek\")"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "openalex"
+  ],
+  "max_results": 10,
+  "date_range": {
+    "start": "2023-01-01",
+    "end": ""
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "project_name": "llm-biomedicine-survey",
+  "search_terms": "(biomedicine OR biomedical OR health sciences OR \"electronic health record\") AND (LLM OR \"large language model\" OR GPT OR ChatGPT OR Claude OR gemini OR qwen OR deepseek)",
+  "primary_topic": "LLM applications in biomedicine",
+  "domain": "biomedical research",
+  "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+  "search_queries": [
+    {
+      "name": "query1",
+      "query": "(biomedicine OR biomedical OR health sciences OR \"electronic health record\") AND (LLM OR \"large language model\" OR GPT OR ChatGPT OR Claude OR gemini OR qwen OR deepseek)"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 10,
+  "date_range": {
+    "start": "2023-01-01",
+    "end": ""
+  }
+}
