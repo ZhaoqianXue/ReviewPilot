@@ -365,7 +365,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         # Layer 1: HTTP/direct/static discovery.
         methods.append(("direct_pdf", lambda: self._try_direct_pdf_url(direct_url)))
-        if self._has_semantic_scholar_cache(doi, title):
+        if self._has_semantic_scholar_cache(doi, title) or self.semantic_scholar_api_key:
             methods.append(("semantic_scholar", lambda: self._try_semantic_scholar(doi, title)))
             semantic_added_early = True
         if source == "arxiv" or (direct_url and "arxiv.org" in direct_url.lower()):
@@ -396,6 +396,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         # Keep LLM search opt-in only. The speed benchmark disables it by default.
         if self.use_web_search:
             methods.append(("web_search", lambda: self._try_llm_web_search(title, doi, journal)))
+        methods.append(("verified_article_print_pdf", lambda: self._try_verified_article_print_pdf(paper)))
 
         for method_name, method_func in methods:
             started = time.perf_counter()
@@ -1189,8 +1190,45 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if self._verify_pdf_candidate(candidate):
                 return candidate
 
-        if verified_article_page:
-            return response.url
+        return None
+
+    def _try_verified_article_print_pdf(self, paper: Dict) -> Optional[str]:
+        title = paper.get("title", "unknown")
+        doi = paper.get("doi")
+        direct_url = paper.get("pdf_url") or paper.get("url")
+        candidates: List[str] = []
+
+        if direct_url and not _looks_like_pdf_url(direct_url):
+            candidates.append(direct_url)
+
+        publisher = self._resolve_publisher(doi, paper.get("journal", "")).get("selected_publisher")
+        if publisher:
+            publisher_method = self._get_publisher_method(publisher, doi, direct_url)
+            if publisher_method:
+                try:
+                    publisher_url = publisher_method()
+                except Exception:
+                    publisher_url = None
+                if publisher_url and not _looks_like_pdf_url(publisher_url):
+                    candidates.append(publisher_url)
+
+        if doi:
+            candidates.append(f"https://doi.org/{doi}")
+
+        for candidate in _dedupe_keep_order(candidates):
+            self._rate_limit()
+            try:
+                response = self.session.get(candidate, timeout=self.request_timeout, allow_redirects=True)
+            except Exception:
+                continue
+            content_type = response.headers.get("content-type", "").lower()
+            if response.status_code == 200 and (
+                "html" in content_type or b"<html" in response.content[:1000].lower()
+            ):
+                if self._is_verified_article_page(response.url, "", response.text[:200000], title):
+                    return response.url
+            if response.status_code in (401, 403, 429) and not _looks_like_pdf_url(candidate):
+                return response.url or candidate
 
         return None
 
@@ -1319,18 +1357,14 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if curl_path:
                 return curl_path
 
-        should_try_browser = (
-            self._is_browser_worthy_html(response)
-            or self._is_article_print_retry_candidate(url, method)
-            or self._is_verified_article_html_response(response, title)
-        )
+        should_try_browser = self._should_try_browser_fallback(method, url, response)
         if is_html_response and self.enable_browser_fallback and should_try_browser:
             self.browser_fallback_attempts += 1
             browser_path = self._download_pdf_with_browser(url, title, method, paper_id)
             if browser_path:
                 self.browser_fallback_successes += 1
                 return browser_path
-            if self._is_article_print_retry_candidate(url, method):
+            if self._is_article_print_retry_candidate(url, method) or method == "verified_article_print_pdf":
                 if self.domain_policy:
                     self._last_failure_class = "article_print_failed"
                     self._last_failure_detail = "article print deferred for batch retry"
@@ -1350,6 +1384,15 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return browser_path
 
         return None
+
+    def _should_try_browser_fallback(self, method: str, url: str, response) -> bool:
+        if method == "verified_article_print_pdf":
+            return True
+        if not self._is_browser_worthy_html(response):
+            return False
+        if self._is_pdf_endpoint_cooldown_candidate(url):
+            return True
+        return method in {"pmc", "europepmc"}
 
     def _save_pdf_bytes(self, content: bytes, title: str, method: str, paper_id: str = None) -> Path:
         if paper_id:
@@ -1527,7 +1570,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         method: str,
         paper_id: str = None,
     ) -> Optional[Path]:
-        if not self._is_article_print_retry_candidate(url, method):
+        if method != "verified_article_print_pdf" and not self._is_article_print_retry_candidate(url, method):
             return None
 
         parent_dir = self.browser_user_data_dir.parent

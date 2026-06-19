@@ -269,7 +269,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
             self.assertEqual(result.read_bytes(), full_text_pdf)
             self.assertEqual(downloader._last_success_class, "html_pdf_link")
 
-    def test_static_html_resolver_returns_verified_article_page_when_pdf_candidates_are_supplements(self):
+    def test_static_html_resolver_does_not_return_verified_article_page_when_pdf_candidates_are_supplements(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
         title = (
@@ -316,7 +316,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         result = downloader._try_static_html_pdf(article_url, title)
 
-        self.assertEqual(result, article_url)
+        self.assertIsNone(result)
 
     def test_fast_downloader_uses_browser_fallback_only_for_bot_blocked_html(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -640,6 +640,113 @@ class FastPdfDownloaderTests(unittest.TestCase):
                 cached_downloader._try_semantic_scholar("10.1111/jerd.13046", "Dental LLM paper"),
                 "https://example.org/paper.pdf",
             )
+
+    def test_semantic_scholar_api_key_runs_before_static_html_candidates(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PriorityDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    semantic_scholar_api_key="test-key",
+                )
+                self.calls = []
+
+            def _try_semantic_scholar(self, doi, title):
+                self.calls.append("semantic_scholar")
+                return "https://pdfs.semanticscholar.org/example/full.pdf"
+
+            def _try_static_html_pdf(self, url, title=None):
+                self.calls.append("static_html")
+                return "https://journal.example.com/article"
+
+            def _download_pdf(self, url, title, method, paper_id=None):
+                self.calls.append(f"download:{method}")
+                return Path(f"/tmp/reviewpilot-test-pdfs/{method}.pdf")
+
+        downloader = PriorityDownloader()
+
+        success, method, result = downloader.download({
+            "paper_id": "PTEST",
+            "title": "Semantic Scholar preferred paper",
+            "doi": "10.5555/example",
+            "journal": "",
+        })
+
+        self.assertTrue(success)
+        self.assertEqual(method, "semantic_scholar")
+        self.assertEqual(result, "/tmp/reviewpilot-test-pdfs/semantic_scholar.pdf")
+        self.assertEqual(downloader.calls, ["semantic_scholar", "download:semantic_scholar"])
+
+    def test_semantic_scholar_runs_before_verified_article_print_fallback(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class SemanticBeforePrintDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    enable_browser_fallback=True,
+                )
+                self.browser_calls = 0
+                self.semantic_calls = 0
+
+            def _try_semantic_scholar(self, doi, title):
+                self.semantic_calls += 1
+                return "https://pdfs.semanticscholar.org/example/full.pdf"
+
+            def _download_pdf(self, url, title, method, paper_id=None):
+                if method == "semantic_scholar":
+                    return Path("/tmp/reviewpilot-test-pdfs/semantic-direct.pdf")
+                return super()._download_pdf(url, title, method, paper_id)
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                self.browser_calls += 1
+                self._last_success_class = "article_printable"
+                return Path("/tmp/reviewpilot-test-pdfs/article-print.pdf")
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        doi = "10.4014/jmb.2511.11050"
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head><title>{title}</title></head>
+          <body>
+            <h1>{title}</h1>
+            <section>Abstract</section>
+            <section>Introduction</section>
+            <section>Methods</section>
+            <section>Results</section>
+            <section>References</section>
+          </body>
+        </html>
+        """.encode("utf-8")
+        downloader = SemanticBeforePrintDownloader()
+        downloader.session = FakeSessionByUrl(
+            get_responses={
+                f"https://doi.org/{doi}": FakeResponse(
+                    f"https://doi.org/{doi}",
+                    content=html,
+                    headers={"content-type": "text/html"},
+                ),
+            }
+        )
+
+        success, method, result = downloader.download({
+            "paper_id": "P0003",
+            "title": title,
+            "doi": doi,
+            "journal": "",
+        })
+
+        self.assertTrue(success)
+        self.assertEqual(method, "semantic_scholar")
+        self.assertEqual(result, "/tmp/reviewpilot-test-pdfs/semantic-direct.pdf")
+        self.assertEqual(downloader.semantic_calls, 1)
+        self.assertEqual(downloader.browser_calls, 0)
 
     def test_pdf_endpoint_cloudflare_sets_domain_cooldown_and_skips_next_pdf_endpoint(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -1032,7 +1139,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         result = downloader._download_pdf(
             "https://ascopubs.org/doi/10.1200/CCI-25-00386",
             "Large Language Model-Based Classification of Case Report Abstracts",
-            "publisher_asco",
+            "verified_article_print_pdf",
             "P0007",
         )
 
@@ -1041,7 +1148,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(downloader.isolated_calls, 1)
         self.assertEqual(downloader._last_success_class, "article_printable_isolated")
 
-    def test_article_print_candidate_uses_browser_for_normal_html_article_page(self):
+    def test_verified_article_print_method_uses_browser_for_normal_html_article_page(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
         class ArticlePrintNormalHtmlDownloader(FastCascadePDFDownloader):
@@ -1070,7 +1177,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         result = downloader._download_pdf(
             "https://ascopubs.org/doi/10.1200/CCI-25-00386",
             "Large Language Model-Based Classification of Case Report Abstracts",
-            "publisher_asco",
+            "verified_article_print_pdf",
             "P0007",
         )
 
@@ -1078,7 +1185,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(downloader.browser_calls, 1)
         self.assertEqual(downloader._last_success_class, "article_printable")
 
-    def test_verified_article_page_from_doi_static_html_uses_browser_print(self):
+    def test_doi_static_html_does_not_use_browser_print_for_verified_article_page(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
         class VerifiedArticlePrintDownloader(FastCascadePDFDownloader):
@@ -1127,9 +1234,8 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         result = downloader._download_pdf(url, title, "doi_static_html", "PTEST")
 
-        self.assertEqual(result, Path("/tmp/reviewpilot-test-pdfs/verified-article-print.pdf"))
-        self.assertEqual(downloader.browser_calls, 1)
-        self.assertEqual(downloader._last_success_class, "article_printable")
+        self.assertIsNone(result)
+        self.assertEqual(downloader.browser_calls, 0)
 
     def test_pubmed_abstract_page_does_not_use_browser_print(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -1208,7 +1314,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         result = downloader._download_pdf(
             "https://ascopubs.org/doi/10.1200/CCI-25-00386",
             "Large Language Model-Based Classification of Case Report Abstracts",
-            "publisher_asco",
+            "verified_article_print_pdf",
             "P0007",
         )
 
@@ -1249,7 +1355,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         result = downloader._download_pdf(
             "https://ascopubs.org/doi/10.1200/CCI-25-00386",
             "Large Language Model-Based Classification of Case Report Abstracts",
-            "publisher_asco",
+            "verified_article_print_pdf",
             "P0007",
         )
 
