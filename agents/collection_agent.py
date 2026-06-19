@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base_agent import BaseAgent
 from utils.jsonl_handler import write_jsonl, save_json, JSONLWriter
 from utils.human_interaction import print_header, print_summary, show_progress
-from utils.pdf_downloader import CascadePDFDownloader, download_papers_cascade
+from utils.pdf_downloader import download_papers_cascade
 
 
 class CollectionAgent(BaseAgent):

@@ -17,6 +17,8 @@ data/
 writing/
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
+.benchmark_step3_download/
+.cache/
 *.csv
 *.xlsx
 *.jsonl

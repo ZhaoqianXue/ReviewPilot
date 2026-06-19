@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.llm import query_llm, load_api_key
 from utils.jsonl_handler import read_jsonl, write_jsonl, save_json, load_json, write_xlsx, save_papers_with_xlsx
-from utils.pdf_downloader import CascadePDFDownloader
+from utils.pdf_downloader import create_pdf_downloader
 from utils.memory import MemoryManager, ExtractionSchema, ExtractionField, ScreeningCriteria
 from utils.agent_memory import AgentMemory
 from main import AcademicSearcher
@@ -3676,9 +3676,10 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                 # Progress file for real-time saving and resume capability
                 progress_file = str(pdf_dir / "download_progress.jsonl")
 
-                downloader = CascadePDFDownloader(email=email, output_dir=pdf_dir)
+                downloader = create_pdf_downloader(email=email, output_dir=pdf_dir)
                 downloader.set_llm_query_func(query_llm)
-                downloader.enable_web_search(model="gpt-5-mini")
+                if os.getenv("REVIEWPILOT_ENABLE_PDF_WEB_SEARCH") == "1":
+                    downloader.enable_web_search(model="gpt-5-mini")
 
                 # Load existing progress to check how many are already downloaded
                 already_downloaded = set()
@@ -3698,57 +3699,37 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                 progress = st.progress(0)
                 status = st.empty()
 
-                results = {"total": len(papers), "success": len(already_downloaded), "failed": 0, "by_method": {}, "downloaded": [], "failed_papers": []}
+                def progress_cb(current, total, title):
+                    progress.progress(current / total if total else 1.0)
+                    status.text(f"Downloaded {current}/{total}: {title[:40]}...")
 
-                for i, paper in enumerate(papers):
-                    # Check if already downloaded
-                    paper_id = paper.get('id') or paper.get('doi') or paper.get('title')
-                    if paper_id and paper_id in already_downloaded:
-                        paper["pdf_downloaded"] = True
-                        progress.progress((i + 1) / len(papers))
+                results = downloader.download_batch(
+                    papers,
+                    progress_callback=progress_cb,
+                    progress_file=progress_file,
+                )
+
+                # Track failed papers for manual download table.
+                import re as _re
+                failed_papers = []
+                for paper in papers:
+                    if paper.get("pdf_downloaded"):
                         continue
+                    safe_title = _re.sub(r'[^\w\s-]', '', (paper.get("title") or "untitled").lower())
+                    safe_title = _re.sub(r'\s+', '_', safe_title)[:60]
+                    paper_id = paper.get("paper_id", "")
+                    expected_file = f"{paper_id}_{safe_title}.pdf" if paper_id else f"{safe_title}.pdf"
+                    failed_papers.append({
+                        "title": paper.get("title", "Unknown"),
+                        "doi": paper.get("doi", "N/A"),
+                        "url": paper.get("url", "N/A"),
+                        "save_as": expected_file
+                    })
+                results["failed_papers"] = failed_papers
 
-                    progress.progress((i + 1) / len(papers))
-                    status.text(f"Downloading {i+1}/{len(papers)}: {paper.get('title', '')[:40]}...")
-
-                    success, method, result = downloader.download(paper)
-
-                    if success:
-                        results["success"] += 1
-                        results["by_method"][method] = results["by_method"].get(method, 0) + 1
-                        paper["pdf_downloaded"] = True
-                        paper["pdf_path"] = result
-                        paper["pdf_method"] = method
-                    else:
-                        results["failed"] += 1
-                        paper["pdf_downloaded"] = False
-                        # Track failed papers for manual download table
-                        import re as _re
-                        safe_title = _re.sub(r'[^\w\s-]', '', (paper.get("title") or "untitled").lower())
-                        safe_title = _re.sub(r'\s+', '_', safe_title)[:60]
-                        paper_id = paper.get("paper_id", "")
-                        if paper_id:
-                            expected_file = f"{paper_id}_{safe_title}.pdf"
-                        else:
-                            expected_file = f"{safe_title}.pdf"
-                        results["failed_papers"].append({
-                            "title": paper.get("title", "Unknown"),
-                            "doi": paper.get("doi", "N/A"),
-                            "url": paper.get("url", "N/A"),
-                            "save_as": expected_file
-                        })
-
-                    # Save progress immediately (real-time saving)
-                    with open(progress_file, 'a', encoding='utf-8') as f:
-                        record = {
-                            "id": paper.get("id"),
-                            "doi": paper.get("doi"),
-                            "title": paper.get("title"),
-                            "pdf_downloaded": paper.get("pdf_downloaded", False),
-                            "pdf_path": paper.get("pdf_path"),
-                            "pdf_method": paper.get("pdf_method")
-                        }
-                        f.write(json.dumps(record, ensure_ascii=False) + '\n')
+                close_downloader = getattr(downloader, "close", None)
+                if close_downloader:
+                    close_downloader()
 
                 progress.empty()
                 status.empty()

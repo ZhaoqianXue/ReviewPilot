@@ -1792,6 +1792,35 @@ def _cell_pdf(url: str) -> Optional[str]:
     return None
 
 
+def create_pdf_downloader(email: str = "research@example.com", output_dir: Path = None,
+                          optimized: Optional[bool] = None):
+    """Create the default Step 3 PDF downloader.
+
+    The optimized downloader is the default production path. Set
+    REVIEWPILOT_LEGACY_PDF_DOWNLOADER=1 or pass optimized=False to force the
+    original Selenium-capable cascade.
+    """
+    use_optimized = optimized
+    if use_optimized is None:
+        use_optimized = os.getenv("REVIEWPILOT_LEGACY_PDF_DOWNLOADER") != "1"
+
+    if use_optimized:
+        try:
+            from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+            return FastCascadePDFDownloader(
+                email=email,
+                output_dir=output_dir,
+                enable_browser_fallback=True,
+            )
+        except Exception as exc:
+            if os.getenv("REVIEWPILOT_STRICT_FAST_PDF_DOWNLOADER") == "1":
+                raise
+            print(f"  Fast PDF downloader unavailable ({type(exc).__name__}: {exc}); using legacy cascade")
+
+    return CascadePDFDownloader(email=email, output_dir=output_dir)
+
+
 def download_papers_cascade(papers: List[Dict], output_dir: Path, email: str = "research@example.com",
                             progress_callback=None, llm_query_func=None,
                             progress_file: Optional[str] = None) -> Dict:
@@ -1809,7 +1838,14 @@ def download_papers_cascade(papers: List[Dict], output_dir: Path, email: str = "
     Returns:
         Download statistics
     """
-    downloader = CascadePDFDownloader(email=email, output_dir=output_dir)
+    downloader = create_pdf_downloader(email=email, output_dir=output_dir)
     if llm_query_func:
         downloader.set_llm_query_func(llm_query_func)
-    return downloader.download_batch(papers, progress_callback, progress_file=progress_file)
+    if os.getenv("REVIEWPILOT_ENABLE_PDF_WEB_SEARCH") == "1":
+        downloader.enable_web_search()
+    try:
+        return downloader.download_batch(papers, progress_callback, progress_file=progress_file)
+    finally:
+        close = getattr(downloader, "close", None)
+        if close:
+            close()

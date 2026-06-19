@@ -30,3 +30,5 @@ openpyxl>=3.1.0        # Excel xlsx support
 
 # Web Interface
 streamlit>=1.30.0      # Web UI
+playwright>=1.49.0     # Optional browser fallback for PDF downloads
+curl_cffi>=0.7.0       # Optional TLS-fingerprint transport for bot-blocked PDF endpoints
