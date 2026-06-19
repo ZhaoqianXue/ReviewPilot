@@ -68,6 +68,41 @@ class FakeSequenceSession:
         return self.responses.pop(0)
 
 
+def make_text_pdf_bytes(text):
+    escaped = (
+        text.replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+        .replace("\n", ") Tj T* (")
+    )
+    stream = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET\n".encode("latin-1", errors="replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"endstream",
+    ]
+    parts = [b"%PDF-1.4\n"]
+    offsets = [0]
+    for index, obj in enumerate(objects, 1):
+        offsets.append(sum(len(part) for part in parts))
+        parts.append(f"{index} 0 obj\n".encode("ascii"))
+        parts.append(obj)
+        parts.append(b"\nendobj\n")
+    xref_offset = sum(len(part) for part in parts)
+    parts.append(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    parts.append(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        parts.append(f"{offset:010d} 00000 n \n".encode("ascii"))
+    parts.append(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_offset}\n%%EOF\n".encode("ascii")
+    )
+    return b"".join(parts)
+
+
 class FastPdfDownloaderTests(unittest.TestCase):
     def test_fast_downloader_defaults_to_eight_batch_workers(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -154,6 +189,134 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertFalse(downloader.selenium_called)
+
+    def test_fast_downloader_rejects_html_pdf_link_when_title_does_not_match_pdf_text(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        article_url = "https://journal.example.com/articles/10.4014/jmb.2511.11050"
+        attachment_url = "https://journal.example.com/articles/table.pdf"
+        html = b"""
+        <!DOCTYPE html>
+        <html><body><a class="download-pdf" href="/articles/table.pdf">PDF</a></body></html>
+        """
+        attachment_pdf = make_text_pdf_bytes(
+            "J. Microbiol. Biotechnol. 2026. 36: e2511050\n"
+            "https://doi.org/10.4014/jmb.2511.11050\n"
+            "Table 1. Rubric dimensions and definitions for human expert evaluation "
+            "of large language model responses in microbiome research."
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            downloader = FastCascadePDFDownloader(output_dir=Path(tmp_dir))
+            downloader.session = FakeSessionByUrl(
+                get_responses={
+                    article_url: FakeResponse(article_url, content=html, headers={"content-type": "text/html"}),
+                    attachment_url: FakeResponse(
+                        attachment_url,
+                        content=attachment_pdf,
+                        headers={"content-type": "application/pdf"},
+                    ),
+                }
+            )
+
+            result = downloader._download_pdf(article_url, title, "doi_static_html", "PTEST")
+
+            self.assertIsNone(result)
+            self.assertEqual(downloader._last_failure_class, "pdf_title_mismatch")
+            self.assertEqual(list(Path(tmp_dir).glob("*.pdf")), [])
+
+    def test_fast_downloader_accepts_html_pdf_link_when_title_matches_pdf_text(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        article_url = "https://journal.example.com/articles/10.4014/jmb.2511.11050"
+        pdf_url = "https://journal.example.com/articles/full.pdf"
+        html = b"""
+        <!DOCTYPE html>
+        <html><body><a class="download-pdf" href="/articles/full.pdf">PDF</a></body></html>
+        """
+        full_text_pdf = make_text_pdf_bytes(
+            title
+            + "\nJ. Microbiol. Biotechnol. 2026. 36: e2511050\n"
+            "This article evaluates natural language processing markers in microbiome datasets."
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            downloader = FastCascadePDFDownloader(output_dir=Path(tmp_dir))
+            downloader.session = FakeSessionByUrl(
+                get_responses={
+                    article_url: FakeResponse(article_url, content=html, headers={"content-type": "text/html"}),
+                    pdf_url: FakeResponse(
+                        pdf_url,
+                        content=full_text_pdf,
+                        headers={"content-type": "application/pdf"},
+                    ),
+                }
+            )
+
+            result = downloader._download_pdf(article_url, title, "doi_static_html", "PTEST")
+
+            self.assertIsNotNone(result)
+            self.assertEqual(result.read_bytes(), full_text_pdf)
+            self.assertEqual(downloader._last_success_class, "html_pdf_link")
+
+    def test_static_html_resolver_returns_verified_article_page_when_pdf_candidates_are_supplements(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        article_url = "https://journal.example.com/view.html?doi=10.4014/jmb.2511.11050"
+        supplement_url = "https://pdf.example.com/JMB036--6953_Supple0.pdf"
+        figure_url = "https://pdf.example.com/download.php?f_name=jmb-36-e2511050-f1.jpg"
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head><title>{title}</title></head>
+          <body>
+            <h1>{title}</h1>
+            <a href="{supplement_url}">Supplementary PDF</a>
+            <a href="{figure_url}">Figure download</a>
+            <section>Abstract</section>
+            <section>Introduction</section>
+            <section>Methods</section>
+            <section>Results</section>
+            <section>References</section>
+          </body>
+        </html>
+        """.encode("utf-8")
+
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        downloader.session = FakeSessionByUrl(
+            get_responses={
+                article_url: FakeResponse(article_url, content=html, headers={"content-type": "text/html"}),
+            },
+            head_responses={
+                supplement_url: FakeResponse(
+                    supplement_url,
+                    headers={"content-type": "application/pdf"},
+                ),
+                figure_url: FakeResponse(
+                    figure_url,
+                    headers={"content-type": "image/jpeg"},
+                ),
+            },
+        )
+
+        result = downloader._try_static_html_pdf(article_url, title)
+
+        self.assertEqual(result, article_url)
 
     def test_fast_downloader_uses_browser_fallback_only_for_bot_blocked_html(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -375,7 +538,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertTrue(downloader._is_verified_article_page(
             url="https://publisher.example.com/doi/10.1200/CCI-25-00386",
             page_title="Large Language Model-Based Classification of Case Report Abstracts | JCO Clinical Cancer Informatics",
-            page_html="<html><body><h1>Large Language Model-Based Classification of Case Report Abstracts</h1><section>Abstract</section><section>References</section></body></html>",
+            page_html="<html><body><h1>Large Language Model-Based Classification of Case Report Abstracts</h1><section>Abstract</section><section>Introduction</section><section>Methods</section><section>Results</section><section>References</section></body></html>",
             expected_title="Large Language Model-Based Classification of Case Report Abstracts",
         ))
         self.assertFalse(downloader._is_verified_article_page(
@@ -525,6 +688,40 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(downloader._resolve_publisher("10.1186/s12859-023-05411-z", "Bioinformatics")["selected_publisher"], "bmc")
         self.assertEqual(downloader._resolve_publisher("10.1093/gigascience/giag015", "GigaScience")["selected_publisher"], "oxford")
         self.assertEqual(downloader._resolve_publisher("10.64898/2026.05.13.724985", "medRxiv preprint")["selected_publisher"], "biorxiv")
+
+    def test_oxford_publisher_method_is_available_for_oup_doi(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+
+        publisher_method = downloader._get_publisher_method(
+            "oxford",
+            "10.1093/gigascience/giag015",
+            None,
+        )
+
+        self.assertIsNotNone(publisher_method)
+
+    def test_extracts_oxford_article_pdf_before_supplemental_files(self):
+        from utils.fast_pdf_downloader import _extract_oxford_article_pdf_url
+
+        html = """
+        <html><body>
+          <a href="https://oup.silverchair-cdn.com/oup/backfile/Content_public/Journal/gigascience/15/example/giag015_supplemental_file.pdf">Supplement</a>
+          <a href="/gigascience/article-pdf/doi/10.1093/gigascience/giag015/66865299/giag015.pdf">PDF</a>
+          <a href="https://oup.silverchair-cdn.com/oup/backfile/Content_public/Journal/gigascience/15/example/giag015_reviewer_1_report_original_submission.pdf">Reviewer report</a>
+        </body></html>
+        """
+
+        result = _extract_oxford_article_pdf_url(
+            html,
+            "https://academic.oup.com/gigascience/article/doi/10.1093/gigascience/giag015/8475380",
+        )
+
+        self.assertEqual(
+            result,
+            "https://academic.oup.com/gigascience/article-pdf/doi/10.1093/gigascience/giag015/66865299/giag015.pdf",
+        )
 
     def test_preprint_doi_tries_biorxiv_before_semantic_scholar_and_pmc(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -880,6 +1077,107 @@ class FastPdfDownloaderTests(unittest.TestCase):
         self.assertEqual(result, Path("/tmp/reviewpilot-test-pdfs/article-print.pdf"))
         self.assertEqual(downloader.browser_calls, 1)
         self.assertEqual(downloader._last_success_class, "article_printable")
+
+    def test_verified_article_page_from_doi_static_html_uses_browser_print(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class VerifiedArticlePrintDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    enable_browser_fallback=True,
+                )
+                self.browser_calls = 0
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                self.browser_calls += 1
+                self._last_success_class = "article_printable"
+                return Path("/tmp/reviewpilot-test-pdfs/verified-article-print.pdf")
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head><title>{title}</title></head>
+          <body>
+            <h1>{title}</h1>
+            <section>Abstract</section>
+            <section>Introduction</section>
+            <section>Methods</section>
+            <section>Results</section>
+            <section>References</section>
+          </body>
+        </html>
+        """.encode("utf-8")
+        url = "https://www.journal.example.com/journal/view.html?doi=10.4014/jmb.2511.11050"
+
+        downloader = VerifiedArticlePrintDownloader()
+        downloader.session = FakeSession(
+            FakeResponse(
+                url,
+                content=html,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                status_code=200,
+            )
+        )
+
+        result = downloader._download_pdf(url, title, "doi_static_html", "PTEST")
+
+        self.assertEqual(result, Path("/tmp/reviewpilot-test-pdfs/verified-article-print.pdf"))
+        self.assertEqual(downloader.browser_calls, 1)
+        self.assertEqual(downloader._last_success_class, "article_printable")
+
+    def test_pubmed_abstract_page_does_not_use_browser_print(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PubmedAbstractDownloader(FastCascadePDFDownloader):
+            def __init__(self):
+                super().__init__(
+                    output_dir=Path("/tmp/reviewpilot-test-pdfs"),
+                    enable_browser_fallback=True,
+                )
+                self.browser_calls = 0
+
+            def _download_pdf_with_browser(self, url, title, method, paper_id=None):
+                self.browser_calls += 1
+                return Path("/tmp/reviewpilot-test-pdfs/pubmed-print.pdf")
+
+        title = (
+            "Development of Large Language Model Specialized into Microbiome Datasets: "
+            "an Application of Self-Evaluation and Scoring Comparison with Conventional "
+            "Natural Language Processing Markers."
+        )
+        url = "https://pubmed.ncbi.nlm.nih.gov/41605796/"
+        html = f"""
+        <!DOCTYPE html>
+        <html>
+          <head><title>{title}</title></head>
+          <body>
+            <h1>{title}</h1>
+            <section>Abstract</section>
+            <section>References</section>
+          </body>
+        </html>
+        """.encode("utf-8")
+
+        downloader = PubmedAbstractDownloader()
+        downloader.session = FakeSession(
+            FakeResponse(
+                url,
+                content=html,
+                headers={"content-type": "text/html; charset=UTF-8"},
+                status_code=200,
+            )
+        )
+
+        result = downloader._download_pdf(url, title, "static_html", "PTEST")
+
+        self.assertIsNone(result)
+        self.assertEqual(downloader.browser_calls, 0)
 
     def test_article_page_browser_and_isolated_failure_classifies_as_article_print_failed(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader

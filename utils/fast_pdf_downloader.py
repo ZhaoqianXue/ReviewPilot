@@ -10,6 +10,7 @@ the expensive fallback behavior for isolated speed tests:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -37,10 +38,62 @@ PDF_URL_MARKERS = (
     "blobtype=pdf",
 )
 
+PDF_TITLE_STOPWORDS = {
+    "about",
+    "after",
+    "among",
+    "analysis",
+    "and",
+    "application",
+    "are",
+    "article",
+    "based",
+    "between",
+    "case",
+    "clinical",
+    "data",
+    "for",
+    "from",
+    "into",
+    "large",
+    "language",
+    "model",
+    "models",
+    "paper",
+    "report",
+    "research",
+    "review",
+    "study",
+    "the",
+    "using",
+    "via",
+    "with",
+}
+
 
 def _looks_like_pdf_url(url: str) -> bool:
     url_lower = url.lower()
     return any(marker in url_lower for marker in PDF_URL_MARKERS)
+
+
+def _is_likely_non_article_pdf_url(url: str) -> bool:
+    parsed = urlparse(url or "")
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+    filename = path.rsplit("/", 1)[-1]
+    if path.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff")):
+        return True
+    candidate_text = f"{filename}?{query}"
+    markers = (
+        "supple",
+        "supplement",
+        "supplementary",
+        "appendix",
+        "thumb",
+    )
+    if any(marker in candidate_text for marker in markers):
+        return True
+    return bool(re.search(r"(^|[-_])(fig|figure|table|tbl|f|t)\d+([._-]|$)", candidate_text))
 
 
 def _dedupe_keep_order(urls: List[str]) -> List[str]:
@@ -50,6 +103,19 @@ def _dedupe_keep_order(urls: List[str]) -> List[str]:
         if url and url not in seen:
             seen.add(url)
             deduped.append(url)
+    return deduped
+
+
+def _title_match_tokens(value: str) -> List[str]:
+    plain = re.sub(r"<[^>]+>", " ", value or "")
+    tokens = re.findall(r"[a-z0-9]+", plain.lower())
+    deduped = []
+    seen = set()
+    for token in tokens:
+        if len(token) < 3 or token in PDF_TITLE_STOPWORDS or token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
     return deduped
 
 
@@ -106,6 +172,19 @@ def extract_static_pdf_urls(html_text: str, base_url: str) -> List[str]:
             absolute.append(absolute_url)
 
     return _dedupe_keep_order(absolute)
+
+
+def _extract_oxford_article_pdf_url(html_text: str, base_url: str) -> Optional[str]:
+    for candidate in extract_static_pdf_urls(html_text, base_url):
+        parsed = urlparse(candidate)
+        if not parsed.netloc.endswith("academic.oup.com"):
+            continue
+        if "/article-pdf/" not in parsed.path.lower():
+            continue
+        if _is_likely_non_article_pdf_url(candidate):
+            continue
+        return candidate
+    return None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -298,8 +377,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 publisher_method = self._get_publisher_method(detected_publisher, doi, direct_url)
             if publisher_method:
                 methods.append((f"publisher_{detected_publisher}", publisher_method))
-        methods.append(("static_html", lambda: self._try_static_html_pdf(direct_url)))
-        methods.append(("doi_static_html", lambda: self._try_static_html_pdf(f"https://doi.org/{doi}") if doi else None))
+        methods.append(("static_html", lambda: self._try_static_html_pdf(direct_url, title)))
+        methods.append(("doi_static_html", lambda: self._try_static_html_pdf(f"https://doi.org/{doi}", title) if doi else None))
         methods.append(("publisher_url", lambda: self._try_publisher_pattern(direct_url, doi)))
 
         # Layer 2: API/direct sources. Keep slower aggregators after cheap/direct checks.
@@ -820,9 +899,48 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return lambda: f"https://ascopubs.org/doi/{doi}"
         if publisher == "wiley" and doi:
             return lambda: f"https://onlinelibrary.wiley.com/doi/pdf/{doi}"
-        if publisher == "oxford":
-            return None
+        if publisher == "oxford" and doi:
+            return lambda: self._try_oxford(doi)
         return super()._get_publisher_method(publisher, doi, url)
+
+    def _try_oxford(self, doi: Optional[str]) -> Optional[str]:
+        if not doi:
+            return None
+
+        landing_url = f"https://doi.org/{doi}"
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        }
+        if self.enable_curl_cffi:
+            try:
+                from curl_cffi import requests as curl_requests
+            except Exception:
+                curl_requests = None
+            if curl_requests:
+                for impersonate in self.curl_cffi_impersonates:
+                    try:
+                        response = curl_requests.get(
+                            landing_url,
+                            headers=headers,
+                            timeout=self.request_timeout,
+                            allow_redirects=True,
+                            impersonate=impersonate,
+                        )
+                    except Exception:
+                        continue
+                    if response.status_code == 200 and "html" in response.headers.get("content-type", "").lower():
+                        pdf_url = _extract_oxford_article_pdf_url(response.text[:800000], response.url)
+                        if pdf_url:
+                            return pdf_url
+
+        try:
+            self._rate_limit()
+            response = self.session.get(landing_url, timeout=self.request_timeout, allow_redirects=True)
+        except Exception:
+            return None
+        if response.status_code == 200 and "html" in response.headers.get("content-type", "").lower():
+            return _extract_oxford_article_pdf_url(response.text[:800000], response.url)
+        return None
 
     def _semantic_scholar_cache_key(self, doi: Optional[str], title: str) -> Optional[str]:
         if doi:
@@ -1038,7 +1156,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         return None
 
-    def _try_static_html_pdf(self, url: Optional[str]) -> Optional[str]:
+    def _try_static_html_pdf(self, url: Optional[str], title: Optional[str] = None) -> Optional[str]:
         if not url:
             return None
 
@@ -1059,9 +1177,20 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if "html" not in content_type.lower() and b"<html" not in response.content[:1000].lower():
             return None
 
+        verified_article_page = self._is_verified_article_page(
+            response.url,
+            "",
+            response.text[:200000],
+            title or "",
+        )
         for candidate in extract_static_pdf_urls(response.text[:200000], response.url):
+            if verified_article_page and _is_likely_non_article_pdf_url(candidate):
+                continue
             if self._verify_pdf_candidate(candidate):
                 return candidate
+
+        if verified_article_page:
+            return response.url
 
         return None
 
@@ -1073,6 +1202,76 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return response.status_code == 200 and ("pdf" in content_type.lower() or _looks_like_pdf_url(response.url))
         except Exception:
             return _looks_like_pdf_url(url)
+
+    def _extract_pdf_text_sample(self, content: bytes, max_pages: int = 4, max_chars: int = 30000) -> str:
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(content))
+            if getattr(reader, "is_encrypted", False):
+                try:
+                    reader.decrypt("")
+                except Exception:
+                    return ""
+            chunks = []
+            for page in reader.pages[:max_pages]:
+                try:
+                    chunks.append(page.extract_text() or "")
+                except Exception:
+                    continue
+                if sum(len(chunk) for chunk in chunks) >= max_chars:
+                    break
+            return "\n".join(chunks)[:max_chars]
+        except Exception:
+            return ""
+
+    def _pdf_title_match_result(self, content: bytes, title: str) -> Tuple[bool, Optional[str]]:
+        title_tokens = _title_match_tokens(title)
+        if len(title_tokens) < 4:
+            return True, None
+
+        pdf_text = self._extract_pdf_text_sample(content)
+        if not pdf_text.strip():
+            return True, None
+
+        pdf_tokens = set(_title_match_tokens(pdf_text))
+        if not pdf_tokens:
+            return True, None
+
+        hits = [token for token in title_tokens if token in pdf_tokens]
+        coverage = len(hits) / len(title_tokens)
+        required_hits = min(6, len(title_tokens))
+        if coverage >= 0.45 or len(hits) >= required_hits:
+            return True, None
+
+        detail = f"title token coverage {coverage:.2f} ({len(hits)}/{len(title_tokens)})"
+        return False, detail
+
+    def _save_pdf_bytes_if_title_matches(
+        self,
+        content: bytes,
+        title: str,
+        method: str,
+        paper_id: str = None,
+    ) -> Optional[Path]:
+        matches, detail = self._pdf_title_match_result(content, title)
+        if not matches:
+            self._last_failure_class = "pdf_title_mismatch"
+            self._last_failure_detail = detail
+            return None
+        return self._save_pdf_bytes(content, title, method, paper_id)
+
+    def _saved_pdf_file_title_matches(self, file_path: Path, title: str) -> bool:
+        try:
+            content = file_path.read_bytes()
+        except Exception:
+            return True
+        matches, detail = self._pdf_title_match_result(content, title)
+        if not matches:
+            self._last_failure_class = "pdf_title_mismatch"
+            self._last_failure_detail = detail
+            return False
+        return True
 
     def _download_pdf(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
         """Download without Selenium fallback; parse returned HTML once for a PDF link."""
@@ -1087,8 +1286,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         content_type = response.headers.get("content-type", "")
         first_bytes = response.content[:20]
         if response.status_code == 200 and (b"%PDF" in first_bytes or "pdf" in content_type.lower()):
-            self._last_success_class = self._last_success_class or "http_pdf"
-            return self._save_pdf_bytes(response.content, title, method, paper_id)
+            file_path = self._save_pdf_bytes_if_title_matches(response.content, title, method, paper_id)
+            if file_path:
+                self._last_success_class = self._last_success_class or "http_pdf"
+                return file_path
+            return None
 
         is_html_response = "html" in content_type.lower() or b"<html" in response.content[:1000].lower()
         if response.status_code == 200 and is_html_response:
@@ -1099,13 +1301,16 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     continue
                 retry_type = retry.headers.get("content-type", "")
                 if retry.status_code == 200 and (b"%PDF" in retry.content[:20] or "pdf" in retry_type.lower()):
-                    self._last_success_class = self._last_success_class or "html_pdf_link"
-                    return self._save_pdf_bytes(retry.content, title, method, paper_id)
+                    file_path = self._save_pdf_bytes_if_title_matches(retry.content, title, method, paper_id)
+                    if file_path:
+                        self._last_success_class = self._last_success_class or "html_pdf_link"
+                        return file_path
+                    continue
                 self._last_failure_class = self._classify_response_failure(method, candidate, retry)
                 self._last_failure_detail = f"HTTP {retry.status_code}"
 
         failure_class = self._classify_response_failure(method, url, response)
-        if failure_class:
+        if failure_class and not self._last_failure_class:
             self._last_failure_class = failure_class
             self._last_failure_detail = f"HTTP {response.status_code}"
 
@@ -1114,7 +1319,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if curl_path:
                 return curl_path
 
-        should_try_browser = self._is_browser_worthy_html(response) or self._is_article_print_retry_candidate(url, method)
+        should_try_browser = (
+            self._is_browser_worthy_html(response)
+            or self._is_article_print_retry_candidate(url, method)
+            or self._is_verified_article_html_response(response, title)
+        )
         if is_html_response and self.enable_browser_fallback and should_try_browser:
             self.browser_fallback_attempts += 1
             browser_path = self._download_pdf_with_browser(url, title, method, paper_id)
@@ -1166,6 +1375,14 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             b"enable javascript",
         ]
         return any(marker in content_lower for marker in markers)
+
+    def _is_verified_article_html_response(self, response, title: str) -> bool:
+        if response.status_code != 200:
+            return False
+        content_type = response.headers.get("content-type", "").lower()
+        if "html" not in content_type and b"<html" not in response.content[:1000].lower():
+            return False
+        return self._is_verified_article_page(response.url, "", response.text[:200000], title)
 
     def _classify_response_failure(self, method: str, url: str, response) -> Optional[str]:
         url_lower = (url or "").lower()
@@ -1232,8 +1449,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             content_type = response.headers.get("content-type", "")
             content = response.content or b""
             if response.status_code == 200 and (content.startswith(b"%PDF") or "pdf" in content_type.lower()):
-                self._last_success_class = "curl_cffi_pdf"
-                return self._save_pdf_bytes(content, title, method, paper_id)
+                file_path = self._save_pdf_bytes_if_title_matches(content, title, method, paper_id)
+                if file_path:
+                    self._last_success_class = "curl_cffi_pdf"
+                    return file_path
+                return None
 
             is_html_response = "html" in content_type.lower() or b"<html" in content[:1000].lower()
             if response.status_code == 200 and is_html_response:
@@ -1253,8 +1473,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     if retry.status_code == 200 and (
                         retry_content.startswith(b"%PDF") or "pdf" in retry_type.lower()
                     ):
-                        self._last_success_class = "curl_cffi_pdf_link"
-                        return self._save_pdf_bytes(retry_content, title, method, paper_id)
+                        file_path = self._save_pdf_bytes_if_title_matches(retry_content, title, method, paper_id)
+                        if file_path:
+                            self._last_success_class = "curl_cffi_pdf_link"
+                            return file_path
+                        continue
 
         return None
 
@@ -1367,8 +1590,13 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         download = download_info.value
                         file_path = self._browser_output_path(title, method, paper_id)
                         download.save_as(str(file_path))
-                        self._last_success_class = "browser_download"
-                        return file_path
+                        if self._saved_pdf_file_title_matches(file_path, title):
+                            self._last_success_class = "browser_download"
+                            return file_path
+                        try:
+                            file_path.unlink()
+                        except Exception:
+                            pass
                     except Exception:
                         pass
 
@@ -1376,12 +1604,13 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 if response and "pdf" in (response.headers.get("content-type", "").lower()):
                     body = response.body()
                     if body.startswith(b"%PDF"):
-                        file_path = self._save_pdf_bytes(body, title, method, paper_id)
-                        return file_path
+                        file_path = self._save_pdf_bytes_if_title_matches(body, title, method, paper_id)
+                        if file_path:
+                            return file_path
 
                 page.wait_for_timeout(min(3000, self.browser_timeout * 1000))
                 html = page.content()
-                if method.startswith("publisher_") and self._is_verified_article_page(page.url, page.title(), html, title):
+                if self._is_verified_article_page(page.url, page.title(), html, title):
                     file_path = self._browser_output_path(title, method, paper_id)
                     page.pdf(path=str(file_path), format="Letter", print_background=True)
                     if file_path.exists() and file_path.read_bytes()[:4] == b"%PDF":
@@ -1394,9 +1623,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         if pdf_response and "pdf" in (pdf_response.headers.get("content-type", "").lower()):
                             body = pdf_response.body()
                             if body.startswith(b"%PDF"):
-                                self._last_success_class = "browser_pdf_link"
-                                file_path = self._save_pdf_bytes(body, title, method, paper_id)
-                                return file_path
+                                file_path = self._save_pdf_bytes_if_title_matches(body, title, method, paper_id)
+                                if file_path:
+                                    self._last_success_class = "browser_pdf_link"
+                                    return file_path
                     except Exception:
                         continue
             finally:
@@ -1415,6 +1645,14 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     ) -> bool:
         url_lower = (url or "").lower()
         if _looks_like_pdf_url(url_lower) or "/doi/pdf/" in url_lower or "/doi/epdf/" in url_lower:
+            return False
+        parsed = urlparse(url_lower)
+        metadata_domains = (
+            "pubmed.ncbi.nlm.nih.gov",
+            "semanticscholar.org",
+            "openalex.org",
+        )
+        if any(parsed.netloc == domain or parsed.netloc.endswith(f".{domain}") for domain in metadata_domains):
             return False
 
         page_title_lower = (page_title or "").lower()
@@ -1438,18 +1676,19 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         page_text = f"{page_title_lower} {page_html_lower[:50000]}"
         overlap = sum(1 for word in expected_words[:16] if word in page_text)
-        full_text_markers = (
-            "abstract",
-            "references",
+        core_section_markers = (
             "introduction",
+            "background",
+            "materials and methods",
             "methods",
             "results",
             "discussion",
             "conclusion",
             "original reports",
         )
-        has_full_text_marker = any(marker in page_html_lower for marker in full_text_markers)
-        return overlap >= min(5, len(expected_words)) and has_full_text_marker
+        core_section_hits = sum(1 for marker in core_section_markers if marker in page_html_lower)
+        has_references = "references" in page_html_lower or "bibliography" in page_html_lower
+        return overlap >= min(5, len(expected_words)) and core_section_hits >= 2 and has_references
 
     def _browser_output_path(self, title: str, method: str, paper_id: str = None) -> Path:
         if paper_id:
