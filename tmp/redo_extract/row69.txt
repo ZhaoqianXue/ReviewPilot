@@ -1,0 +1,219 @@
+=== PDF FIRST PAGE (title region) ===
+CaveAgent: Transforming LLMs into Stateful
+Runtime Operators
+Maohao Ran∗1,2, Zhenglin Wan∗1,3, Cooper Lin4, Yanting Zhang1, Hongyu Xin1, Hongwei Fan7, Yibo Xu1, Beier
+Luo4, Yaxin Zhou5, Wangbo Zhao3, Lijie Yang8, Lang Feng6, Fuchao Yang6, Jingxuan Wu9, Yiqiao Huang10,
+Chendong Ma2, Dailing Jiang2, Jianbo Deng1, Sirui Han1, Yang You3, Bo An6, Yike Guo1, Jun Song1,2†
+1HKUST
+2HKBU
+3NUS
+4HKU
+5CMU
+6NTU, Singapore
+7Imperial College London
+8Princeton
+9UNC, Chapel Hill
+10Harvard
+Abstract:
+LLM-based agents are increasingly capable of complex task execution, yet current agentic systems
+remain constrained by text-centric paradigms that struggle with long-horizon tasks due to fragile multi-turn
+dependencies and context drift. We present CaveAgent, a framework that shifts LLM tool use from “LLM-as-Text-
+Generator” to “LLM-as-Runtime-Operator.” CaveAgent introduces a dual-stream architecture: a semantic stream
+for lightweight reasoning and a runtime stream backed by a persistent Python environment for stateful execution.
+Rather than treating the LLM’s text context as the primary workspace, CaveAgent elevates the persistent runtime as
+the central locus. Beyond leveraging code generation to resolv
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+CaveAgent: Transforming LLMs into Stateful
+Runtime Operators
+Maohao Ran∗1,2, Zhenglin Wan∗1,3, Cooper Lin4, Yanting Zhang1, Hongyu Xin1, Hongwei Fan7, Yibo Xu1, Beier
+Luo4, Yaxin Zhou5, Wangbo Zhao3, Lijie Yang8, Lang Feng6, Fuchao Yang6, Jingxuan Wu9, Yiqiao Huang10,
+Chendong Ma2, Dailing Jiang2, Jianbo Deng1, Sirui Han1, Yang You3, Bo An6, Yike Guo1, Jun Song1,2†
+1HKUST
+2HKBU
+3NUS
+4HKU
+5CMU
+6NTU, Singapore
+7Imperial College London
+8Princeton
+9UNC, Chapel Hill
+10Harvard
+Abstract:
+LLM-based agents are increasingly capable of complex task execution, yet current agentic systems
+remain constrained by text-centric paradigms that struggle with long-horizon tasks due to fragile multi-turn
+dependencies and context drift. We present CaveAgent, a framework that shifts LLM tool use from “LLM-as-Text-
+Generator” to “LLM-as-Runtime-Operator.” CaveAgent introduces a dual-stream architecture: a semantic stream
+for lightweight reasoning and a runtime stream backed by a persistent Python environment for stateful execution.
+Rather than treating the LLM’s text context as the primary workspace, CaveAgent elevates the persistent runtime as
+the central locus. Beyond leveraging code generation to resolve interdependent sub-tasks (e.g., loops, conditionals)
+in a single step, CaveAgent introduces Stateful Runtime Management: it injects, manipulates, and retrieves
+complex Python objects (e.g., DataFrames, database connections) that persist across turns, unlike existing code-
+based approaches that remain text-bound. CaveAgent further provides a runtime-integrated skill management
+system that extends the Agent Skills open standard, enabling ecosystem interoperability through executable skill
+injections. This persistence mechanism serves as a high-fidelity external memory that reduces context drift in
+multi-turn interactions and preserves processed data for downstream applications with less information loss.
+Evaluations on Tau2-bench and BFCL across six SOTA LLMs demonstrate consistent improvements: +10.5%
+success rate on retail tasks, 28.4% reduction in total token consumption, and 59% token reduction on data-
+intensive tasks. The accessible runtime state further provides programmatically verifiable feedback, enabling
+automated evaluation and reward signal generation without human annotation and establishing a structural
+foundation for future research in Reinforcement Learning with Verifiable Rewards (RLVR).
+Date: Feb 19, 2026 (v.2)
+Code: https://github.com/acodercat/cave-agent
+Main Contact: Zhenglin Wan (vanzl@u.nus.edu), Jun Song (junsong@hkbu.edu.hk)
+Figure 1: Town Simulation: a toy example for Stateful Runtime-Mediated Multi-Agent Collaboration.
+∗Joint first author & Equal Contribution.
+† Corresponding to junsong@hkbu.edu.hk. Work conducted at the Hong Kong Generative AI Research and Development Center (HKGAI), led by HKUST.
+arXiv:2601.01569v3  [cs.AI]  19 Feb 2026
+
+Technical Report
+1. Introduction
+Large Language Models (LLMs) have demonstrated strong knowledge acquisition and reasoning capabilities across diverse
+natural language processing tasks. Building on these capabilities, tool-integrated reasoning (TIR) enables LLM agents to
+interact with external tools and APIs in a multi-turn manner1 (Lu et al., 2023, Shen et al., 2023, Patil et al., 2024, Qu et al.,
+2025), expanding their information access and solution space. This has extended LLM agents to various domains, including
+scientific discovery (Boiko et al., 2023, Bran et al., 2023), mathematical problem-solving (Gao et al., 2023, Chen et al.,
+2022), Web GUI navigation (Zhou et al., 2023, Yao et al., 2022a), and robotics (Driess et al., 2023, Zitkovich et al., 2023).
+Despite this progress, the conventional protocol for tool use requires LLMs to conform to predefined JSON schemas and
+generate structured JSON objects containing precise tool names and arguments (Qin et al., 2023, Achiam et al., 2023). For
+example, to retrieve stock data, the model must synthesize a JSON string like {"tool":
+"get_stock", "params":
+{"ticker":
+"AAPL", "date":
+"today"}}, requiring exact adherence to syntax and field constraints. This imposes
+three architectural limitations: 1) Rigid Control Flow: each turn executes a single tool call (or parallel batch) and serializes
+output back to context, introducing latency for tasks requiring sequential orchestration (Wu et al., 2024, Shen et al., 2023);
+2) Statelessness: each call is an isolated transaction with no persistent state across turns, so intermediate results must be
+serialized back into text, causing token overhead for complex data structures and cascading error propagation (Qiao et al.,
+2023, Kim et al., 2023); and 3) Limited Composability: JSON schemas express flat function signatures and cannot natively
+represent loops, conditionals, or variable dependencies, forcing multi-step logic into error-prone multi-turn dialogue (Kim
+et al., 2023, Wang et al., 2024).
+While recent works attempt to address these issues with code-based tool use (Wang et al., 2024, Yang et al., 2024), they
+predominantly adopt a process-oriented paradigm where the runtime state remains internalized and text-bound. This
+creates a “textualization bottleneck”: variables are accessible to external systems only through text output, requiring
+serialization into text strings (e.g., printing a DataFrame) to communicate with the user (Wang et al., 2024, Yao et al.,
+2022b). This prevents the direct input and output of structured, manipulatable objects, making it inefficient or impossible to
+handle complex non-textual data (e.g., large datasets, videos) (Qiao et al., 2023) and interact with downstream tasks. To
+address these limitations:
+We aim to build a system that utilizes Python’s "everything is an object” philosophy to enable full Object-Oriented function
+calling and interaction, delegating context engineering to a persistent runtime and allowing the direct injection and retrieval
+of high-fidelity objects without serialization loss, thereby fully leveraging the strong code-generation capability of LLMs, and
+enabling modular distribution of executable tool capabilities through a portable Agent-Skill standard.
+We present CaveAgent, an open-source framework that introduces the concept of Stateful Runtime Management for
+LLM agents, shifting code-based tool use from “process-oriented function calling” to persistent “object-oriented state
+manipulation.” CaveAgent operates on a dual-stream architecture with two distinct streams: a semantic stream for
+reasoning and a runtime stream for state management and code execution. This represents a fundamental inversion of the
+conventional paradigm: whereas existing agents treat the LLM’s semantic context as the primary workspace with external
+tools as auxiliary, CaveAgent elevates the persistent runtime as the primary locus of computation and state, with the semantic
+stream serving as a lightweight orchestrator that generates code to manipulate it.
+By injecting complex data structures (e.g., graphs, DataFrames) directly into the runtime as persistent objects, CaveAgent
+achieves a form of context engineering: the agent manipulates high-fidelity data via concise variable references, decoupling
+storage from the limited context window. Any intermediate result (e.g., DataFrames, planning trees, or key metadata) can
+be stored in persistent variables that the agent actively retrieves for later use or downstream applications (code as action,
+state as memory). This reduces progressive context degradation in multi-turn interactions (Ouyang et al., 2022, Luo et al.,
+2025), enables context compression, and provides error-free recall through the runtime serving as an external memory.
+The persistent environment also enables few-step resolution of complex logical dependencies by using code to interact
+with multiple interdependent tools, allowing the agent to compose workflows (e.g., data filtering followed by analysis) in a
+few turns rather than through error-prone multi-round function calling (Wang et al., 2023a, Qin et al., 2023). The runtime’s
+transparency makes agent behavior fully verifiable, supporting checks on both intermediate programmatic states and final
+output objects of any data type, thereby enabling fine-grained reward signals for Reinforcement Learning.
+Finally, CaveAgent supports artifact handoff without information loss by returning native Python objects rather than text
+representations, enabling direct use in downstream tasks such as UI rendering, visualization, and structured validation. The
+runtime can be serialized and reloaded, preserving the agent’s complete state across sessions. This transforms the LLM from
+1In this paper, we use tool use and function calling interchangeably.
+2
+
+Technical Report
+Figure 2: Key Advantages of CaveAgent
+an isolated text generator into a stateful, interoperable computational component within broader software ecosystems.
+The function-calling paradigm in CaveAgent also extends beyond single-agent capabilities to enable Runtime-Mediated
+Multi-Agent Coordination, as shown in Figure 1 and Figure 2. Unlike conventional frameworks where agents coordinate
+via lossy text message passing (Li et al., 2023, Park et al., 2023), CaveAgent enables agents to interact through direct state
+manipulation. A supervisor agent can programmatically inject variables into a sub-agent’s runtime to alter its environment
+or task context without ambiguous natural language instructions. Multiple agents can also operate on a unified shared
+runtime, achieving implicit synchronization: when one agent modifies a shared object (e.g., updating a global “weather”
+entity in a town simulation), the change is immediately visible to all peers through direct reference. This transforms
+multi-agent collaboration from serialized dialogue into precise, verifiable state flow (details in Appendix E). We summarize
+our contributions as follows:
+• We introduce CaveAgent, a tool-use framework built on Stateful Runtime Management. CaveAgent shifts the
+paradigm from process-oriented function calling to persistent, object-oriented state management. It achieves context
+compression and context-grounded memory recall by delegating context engineering to a persistent runtime, elimi-
+nating the token overhead and precision loss of textual serialization while enabling few-step resolution of logically
+interdependent tasks. CaveAgent also introduces runtime-integrated skill management that extends the Agent Skills
+open standard: because the architecture treats tools as first-class Python objects, skills can deliver executable artifacts
+(functions, variables, and type definitions) directly into the runtime upon activation, unifying tool registration and
+skill distribution into a single mechanism.
+• The framework’s programmatic inspectability is a structural property of the architecture: runtime state is determinis-
+tically accessible at any point, providing automated evaluation and fine-grained reward signals for Reinforcement
+Learning with Verifiable Rewards (RLVR) without requiring subjective human annotation.
+• We evaluate CaveAgent on standard benchmarks (e.g., Tau2-Bench) and provide case studies across various domains in-
+cluding geospatial analysis (Appendix G.3) and AutoML multi-agent coordination (Appendix E.4). We also demonstrate
+the potential to extend the paradigm to Stateful Runtime-Mediated Multi-Agent Coordination with qualitative
+results, opening directions for future research.
+3
+
+Technical Report
+Figure 3: Framework Overview
+2. CaveAgent: Stateful Runtime Management
+2.1. Core Methodologies
+In this section, we present the design of CaveAgent. As illustrated in Figure 3, CaveAgent adopts a dual-stream architecture,
+maintaining two synchronized streams throughout the interaction lifecycle: a Semantic Stream for lightweight reasoning,
+and a Runtime Stream for stateful execution, observation, and context engineering. Unlike conventional agents where the
+LLM’s text context serves as the primary workspace and external tools are called as auxiliary services, CaveAgent inverts this
+relationship: the persistent runtime becomes the central locus of data storage, computation, and state management, while
+the semantic stream is reduced to a lightweight controller that generates code to operate on the runtime.
+We model the agent’s task as a sequential decision process over a horizon T. At each turn t ∈[1,T], the agent receives a query
+or observation xt and must produce a response yt. Unlike traditional formulations where the entire state is re-serialized into
+xt, we introduce a latent runtime state St (we call it "in-runtime context"). The system evolution is thus defined by:
+ht = LLM(xt,ht−1)
+(Semantic Stream: Context History)
+(1)
+St = Exec(ct,St−1)
+(Runtime Stream: Persistent Environment)
+(2)
+where ht represents the semantic history (“in-prompt context”) and ct is the executable code generated by the agent. The
+key design choice is the decoupling of ht and St: the semantic stream tracks intent and lightweight reasoning for code
+generation, while the runtime stream maintains all data and execution state via the code generated by the semantic stream.
+The Runtime Stream:
+The execution kernel of the runtime stream is a persistent Python kernel (an IPython interactive
+shell). We conceptualize each interaction turn t not as an isolated API call, but as a cell execution in a virtual Jupyter
+notebook.
+• Persistent Namespace: The state St comprises the global namespace Nt, containing all variables, functions, and
+imported modules. When the agent executes code ct (e.g., x = 5), the modification to Nt persists to Nt+1. This allows
+subsequent turns to reference x directly without requiring the LLM to memorize or re-output its value.
+• Stateful Injection: Tools are not only described in text; they are injected into N0 as live Python objects. This allows
+the agent to interact with stateful objects via calling tools that modify the object’s internal state across turns.
+The runtime stream can also assign values to new variables during interaction and inject them into the persistent namespace
+(in-runtime context). This enables large context in complex tasks, such as large DataFrames, graphs, or other data structures,
+to be managed entirely by the Python runtime stream as stateful variables. Their values are preserved natively in persistent
+4
+
+Technical Report
+runtime memory without requiring repeated serialization into text, eliminating the risk of hallucination from lossy textual
+representations.
+Code as Action, State as Memory
+The agent stores key information (such as reasoning chains and intermediate data
+analysis results) as persistent variables in the runtime context, retaining only a lightweight description and reference in its
+in-prompt context. The runtime thus functions as an external memory, allowing the agent to retrieve stored data as native
+Python objects, achieving context compression and reducing progressive context degradation in multi-turn interactions. This
+property addresses persistent challenges in agentic tool use, specifically memory, dynamic decision-making, and long-horizon
+reasoning (Patil et al.).
+A natural question arises: what distinguishes storing intermediate results in runtime variables from persisting them to files?
+We identify three key differences. First, type fidelity: runtime variables preserve native Python object types with full method
+interfaces (e.g., a DataFrame retains .groupby(), .merge() operations), whereas file-based storage requires serialization
+that may lose type information or fail entirely for non-serializable objects such as database connections, trained models with
+custom layers, or open file handles. Second, access latency: runtime variables enable zero-cost retrieval within the same
+memory space, while file I/O introduces disk latency and requires explicit read/write operations in generated code. Third,
+lifecycle management: runtime variables are automatically scoped to the agent session and garbage-collected app
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Technical Report
+Figure 16: Demonstration of CaveAgent in a smart-home example: the Semantic Stream interacts with the Runtime Stream by
+generating code that manipulates stateful objects (variables) in the persistent runtime.
+30
+
+Technical Report
+Figure 17: Geospatial Analysis: a user draws two regions on an interactive map. CaveAgent injects the GeoJSON polygons as Python
+variables and resolves the entire spatial query in a single turn with lossless data flow.
+31
+

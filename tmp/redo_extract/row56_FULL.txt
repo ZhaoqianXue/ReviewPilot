@@ -1,0 +1,1667 @@
+Do Self-Evolving Agents Forget? Capability
+Degradation and Preservation in Lifelong LLM Agent
+Adaptation
+Ye Yu1, Xiaopeng Yuan1, Haibo Jin1, Heming Liu1, Yaoning Yu1, Haohan Wang1∗
+1 University of Illinois Urbana-Champaign, IL, USA
+Abstract
+Recent advances in LLM agents enable systems that autonomously refine work-
+flows, accumulate reusable skills, self-train their underlying models, and maintain
+persistent memory. However, we show that such self-evolution is often non-
+monotonic: adapting to new task distributions can progressively degrade previously
+acquired capabilities across all major evolution channels.
+We identify this phenomenon as capability erosion under self-evolution and show
+that it consistently emerges across workflow, skill, model, and memory evolution.
+To mitigate this issue, we propose Capability-Preserving Evolution (CPE), a general
+stabilization principle that constrains destructive capability drift during continual
+adaptation. Across all four evolution dimensions, CPE consistently improves
+retained capability stability while preserving adaptation performance. For example,
+in workflow evolution, CPE improves retained simple-task performance from 41.8%
+to 52.8% under GPT-5.1 optimization while simultaneously achieving stronger
+complex-task adaptation.
+Our findings suggest that stable long-horizon self-evolving agents require not only
+acquiring new capabilities, but also explicitly preserving previously learned ones
+during continual adaptation.
+1
+Introduction
+LLM agents are rapidly shifting from static, manually engineered systems toward self-evolving
+entities that continuously refine themselves through interaction with their environments [1]. Recent
+frameworks enable agents to autonomously optimize their reasoning workflows [2–6], construct
+reusable skills and tools [7–12], update their underlying model parameters [13–15], and accumulate
+persistent memory [14, 16, 17] without human intervention. Together, these advances suggest a
+compelling long-term vision: agents that can continually expand their competence over their lifetime
+through continual self-directed adaptation.
+Yet this long-term vision rests on an assumption that has received little systematic scrutiny: when an
+agent adapts to new tasks within its task scope, it retains competence on tasks it has already mastered.
+Our empirical study indicates that this assumption does not hold in many cases. Across the major
+channels through which self-evolving agents adapt–workflow, skill and tools, model, memory [1]–
+acquiring new competencies frequently comes at the expense of previously mastered ones. As agents’
+task distribution temporarily shifts from an old task distribution X toward a new task distribution Y,
+repeated self-updates gradually weaken the internal structures that previously supported successful
+behavior on earlier tasks, causing prior capabilities to decay as illustrated in Figure 1. We term this
+phenomenon capability erosion under self-evolution.
+∗Corresponding author: haohanw@illinois.edu
+Preprint.
+arXiv:2605.09315v1  [cs.AI]  10 May 2026
+
+Task X
+Task Y
+Task Distribution Shift
+Vanilla
+Self-Evolve
+Capabilities
+Decay
+Capabilities
+Preserve
+Self-Evolve
+With Drift Control
+Self-Evolving
+Loop
+Self-Evolving
+Loop
+LLM Agent
+LLM Agent
+LLM Agent
+LLM Agent
+Figure 1: Self-evolution under task distribution shift. Under unconstrained self-evolution, repeated
+adaptation toward new tasks progressively erodes capability structures that supported previously
+mastered tasks, causing prior capability loss. Capability-Preserving Evolution instead constrains
+self-updates to acquire new capabilities while preserving previously retained ones.
+Capability erosion cannot be characterized as a single drop in held-out accuracy. It manifests
+structurally across three dimensions:
+1. Retrospective capability decay. Performance on previously mastered tasks degrades after fine-
+tuning on new task distributions.
+2. Behavioral policy drift. Workflows become longer and more complex, introducing unnecessary
+execution steps that introduce noise.
+3. Generalization erosion. Adaptation to the evolved distribution narrows the effective reasoning
+space and interferes with previously acquired capabilities during skill or memory evolution.
+Taken together, these modes reveal that unconstrained self-evolution does not accumulate capabil-
+ity monotonically, but instead introduces continual drift away from previously reliable behavior.
+Adaptation to new tasks often trades off with the retention of prior capabilities.
+A single mechanistic account underlies this phenomenon across all four evolution dimensions. Al-
+though workflow, tool, model, and memory evolution appear to be heterogeneous, all four dimensions
+involve repeatedly rewriting a mutable repository to accommodate new tasks. Each update opti-
+mized solely for a new task distribution introduces destructive interference: modifications to internal
+repository structures that previously supported successful behavior on earlier tasks are degraded or
+overwritten. Capability erosion is therefore not an artifact of any particular adaptation mechanism,
+but a structural consequence of unconstrained continual self-modification [18–24].
+This diagnosis points toward a shared mitigation principle: self-evolution updates should acquire new
+competencies while minimizing destructive disruption to capability structures already encoded in
+the repository. In other words, the objective is not merely to move the agent toward the new task
+distribution Y, but to do so while preserving the capability support required by prior tasks, as depicted
+in the lower pipeline of Figure 1. We term this Capability-Preserving Evolution and propose it as
+a general design principle for stable long-horizon agent adaptation. To this end, we analyze how
+capability erosion manifests across all four evolution dimensions and, from this analysis, derive
+dimension-specific regularization strategies that instantiate capability-preserving evolution in each
+setting. Across workflow, skill and tool, model, and memory evolution, these strategies substantially
+mitigate observed erosion, demonstrating that capability-preserving evolution constitutes a broadly
+applicable stabilization mechanism for self-evolving agents.
+Our contributions are threefold:
+2
+
+• We identify capability erosion as a fundamental failure mode of self-evolving LLM agents, where
+continual adaptation degrades previously acquired capabilities across workflow, skill, model, and
+memory evolution.
+• We provide a unified interference perspective on capability erosion, together with a local analysis
+showing how unconstrained self-evolution overwrites prior capability-supporting structures.
+• We propose Capability-Preserving Evolution (CPE), a general stabilization principle for self-
+evolving agents that constrains destructive capability drift during continual adaptation while
+preserving adaptation performance.
+2
+Capability Erosion under Distributional Self-Evolution
+2.1
+Sequential Self-Evolution
+We model self-evolution as a sequential adaptation process over task distributions.
+Let
+D1, D2, . . . , DT denote the distributions encountered by an agent over its lifetime. At stage t,
+the agent is represented by a capability state Rt ∈R, which may correspond to an executable work-
+flow, a skill repository, trainable model parameters, or a memory store. Self-evolution updates Rt to
+improve performance on newly encountered task distributions while implicitly affecting performance
+on previously learned ones.
+Notation. A sampled task instance is denoted by x ∼Dt. The instantaneous loss on x under
+capability state R is written as ℓ(R; x). The expected stage loss is
+Lt(R) = Ex∼Dt[ℓ(R; x)].
+(1)
+Given a new distribution Dt, naïve self-evolution updates the capability state by optimizing only the
+current-stage objective:
+Rnaive
+t
+∈arg min
+R∈R Lt(R).
+(2)
+This abstraction intentionally hides the concrete representation of Rt. For workflow evolution, Rt is
+an executable policy graph or prompt program. For skill/tool evolution, Rt is a bounded repository of
+reusable procedural entries. For model evolution, Rt is the trainable parameter state. For memory
+evolution, Rt is an external retrieved memory store. Although the underlying representations differ,
+all four settings share the same learning dynamic: optimizing performance on the current distribution
+Dt can interfere with capabilities previously acquired on earlier distributions D<t.
+2.2
+Capability Erosion
+Let D<t = {D1, . . . , Dt−1} denote previously encountered distributions. We define the retained
+old-distribution risk at stage t as
+L<t(R) =
+X
+i<t
+αiLi(R),
+αi ≥0,
+X
+i<t
+αi = 1.
+(3)
+The coefficients αi control the relative importance assigned to prior distributions and may be chosen
+uniformly in the simplest setting.
+We say capability erosion occurs at stage t if adaptation toward the current distribution Dt increases
+retained risk on previously encountered distributions D<t:
+L<t(Rt) > L<t(Rt−1).
+(4)
+The central source of erosion is distributional interference. If the minimizers of the current objective
+Lt are misaligned with those of prior objectives L<t, then optimizing only Lt can move the capability
+state toward regions that increase retained old-distribution risk. When old and new distributions rely
+on overlapping capability support, such interference may be weak or even beneficial. Conversely,
+larger mismatch between the structures required by Dt and D<t induces stronger capability erosion.
+Importantly, this formulation is stated in terms of a general capability state Rt rather than only
+neural parameters. In self-evolving agents, adaptation may occur through workflow rewriting,
+skill replacement, memory updates, or parameter optimization, all of which modify a mutable
+capability repository. Despite these different implementations, the same interference principle applies:
+adaptation toward new distributions can disrupt structures that previously supported successful
+behavior.
+3
+
+2.3
+A Local Mechanism of Capability Erosion
+The discussion above characterizes capability erosion at the level of task distributions and retained
+risk. To study how such erosion emerges during self-evolution updates, we now consider a local
+approximation in which small changes to the capability state induce corresponding local changes in
+the retained and current-task objectives.
+Let ∆= R −Rt−1 denote a local update around the current capability state. Suppose Rt−1 is locally
+well-adapted to the retained old distributions, so that
+∇L<t(Rt−1) = 0,
+and let
+H<t = ∇2L<t(Rt−1) ⪰0,
+gt = ∇Lt(Rt−1).
+Here, H<t captures directions that are locally important for retained capabilities, while gt is the
+update direction preferred by the new distribution.
+Proposition 1 (Curvature mechanism of capability erosion). Let Rt−1 be a local minimizer of L<t,
+and suppose L<t is twice differentiable around Rt−1 with Hessian H<t ⪰0. Consider a naive
+current-task update
+Rnaive
+t
+= Rt−1 −ηgt,
+gt = ∇Lt(Rt−1),
+where η > 0. Then, for sufficiently small η,
+L<t(Rnaive
+t
+) −L<t(Rt−1) = η2
+2 g⊤
+t H<tgt + o(η2).
+Consequently, naive adaptation increases retained old-distribution loss whenever gt has nonzero
+projection onto a positive-curvature direction of H<t.
+Proposition 1 shows that capability erosion is not controlled only by the size of the update. It is
+governed by whether the new-task update direction overlaps with directions that are locally important
+for retained capabilities. Thus, updates that improve the current distribution can be destructive when
+they move the capability state along old-task-sensitive directions. The proof is given in Appendix A.
+3
+Capability-Preserving Evolution
+3.1
+Regularized Self-Evolution Objective
+Capability-Preserving Evolution addresses this interference by adding an explicit retention regularizer.
+At stage t, instead of optimizing only Lt, CPE solves
+RCPE
+t
+∈arg min
+R∈R Lt(R) + λΩt(R, Rt−1),
+(5)
+where Ωt measures deviation from prior capability-supporting structure and λ > 0 controls the
+stability–plasticity tradeoff. Naïve self-evolution corresponds to the special case λ = 0, where
+adaptation is optimized without any explicit retention constraint.
+The role of Ωt is not to prevent evolution. Rather, it biases self-evolution toward low-interference
+solutions: among updates that improve the new distribution, prefer those that minimally disrupt
+structures needed by prior distributions. Different evolution dimensions instantiate Ωt differently:
+Ωt(R, Rt−1) =
+
+
+
+
+
+
+
+Ωwf
+workflow retention regularization,
+Ωsk
+skill retention regularization,
+Ωmd
+parameter retention regularization,
+Ωmem
+memory retention regularization.
+(6)
+3.2
+Local Forgetting Control under CPE
+We now show how capability-preserving evolution controls the local erosion mechanism above. In a
+local quadratic surrogate, CPE chooses an update ∆λ by solving
+∆λ = arg min
+∆
+
+g⊤
+t ∆+ 1
+2∆⊤Ht∆+ λ
+2 ∆⊤Mt∆
+
+,
+where Ht ⪰0 is the local curvature of the current-task loss and Mt ≻0 is a preservation metric. The
+matrix Mt is a local quadratic surrogate for the preservation regularizer Ωt(R, Rt−1).
+4
+
+Assumption 1 (Capability-aligned preservation metric). There exists a constant c > 0 such that,
+locally around Rt−1,
+H<t ⪯cMt.
+Equivalently, for every local update direction ∆,
+∆⊤H<t∆≤c∆⊤Mt∆.
+Assumption 1 does not require the preservation metric to equal the retained-task Hessian. It only
+requires the metric to upper-control directions along which retained-task loss is locally sensitive. In
+model evolution, this corresponds to Fisher-style parameter-importance penalties; in workflow, skill,
+and memory evolution, it corresponds to a capability-aware discrepancy over the mutable repository.
+Proposition 2 (CPE suppresses local old-task forgetting). Suppose Rt−1 is a local minimizer of
+L<t, L<t is twice differentiable around Rt−1 with Hessian H<t ⪰0, and Assumption 1 holds. Let
+Ht ⪰0, Mt ≻0, and λ > 0. Then
+∆λ = −(Ht + λMt)−1gt,
+and the retained old-distribution degradation satisfies
+L<t(Rt−1 + ∆λ) −L<t(Rt−1) ≤
+c
+2λ2 ∥gt∥2
+M −1
+t
++ o(∥∆λ∥2).
+Moreover, ∥∆λ∥= O(λ−1) for large λ, so the remainder is lower order than the leading O(λ−2)
+term.
+Proposition 2 gives a local stability interpretation of CPE. Naive adaptation can increase old-task loss
+by moving along old-task-sensitive curvature directions. A capability-aligned preservation metric
+penalizes precisely these directions, so increasing λ suppresses old-task degradation while also
+limiting the size of the new-task update. This is the local stability–plasticity tradeoff that motivates
+the dimension-specific CPE regularizers below. The proof is given in Appendix A.
+3.3
+Channel-Specific Instantiations
+The theory above gives a shared template. Each empirical setting instantiates the same objective.
+Workflow evolution. Here Rt is an executable workflow. The regularizer Ωwf discourages deviations
+from previously successful execution behavior during adaptation to new task distributions.
+Skill/tool evolution. Here Rt is a bounded skill repository. The regularizer Ωsk discourages
+unnecessary removal of previously useful skills during sequential adaptation.
+Model evolution. Here Rt = θt denotes trainable model parameters or adapter weights. CPE uses
+an importance-weighted quadratic penalty:
+Ωmd(θ, θt−1) = 1
+2
+X
+i
+Fi(θi −θt−1,i)2,
+(7)
+where Fi estimates the importance of parameter i to prior-stage performance. This regularizer dis-
+courages parameter movement along directions that are important for previously learned distributions,
+reducing interference between old and new task adaptation.
+Memory evolution. Here Rt is a persistent memory bank. The regularizer Ωmem discourages
+deletion or suppression of memories useful for previously encountered distributions.
+4
+Empirical Instantiations of Capability-Preserving Evolution
+We now instantiate Capability-Preserving Evolution across four major self-evolution dimensions:
+workflow evolution, skill/tool evolution, model evolution, and memory evolution. Although the
+underlying repositories differ across these settings, all four exhibit the same stability–plasticity
+tension: adaptation toward new task distributions can interfere with previously retained capabilities.
+For each dimension, we implement a dimension-specific preservation mechanism while keeping the
+underlying self-evolution pipeline unchanged, allowing direct comparison between unconstrained
+and capability-preserving evolution.
+4.1
+CPE for Workflow Evolution
+5
+
+(a) Final workflow comparison
+after complex-task self-evolution.
+Vanilla
+EvoAgentX
+introduces
+overly complex workflow, while
+CPE preserves a more compact
+execution structure.
+(b)
+Workflow
+complexity
+mea-
+sured during self-evolution on com-
+plex Airline task subset.
+Vanilla
+EvoAgentX accumulates workflow
+complexity, while CPE substan-
+tially slows long-horizon structural
+growth.
+(c)
+Post-evolution
+trade-off
+be-
+tween retained simple-task perfor-
+mance and complex-task perfor-
+mance. Each point denotes the final
+evolved workflow after evolution on
+complex task subset.
+Figure 2: Behavioral policy drift during complex-task workflow self-evolution. Starting from the
+same simple-task seed workflow, vanilla EvoAgentX and CPE undergo parallel self-evolution on the
+complex-task subset. Vanilla evolution accumulates structural detours, producing a more complex
+final executable workflow.
+Env.
+GPT-5.1
+GPT-5 nano
+Van.
+CPE
+Van.
+CPE
+Simple
+Airline
+57.1
+64.3
+57.1
+71.4
+Retail
+43.3
+56.7
+50.0
+50.0
+Telecom
+25.0
+37.5
+33.3
+45.8
+Avg.
+41.8
+52.8
+46.8
+55.7
+Complex
+Airline
+37.5
+37.5
+20.8
+29.2
+Retail
+20.3
+45.3
+40.6
+43.8
+Telecom
+14.0
+17.5
+7.0
+7.0
+Avg.
+23.9
+33.4
+22.8
+26.7
+Table 1: Workflow self-evolution com-
+parison between vanilla self-evolve
+and
+CPE-style
+evolution
+(in
+%).
+Scores are reported after self-evolving
+from a shared simple-task seed work-
+flow on the complex-task subset.
+Setup. In workflow self-evolution, the mutable repository
+Rwf
+t
+is the current executable workflow, including both op-
+erator orchestration and prompt specifications. Repeated
+unconstrained workflow rewriting often introduces prompt
+and structural policy drift, causing later workflows to deviate
+from the compact execution semantics encoded in earlier
+successful behaviors.
+We study this setting using EvoAgentX [4] on τ 2-Bench [25]
+with GPT-5.1 and GPT-5 nano [26, 27] as optimizer back-
+bones. For each domain, we first construct a shared seed
+workflow on the simple-task subset, then launch parallel
+vanilla and CPE self-evolution branches on the complex-
+task subset. In both settings, failed trajectories are iteratively
+fed back to an optimizer LLM that rewrites the workflow
+to improve future execution success. Vanilla EvoAgentX
+performs unconstrained workflow mutation, whereas CPE
+injects anchor behavioral signatures extracted from the seed
+workflow, including core task objectives, output constraints,
+and failure-avoidance behaviors, to discourage disruptive
+rewrites while preserving the same optimizer, feedback loop,
+and mutation budget.
+After evolution, we evaluate the final workflows on both simple and complex tasks to measure retained
+routine-task robustness and adaptation to harder task distributions. Additional implementation details
+are deferred to Appendix C.
+Observation and Analysis. Table 1 and Figure 2 show that, starting from the same seed workflow
+and optimization budget, vanilla EvoAgentX and CPE produce markedly different post-evolution
+policies. Although both adapt to complex tasks, vanilla EvoAgentX yields a more bloated workflow
+and larger degradation on previously mastered simple tasks.
+As illustrated in Figure 2a, vanilla evolution often inserts extra validation operators and structural
+detours. This pattern is locally reasonable: in long-horizon complex tasks, moderate validation can
+prevent malformed intermediate outputs from derailing execution. However, when such validation-
+heavy repairs are repeatedly accepted without compactness constraints, the workflow gradually
+becomes over-defensive. Slightly nonstandard but semantically valid actions may be rejected,
+triggering conservative fallback behavior or prematurely terminating recoverable episodes. This
+structural drift is reflected in Figure 2b, where vanilla EvoAgentX accumulates much longer workflow
+6
+
+Figure 3: Generalization erosion during skill self-evolution. As the task distribution shifts from
+Geometry to Number Theory, vanilla self-evolution progressively overwrites previously useful
+Geometry skills under bounded repository capacity. In contrast, CPE preserves prior procedural
+knowledge through capability-preserving skill consolidation, allowing old and new skills to coexist
+more stably.
+(a) Normalized retained skill usage across sequential
+skill evolution stages. Vanilla self-evolution gradu-
+ally suppresses previously learned skills after the task
+distribution shifts, while CPE preserves broader prior-
+skill utilization through capability-preserving reposi-
+tory management.
+(b) Sequential self-evolution performance on the Al-
+gebra evaluation set using GPT-4o mini. As the evo-
+lution trajectory shifts toward later domains, vanilla
+self-evolution exhibits continual degradation on earlier
+Algebra capability, whereas CPE substantially stabi-
+lizes retained performance throughout the evolution.
+Figure 4: Generalization erosion during skill self-evolution. Vanilla self-evolution and CPE undergo
+identical evolution trajectories. Vanilla evolution progressively overwrites previously useful proce-
+dural skills as the task distribution shifts, while CPE preserves historically reusable skills through
+capability-preserving repository compression and merge-based capacity management.
+code, while CPE substantially slows this expansion. Figure 2c further shows that CPE achieves a
+better retention–adaptation trade-off, preserving more simple-task performance while maintaining
+comparable or stronger complex-task gains.
+Overall, we find that unconstrained self-evolution repeatedly rewards locally beneficial repairs that
+improve difficult trajectories but gradually overwrite the compact execution semantics needed for
+stable routine-task behavior. CPE mitigates this failure by constraining evolution toward seed-
+consistent executable behavior.
+4.2
+CPE for Skill/Tool Evolution
+Setup. We study skill self-evolution using a MemSkill [8] style framework on MATH [28] with GPT-
+4o mini and GPT-5 nano [26, 27] as the designer and executor backbones. The mutable repository
+is a bounded-capacity skill bank that stores reusable procedural reasoning templates. During each
+episode, the agent retrieves the most relevant skills from the current repository to guide downstream
+7
+
+reasoning, while failed trajectories are accumulated and periodically analyzed by a designer LLM to
+synthesize new procedural skills.
+Under vanilla self-evolution, accepted skills are directly added into the shared repository, and least-
+frequently-used entries are evicted once the capacity budget is exceeded. As the task distribution
+shifts, newly synthesized specialized skills progressively dominate repository capacity, causing
+previously useful general-purpose skills to become under-utilized and eventually overwritten.
+Our CPE variant preserves the same retrieval, execution, and skill-generation pipeline, but regularizes
+repository updates before admission. Candidate skills are checked against preserved capability
+signatures, semantically related skills are merged to release capacity, and historically reusable high-
+utility skills are protected from direct deletion. Both variants are evaluated under identical evolution
+budgets. Implementation details are deferred to Appendix D.1.
+Domain
+GPT-5 nano
+GPT-4o mini
+Vanilla
+CPE
+Vanilla
+CPE
+Algebra
+84.3
+85.9
+82.6
+84.4
+Geometry
+58.9
+59.3
+50.8
+51.1
+Number Theory
+85.4
+87.8
+73.5
+76.1
+Table 2: Skill dimension self-evolution compar-
+ison between vanilla self-evolve and CPE-style
+evolution (in %). Scores are reported after Alge-
+bra →Geometry →Number Theory evolution.
+Observation and Analysis. Table 2, Figure 3,
+and Figure 4 show that capability erosion in skill
+self-evolution mainly arises from repository over-
+write under sequential task-distribution shift. As
+the task distribution shifts from Geometry to Num-
+ber Theory, newly synthesized skills gradually
+dominate retrieval frequency and bounded repos-
+itory capacity, causing previously useful Geome-
+try skills to become under-utilized and eventually
+evicted.
+CPE mitigates this issue through capability-
+preserving consolidation. Instead of directly over-
+writing old entries, semantically related skills are merged before new skills are admitted, allowing
+earlier capabilities to remain represented within the repository. This effect appears in both repository
+statistics and downstream performance. Figure 4a shows that vanilla self-evolution progressively sup-
+presses retained skill usage for earlier domains, while CPE preserves substantially higher prior-skill
+utilization across stages. Similarly, Figure 4b shows continual degradation on the Algebra evalua-
+tion set under vanilla evolution, whereas CPE maintains more stable retained capability throughout
+sequential evolution.
+Overall, vanilla skill evolution progressively overwrites previously useful skills under bounded
+repository capacity, while CPE mitigates this erosion through capability-preserving consolidation.
+4.3
+CPE for Model Evolution
+Figure 5: Sequential self-evolution per-
+formance on the Anatomy evaluation set
+using Qwen3-0.6B.
+Setup. We study model self-evolution using STaR self-
+training [13] on MedMCQA [29] with Qwen3-0.6B [30]
+and Llama3.2-3B [31]. The mutable repository is the
+trainable parameter space of the evolving language model
+adapter. At each stage, the model generates rationale-
+answer traces on a newly introduced medical domain, fil-
+ters correct trajectories, and performs LoRA fine-tuning
+on the resulting demonstrations, producing a sequential
+self-training process across domains.
+Under vanilla self-evolution, later-stage updates continu-
+ally adapt the model toward newly encountered domains,
+but often overwrite parameter regions that previously sup-
+ported earlier reasoning behaviors, producing classical
+catastrophic forgetting.
+Our CPE variant preserves the same continual self-training pipeline, but adds an Elastic Weight
+Consolidation style regularizer [18, 32]. After each stage, Fisher-based parameter importance weights
+are estimated to discourage destructive updates on parameters important to prior domains while still
+permitting adaptation on lower-importance directions. Both variants are evaluated under identical
+evolution order, optimization budget, and LoRA configurations. Implementation details are deferred
+to Appendix E.1.
+8
+
+Domain
+Qwen3-0.6B
+Llama3.2-3B
+Vanilla
+CPE
+Vanilla
+CPE
+Anatomy
+29.4
+30.5
+68.9
+70.3
+Biochemistry
+37.2
+38.4
+79.4
+79.5
+Dental
+32.2
+33.0
+53.0
+53.5
+Table 3: Model dimension self-evolution
+comparison between vanilla self-evolve
+and CPE-style evolution (in %). Scores
+are reported after the full Anatomy →
+Biochemistry →Dental evolution.
+Observation and Analysis. Table 3 and Figure 5 show
+that capability erosion in model self-evolution emerges
+as continual parametric overwrite under sequential self-
+training. Vanilla self-evolution exhibits continual degrada-
+tion on earlier domains as later-stage adaptation proceeds.
+This effect is consistent across both backbone scales in
+Table 3. On the other hand, CPE consistently preserves
+higher retained performance than vanilla self-evolution
+across all evaluated domains. On Qwen3-0.6B, retained
+accuracy improves from 29.4% to 30.5% on Anatomy,
+from 37.2% to 38.4% on Biochemistry, and from 32.2%
+to 33.0% on Dental, with similar trends on Llama3.2-3B.
+CPE mitigates this erosion by constraining destructive parameter movement through Fisher-based im-
+portance regularization, encouraging adaptation along lower-interference directions while preserving
+previously useful representations.
+4.4
+CPE for Memory Evolution
+Memory evolution also exhibits capability erosion: vanilla memory updates can evict, suppress,
+or compete with previously useful memories, degrading old-task retention. CPE mitigates this
+interference through evidence-gated preservation, protecting historically reliable memories while
+keeping low-evidence entries adaptable, reducing the average retention gap from 2.3% to 0.7%. Due
+to space constraints, we defer the full setup and detailed analysis to Appendix F.
+5
+Related Work
+Self-Evolving LLM Agents. Recent work enables LLM agents to refine themselves across four
+dimensions: workflow optimization [2–6], skill and tool accumulation [7–12], model self-training [13–
+15], and memory evolution [14, 16, 17]. ang Gao et al. [1], Fang et al. [33] survey these as com-
+plementary paths toward open-ended improvement. Critically, all existing frameworks measure
+self-evolution solely by forward progress on new tasks, without asking whether adaptation preserves
+competence on previously mastered ones. Our work is the first to systematically study this question,
+revealing capability degradation as a consistent, structural failure mode across all four dimensions.
+Continual Learning. Catastrophic forgetting is well-studied in continual learning [19–24], where
+methods such as Elastic Weight Consolidation [18] penalize destructive parameter updates. However,
+this literature assumes the agent’s only mutable component is its weights. Self-evolving agents
+break this assumption by simultaneously modifying workflows, skill repositories, memory stores,
+and model parameters, each capable of inducing degradation through distinct mechanisms. Our
+work extends the forgetting problem to this multi-component setting, identifying dimension-specific
+erosion modes and targeted preservation strategies.
+Risks in Self-Evolving Agents.
+Recent work identifies safety risks under autonomous self-
+modification: Shao et al. [34] document emergent safety misalignment, while Zhou et al. [35]
+link capability-oriented training to alignment drift. Our work shares this motivation but focuses on
+retained competence degradation, specifically whether agents lose previously mastered functional
+capabilities as they adapt to new task distributions, rather than safety-oriented degeneration.
+6
+Conclusion
+We identify capability erosion as a general failure mode of self-evolving LLM agents: adaptation to
+new task distributions can degrade previously acquired capabilities across workflow, skill, model,
+and memory evolution. We further show that this phenomenon arises from a shared interference
+mechanism underlying continual self-modification. To address this issue, we propose Capability-
+Preserving Evolution, a general principle for stabilizing long-horizon self-evolution by constraining
+destructive capability drift during adaptation. Our empirical findings show that CPE consistently
+improves retained capability stability and plasticity, highlighting the importance of preserving
+previously acquired capabilities during continual self-evolution.
+9
+
+References
+[1] Huan ang Gao, Jiayi Geng, Wenyue Hua, Mengkang Hu, Xinzhe Juan, Hongzhang Liu, Shilong
+Liu, Jiahao Qiu, Xuan Qi, Yiran Wu, Hongru Wang, Han Xiao, Yuhang Zhou, Shaokun Zhang,
+Jiayi Zhang, Jinyu Xiang, Yixiong Fang, Qiwen Zhao, Dongrui Liu, Qihan Ren, Cheng Qian,
+Zhenhailong Wang, Minda Hu, Huazheng Wang, Qingyun Wu, Heng Ji, and Mengdi Wang. A
+survey of self-evolving agents: What, when, how, and where to evolve on the path to artificial
+super intelligence, 2026. URL https://arxiv.org/abs/2507.21046.
+[2] Shengran Hu, Cong Lu, and Jeff Clune. Automated design of agentic systems, 2025. URL
+https://arxiv.org/abs/2408.08435.
+[3] Jiayi Zhang, Jinyu Xiang, Zhaoyang Yu, Fengwei Teng, Xionghui Chen, Jiaqi Chen, Mingchen
+Zhuge, Xin Cheng, Sirui Hong, Jinlin Wang, Bingnan Zheng, Bang Liu, Yuyu Luo, and Chenglin
+Wu. Aflow: Automating agentic workflow generation, 2025. URL https://arxiv.org/abs/
+2410.10762.
+[4] Yingxu Wang, Siwei Liu, Jinyuan Fang, and Zaiqiao Meng. Evoagentx: An automated frame-
+work for evolving agentic workflows, 2025. URL https://arxiv.org/abs/2507.03616.
+[5] Guibin Zhang, Kaijie Chen, Guancheng Wan, Heng Chang, Hong Cheng, Kun Wang, Shuyue
+Hu, and Lei Bai.
+Evoflow: Evolving diverse agentic workflows on the fly, 2025.
+URL
+https://arxiv.org/abs/2502.07373.
+[6] Siwei Liu, Jinyuan Fang, Han Zhou, Yingxu Wang, and Zaiqiao Meng. Sew: Self-evolving
+agentic workflows for automated code generation, 2026. URL https://arxiv.org/abs/
+2505.18646.
+[7] Dang Nguyen, Viet Dac Lai, Seunghyun Yoon, Ryan A. Rossi, Handong Zhao, Ruiyi Zhang,
+Puneet Mathur, Nedim Lipka, Yu Wang, Trung Bui, Franck Dernoncourt, and Tianyi Zhou.
+Dynasaur: Large language agents beyond predefined actions, 2025. URL https://arxiv.
+org/abs/2411.01747.
+[8] Haozhen Zhang, Quanyu Long, Jianzhu Bao, Tao Feng, Weizhi Zhang, Haodong Yue, and
+Wenya Wang. Memskill: Learning and evolving memory skills for self-evolving agents, 2026.
+URL https://arxiv.org/abs/2602.02474.
+[9] Guanzhi Wang, Yuqi Xie, Yunfan Jiang, Ajay Mandlekar, Chaowei Xiao, Yuke Zhu, Linxi Fan,
+and Anima Anandkumar. Voyager: An open-ended embodied agent with large language models,
+2023. URL https://arxiv.org/abs/2305.16291.
+[10] Andrew Zhao, Daniel Huang, Quentin Xu, Matthieu Lin, Yong-Jin Liu, and Gao Huang. Expel:
+Llm agents are experiential learners, 2024. URL https://arxiv.org/abs/2308.10144.
+[11] Emre Can Acikgoz, Cheng Qian, Jonas Hübotter, Heng Ji, Dilek Hakkani-Tür, and Gokhan
+Tur. Tool-r0: Self-evolving llm agents for tool-learning from zero data, 2026. URL https:
+//arxiv.org/abs/2602.21320.
+[12] Shiqi Chen, Jingze Gai, Ruochen Zhou, Jinghan Zhang, Tongyao Zhu, Junlong Li, Kangrui
+Wang, Zihan Wang, Zhengyu Chen, Klara Kaleb, Ning Miao, Siyang Gao, Cong Lu, Manling
+Li, Junxian He, and Yee Whye Teh. Skillcraft: Can llm agents learn to use tools skillfully?,
+2026. URL https://arxiv.org/abs/2603.00718.
+[13] Eric Zelikman, Yuhuai Wu, Jesse Mu, and Noah D. Goodman. Star: Bootstrapping reasoning
+with reasoning, 2022. URL https://arxiv.org/abs/2203.14465.
+[14] Weihao Zeng, Yuzhen Huang, Lulu Zhao, Yijun Wang, Zifei Shan, and Junxian He. B-star:
+Monitoring and balancing exploration and exploitation in self-taught reasoners, 2025. URL
+https://arxiv.org/abs/2412.17256.
+[15] Ye Tian, Baolin Peng, Linfeng Song, Lifeng Jin, Dian Yu, Haitao Mi, and Dong Yu. Toward
+self-improvement of llms via imagination, searching, and criticizing, 2024. URL https:
+//arxiv.org/abs/2404.12253.
+10
+
+[16] Mirac Suzgun, Mert Yuksekgonul, Federico Bianchi, Dan Jurafsky, and James Zou. Dynamic
+cheatsheet: Test-time learning with adaptive memory, 2025. URL https://arxiv.org/abs/
+2504.07952.
+[17] Tianxin Wei, Noveen Sachdeva, Benjamin Coleman, Zhankui He, Yuanchen Bei, Xuying Ning,
+Mengting Ai, Yunzhe Li, Jingrui He, Ed H. Chi, Chi Wang, Shuo Chen, Fernando Pereira, Wang-
+Cheng Kang, and Derek Zhiyuan Cheng. Evo-memory: Benchmarking llm agent test-time
+learning with self-evolving memory, 2025. URL https://arxiv.org/abs/2511.20857.
+[18] James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel Veness, Guillaume Desjardins,
+Andrei A. Rusu, Kieran Milan, John Quan, Tiago Ramalho, Agnieszka Grabska-Barwinska,
+Demis Hassabis, Claudia Clopath, Dharshan Kumaran, and Raia Hadsell. Overcoming catas-
+trophic forgetting in neural networks. Proceedings of the National Academy of Sciences,
+114(13):3521–3526, March 2017. ISSN 1091-6490. doi: 10.1073/pnas.1611835114. URL
+http://dx.doi.org/10.1073/pnas.1611835114.
+[19] Liyuan Wang, Xingxing Zhang, Hang Su, and Jun Zhu. A comprehensive survey of continual
+learning: Theory, method and application, 2024. URL https://arxiv.org/abs/2302.
+00487.
+[20] Omer Marcus et al. SWE-Bench-CL: Continual learning for coding agents. arXiv preprint
+arXiv:2507.00014, 2025.
+[21] Zafeirios Fountas et al. SuRe: Surprise-driven prioritised replay for continual LLM learning.
+arXiv preprint arXiv:2511.22367, 2025.
+[22] Ming Chen et al. Analyzing and reducing catastrophic forgetting in parameter efficient tuning.
+arXiv preprint arXiv:2402.18865, 2024.
+[23] Wei Zhang et al. Mechanistic analysis of catastrophic forgetting in large language models
+during continual fine-tuning. arXiv preprint arXiv:2601.18699, 2026.
+[24] Yuhao Luo et al. An empirical study of catastrophic forgetting in large language models during
+continual fine-tuning. arXiv preprint arXiv:2308.08747, 2024.
+[25] Victor Barres, Honghua Dong, Soham Ray, Xujie Si, and Karthik Narasimhan. τ 2-bench:
+Evaluating conversational agents in a dual-control environment, 2025. URL https://arxiv.
+org/abs/2506.07982.
+[26] Aaditya Singh, Adam Fry, Adam Perelman, Adam Tart, Adi Ganesh, Ahmed El-Kishky, Aidan
+McLaughlin, Aiden Low, AJ Ostrow, Akhila Ananthram, Akshay Nathan, Alan Luo, Alec
+Helyar, Aleksander Madry, Aleksandr Efremov, Aleksandra Spyra, Alex Baker-Whitcomb,
+Alex Beutel, Alex Karpenko, Alex Makelov, Alex Neitz, Alex Wei, Alexandra Barr, Alexandre
+Kirchmeyer, Alexey Ivanov, Alexi Christakis, Alistair Gillespie, Allison Tam, Ally Bennett,
+Alvin Wan, Alyssa Huang, Amy McDonald Sandjideh, Amy Yang, Ananya Kumar, Andre
+Saraiva, Andrea Vallone, Andrei Gheorghe, Andres Garcia Garcia, Andrew Braunstein, An-
+drew Liu, Andrew Schmidt, Andrey Mereskin, Andrey Mishchenko, Andy Applebaum, Andy
+Rogerson, Ann Rajan, Annie Wei, Anoop Kotha, Anubha Srivastava, Anushree Agrawal, Arun
+Vijayvergiya, Ashley Tyra, Ashvin Nair, Avi Nayak, Ben Eggers, Bessie Ji, Beth Hoover, Bill
+Chen, Blair Chen, Boaz Barak, Borys Minaiev, Botao Hao, Bowen Baker, Brad Lightcap,
+Brandon McKinzie, Brandon Wang, Brendan Quinn, Brian Fioca, Brian Hsu, Brian Yang,
+Brian Yu, Brian Zhang, Brittany Brenner, Callie Riggins Zetino, Cameron Raymond, Camillo
+Lugaresi, Carolina Paz, Cary Hudson, Cedric Whitney, Chak Li, Charles Chen, Charlotte Cole,
+Chelsea Voss, Chen Ding, Chen Shen, Chengdu Huang, Chris Colby, Chris Hallacy, Chris
+Koch, Chris Lu, Christina Kaplan, Christina Kim, CJ Minott-Henriques, Cliff Frey, Cody Yu,
+Coley Czarnecki, Colin Reid, Colin Wei, Cory Decareaux, Cristina Scheau, Cyril Zhang, Cyrus
+Forbes, Da Tang, Dakota Goldberg, Dan Roberts, Dana Palmie, Daniel Kappler, Daniel Levine,
+Daniel Wright, Dave Leo, David Lin, David Robinson, Declan Grabb, Derek Chen, Derek
+Lim, Derek Salama, Dibya Bhattacharjee, Dimitris Tsipras, Dinghua Li, Dingli Yu, DJ Strouse,
+Drew Williams, Dylan Hunn, Ed Bayes, Edwin Arbus, Ekin Akyurek, Elaine Ya Le, Elana
+Widmann, Eli Yani, Elizabeth Proehl, Enis Sert, Enoch Cheung, Eri Schwartz, Eric Han, Eric
+Jiang, Eric Mitchell, Eric Sigler, Eric Wallace, Erik Ritter, Erin Kavanaugh, Evan Mays, Evgenii
+11
+
+Nikishin, Fangyuan Li, Felipe Petroski Such, Filipe de Avila Belbute Peres, Filippo Raso,
+Florent Bekerman, Foivos Tsimpourlas, Fotis Chantzis, Francis Song, Francis Zhang, Gaby
+Raila, Garrett McGrath, Gary Briggs, Gary Yang, Giambattista Parascandolo, Gildas Chabot,
+Grace Kim, Grace Zhao, Gregory Valiant, Guillaume Leclerc, Hadi Salman, Hanson Wang,
+Hao Sheng, Haoming Jiang, Haoyu Wang, Haozhun Jin, Harshit Sikchi, Heather Schmidt,
+Henry Aspegren, Honglin Chen, Huida Qiu, Hunter Lightman, Ian Covert, Ian Kivlichan, Ian
+Silber, Ian Sohl, Ibrahim Hammoud, Ignasi Clavera, Ikai Lan, Ilge Akkaya, Ilya Kostrikov, Irina
+Kofman, Isak Etinger, Ishaan Singal, Jackie Hehir, Jacob Huh, Jacqueline Pan, Jake Wilczynski,
+Jakub Pachocki, James Lee, James Quinn, Jamie Kiros, Janvi Kalra, Jasmyn Samaroo, Jason
+Wang, Jason Wolfe, Jay Chen, Jay Wang, Jean Harb, Jeffrey Han, Jeffrey Wang, Jennifer Zhao,
+Jeremy Chen, Jerene Yang, Jerry Tworek, Jesse Chand, Jessica Landon, Jessica Liang, Ji Lin,
+Jiancheng Liu, Jianfeng Wang, Jie Tang, Jihan Yin, Joanne Jang, Joel Morris, Joey Flynn,
+Johannes Ferstad, Johannes Heidecke, John Fishbein, John Hallman, Jonah Grant, Jonathan
+Chien, Jonathan Gordon, Jongsoo Park, Jordan Liss, Jos Kraaijeveld, Joseph Guay, Joseph Mo,
+Josh Lawson, Josh McGrath, Joshua Vendrow, Joy Jiao, Julian Lee, Julie Steele, Julie Wang,
+Junhua Mao, Kai Chen, Kai Hayashi, Kai Xiao, Kamyar Salahi, Kan Wu, Karan Sekhri, Karan
+Sharma, Karan Singhal, Karen Li, Kenny Nguyen, Keren Gu-Lemberg, Kevin King, Kevin
+Liu, Kevin Stone, Kevin Yu, Kristen Ying, Kristian Georgiev, Kristie Lim, Kushal Tirumala,
+Kyle Miller, Lama Ahmad, Larry Lv, Laura Clare, Laurance Fauconnet, Lauren Itow, Lauren
+Yang, Laurentia Romaniuk, Leah Anise, Lee Byron, Leher Pathak, Leon Maksin, Leyan Lo,
+Leyton Ho, Li Jing, Liang Wu, Liang Xiong, Lien Mamitsuka, Lin Yang, Lindsay McCallum,
+Lindsey Held, Liz Bourgeois, Logan Engstrom, Lorenz Kuhn, Louis Feuvrier, Lu Zhang, Lucas
+Switzer, Lukas Kondraciuk, Lukasz Kaiser, Manas Joglekar, Mandeep Singh, Mandip Shah,
+Manuka Stratta, Marcus Williams, Mark Chen, Mark Sun, Marselus Cayton, Martin Li, Marvin
+Zhang, Marwan Aljubeh, Matt Nichols, Matthew Haines, Max Schwarzer, Mayank Gupta,
+Meghan Shah, Melody Y. Guan, Melody Huang, Meng Dong, Mengqing Wang, Mia Glaese,
+Micah Carroll, Michael Lampe, Michael Malek, Michael Sharman, Michael Zhang, Michele
+Wang, Michelle Pokrass, Mihai Florian, Mikhail Pavlov, Miles Wang, Ming Chen, Mingxuan
+Wang, Minnia Feng, Mo Bavarian, Molly Lin, Moose Abdool, Mostafa Rohaninejad, Nacho
+Soto, Natalie Staudacher, Natan LaFontaine, Nathan Marwell, Nelson Liu, Nick Preston, Nick
+Turley, Nicklas Ansman, Nicole Blades, Nikil Pancha, Nikita Mikhaylin, Niko Felix, Nikunj
+Handa, Nishant Rai, Nitish Keskar, Noam Brown, Ofir Nachum, Oleg Boiko, Oleg Murk, Olivia
+Watkins, Oona Gleeson, Pamela Mishkin, Patryk Lesiewicz, Paul Baltescu, Pavel Belov, Peter
+Zhokhov, Philip Pronin, Phillip Guo, Phoebe Thacker, Qi Liu, Qiming Yuan, Qinghua Liu,
+Rachel Dias, Rachel Puckett, Rahul Arora, Ravi Teja Mullapudi, Raz Gaon, Reah Miyara,
+Rennie Song, Rishabh Aggarwal, RJ Marsan, Robel Yemiru, Robert Xiong, Rohan Kshirsagar,
+Rohan Nuttall, Roman Tsiupa, Ronen Eldan, Rose Wang, Roshan James, Roy Ziv, Rui Shu,
+Ruslan Nigmatullin, Saachi Jain, Saam Talaie, Sam Altman, Sam Arnesen, Sam Toizer, Sam
+Toyer, Samuel Miserendino, Sandhini Agarwal, Sarah Yoo, Savannah Heon, Scott Ethersmith,
+Sean Grove, Sean Taylor, Sebastien Bubeck, Sever Banesiu, Shaokyi Amdo, Shengjia Zhao,
+Sherwin Wu, Shibani Santurkar, Shiyu Zhao, Shraman Ray Chaudhuri, Shreyas Krishnaswamy,
+Shuaiqi, Xia, Shuyang Cheng, Shyamal Anadkat, Simón Posada Fishman, Simon Tobin, Siyuan
+Fu, Somay Jain, Song Mei, Sonya Egoian, Spencer Kim, Spug Golden, SQ Mah, Steph Lin,
+Stephen Imm, Steve Sharpe, Steve Yadlowsky, Sulman Choudhry, Sungwon Eum, Suvansh
+Sanjeev, Tabarak Khan, Tal Stramer, Tao Wang, Tao Xin, Tarun Gogineni, Taya Christianson,
+Ted Sanders, Tejal Patwardhan, Thomas Degry, Thomas Shadwell, Tianfu Fu, Tianshi Gao,
+Timur Garipov, Tina Sriskandarajah, Toki Sherbakov, Tomek Korbak, Tomer Kaftan, Tomo
+Hiratsuka, Tongzhou Wang, Tony Song, Tony Zhao, Troy Peterson, Val Kharitonov, Victoria
+Chernova, Vineet Kosaraju, Vishal Kuo, Vitchyr Pong, Vivek Verma, Vlad Petrov, Wanning
+Jiang, Weixing Zhang, Wenda Zhou, Wenlei Xie, Wenting Zhan, Wes McCabe, Will DePue, Will
+Ellsworth, Wulfie Bain, Wyatt Thompson, Xiangning Chen, Xiangyu Qi, Xin Xiang, Xinwei
+Shi, Yann Dubois, Yaodong Yu, Yara Khakbaz, Yifan Wu, Yilei Qian, Yin Tat Lee, Yinbo
+Chen, Yizhen Zhang, Yizhong Xiong, Yonglong Tian, Young Cha, Yu Bai, Yu Yang, Yuan Yuan,
+Yuanzhi Li, Yufeng Zhang, Yuguang Yang, Yujia Jin, Yun Jiang, Yunyun Wang, Yushi Wang,
+Yutian Liu, Zach Stubenvoll, Zehao Dou, Zheng Wu, and Zhigang Wang. Openai gpt-5 system
+card, 2026. URL https://arxiv.org/abs/2601.03267.
+[27] OpenAI, Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Flo-
+rencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt, Sam Altman, Shyamal Anadkat,
+12
+
+Red Avila, Igor Babuschkin, Suchir Balaji, Valerie Balcom, Paul Baltescu, Haiming Bao,
+Mohammad Bavarian, Jeff Belgum, Irwan Bello, Jake Berdine, Gabriel Bernadett-Shapiro,
+Christopher Berner, Lenny Bogdonoff, Oleg Boiko, Madelaine Boyd, Anna-Luisa Brakman,
+Greg Brockman, Tim Brooks, Miles Brundage, Kevin Button, Trevor Cai, Rosie Campbell, An-
+drew Cann, Brittany Carey, Chelsea Carlson, Rory Carmichael, Brooke Chan, Che Chang, Fotis
+Chantzis, Derek Chen, Sully Chen, Ruby Chen, Jason Chen, Mark Chen, Ben Chess, Chester
+Cho, Casey Chu, Hyung Won Chung, Dave Cummings, Jeremiah Currier, Yunxing Dai, Cory
+Decareaux, Thomas Degry, Noah Deutsch, Damien Deville, Arka Dhar, David Dohan, Steve
+Dowling, Sheila Dunning, Adrien Ecoffet, Atty Eleti, Tyna Eloundou, David Farhi, Liam Fedus,
+Niko Felix, Simón Posada Fishman, Juston Forte, Isabella Fulford, Leo Gao, Elie Georges,
+Christian Gibson, Vik Goel, Tarun Gogineni, Gabriel Goh, Rapha Gontijo-Lopes, Jonathan
+Gordon, Morgan Grafstein, Scott Gray, Ryan Greene, Joshua Gross, Shixiang Shane Gu, Yufei
+Guo, Chris Hallacy, Jesse Han, Jeff Harris, Yuchen He, Mike Heaton, Johannes Heidecke,
+Chris Hesse, Alan Hickey, Wade Hickey, Peter Hoeschele, Brandon Houghton, Kenny Hsu,
+Shengli Hu, Xin Hu, Joost Huizinga, Shantanu Jain, Shawn Jain, Joanne Jang, Angela Jiang,
+Roger Jiang, Haozhun Jin, Denny Jin, Shino Jomoto, Billie Jonn, Heewoo Jun, Tomer Kaftan,
+Łukasz Kaiser, Ali Kamali, Ingmar Kanitscheider, Nitish Shirish Keskar, Tabarak Khan, Logan
+Kilpatrick, Jong Wook Kim, Christina Kim, Yongjik Kim, Jan Hendrik Kirchner, Jamie Kiros,
+Matt Knight, Daniel Kokotajlo, Łukasz Kondraciuk, Andrew Kondrich, Aris Konstantinidis,
+Kyle Kosic, Gretchen Krueger, Vishal Kuo, Michael Lampe, Ikai Lan, Teddy Lee, Jan Leike,
+Jade Leung, Daniel Levy, Chak Ming Li, Rachel Lim, Molly Lin, Stephanie Lin, Mateusz
+Litwin, Theresa Lopez, Ryan Lowe, Patricia Lue, Anna Makanju, Kim Malfacini, Sam Man-
+ning, Todor Markov, Yaniv Markovski, Bianca Martin, Katie Mayer, Andrew Mayne, Bob
+McGrew, Scott Mayer McKinney, Christine McLeavey, Paul McMillan, Jake McNeil, David
+Medina, Aalok Mehta, Jacob Menick, Luke Metz, Andrey Mishchenko, Pamela Mishkin, Vinnie
+Monaco, Evan Morikawa, Daniel Mossing, Tong Mu, Mira Murati, Oleg Murk, David Mély,
+Ashvin Nair, Reiichiro Nakano, Rajeev Nayak, Arvind Neelakantan, Richard Ngo, Hyeonwoo
+Noh, Long Ouyang, Cullen O’Keefe, Jakub Pachocki, Alex Paino, Joe Palermo, Ashley Pan-
+tuliano, Giambattista Parascandolo, Joel Parish, Emy Parparita, Alex Passos, Mikhail Pavlov,
+Andrew Peng, Adam Perelman, Filipe de Avila Belbute Peres, Michael Petrov, Henrique Ponde
+de Oliveira Pinto, Michael, Pokorny, Michelle Pokrass, Vitchyr H. Pong, Tolly Powell, Alethea
+Power, Boris Power, Elizabeth Proehl, Raul Puri, Alec Radford, Jack Rae, Aditya Ramesh,
+Cameron Raymond, Francis Real, Kendra Rimbach, Carl Ross, Bob Rotsted, Henri Roussez,
+Nick Ryder, Mario Saltarelli, Ted Sanders, Shibani Santurkar, Girish Sastry, Heather Schmidt,
+David Schnurr, John Schulman, Daniel Selsam, Kyla Sheppard, Toki Sherbakov, Jessica Shieh,
+Sarah Shoker, Pranav Shyam, Szymon Sidor, Eric Sigler, Maddie Simens, Jordan Sitkin, Kata-
+rina Slama, Ian Sohl, Benjamin Sokolowsky, Yang Song, Natalie Staudacher, Felipe Petroski
+Such, Natalie Summers, Ilya Sutskever, Jie Tang, Nikolas Tezak, Madeleine B. Thompson, Phil
+Tillet, Amin Tootoonchian, Elizabeth Tseng, Preston Tuggle, Nick Turley, Jerry Tworek, Juan
+Felipe Cerón Uribe, Andrea Vallone, Arun Vijayvergiya, Chelsea Voss, Carroll Wainwright,
+Justin Jay Wang, Alvin Wang, Ben Wang, Jonathan Ward, Jason Wei, CJ Weinmann, Akila
+Welihinda, Peter Welinder, Jiayi Weng, Lilian Weng, Matt Wiethoff, Dave Willner, Clemens
+Winter, Samuel Wolrich, Hannah Wong, Lauren Workman, Sherwin Wu, Jeff Wu, Michael Wu,
+Kai Xiao, Tao Xu, Sarah Yoo, Kevin Yu, Qiming Yuan, Wojciech Zaremba, Rowan Zellers,
+Chong Zhang, Marvin Zhang, Shengjia Zhao, Tianhao Zheng, Juntang Zhuang, William Zhuk,
+and Barret Zoph. Gpt-4 technical report, 2024. URL https://arxiv.org/abs/2303.08774.
+[28] Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn
+Song, and Jacob Steinhardt. Measuring mathematical problem solving with the math dataset,
+2021. URL https://arxiv.org/abs/2103.03874.
+[29] Ankit Pal, Logesh Kumar Umapathi, and Malaikannan Sankarasubbu. Medmcqa : A large-
+scale multi-subject multi-choice dataset for medical domain question answering, 2022. URL
+https://arxiv.org/abs/2203.14371.
+[30] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang
+Gao, Chengen Huang, Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu,
+Hao Ge, Haoran Wei, Huan Lin, Jialong Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin
+Yang, Jiaxi Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai Dang, Keqin Bao, Kexin Yang,
+Le Yu, Lianghao Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang, Qin Zhu, Rui
+13
+
+Men, Ruize Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang
+Ren, Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger
+Zhang, Yu Wan, Yuqiong Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan
+Qiu. Qwen3 technical report, 2025. URL https://arxiv.org/abs/2505.09388.
+[31] Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ah-
+mad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex Vaughan, Amy Yang, Angela
+Fan, Anirudh Goyal, Anthony Hartshorn, Aobo Yang, Archi Mitra, Archie Sravankumar, Artem
+Korenev, Arthur Hinsvark, Arun Rao, Aston Zhang, Aurelien Rodriguez, Austen Gregerson,
+Ava Spataru, Baptiste Roziere, Bethany Biron, Binh Tang, Bobbie Chern, Charlotte Caucheteux,
+Chaya Nayak, Chloe Bi, Chris Marra, Chris McConnell, Christian Keller, Christophe Touret,
+Chunyang Wu, Corinne Wong, Cristian Canton Ferrer, Cyrus Nikolaidis, Damien Allonsius,
+Daniel Song, Danielle Pintz, Danny Livshits, Danny Wyatt, David Esiobu, Dhruv Choudhary,
+Dhruv Mahajan, Diego Garcia-Olano, Diego Perino, Dieuwke Hupkes, Egor Lakomkin, Ehab
+AlBadawy, Elina Lobanova, Emily Dinan, Eric Michael Smith, Filip Radenovic, Francisco
+Guzmán, Frank Zhang, Gabriel Synnaeve, Gabrielle Lee, Georgia Lewis Anderson, Govind
+Thattai, Graeme Nail, Gregoire Mialon, Guan Pang, Guillem Cucurell, Hailey Nguyen, Hannah
+Korevaar, Hu Xu, Hugo Touvron, Iliyan Zarov, Imanol Arrieta Ibarra, Isabel Kloumann, Ishan
+Misra, Ivan Evtimov, Jack Zhang, Jade Copet, Jaewon Lee, Jan Geffert, Jana Vranes, Jason
+Park, Jay Mahadeokar, Jeet Shah, Jelmer van der Linde, Jennifer Billock, Jenny Hong, Jenya
+Lee, Jeremy Fu, Jianfeng Chi, Jianyu Huang, Jiawen Liu, Jie Wang, Jiecao Yu, Joanna Bitton,
+Joe Spisak, Jongsoo Park, Joseph Rocca, Joshua Johnstun, Joshua Saxe, Junteng Jia, Kalyan Va-
+suden Alwala, Karthik Prasad, Kartikeya Upasani, Kate Plawiak, Ke Li, Kenneth Heafield,
+Kevin Stone, Khalid El-Arini, Krithika Iyer, Kshitiz Malik, Kuenley Chiu, Kunal Bhalla, Kushal
+Lakhotia, Lauren Rantala-Yeary, Laurens van der Maaten, Lawrence Chen, Liang Tan, Liz
+Jenkins, Louis Martin, Lovish Madaan, Lubo Malo, Lukas Blecher, Lukas Landzaat, Luke
+de Oliveira, Madeline Muzzi, Mahesh Pasupuleti, Mannat Singh, Manohar Paluri, Marcin
+Kardas, Maria Tsimpoukelli, Mathew Oldham, Mathieu Rita, Maya Pavlova, Melanie Kam-
+badur, Mike Lewis, Min Si, Mitesh Kumar Singh, Mona Hassan, Naman Goyal, Narjes Torabi,
+Nikolay Bashlykov, Nikolay Bogoychev, Niladri Chatterji, Ning Zhang, Olivier Duchenne,
+Onur Çelebi, Patrick Alrassy, Pengchuan Zhang, Pengwei Li, Petar Vasic, Peter Weng, Prajjwal
+Bhargava, Pratik Dubal, Praveen Krishnan, Punit Singh Koura, Puxin Xu, Qing He, Qingxiao
+Dong, Ragavan Srinivasan, Raj Ganapathy, Ramon Calderer, Ricardo Silveira Cabral, Robert
+Stojnic, Roberta Raileanu, Rohan Maheswari, Rohit Girdhar, Rohit Patel, Romain Sauvestre,
+Ronnie Polidoro, Roshan Sumbaly, Ross Taylor, Ruan Silva, Rui Hou, Rui Wang, Saghar Hos-
+seini, Sahana Chennabasappa, Sanjay Singh, Sean Bell, Seohyun Sonia Kim, Sergey Edunov,
+Shaoliang Nie, Sharan Narang, Sharath Raparthy, Sheng Shen, Shengye Wan, Shruti Bhosale,
+Shun Zhang, Simon Vandenhende, Soumya Batra, Spencer Whitman, Sten Sootla, Stephane
+Collot, Suchin Gururangan, Sydney Borodinsky, Tamar Herman, Tara Fowler, Tarek Sheasha,
+Thomas Georgiou, Thomas Scialom, Tobias Speckbacher, Todor Mihaylov, Tong Xiao, Ujjwal
+Karn, Vedanuj Goswami, Vibhor Gupta, Vignesh Ramanathan, Viktor Kerkez, Vincent Gonguet,
+Virginie Do, Vish Vogeti, Vítor Albiero, Vladan Petrovic, Weiwei Chu, Wenhan Xiong, Wenyin
+Fu, Whitney Meers, Xavier Martinet, Xiaodong Wang, Xiaofang Wang, Xiaoqing Ellen Tan,
+Xide Xia, Xinfeng Xie, Xuchao Jia, Xuewei Wang, Yaelle Goldschlag, Yashesh Gaur, Yasmine
+Babaei, Yi Wen, Yiwen Song, Yuchen Zhang, Yue Li, Yuning Mao, Zacharie Delpierre Coudert,
+Zheng Yan, Zhengxing Chen, Zoe Papakipos, Aaditya Singh, Aayushi Srivastava, Abha Jain,
+Adam Kelsey, Adam Shajnfeld, Adithya Gangidi, Adolfo Victoria, Ahuva Goldstand, Ajay
+Menon, Ajay Sharma, Alex Boesenberg, Alexei Baevski, Allie Feinstein, Amanda Kallet, Amit
+Sangani, Amos Teo, Anam Yunus, Andrei Lupu, Andres Alvarado, Andrew Caples, Andrew Gu,
+Andrew Ho, Andrew Poulton, Andrew Ryan, Ankit Ramchandani, Annie Dong, Annie Franco,
+Anuj Goyal, Aparajita Saraf, Arkabandhu Chowdhury, Ashley Gabriel, Ashwin Bharambe,
+Assaf Eisenman, Azadeh Yazdan, Beau James, Ben Maurer, Benjamin Leonhardi, Bernie Huang,
+Beth Loyd, Beto De Paola, Bhargavi Paranjape, Bing Liu, Bo Wu, Boyu Ni, Braden Hancock,
+Bram Wasti, Brandon Spence, Brani Stojkovic, Brian Gamido, Britt Montalvo, Carl Parker,
+Carly Burton, Catalina Mejia, Ce Liu, Changhan Wang, Changkyu Kim, Chao Zhou, Chester
+Hu, Ching-Hsiang Chu, Chris Cai, Chris Tindal, Christoph Feichtenhofer, Cynthia Gao, Damon
+Civin, Dana Beaty, Daniel Kreymer, Daniel Li, David Adkins, David Xu, Davide Testuggine,
+Delia David, Devi Parikh, Diana Liskovich, Didem Foss, Dingkang Wang, Duc Le, Dustin
+Holland, Edward Dowling, Eissa Jamil, Elaine Montgomery, Eleonora Presani, Emily Hahn,
+14
+
+Emily Wood, Eric-Tuan Le, Erik Brinkman, Esteban Arcaute, Evan Dunbar, Evan Smothers,
+Fei Sun, Felix Kreuk, Feng Tian, Filippos Kokkinos, Firat Ozgenel, Francesco Caggioni, Frank
+Kanayet, Frank Seide, Gabriela Medina Florez, Gabriella Schwarz, Gada Badeer, Georgia Swee,
+Gil Halpern, Grant Herman, Grigory Sizov, Guangyi, Zhang, Guna Lakshminarayanan, Hakan
+Inan, Hamid Shojanazeri, Han Zou, Hannah Wang, Hanwen Zha, Haroun Habeeb, Harrison
+Rudolph, Helen Suk, Henry Aspegren, Hunter Goldman, Hongyuan Zhan, Ibrahim Damlaj,
+Igor Molybog, Igor Tufanov, Ilias Leontiadis, Irina-Elena Veliche, Itai Gat, Jake Weissman,
+James Geboski, James Kohli, Janice Lam, Japhet Asher, Jean-Baptiste Gaya, Jeff Marcus, Jeff
+Tang, Jennifer Chan, Jenny Zhen, Jeremy Reizenstein, Jeremy Teboul, Jessica Zhong, Jian Jin,
+Jingyi Yang, Joe Cummings, Jon Carvill, Jon Shepard, Jonathan McPhie, Jonathan Torres, Josh
+Ginsburg, Junjie Wang, Kai Wu, Kam Hou U, Karan Saxena, Kartikay Khandelwal, Katayoun
+Zand, Kathy Matosich, Kaushik Veeraraghavan, Kelly Michelena, Keqian Li, Kiran Jagadeesh,
+Kun Huang, Kunal Chawla, Kyle Huang, Lailin Chen, Lakshya Garg, Lavender A, Leandro
+Silva, Lee Bell, Lei Zhang, Liangpeng Guo, Licheng Yu, Liron Moshkovich, Luca Wehrstedt,
+Madian Khabsa, Manav Avalani, Manish Bhatt, Martynas Mankus, Matan Hasson, Matthew
+Lennie, Matthias Reso, Maxim Groshev, Maxim Naumov, Maya Lathi, Meghan Keneally, Miao
+Liu, Michael L. Seltzer, Michal Valko, Michelle Restrepo, Mihir Patel, Mik Vyatskov, Mikayel
+Samvelyan, Mike Clark, Mike Macey, Mike Wang, Miquel Jubert Hermoso, Mo Metanat,
+Mohammad Rastegari, Munish Bansal, Nandhini Santhanam, Natascha Parks, Natasha White,
+Navyata Bawa, Nayan Singhal, Nick Egebo, Nicolas Usunier, Nikhil Mehta, Nikolay Pavlovich
+Laptev, Ning Dong, Norman Cheng, Oleg Chernoguz, Olivia Hart, Omkar Salpekar, Ozlem
+Kalinli, Parkin Kent, Parth Parekh, Paul Saab, Pavan Balaji, Pedro Rittner, Philip Bontrager,
+Pierre Roux, Piotr Dollar, Polina Zvyagina, Prashant Ratanchandani, Pritish Yuvraj, Qian Liang,
+Rachad Alao, Rachel Rodriguez, Rafi Ayub, Raghotham Murthy, Raghu Nayani, Rahul Mitra,
+Rangaprabhu Parthasarathy, Raymond Li, Rebekkah Hogan, Robin Battey, Rocky Wang, Russ
+Howes, Ruty Rinott, Sachin Mehta, Sachin Siby, Sai Jayesh Bondu, Samyak Datta, Sara Chugh,
+Sara Hunt, Sargun Dhillon, Sasha Sidorov, Satadru Pan, Saurabh Mahajan, Saurabh Verma,
+Seiji Yamamoto, Sharadh Ramaswamy, Shaun Lindsay, Shaun Lindsay, Sheng Feng, Shenghao
+Lin, Shengxin Cindy Zha, Shishir Patil, Shiva Shankar, Shuqiang Zhang, Shuqiang Zhang,
+Sinong Wang, Sneha Agarwal, Soji Sajuyigbe, Soumith Chintala, Stephanie Max, Stephen
+Chen, Steve Kehoe, Steve Satterfield, Sudarshan Govindaprasad, Sumit Gupta, Summer Deng,
+Sungmin Cho, Sunny Virk, Suraj Subramanian, Sy Choudhury, Sydney Goldman, Tal Remez,
+Tamar Glaser, Tamara Best, Thilo Koehler, Thomas Robinson, Tianhe Li, Tianjun Zhang, Tim
+Matthews, Timothy Chou, Tzook Shaked, Varun Vontimitta, Victoria Ajayi, Victoria Montanez,
+Vijai Mohan, Vinay Satish Kumar, Vishal Mangla, Vlad Ionescu, Vlad Poenaru, Vlad Tiberiu
+Mihailescu, Vladimir Ivanov, Wei Li, Wenchen Wang, Wenwen Jiang, Wes Bouaziz, Will Con-
+stable, Xiaocheng Tang, Xiaojian Wu, Xiaolan Wang, Xilun Wu, Xinbo Gao, Yaniv Kleinman,
+Yanjun Chen, Ye Hu, Ye Jia, Ye Qi, Yenda Li, Yilin Zhang, Ying Zhang, Yossi Adi, Youngjin
+Nam, Yu, Wang, Yu Zhao, Yuchen Hao, Yundi Qian, Yunlu Li, Yuzi He, Zach Rait, Zachary
+DeVito, Zef Rosnbrick, Zhaoduo Wen, Zhenyu Yang, Zhiwei Zhao, and Zhiyu Ma. The llama 3
+herd of models, 2024. URL https://arxiv.org/abs/2407.21783.
+[32] Yaoyue Zheng, Yin Zhang, Joost van de Weijer, Gido M van de Ven, Shaoyi Du, Xuetao Zhang,
+and Zhiqiang Tian. Revisiting weight regularization for low-rank continual learning, 2026. URL
+https://arxiv.org/abs/2602.17559.
+[33] Jinyuan Fang, Yanwen Peng, Xi Zhang, Yingxu Wang, Xinhao Yi, Guibin Zhang, Yi Xu, Bin
+Wu, Siwei Liu, Zihao Li, Zhaochun Ren, Nikos Aletras, Xi Wang, Han Zhou, and Zaiqiao
+Meng. A comprehensive survey of self-evolving ai agents: A new paradigm bridging foundation
+models and lifelong agentic systems, 2025. URL https://arxiv.org/abs/2508.07407.
+[34] Shuai Shao, Qihan Ren, Chen Qian, Boyi Wei, Dadi Guo, Jingyi Yang, Xinhao Song, Linfeng
+Zhang, Weinan Zhang, Dongrui Liu, and Jing Shao. Your agent may misevolve: Emergent risks
+in self-evolving llm agents, 2026. URL https://arxiv.org/abs/2509.26354.
+[35] Yujun Zhou, Yue Huang, Han Bao, Kehan Guo, Zhenwen Liang, Pin-Yu Chen, Tian Gao,
+Werner Geyer, Nuno Moniz, Nitesh V Chawla, and Xiangliang Zhang. Capability-oriented
+training induced alignment risk, 2026. URL https://arxiv.org/abs/2602.12124.
+15
+
+A
+Proofs for the Local CPE Analysis
+Proof of Proposition 1. By Taylor expansion of L<t around Rt−1, for a local update ∆,
+L<t(Rt−1 + ∆) = L<t(Rt−1) + ∇L<t(Rt−1)⊤∆+ 1
+2∆⊤H<t∆+ o(∥∆∥2).
+Since Rt−1 is a local minimizer of L<t, we have ∇L<t(Rt−1) = 0. Substituting ∆= −ηgt gives
+L<t(Rnaive
+t
+) −L<t(Rt−1) = η2
+2 g⊤
+t H<tgt + o(η2).
+If gt has nonzero projection onto a positive-curvature direction of H<t, then g⊤
+t H<tgt > 0, so the
+leading term is positive for sufficiently small η. This proves the result.
+Proof of Proposition 2. The first-order optimality condition for the local CPE objective is
+gt + Ht∆λ + λMt∆λ = 0.
+Since Mt ≻0, Ht ⪰0, and λ > 0, the matrix Ht + λMt is positive definite. Therefore,
+∆λ = −(Ht + λMt)−1gt.
+Let
+A = M −1/2
+t
+HtM −1/2
+t
+⪰0,
+eg = M −1/2
+t
+gt.
+Then
+∆λ = −M −1/2
+t
+(A + λI)−1eg.
+Therefore,
+∆⊤
+λ Mt∆λ = eg⊤(A + λI)−2eg.
+Since A ⪰0, every eigenvalue of (A + λI)−2 is at most λ−2. Hence
+∆⊤
+λ Mt∆λ ≤1
+λ2 ∥eg∥2
+2 = 1
+λ2 g⊤
+t M −1
+t
+gt = 1
+λ2 ∥gt∥2
+M −1
+t .
+By Assumption 1, H<t ⪯cMt, so
+1
+2∆⊤
+λ H<t∆λ ≤c
+2∆⊤
+λ Mt∆λ ≤
+c
+2λ2 ∥gt∥2
+M −1
+t .
+Finally, since Rt−1 is a local minimizer of L<t, Taylor expansion gives
+L<t(Rt−1 + ∆λ) −L<t(Rt−1) = 1
+2∆⊤
+λ H<t∆λ + o(∥∆λ∥2).
+Combining the previous two displays proves the stated bound.
+It remains only to justify that the remainder is lower order for large λ. Since
+∆λ = −M −1/2
+t
+(A + λI)−1eg,
+and ∥(A + λI)−1∥2 ≤λ−1, we have ∥∆λ∥= O(λ−1) when Mt is fixed and positive definite. Thus
+the Taylor remainder o(∥∆λ∥2) is lower order than the leading O(λ−2) term.
+B
+CPE for Memory Evolution
+In memory self-evolution, the mutable repository is a persistent external memory bank that continually
+accumulates reusable experiences to guide future inference. As the agent encounters new task streams,
+new memory entries may be added, existing memories may be revised, and low-evidence memories
+may be removed to improve future performance.
+Under naïve memory evolution, however, continual updates can gradually interfere with previously
+useful memories. As new task-specific memories accumulate, earlier memories become increasingly
+vulnerable to eviction, suppression, or retrieval competition, causing the memory bank to drift
+toward recently optimized task distributions. Consequently, previously useful retrieval patterns may
+deteriorate even when the underlying model parameters remain fixed.
+CPE mitigates this issue through evidence-gated memory preservation. Instead of treating all
+memories as equally mutable, memory entries accumulate stability through repeated self-verified
+support over time. Historically reliable memories are protected from destructive rewrite or eviction
+whenever possible, while lower-evidence entries remain adaptable to new task distributions. This
+stabilizes long-horizon memory evolution while still permitting continual memory growth and
+adaptation.
+16
+
+Domain
+GPT-5 nano
+GPT-4o mini
+Van.
+Reg.
+Van.
+Reg.
+Counting & Probability
+85.0
+86.0
+74.5
+78.0
+Prealgebra
+82.5
+86.0
+88.5
+88.5
+Number Theory
+85.0
+86.5
+74.0
+74.5
+Table 4: Memory self-evolution comparison between vanilla self-evolve and CPE-style evolution.
+Scores are reported after self-evolving from a shared simple-task memory on the complex-task subset.
+C&P
+GPT-5 nano
+C&P
+GPT-4o mini
+Prealg.
+GPT-5 nano
+Prealg.
+GPT-4o mini
+Num. Theory
+GPT-5 nano
+Num. Theory
+GPT-4o mini
+70
+75
+80
+85
+90
+Old-domain accuracy (%)
+Before New-Task Evolution (Rmem
+A
+)
+Vanilla New-Task Evolution (Rmem
+B, vanilla)
+CPE New-Task Evolution (Rmem
+B, CPE)
+Figure 6: Memory-level interference under sequential memory evolution. We compare retained
+old-task performance before and after exposing the memory repository to new-task updates. Although
+the underlying model remains fixed, naïve memory evolution consistently degrades old-task retention
+after continual memory updates. CPE mitigates this interference by stabilizing historically reliable
+memories during long-horizon memory evolution.
+Setup.
+We study memory self-evolution using a Dynamic-Cheatsheet-style external strategy repos-
+itory [16] with GPT-4o mini [27] and GPT-5 nano [26] as the underlying solver backbones. The
+base model remains fixed throughout the experiment, and only the external memory bank is updated
+during self-evolution.
+The memory repository stores reusable strategy notes accumulated from previous reasoning trajecto-
+ries. During sequential evolution, the agent continually updates this repository using self-verified
+successful experiences from newly encountered task streams. The vanilla baseline directly performs
+unconstrained memory insertion, revision, and eviction during continual updates.
+Our CPE variant preserves the same memory update pipeline, but introduces evidence-gated memory
+preservation. Memories that accumulate repeated self-verified support are treated as increasingly
+stable and are protected from destructive rewrite or eviction whenever possible, while lower-evidence
+entries remain adaptable to new task distributions.
+Following an old-task adaptation stage, we continue memory evolution on a new-task stream and
+evaluate retained performance on held-out old-task probes to measure memory-level interference.
+Additional implementation details are deferred to Appendix F.
+Observation and Analysis.
+Figure 6 compares retained old-domain probe accuracy across one
+pre-evolution memory state and two post-evolution memory states. The pre-evolution state is the
+memory bank obtained after old-domain adaptation. The first post-evolution state is produced by
+vanilla new-task memory evolution, where the repository is updated through unconstrained insertion,
+revision, and eviction. The second post-evolution state is produced by CPE-regularized memory
+evolution, which uses the same update pipeline but protects historically reliable memories through
+evidence-gated preservation. This comparison measures how continued memory updates on new
+tasks affect retained performance on previously learned domains.
+17
+
+Vanilla new-task memory evolution increases old-task interference. Across all six domain–backbone
+settings, average old-domain performance drops from 83.9% before new-task evolution to 81.6%
+after unconstrained memory updates. This indicates that repository-level memory modification can
+degrade previously acquired memory benefits even when the underlying model parameters remain
+fixed.
+CPE substantially mitigates this degradation. After CPE-regularized memory evolution, average
+retained performance reaches 83.3%, recovering most of the capability loss introduced by naïve
+updates. The effect is particularly strong on GPT-5 nano, where retained performance after evolution
+remains nearly identical to the pre-evolution memory baseline. GPT-4o mini shows a smaller but still
+consistent recovery trend.
+These results suggest that persistent memory functions as a mutable capability repository. Under un-
+constrained evolution, newly introduced memories gradually interfere with previously useful retrieval
+patterns through eviction and context competition. CPE reduces this interference by preserving stable
+high-utility memories and preferentially compressing lower-evidence entries under memory-budget
+constraints.
+C
+Workflow Evolve Implementation Details
+C.1
+Simple and Complex Task Split
+Tau2-Bench Task Classification Prompt
+Objective: Classify each Tau2-Bench text task into exactly one label: simple, complex, or
+drop.
+Rubric:
+• simple: single main objective, limited branching, limited state tracking, little planning, and
+minimal tool use.
+• complex: multiple dependent steps, meaningful planning, multi-stage reasoning, trou-
+bleshooting, topic shifts, verification, or substantial tool use/state tracking.
+• drop: ambiguous or in-between cases that should not be forced into either simple or
+complex.
+Output Format:
+Return strict JSON with the following schema:
+{
+"decisions": [
+{
+"task_id": "...",
+"label": "simple|complex|drop",
+"reason": "short reason"
+}
+]
+}
+Input Fields:
+• Domain: {domain}
+• Tasks: serialized task summaries in JSON format.
+To construct a controlled distribution shift for workflow self-evolution, we partition τ 2-Bench tasks
+into simple and complex subsets using GPT-5 nano as an LLM classifier. The full prompt is shown
+in “Tau2-Bench Task Classification Prompt” box above. The classifier follows a structured rubric
+based on workflow complexity, including branching, planning depth, state tracking, verification,
+and tool usage. Ambiguous cases are assigned a separate drop label instead of being forced into
+either category. The resulting split statistics are shown in Table 5.We validate the split using
+several independent structural signals from τ 2-Bench. As shown in Table 6, complex tasks require
+substantially more mandatory tool-call actions than simple tasks across all domains (5.28 vs. 2.47 on
+average, pooled p < 0.001 under a one-sided Mann–Whitney U test). Complex tasks also contain
+18
+
+Domain
+Simple
+Complex
+Dropped
+Airline
+14
+29
+7
+Retail
+30
+79
+5
+Telecom
+24
+71
+19
+Table 5: Task split statistics across domains.
+Tasks labeled as “Dropped” were excluded
+because the classifier judged them ambiguous
+between simple and complex categories.
+Domain Simple Mean Complex Mean
+p-value
+Airline
+0.86
+3.93
+0.0003
+Retail
+3.87
+5.08
+0.0119
+Telecom
+1.67
+6.07
+< 0.001
+Pooled
+2.47
+5.28
+< 0.001
+Table 6: Comparison of required tool-call
+actions (num_actions) between simple and
+complex tasks. Complex tasks consistently
+require more tool calls across all domains.
+Domain
+Simple Mean
+Complex Mean
+Airline
+1.57
+3.00
+Retail
+0.37
+0.61
+Telecom
+0.00
+0.00
+Table 7: Comparison of the number of natural
+language assertions (num_nl_assertions)
+between simple and complex tasks. NL as-
+sertions are used by τ 2-Bench to measure be-
+havioural constraints that cannot be verified
+solely through database state.
+Domain Simple Mean Complex Mean
+p-value
+Airline
+22.5 words
+28.6 words
+0.11
+Retail
+36.6 words
+75.4 words
+< 0.001
+Telecom
+18.0 words
+34.8 words
+< 0.001
+Pooled
+27.2 words
+51.7 words
+< 0.001
+Table 8:
+Comparison of user instruction
+length in the reason_for_call field be-
+tween simple and complex tasks. Longer de-
+scriptions indicate richer user intent and more
+multi-stage objectives.
+Hyperparameter
+Value
+Optimizer backbone
+GPT-5.1 / GPT-5 nano
+Executor backbone
+GPT-5.1 / GPT-5 nano
+User simulator
+GPT-5.1 / GPT-5 nano
+Optimizer temperature
+0.2
+Executor temperature
+0.2
+Maximum workflow rounds
+3
+Validation rounds
+1
+Evaluation rounds
+1
+Maximum tool steps
+40
+Max concurrency
+5
+Top prior rounds sampled
+3
+Complex-task train ratio
+0.2
+Complex-task eval ratio
+0.8
+Table 9: Workflow evolution hyperparameters.
+significantly longer user intent descriptions (51.7 vs. 27.2 words on average; Table 8), indicating
+richer multi-stage objectives. In addition, complex tasks generally involve more natural-language
+behavioral constraints measured through NL assertions (Table 7).Finally, across downstream workflow
+evolution experiments, agents consistently achieve higher success rates on the simple subset than
+on the complex subset, further confirming that the split captures genuine execution difficulty rather
+than superficial textual variation. Together, these results support the validity of the LLM-assisted
+simple/complex partition.
+C.2
+Implementation Details
+Following the continual self-evolution setting in the main paper, both vanilla and CPE workflows are
+initialized from the same simple-task seed workflow and subsequently evolved using the first 20% of
+the complex-task subset. The remaining 80% of complex tasks are reserved for held-out evaluation.
+To measure retained capability stability, we additionally evaluate the evolved workflows on the full
+simple-task subset. Evaluation uses the τ 2-Bench execution environment with a maximum of 40
+interaction steps per episode. During evaluation, the best workflow round is automatically selected
+according to the highest validation score recorded in results.json. The hyperparameters used in
+19
+
+our experiments are summarized in Table 9; all remaining settings follow the default EvoAgentX
+configuration.
+C.3
+Additional Results
+Airline
+simple
+Retail
+simple
+Telecom
+simple
+Airline
+complex
+Retail
+complex
+Telecom
+complex
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Score
+0.714
+0.767
+0.458
+0.333
+0.406
+0.175
+0.571
+0.433
+0.250
+0.375
+0.203
+0.140
+0.643
+0.567
+0.375
+0.375
+0.453
+0.175
+GPT-5.1
+Initial
+Vanilla
+CPE
+(a) GPT 5.1
+(b) GPT-5 nano
+Figure 7: Full workflow evolution results across backbones.
+Figure 7 presents the full workflow evolution trajectories across GPT-5.1 and GPT-5 nano backbones.
+Across both models, we observe a consistent pattern: unconstrained workflow self-evolution progres-
+sively drifts toward increasingly complex execution structures, which improves adaptation on harder
+tasks but degrades previously retained simple-task capability. In contrast, CPE substantially stabilizes
+this evolution process by constraining destructive workflow drift, leading to consistently stronger
+retention of simple-task performance while maintaining competitive or improved complex-task
+adaptation. These results further support our central claim that capability erosion emerges as a gen-
+eral property of long-horizon workflow self-evolution, and that capability-preserving regularization
+improves the stability–plasticity trade-off across different optimizer backbones.
+D
+Skill/Tool Evolve Implementation Details
+D.1
+Implementation Details
+We study skill/tool self-evolution using a MemSkill [8] style framework on the MATH benchmark [28].
+The continual evolution trajectory follows three sequential domains: Algebra →Geometry →Number
+Theory. Each stage uses 500 training samples, and evaluation is performed on up to 1,000 held-out
+problems per domain. No model parameter updates are performed during evolution; adaptation
+occurs entirely through skill repository updates.
+The hyperparameters used in our experiments are summarized in Table 10; all remaining settings
+follow the default configuration. The skill repository is implemented as a bounded-capacity skill
+bank with a maximum size of 30 skills. Each skill contains a textual description, instruction template,
+update type, and usage statistics. Skill retrieval uses Contriever embeddings with cosine similarity,
+while the executor retrieves the top-5 relevant skills and top-5 memories during training. During
+evaluation, the memory retrieval budget is increased to top-10. The designer module is triggered
+every 50 chunks and can add at most 3 new skills per update cycle with 2 reflection iterations.
+We evaluate both vanilla self-evolution and CPE under the same continual learning protocol. After
+training on each domain, the resulting skill repository is carried forward to the next domain without
+replay or parameter reset. Retained capability is evaluated by re-testing earlier domains after later-
+stage evolution. Final performance is reported after the full Algebra →Geometry →Number Theory
+evolution trajectory. Forgetting is measured as the degradation on earlier domains after adaptation to
+later domains.
+D.2
+Additional Results
+Figure 8 presents the complete skill/tool evolution results across both GPT-4o mini and GPT-5 nano
+backbones. Across all evaluated domains, CPE consistently achieves stronger retained capability
+stability than vanilla self-evolution under the same sequential evolution trajectory and repository
+budget. The improvements are particularly visible in domains encountered earlier in the evolution
+process, where unconstrained repository updates progressively suppress previously useful procedural
+20
+
+Hyperparameter
+Value
+Backbone LLM
+GPT-5 nano/GPT-4o mini
+Skill bank capacity
+30
+Retriever backbone
+Contriever
+Skill retrieval top-k
+5
+Memory retrieval top-k
+5
+Eval memory top-k
+10
+Chunk eval frequency
+50
+Max new skills / cycle
+3
+Reflection cycles
+2
+Failure pool size
+200
+QA workers
+20
+Table 10: Implementation hyperparameters for skill/tool self-evolution experiments.
+(a) GPT-4o mini
+(b) GPT-5 nano
+Figure 8: Full skill/tool evolution results across backbones.
+skills. These results further support the observation that capability erosion in skill evolution mainly
+arises from bounded-capacity repository overwrite, while capability-preserving consolidation helps
+maintain broader procedural coverage throughout long-horizon self-evolution.
+E
+Model Evolution Implementation Details
+E.1
+Implementation Details
+We implement model self-evolution using a STaR-style self-training pipeline with LoRA fine-tuning
+on MedMCQA. At each evolution stage, the model generates rationale-answer trajectories on the
+current medical domain, filters correct trajectories using strict answer matching, and performs
+supervised fine-tuning on the resulting demonstrations for one epoch. All experiments are conducted
+on NVIDIA A100 GPUs.
+Both vanilla self-evolution and CPE use identical optimization settings and evolution trajectories.
+All models are loaded with 4-bit NF4 quantization and bfloat16 computation. During generation,
+we use temperature 0.7, top-p 0.9, and a maximum generation length of 192 tokens. Each stage
+uses up to 1,000 training questions sampled from the corresponding MedMCQA subject split. The
+hyperparameters used in our experiments are summarized in Table 11; all remaining settings follow
+the default configuration.
+For CPE, we apply an Elastic Weight Consolidation (EWC) regularizer on LoRA parameters. After
+each stage, parameter importance is estimated using a diagonal Fisher approximation computed from
+the current-stage training data.
+Following standard continual learning evaluation protocols, after each evolution stage we evaluate the
+updated model on the held-out test splits of all previously encountered domains to measure retained
+capability under continual adaptation. Final predictions are evaluated using strict exact-match scoring
+after answer normalization.
+21
+
+Configuration
+Value
+Hardware
+NVIDIA A100
+Base Models
+Qwen3-0.6B/Llama3.2-3B
+Dataset
+MedMCQA
+Quantization
+4-bit NF4 + bfloat16
+LoRA Rank (r)
+16
+LoRA Alpha (α)
+32
+LoRA Dropout
+0.05
+Learning Rate
+2 × 10−4
+Epochs per Stage
+1
+Per-device Batch Size
+4
+Gradient Accumulation
+4
+Effective Batch Size
+16
+Generation Temperature
+0.7
+Top-p
+0.9
+Max New Tokens
+192
+Training Questions per Stage
+1,000
+Evolution Order
+Anatomy →Biochemistry →Dental
+EWC Regularization Strength (λ)
+10,000
+EWC Decay Factor (γ)
+0.9
+Fisher Estimation Samples
+100
+Table 11: Model self-evolution configuration used for all experiments.
+E.2
+Additional Results
+(a) Llama
+(b) Qwen
+Figure 9: Full Model evolution results across backbones.
+Figure 9 presents additional continual self-evolution trajectories for both Llama and Qwen backbones.
+Consistent with the main results, vanilla self-evolution exhibits progressive degradation on previously
+learned medical domains as later-stage adaptation proceeds, reflecting continual parametric overwrite
+under sequential self-training. In contrast, CPE consistently stabilizes retained performance through-
+out the evolution trajectory while preserving adaptation capability on newly introduced domains.
+These trends further support that capability erosion is a persistent phenomenon across backbone
+families rather than a model-specific artifact.
+F
+Memory Evolve Implementation Details
+We instantiate memory self-evolution using the Dynamic Cheatsheet framework [16] under a continual
+domain adaptation setting. The evolving memory repository is implemented as an external adaptive
+cheatsheet memory that is updated sequentially as the task distribution shifts across mathematical
+reasoning domains.
+We use GPT-4o mini and GPT-5 nano as the underlying reasoning backbones. For all experiments, the
+maximum generation length is set to 8192 tokens. GPT-5 nano is configured with reasoning effort set
+22
+
+Component
+Configuration
+Backbone Models
+GPT-5 nano/GPT-4o mini
+Max Tokens
+8192
+GPT-5 Reasoning Effort
+medium
+GPT-5 Verbosity
+low
+Training Size
+30 problems per domain
+Old-Domain Test Size
+200 problems
+Sequential Domains
+Count.&Prob. →Prealg.
+→Num. Theory →Geometry
+Table 12: Implementation details for memory self-evolution experiments.
+to medium and text verbosity set to low. All experiments use random seed 42. The hyperparameters
+used in our experiments are summarized in Table 12; all remaining settings follow the default
+configuration.
+The continual evolution trajectory consists of sequential adaptation across mathematical domains.
+The old-domain distributions contain Counting & Probability, Prealgebra, and Number Theory, while
+the new-domain distribution corresponds to Geometry, which exhibits larger structural divergence
+from the previous domains.
+For each evolution stage, both the old-domain and new-domain memory repositories are constructed
+using 30 training problems per domain. The retained old-domain evaluation set contains 200 held-out
+problems.
+Following the continual self-evolution setting described in the main paper, we evaluate memory
+evolution under both retained-capability and forward-adaptation criteria. After sequential memory
+updates on the new-domain stream, we evaluate: (i) retained performance on previously encountered
+domains using the preserved memory repository, and (ii) adaptation performance on the newly
+introduced domain.
+G
+Examples of Evolved Skills in Skill Self-Evolve
+triangulation_area_template
+Description: Compute the area of a polygon by dividing it into triangles and summing their
+areas.
+Instruction Template:
+Divide the polygon into triangles. Compute the area of each triangle using the given base and
+height. Sum the triangle areas to obtain the total polygon area.
+triangulation_area_template_v3
+Description: Robust triangulation workflow for complex polygons: perform a fan or ear-
+clipping triangulation from a fixed vertex, compute each triangle area, sum all sub-areas,
+optionally verify with the shoelace formula, and cross-check with total area constraints.
+Instruction Template:
+(1) Choose a fixed vertex and triangulate the polygon into non-overlapping triangles. (2) For
+each triangle, compute its area via base-height or cross product. (3) Sum all triangle areas.
+(4) If coordinates are available, verify using the shoelace formula. (5) Check that the total is
+consistent with any given area constraints. (6) Return the final area.
+23
+
+area_union_and_overlap_template_for_complex_regions_v2
+Description: A robust workflow for computing areas defined as unions or intersections
+of multiple overlapping shapes (circles, sectors, polygons), with explicit partitioning and
+inclusion-exclusion reasoning.
+Instruction Template:
+When a problem defines a region as a union or intersection of multiple shapes:
+(a) Partition the plane into disjoint cells where region membership is constant, compute
+each cell area, and sum them. (b) Apply inclusion-exclusion to correct for overlaps where
+necessary. (c) Use symmetry to reduce repetitive work and avoid double counting. (d) Cross-
+check with an alternate decomposition such as shoelace or triangulation when coordinates are
+available. (e) For circle-based regions, explicitly decompose into sectors and segments using
+central angles. (f) Provide the final consolidated area, and if needed, surface a canonical
+fallback workflow with explicit validation constraints.
+problem_type_tagging_and_ranking
+Description: Tag memories with problem-type categories and rank their relevance to the
+current problem in order to retrieve the most helpful strategies.
+Instruction Template:
+(1) Annotate each memory with a set of problem-type tags such as quadratic, geometry, poly-
+nomial, inverse_function, or geometric_progression. (2) For the current problem, compute
+a relevance score using tag overlap, keyword overlap, and historical success weight. (3)
+Retrieve the top-k memories with the highest relevance and present them with a brief one-line
+relevance justification. (4) If a memory is broadly useful but procedurally vague, include an
+applicability note clarifying the problem types it best addresses. (5) Prefer memories that
+provide concrete solving steps or a short actionable plan aligned with the current problem
+type.
+H
+Use of AI Assistants
+AI assistants were used as auxiliary tools for manuscript preparation, including language polishing,
+clarity improvement, organization, and limited experimental workflows. All experimental design,
+methodological decisions, analyses, reported results, and final content were reviewed and verified by
+the authors.
+I
+Limitations
+Although we propose Capability-Preserving Evolution (CPE) as a general principle for stabilizing
+self-evolving agents, the current work only explores relatively straightforward constraint-based instan-
+tiations within each evolution dimension. Our goal is primarily to verify the existence of capability
+erosion under self-evolution and demonstrate that explicitly regularizing destructive capability drift
+can substantially improve retained capability stability.
+Accordingly, the preservation mechanisms used in this paper are intentionally lightweight and
+domain-specific, including anchor-based workflow regularization, repository consolidation, Fisher-
+style parameter constraints, and memory preservation heuristics. More sophisticated preservation
+strategies, adaptive regularization schedules, or jointly optimized multi-component preservation
+frameworks may further improve the stability–plasticity tradeoff in long-horizon self-evolving agents.
+In addition, our experiments focus on controlled sequential task-distribution shifts and representative
+self-evolution frameworks. Real-world autonomous agents may encounter substantially more complex
+and open-ended evolution trajectories, including dynamic environments, multi-agent interaction, and
+continuously expanding capability spaces. Extending CPE to such settings remains an important
+direction for future work.
+24
+
+J
+Broader Impacts
+This work studies capability degradation in self-evolving LLM agents and proposes Capability-
+Preserving Evolution (CPE) as a stabilization principle for continual adaptation. A potential positive
+impact of this work is improving the reliability and robustness of long-horizon autonomous agents by
+reducing destructive capability drift during self-evolution. More stable self-evolving systems may be
+beneficial for applications that require continual adaptation while maintaining previously acquired
+behaviors.
+At the same time, improving the stability of self-evolving agents may also increase the robustness
+and persistence of autonomous systems in settings where misuse, over-automation, or unintended
+behaviors could create societal risks. In particular, more reliable autonomous adaptation mechanisms
+could be incorporated into large-scale agentic systems with limited human oversight. Our work does
+not introduce new deployment pipelines or application-specific autonomous capabilities, but the
+broader risks associated with increasingly capable self-evolving agents should still be considered.
+Overall, we view capability preservation as an important component of safer continual adaptation,
+since uncontrolled capability drift can itself produce unreliable or unstable agent behavior during
+long-horizon self-evolution.
+25

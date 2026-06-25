@@ -1,0 +1,482 @@
+=== PDF FIRST PAGE (title region) ===
+Socratic-SWE: Self-Evolving Coding Agents via Trace-Derived Agent
+Skills
+Chuan Xiao2,∗, Zhengbo Jiao1,2,∗, Shaobo Wang2, Wei Wang1, Bing Zhao1, HU WEI1,†, Linfeng
+Zhang2,†, Lin Qu1
+1AI Data, Alibaba Group
+2Shanghai Jiao Tong University
+∗Equal contribution, †Corresponding authors
+Abstract
+LLM-driven software engineering agents have become a central testbed for real-world language-
+model capability, yet their training remains limited by the availability of high-quality SWE tasks.
+Existing synthetic data methods typically create tasks through fixed mutation or bug-injection
+procedures, making the resulting distributions largely independent of the agent’s own weaknesses
+and training progress.
+We introduce Socratic-SWE, a closed-loop self-evolution framework
+that reuses the agent’s historical solving traces as a source of training signal. Rather than treat-
+ing traces only as evidence for reward computation, Socratic-SWE distills them into structured
+agent skills that summarize recurring failures and effective repair patterns. These skills then guide
+the generation of targeted repair tasks in real repositories. Candidate tasks are checked through
+execution-based validation and scored wi
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Socratic-SWE: Self-Evolving Coding Agents via Trace-Derived Agent
+Skills
+Chuan Xiao2,∗, Zhengbo Jiao1,2,∗, Shaobo Wang2, Wei Wang1, Bing Zhao1, HU WEI1,†, Linfeng
+Zhang2,†, Lin Qu1
+1AI Data, Alibaba Group
+2Shanghai Jiao Tong University
+∗Equal contribution, †Corresponding authors
+Abstract
+LLM-driven software engineering agents have become a central testbed for real-world language-
+model capability, yet their training remains limited by the availability of high-quality SWE tasks.
+Existing synthetic data methods typically create tasks through fixed mutation or bug-injection
+procedures, making the resulting distributions largely independent of the agent’s own weaknesses
+and training progress.
+We introduce Socratic-SWE, a closed-loop self-evolution framework
+that reuses the agent’s historical solving traces as a source of training signal. Rather than treat-
+ing traces only as evidence for reward computation, Socratic-SWE distills them into structured
+agent skills that summarize recurring failures and effective repair patterns. These skills then guide
+the generation of targeted repair tasks in real repositories. Candidate tasks are checked through
+execution-based validation and scored with a solver-gradient alignment reward, so that the re-
+tained tasks are both verifiable and useful for improving the Solver. The updated Solver produces
+new traces, enabling the task curriculum to adapt over successive rounds. Across SWE-bench Ver-
+ified, SWE-bench Lite, SWE-bench Pro, and Terminal-Bench 2.0, Socratic-SWE consistently
+improves over self-evolving baselines under the same compute budget, reaching 50.40% on SWE-
+bench Verified after three iterations. These results suggest that solving traces can serve as a
+scalable substrate for self-evolving SWE agents.
+Date: June 8, 2026
+1
+Introduction
+Software engineering is one of the most impactful application domains for large language models (LLMs),
+and the capability of coding agents has emerged as a critical measure of real-world intelligence.
+Unlike
+mathematical reasoning or short-form code generation, SWE tasks require agents to complete a full loop of
+bug localization, repair, and verification through long-horizon interaction with real code repositories, making
+SWE a natural setting for training capable language agents in realistic environments. Reinforcement learning
+(RL) has shown strong promise in this setting: SWE-RL [1] and SWE-Gym [2] demonstrate substantial gains
+by embedding agents in executable repository environments. However, RL training fundamentally depends
+on large quantities of high-quality tasks, and such data remains scarce in the SWE domain. Existing synthetic
+pipelines attempt to alleviate this bottleneck through AST-level mutation, LM-guided rewriting, or learned
+bug injection [3, 4], but they operate independently of the agent’s own training experience, resulting in largely
+1
+arXiv:2606.07412v1  [cs.SE]  5 Jun 2026
+
+Static Rule
+Synthesis Engine
+Static Task Supply
+Agent Skills
+SWE-Agent
+Evolving Task 
+Supply
+(a) Traditional SWE Data Synthesis Paradigm
+(b)Socratic-SWE (Ours)
+Scarce & Costly
+Model-Agnostic
+reward only
+Grounded & Reusable
+Model-Aware
+Dynamic & Evolving
+Task-Trace-Skill
+reward signals
+Non-adaptive
+Figure 1
+Comparison of SWE data synthesis paradigms. (a) Traditional: an open-loop, single-pass pipeline where
+static rules synthesize a fixed task supply. Evaluation traces are used only post hoc for rewards, not fed back into
+task construction, leaving the supply scarce, model-agnostic, and non-adaptive.
+(b) Socratic-SWE: a closed-loop,
+self-evolving process that distills grounded skills from solving traces to guide repository-grounded task construction,
+while feeding rewards into subsequent skill and task updates.
+static task distributions that may be poorly aligned with the model’s actual capability gaps.
+At the same time, each round of RL training produces a valuable byproduct: solving traces. These traces
+record the agent’s behavior throughout repository interaction, including code search, file editing, command
+execution, and test runs. They reveal where the agent repeatedly fails, which repair strategies tend to induce
+regressions, and which repository patterns lead to ineffective exploration. Yet existing methods use traces
+primarily for reward extraction or credit assignment. GRPO [5] reduces a trajectory to a scalar reward, while
+process-level approaches such as GiGPO [6], iStar [7], and process reward models [8] assign finer-grained credit
+within trajectories. Regardless of granularity, traces are discarded once supervision has been computed. As
+the model improves, the fraction of tasks in a fixed distribution that still provides useful training signal
+becomes increasingly sparse, and learning eventually stagnates.
+We argue that these discarded traces contain the signals needed to evolve the curriculum. Because the traces
+are generated by the agent itself, they provide a direct view of the model’s current capability boundary. This
+suggests a self-evolving loop: the agent distills capabilities from historical solving traces and uses them to
+construct the next round of training tasks, without requiring external annotation. Related ideas have shown
+promise in adjacent domains. R-Zero [9] and Socratic-Zero [10] adapt task proposers to the solver’s frontier,
+Absolute Zero [11] achieves zero-data self-improvement through execution-based verification, and SkillRL [12]
+and SKILL0 [13] distill reusable skills from interaction traces. However, these settings involve simple traces,
+such as symbolic reasoning chains, short programs, or finite-step games, where pass/fail feedback is often
+sufficient to drive adaptation. SWE traces are richer: a single trajectory may span dozens of tool invocations
+across search, editing, execution, and testing, exposing diverse and diagnosable failure modes. Combined
+with deterministic execution-based verification from repository test suites, this makes SWE a particularly
+suitable domain for trace-based self-evolution.
+To address this challenge, we propose Socratic-SWE, a self-evolution framework for software en-
+gineering. Figure 1 summarizes the closed-loop design of Socratic-SWE. Socratic-SWE operates in
+2
+
+Figure 2
+Main performance comparison on four benchmarks under a fixed 36k-instance training budget. Socratic-
+SWE achieves 50.40% on SWE-bench Verified, 36.67% on SWE-bench Lite, 22.85% on SWE-bench Pro, and 14.61%
+on Terminal-Bench 2.0, outperforming all adapted baselines across both repository-level software repair and terminal-
+agent tasks.
+a three-stage loop. First, it distills recurring failure modes and successful repair behaviors from historical
+solving traces into an Agent Skill Registry, a structured representation of the model’s capability boundary.
+Second, a Generator uses these skills as constraints to construct targeted repair tasks in real code repositories.
+Candidate tasks are filtered through a staged execution-based validation pipeline to ensure reproducibility
+and non-triviality, and are further scored by a solver-gradient alignment reward that favors tasks whose in-
+duced Solver updates align with trusted validation gradients. Third, the Solver trains on the accepted tasks
+and produces new traces, which support the next round of skill distillation. In this way, traces are trans-
+formed into skills, skills guide task generation, and generated tasks produce the traces needed for continued
+self-evolution.
+Empirically, we validate Socratic-SWE on SWE-bench Verified, SWE-bench Lite, SWE-bench Pro, and
+Terminal-Bench 2.0. As summarized in Figure 2, Socratic-SWE consistently outperforms self-evolving base-
+lines under the same compute budget, reaching 50.40% on SWE-bench Verified after 3 iterations (+7.80 over
+the base agent and +3.40 over SSR). These results show that trace-derived curricula provide stronger training
+signals, support sustained self-evolution without external annotation, and transfer beyond repository repair
+to terminal-native tasks in realistic SWE environments. Our contributions are as follows:
+1. Trace-Driven Self-Evolution Paradigm. We show that solving traces, typically discarded after reward
+computation, can serve as a reusable substrate for self-evolving SWE agents. Socratic-SWE converts
+historical Solver behavior into structured agent skills, which guide subsequent repository-grounded task
+construction in a closed trace-skill-task loop.
+2. Gradient-Aware Curriculum Optimization. We introduce a curriculum mechanism that combines
+skill-conditioned task generation, execution-based task validation, and a solver-gradient alignment reward.
+Generated tasks are first verified in real repository environments to ensure reproducibility and solvability,
+and are then prioritized by whether their induced Solver updates align with trusted validation gradients.
+3. Superior Empirical Performance. We evaluate Socratic-SWE on SWE benchmarks, including SWE-
+bench and Terminal-Bench. Under the same compute budget, it consistently outperforms self-evolving
+baselines, demonstrating strong self-evolution and transfer capabilities.
+3
+
+2
+Related Work
+Agentic Reinforcement Learning. Reinforcement learning is a central post-training paradigm for LLM
+reasoning and decision-making. OpenAI o1 popularized large-scale reasoning RL [14], and DeepSeekMath’s
+GRPO provided an open-source framework for verifiable rewards [5]. DAPO [15], GSPO [16], SAPO [17], and
+GDPO [18] improve RL efficiency and stability, but still assume immediately verifiable rewards. Agentic tasks
+violate this assumption: feedback is sparse and spread over long trajectories. GiGPO [6], ARPO [19], and
+SkyRL-Agent [20] extend RL to multi-turn tool use and long-horizon optimization. OPUS [21], GradAlign [22],
+and OptimSyn [23] use optimizer feedback, gradient alignment, or synthetic data construction as dynamic
+signals. Integrating verifiable feedback, failure analysis, and long-horizon agent training for SWE remains
+underexplored.
+SWE Coding Agents.
+SWE agents must navigate executable repositories, edit code, run commands,
+and preserve behavior under regression tests. SWE-bench introduced repository-level issue resolution from
+GitHub issues [24]. SWE-agent [25], OpenHands [26], and Agentless [27] show that LLMs can solve tasks
+with tools, code execution, and verification feedback. SWE-Gym [2], SWE-RL [1], and SWE-Master [28]
+build training settings from executable environments, software evolution data, and post-training pipelines.
+BugLab [4], SWE-smith [3], and SSR [29] expand data through bug injection, synthetic task generation, or
+self-play. Yet data construction emphasizes scale and executability, while using repository understanding,
+executable feedback, and model failures only weakly for targeted task generation.
+Self-Evolving LLMs. Self-play reduces human labels by assigning proposer, solver, evaluator, or teacher
+roles.
+TTRL [30], R-Zero [9], and Socratic-Zero [10] form self-improvement signals from unlabeled data,
+Challenger-Solver co-evolution, or Teacher-Solver-Generator loops. Absolute Zero [11], SPIRAL [31], Socratic-
+Geo [32], and SpatialEvo [33] reduce noisy feedback through verifiable environments, including code execution,
+zero-sum games, programmatic geometry, and deterministic spatial tasks. SkillRL [12] and SKILL0 [13] distill
+interaction experience into reusable skills. Agentic Proposing [34] uses modular reasoning skills to synthesize
+harder verifiable examples. Overall, self-evolution is shifting toward environment-grounded feedback and
+skill-driven synthesis; for SWE, the key challenge is transforming long-horizon repair failures into future task
+distributions that keep pushing model capabilities.
+3
+Methodology
+3.1
+Socratic-SWE Framework
+We introduce Socratic-SWE, a co-evolutionary self-play framework for software engineering agents.
+A
+shared policy πθ alternates between two roles: a Generator that constructs repository-grounded repair tasks
+and a Solver that produces patches for them. The framework learns from two external signals: an Agent
+Skill Registry S distilled from historical interaction traces, and a staged execution-grounded validation
+pipeline that filters generated tasks before they enter training. Figure 3 illustrates the overall loop.
+Let R denote the repository corpus and S the Agent Skill Registry. At iteration t, the system maintains a
+curriculum of tasks Dt = {(r, τ, v)}, where r ∈R is a sandboxed repository, τ is a repair task grounded in
+r, and v is an executable verification signal. The Solver trains on Dt and produces trajectories that expose
+capability gaps. The Generator then uses skills s ∈S to propose tasks targeting these gaps, and the validation
+pipeline filters proposals so that only executable, reproducible, and solvable tasks enter the curriculum:
+(τ ′, v′) ∼πθ(· | r, s, Et, role=G),
+(1)
+Dt+1 = Dt ∪{(r, τ ′, v′) | Valid(τ ′, v′, r) = 1},
+(2)
+where Et denotes Solver-side evidence collected on Dt, and Valid(·) is a staged validation function defined in
+§3.3. Algorithm 1 details the procedure.
+3.2
+Agent Skill Registry
+A central challenge in skill-guided task generation is obtaining skills that are both structured for retrieval
+and grounded in real agent behavior. We distill an Agent Skill Registry from historical interaction traces
+4
+
+     
+    
+       
+        
+         
+      
+            
+             
+         
+                
+   
+Accepted Task
+Solver
+inspect
+edit
+test
+patch
+Solver in Repository Sandbox
+Execution Feedback
+Fixed failing tests
+Regression avoidance 
+Preserved passing rates
+…
+Outputs
+Patch
+run tests
+Execution 
+feedback
+Evidence
+Curriculum Task Pool
+Task Evolution(capability-gap targeting)
+local fix
+edge case
+no regression
+multi-file
+Generator Reward
+Trace
+Role-based Self-play Loop
+Success trace
+Failure trace
+Partial trace
+Capability Gaps
+pass
+fail
+regression
+Repository Context(shared)
+Held-out Validation
+⚫
+Trusted tasks
+⚫
+Diverse tasks
+⚫
+Human verified
+Target gradient 𝐺𝑣
+Accepted Task
+𝝉′, 𝒗′, 𝒓
+Candidate signal
+𝒈𝝉
+Alignment Reward
+(usefulness signal)
+𝑅𝐺= 𝑉𝑎𝑙ሶ𝑖𝑑𝜏, 𝑣, 𝑟⋅cos 𝑔𝜏, 𝐺𝑣
+usefulness signal 
+validation direction 𝐺𝑣
+Verifier Gate
+Format
+Grounding
+Execution
+Semantics
+Inputs
+skills
+Construct task
+task
+Generator
+Skill: Gap-to-Task
+name
+when
+ops
+name
+when
+ops
+name
+when
+ops
+Skill: Verifier Design
+Skill: Task Mutation
+Repository Sandbox/Code World
+Terminal
+$ pytest -q
+..F.
+FAIL:
+test_get_item
+5 passed
+1 failed
+Gap-to-task
+Weakness in 𝑬𝝉
+Gap to 𝝉
+Verifier Design
+Needs check
+Oracle to 𝒗
+Task Mutation
+Frontier target
+𝝉 to harder 𝝉
+File Tree
+Results
+evidences
+repos
+Generated
+Design verifier
+Verifier
+Step 1
+Step 2
+Step 3
+Step 4
+     
+    
+      
+         
+                
+                     
+  
+  
+  
+  
+  
+  
+               
+                 
+                    
+          
+   
+Figure 3 An overview of the Socratic-SWE framework, illustrating the co-evolution of the Solver and the Generator.
+On the Solver side, the model consumes tasks from the task pool, solves them in the repository sandbox, and
+produces solving traces. These traces are distilled into the Agent Skill Registry, where recurring model gaps and
+repository-understanding patterns are captured as reusable skills. On the Generator side, the model uses the Skill
+Registry to synthesize targeted tasks in the repository sandbox. Candidate tasks are then filtered by the Verifier Gate
+along format, grounding, execution, and semantics to ensure that they are well-formed, reproducible, solvable, and
+meaningful. Accepted tasks receive an alignment reward from the held-out validation gradient, enter the task pool as
+the next generation of tasks, and are consumed again by the Solver, forming a closed task-trace-skill-task loop.
+through a three-stage pipeline.
+We define a skill as a structured document with four fields: a name, a natural-language description, a set of
+applicability conditions, and an ordered list of operations. This representation lets the Generator retrieve
+and condition on skills programmatic
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Table 7 Training hyperparameters for Socratic-SWE.
+Hyperparameter
+Value
+Model Configuration
+Base model
+Qwen3.5-9B
+Skill extractor
+Qwen3.6-27B
+Context length
+32,768 tokens
+Training
+Iterations
+3
+Instances per iteration
+12,000
+Group size (K)
+8
+Learning rate
+1 × 10−6
+Optimizer
+AdamW
+KL coefficient (β)
+0.01
+Clip ratio (ϵ)
+0.2
+Batch size
+64
+Solver Reward (GDPO)
+λ1 (full pass)
+0.5
+λ2 (repair rate)
+0.3
+λ3 (regression avoidance)
+0.2
+Gradient Alignment
+Validation set size
+100
+Rollouts per validation task
+8
+Recomputation frequency
+Once per iteration
+Alignment metric
+Cosine similarity
+Generator Validation Gate
+Max attempts per repository
+8
+Stability reruns
+3
+Infrastructure
+GPUs
+8× A100-80G
+Sandbox
+Aone Cloud Sandbox (per-task)
+Wall-clock per iteration
+∼15 hours
+H
+Worked Example of Skill-Guided Task Generation
+Shortened Repository-Level Skill Guidance
+# OAuthLib Repository Skill
+## 1. Target Overview
+OAuthLib implements OAuth 1.0, OAuth 2.0, OpenID Connect, and related RFC
+extensions. High-value tasks in this repository are usually small semantic
+regressions in protocol helpers, endpoint constructors, and grant wrappers.
+They require exact repository-specific semantics rather than broad rewriting.
+Relevant modules:
+- oauthlib/oauth2/rfc6749/utils.py
+- oauthlib/oauth2/rfc8628/endpoints/device_authorization.py
+- oauthlib/oauth1/
+- oauthlib/openid/connect/core/grant_types/
+Common conventions:
+- Scope helpers preserve exact conversion behavior.
+- Constructors store protocol configuration without transformation.
+- OAuth1 parameters are string-like but semantically distinct.
+- OpenID Connect grants extend or wrap OAuth2 grant behavior.
+## 2. Solver Weakness Analysis
+Historical Solver traces show four recurring weaknesses.
+1. Scope conversion: the Solver localizes list_to_scope or scope_to_list but
+uses generic filtering, sorting, or normalization that violates OAuthLib's
+helper contracts.
+2. Constructor storage: endpoint and client constructors contain same-typed
+parameters, causing the Solver to swap fields, transform values, or store
+parameters under the wrong private attributes.
+3. OAuth1 plumbing: nonce, timestamp, realm, and callback_uri are all
+20
+
+string-like but semantically different, so type information alone is
+insufficient.
+4. OIDC inheritance: OpenID Connect grants inherit from or delegate to OAuth2
+grant logic. The Solver may replace inherited behavior instead of extending it,
+or forward attributes to the wrong object.
+Representative traces include failures in scope utility tests, device endpoint
+tests, OAuth1 client/signature tests, and OpenID Connect grant-type tests.
+## 3. Bug Injection Playbook
+### Pattern A: Scope Helper Contract
+Targets:
+- oauthlib/oauth2/rfc6749/utils.py
+- list_to_scope, scope_to_list, params_from_uri
+Mutation ideas:
+- Convert only some scope elements instead of all elements.
+- Reorder tokens during list/string conversion.
+- Mishandle None, empty strings, or empty collections.
+- Replace repository-specific conversion with generic filtering.
+### Pattern B: Device Endpoint Constructor Storage
+Target:
+- oauthlib/oauth2/rfc8628/endpoints/device_authorization.py
+Mutation ideas:
+- Swap verification_uri and verification_uri_complete.
+- Store interval or expires_in under the wrong attribute.
+- Transform a constructor value that should be preserved unchanged.
+### Pattern C: OAuth1 Parameter Plumbing
+Target:
+- oauthlib/oauth1/
+Mutation ideas:
+- Confuse nonce and timestamp.
+- Confuse callback_uri and realm.
+- Keep most fields correct so the bug remains localized.
+### Pattern D: OIDC Inheritance and Delegation
+Target:
+- oauthlib/openid/connect/core/grant_types/
+Mutation ideas:
+- Drop inherited OAuth2 response fields.
+- Forward a method to the wrong wrapped object.
+- Override a method without preserving parent behavior.
+## 4. Validation and Anti-Patterns
+Use existing targeted pytest tests, not synthetic tests or full-suite execution.
+A candidate is accepted only if the bug patch applies cleanly, target tests fail,
+the reversed patch restores passing tests, repeated runs are stable, and the
+issue text does not leak the oracle patch.
+Do not generate tasks that modify tests, introduce syntax/import errors, require
+network access, touch many unrelated modules, reveal the patch in the issue
+text, or produce failures that cannot be reproduced by targeted pytest commands.
+21
+

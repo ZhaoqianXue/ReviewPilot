@@ -1,0 +1,535 @@
+=== PDF FIRST PAGE (title region) ===
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+Haozhen Zhang 1 Quanyu Long 1 Jianzhu Bao 1 Tao Feng 2 Weizhi Zhang 3 Haodong Yue 4 Wenya Wang 1
+Abstract
+Most Large Language Model (LLM) agent mem-
+ory systems rely on a small set of static, hand-
+designed operations for extracting memory. These
+fixed procedures hard-code human priors about
+what to store and how to revise memory, mak-
+ing them rigid under diverse interaction patterns
+and inefficient on long histories. To this end, we
+present MemSkill, which reframes these opera-
+tions as learnable and evolvable memory skills,
+structured and reusable routines for extracting,
+consolidating, and pruning information from inter-
+action traces. Inspired by the design philosophy of
+agent skills, MemSkill employs a controller that
+learns to select a small set of relevant skills, paired
+with an LLM-based executor that produces skill-
+guided memories. Beyond learning skill selection,
+MemSkill introduces a designer that periodically
+reviews hard cases where selected skills yield
+incorrect or incomplete memories, and evolves
+the skill set by proposing refinements and new
+skills. Together, MemSkill forms a closed-loop
+proce
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+Haozhen Zhang 1 Quanyu Long 1 Jianzhu Bao 1 Tao Feng 2 Weizhi Zhang 3 Haodong Yue 4 Wenya Wang 1
+Abstract
+Most Large Language Model (LLM) agent mem-
+ory systems rely on a small set of static, hand-
+designed operations for extracting memory. These
+fixed procedures hard-code human priors about
+what to store and how to revise memory, mak-
+ing them rigid under diverse interaction patterns
+and inefficient on long histories. To this end, we
+present MemSkill, which reframes these opera-
+tions as learnable and evolvable memory skills,
+structured and reusable routines for extracting,
+consolidating, and pruning information from inter-
+action traces. Inspired by the design philosophy of
+agent skills, MemSkill employs a controller that
+learns to select a small set of relevant skills, paired
+with an LLM-based executor that produces skill-
+guided memories. Beyond learning skill selection,
+MemSkill introduces a designer that periodically
+reviews hard cases where selected skills yield
+incorrect or incomplete memories, and evolves
+the skill set by proposing refinements and new
+skills. Together, MemSkill forms a closed-loop
+procedure that improves both the skill-selection
+policy and the skill set itself. Experiments on
+LoCoMo, LongMemEval, HotpotQA, and ALF-
+World demonstrate that MemSkill improves task
+performance over strong baselines and general-
+izes well across settings. Further analyses shed
+light on how skills evolve, offering insights to-
+ward more adaptive, self-evolving memory man-
+agement for LLM agents. Code is available at
+https://github.com/ViktorAxelsen/MemSkill
+1. Introduction
+As Large Language Model (LLM) agents engage in longer,
+open-ended interactions, they must handle growing histories
+that are essential yet challenging to leverage, motivating
+1Nanyang Technological University
+2University of Illi-
+nois
+Urbana-Champaign
+3University
+of
+Illinois
+Chicago
+4Tsinghua
+University.
+Correspondence
+to:
+Haozhen
+Zhang
+<haozhen001@e.ntu.edu.sg>,
+Wenya
+Wang
+<wangwy@ntu.edu.sg>.
+Preprint. May 26, 2026.
+memory for retaining experience and maintaining coher-
+ence (Hu et al., 2025). This need has driven rapid progress
+in agent memory, including approaches that summarize
+and retrieve past interactions or manage external memory
+stores (Kang et al., 2025; Chhikara et al., 2025; Packer et al.,
+2023; Xu et al., 2025). However, most methods still rely on
+static, hand-designed memory mechanisms, including fixed
+operation primitives (e.g., add/update/delete/skip) (Wang
+et al., 2025a; Yan et al., 2025) and heuristic modules that
+govern what to store, how to revise it (Kang et al., 2025;
+Fang et al., 2025), and when to prune it. Such designs bake
+in strong human assumptions and often suffer under diverse
+interaction patterns, scaling poorly as histories grow.
+We argue that this formulation fundamentally limits the
+adaptability of agent memory. Rather than treating memory
+as the output of fixed operations or hand-designed modules,
+we propose to elevate memory extraction itself into a learn-
+able abstraction. Concretely, we view memory construction
+as the outcome of applying a small set of generic, reusable
+memory skills: structured behaviors that specify when and
+how interaction traces should be transformed into memory
+and revised over time. This perspective reveals a key bottle-
+neck of prior pipelines: they hard-code memory behaviors
+into fixed procedural workflows that interleave heuristics
+with LLM-mediated extraction and revision, making them
+brittle under distribution shift (Fang et al., 2025).
+Under this view, an ideal agent memory system should sat-
+isfy three properties. (i) Minimal reliance on human priors.
+Instead of manually encoding what is worth remembering
+for a domain (Zhong et al., 2024), memory behaviors should
+be shaped by interaction data and updated as task demands
+evolve. (ii) Support for larger extraction granularity. Many
+approaches are tuned to a fixed unit, such as per-turn pro-
+cessing (Fang et al., 2025), and can weaken when applied
+to longer spans. A practical system should be able to op-
+erate at larger extraction granularity when needed. (iii)
+Skill-conditioned, compositional memory construction. Ex-
+isting systems often decompose memory construction into
+specialized modules (Kang et al., 2025). In contrast, we
+prefer to select and compose a small set of relevant skills for
+the current context and apply them in one generation step,
+enabling flexible reuse and evolution of memory behaviors.
+Based on the above observations, we introduce MemSkill,
+1
+arXiv:2602.02474v2  [cs.CL]  24 May 2026
+
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+Turn 1
+......
+Turn 2
+......
+Turn N
+......
+...
+Handcrafted
+operations
+Handcrafted
+operations
+LLM
+LLM
+Interleave
+Interleave
+Handcrafted
+operations
+LLM
+Interleave
+...
+...
+...
+Memory Bank
+(a) Prior: Turn-level + Handcrafted Operations
+......
+Conversation Turns
+Turn 1
+......
+Turn 2
+......
+Turn N
+......
+...
+LLM
+Span/Chunk
+Processing
+Skill
+Selection
+Input
+Capture Temporal
+Purpose: Capture temporal...
+When to use: When inputs...
+How to apply: Identify...
+Constraints: Avoid...
+Handle Entity Rel.
+Purpose: Entity Relationship...
+When to use: When inputs...
+How to apply: Extract...
+Constraints: Avoid...
+Refine Details
+Purpose: Update details...
+When to use: When inputs...
+How to apply: Refine...
+Constraints: Focus on...
+Capture Activity
+Purpose: Capture activities...
+When to use: When inputs...
+How to apply: Capture..
+Constraints: Only use...
+Selected Skills
+Input
+......
+......
+(b) MemSkill: Span-level + Skill-conditioned Generation
+Skill Bank
+Figure 1. Comparison between (a) prior turn-level, handcrafted operations and (b) MemSkill’s span-level, skill-conditioned
+generation. Prior methods interleave handcrafted operations with LLM calls to incrementally extract and revise memory turn by turn,
+while MemSkill selects a small set of skills from a shared skill bank and applies them in one pass to produce skill-guided memories.
+which reframes memory operations as a learnable and evolv-
+able set of memory skills. MemSkill maintains a shared
+skill bank, where each skill captures a reusable way to ex-
+tract, consolidate, or revise memories from interaction text
+(Figure 1 shows the structured template of a memory skill).
+Given the current context, a controller learns to select a
+small set of relevant skills, and an LLM-based executor
+conditions on these skills to generate skill-guided memories
+in one pass. This skill-conditioned formulation is not tied to
+a fixed extraction unit and can be applied to different span
+lengths when processing long interaction histories.
+Crucially, MemSkill goes beyond learning how to use a
+fixed set of skills. We introduce a closed-loop evolution
+process that alternates between learning to use the current
+skill bank and evolving the skill bank itself. Specifically,
+we train the controller with reinforcement learning (RL)
+using downstream task signals as feedback for skill selec-
+tion. Periodically, a designer aggregates the hardest cases
+produced during training, selects representative failures, and
+uses an LLM to refine existing skills and propose new ones.
+After each evolution step, the controller continues training
+on the evolved skill bank, with additional exploration to
+facilitate adopting newly introduced skills. Overall, this
+process gradually strengthens both the skill selection policy
+and the evolving skill bank, moving toward a more adaptive
+memory management system driven by interaction data.
+Experiments on LoCoMo, LongMemEval, HotpotQA, and
+ALFWorld show that MemSkill consistently improves task
+performance and generalizes well. Further analyses vali-
+date key components and showcase representative evolved
+skills, offering insights toward more adaptive, self-evolving
+memory management for LLM agents.
+Our contributions can be summarized as follows.
+• We propose MemSkill, an agent memory method that
+represents memory operations as an evolving skill
+bank, where each skill provides reusable guidance for
+selecting, extracting, and organizing useful memories.
+This turns memory construction from a fixed hand-
+crafted pipeline into an adaptive skill-conditioned gen-
+eration process.
+• We introduce a closed-loop optimization recipe that
+combines reinforcement learning for skill selection
+with LLM-guided skill evolution from hard cases, en-
+abling continual refinement of the skill bank and taking
+a step toward self-evolving agent memory systems.
+• We evaluate MemSkill on LoCoMo, LongMemEval,
+HotpotQA, and ALFWorld, demonstrating consistent
+gains and strong transfer ability across conversational
+QA and embodied interaction settings, offering insights
+for self-evolving memory in LLM agents.
+2. Related Work
+2.1. LLM Agent Memory Systems
+Prior work on agent memory focuses on constructing exter-
+nal memories from interaction histories and leveraging them
+2
+
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+to support downstream reasoning and decision making. Typ-
+ical pipelines periodically extract salient information into a
+memory store, retrieve relevant entries for a new query, and
+update the store via consolidation or pruning (Kang et al.,
+2025; Zhong et al., 2024; Xu et al., 2025; Packer et al., 2023;
+Chhikara et al., 2025; Fang et al., 2025). More recently,
+learning-based approaches such as Memory-R1 (Yan et al.,
+2025) and Mem-α (Wang et al., 2025a) optimize memory
+management with reinforcement learning using downstream
+task signals. Despite this progress, memory management
+is still largely governed by static, hand-crafted routines for
+extraction, consolidation, and pruning.
+Several concurrent works also explore self-evolving mem-
+ory in agent settings, but differ from our focus.
+Evo-
+Memory (Wei et al., 2025) evaluates streaming memory
+evolution, MemEvolve (Zhang et al., 2025b) optimizes
+predefined memory architectures, MemGen (Zhang et al.,
+2025a) targets latent memory for reasoning, and Reasoning-
+Bank (Ouyang et al., 2025) distills reasoning strategies from
+experience. By contrast, we target the evolution of memory
+skills themselves, enabling the system to refine and grow
+reusable memory operations over time.
+2.2. Self-Evolving LLM Agents
+Recent work on self-evolving LLM agents studies how
+agents can improve from interaction experience with mini-
+mal manual supervision. ExpeL (Zhao et al., 2024) distills
+trajectories into editable natural-language insights and re-
+trieves relevant experiences to guide future decisions, while
+EvolveR (Wu et al., 2025) formalizes an experience lifecy-
+cle that consolidates interactions into reusable principles
+and closes the loop with reinforcement learning updates. A
+complementary line reduces reliance on curated data via
+self-play style curricula: Absolute Zero Reasoner (Zhao
+et al., 2025) trains a proposer and solver with verifiable re-
+wards from a code executor, and Multi-Agent Evolve (Chen
+et al., 2025) extends this to a proposer solver judge triad with
+LLM-based evaluation; R-Zero (Huang et al., 2025) follows
+a similar challenger solver co-evolution pattern. Beyond cur-
+ricula, systems such as AgentEvolver (Zhai et al., 2025) and
+RAGEN (Wang et al., 2025b) study efficient agent learn-
+ing dynamics and stabilization in multi-turn RL settings,
+while ADAS (Hu et al., 2024) and AlphaEvolve (Novikov
+et al., 2025) explore automated discovery and evolutionary
+improvement of agent designs. Finally, SkillWeaver (Zheng
+et al., 2025) shows that agents can discover and refine
+reusable skills for web interaction. In contrast, our focus
+is on self-evolving memory skills that govern how agents
+construct and revise memories over time.
+3. Method
+In this section, we first provide an overview of MemSkill
+(Section 3.1), then detail the skill bank (Section 3.2) and
+the three core components (controller (Section 3.3.1), ex-
+ecutor (Section 3.3.2), and designer (Section 3.4)), and
+finally summarize the closed-loop optimization procedure
+that alternates between learning to use the current skills and
+evolving the skill bank from hard cases (Section 3.5).
+3.1. Overview
+As shown in Figure 2, we propose MemSkill, which op-
+timizes agent memory through two intertwined processes.
+First, it learns to use a given skill bank: a controller se-
+lects context-relevant skills, and an executor applies them
+to produce memory updates. Second, it improves the skill
+bank itself: a designer periodically revises existing skills
+and adds new ones based on challenging training cases.
+To disentangle trace-specific memories from reusable mem-
+ory management knowledge, MemSkill maintains two
+stores. The memory bank is trace-specific and stores memo-
+ries for each training trace (e.g., a long dialogue). In contrast,
+the skill bank is shared across traces and contains reusable
+memory skills. During training, the controller and executor
+build each trace’s memory bank, while the designer updates
+the shared skill bank between phases. This alternating pro-
+cedure gradually improves both the skill selection policy
+and the skill bank for memory construction.
+3.2. Skill Bank
+As shown in Figure 2, a memory skill specifies a reusable
+memory operation as structured guidance, including when
+it is applicable and how it should be applied to the current
+context. Concretely, each skill s ∈S contains (i) a short
+description for skill representation and selection, and (ii) a
+detailed content specification that instructs the executor on
+memory extraction or revision.
+We start from a minimal set of general-purpose primitives
+to ensure a stable and functional initialization. Specifically,
+we initialize the skill bank with four basic skills correspond-
+ing to canonical memory operations: INSERT, UPDATE,
+DELETE, and SKIP. Starting from this minimal set, the
+designer progressively refines existing skills and expands
+the bank by proposing new skills that address uncovered
+failure modes. (Appendix C details skill description)
+3.3. Learning to Use Memory Skills
+In this part, we describe how MemSkill learns to use mem-
+ory skills, covering (i) the skill-selection policy and (ii)
+skill-conditioned memory construction.
+3
+
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+Learning to Use Memory Skills
+(Controller & Executor)
+Trace 1
+Segmenter
+Text Span
+...
+...
+...
+Sequential Process
+Memory Bank
+Input
+Controller
+Retriever
+Retrieve
+Current
+Text Span
+Executor
+(LLM)
+State/Skill
+Encoder
+Memory
+Update
+Evaluation on Training Data
+Task Reward
+Optimize Controller
+Reset Every Trace
+Trace 1
+Trace 2
+Trace 3
+Trace 4
+...
+Trace E
+Interaction
+Traces
+Skill Bank
+(Shared Across Training)
+......
+Description: ...
+Skip
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
+Description: ...
+Delete
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
+Description: ...
+Update
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
+Description: ...
+Insert
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
+Description: ...
+New Skill 1
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
++
+Description: ...
+New Skill 2
+(1) Purpose: ...
+(2) When to use: ...
+(3) How to apply: ...
+(4) Constraints: ...
+Content:
++
+Refines and Evolves Over Training
+Read Skills
+Hard Case Buffer
+Record Recently Observed Failure Cases
+Failure Case 1
+Model Prediction
+Reward Score
+Ground Truth
+Fail Count
+......
+Failure Case 2
+Model Prediction
+Reward Score
+Ground Truth
+Fail Count
+......
+Failure Case 3
+Model Prediction
+Reward Score
+Ground Truth
+Fail Count
+......
+Failure Case N
+Model Prediction
+Reward Score
+Ground Truth
+Fail Count
+......
+......
+......
+Skill Evolution
+(Designer)
+Retrieved
+Memory
+Trigger Periodically
+Select Representative
+Hard Cases
+Cluster Hard Cases
+Filter by Reward
+Score and Fail Count
+Divided by Groups
+Difficulty 
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+LLM Judge Prompt
+You are an expert judge evaluating the quality of an answer for a QA task. Your goal is to determine whether the
+model’s answer correctly and sufficiently answers the given question.
+Read the following information carefully:
+[Question]
+{question}
+[Ground Truth Answers]
+{ground truth}
+[Model Answer]
+{model answer}
+Your evaluation criteria:
+1. Correctness:
+- Is the model answer factually consistent with ANY of the correct answers?
+- Does it avoid contradictions or introducing false information?
+2. Relevance:
+- Does the answer address the question directly without unnecessary content?
+3. Completeness:
+- Does the answer include all essential information needed to fully answer the question?
+- Partial answers are allowed but should receive lower scores.
+Scoring Rules:
+- Score = 1.0 if the answer is fully correct.
+- Score = 0.5 if the answer is partially correct but incomplete or slightly inaccurate.
+- Score = 0.0 if the answer is incorrect, irrelevant, or contradicts the ground truth.
+Output Format (STRICT):
+Return your output as a JSON dictionary with two fields:
+{ “explanation”: “<brief explanation of your reasoning>”, ”score”: <0.0 — 0.5 — 1.0>}
+Be concise and objective. Do not include anything outside the JSON.
+E. Use of Large Language Models
+LLMs are used as part of our method and evaluation pipeline. Specifically, MemSkill uses an LLM executor for skill-
+conditioned memory generation, an LLM designer for skill evolution, and an LLM judge for evaluation on tasks where
+automatic metrics are insufficient. The corresponding prompts are provided in Appendix D.
+LLM-based tools may also be used for grammar polishing and code assistance. The authors take full responsibility for all
+scientific claims, experimental results, figures, and references in this paper.
+F. Limitations and Societal Impact
+Limitations.
+This work focuses on benchmarked research settings for skill-conditioned memory construction. Practical
+deployments of agent memory systems may require additional mechanisms for privacy protection, user consent, access
+control, and data retention. These considerations are orthogonal to the core algorithmic contribution of MemSkill and are
+left for future deployment-oriented studies.
+32
+
+MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents
+Societal impact.
+MemSkill contributes toward more adaptive and reusable memory mechanisms for long-horizon LLM
+agents. Instead of repeatedly designing task-specific memory pipelines, the proposed skill-based formulation allows memory
+behaviors to be learned, reused, and evolved from interaction traces, which may lower the engineering barrier for building
+memory-augmented agents. This can benefit research and practical applications that require long-term context management,
+such as personalized assistants, educational agents, research support tools, and embodied task-solving systems. Since
+agent memory may involve user-provided or task-specific information, practical deployments should follow standard data
+governance practices, including user consent, privacy protection, data retention control, and mechanisms for inspecting or
+deleting stored memories. Our work focuses on benchmarked research settings and does not target surveillance, deception,
+or high-stakes decision making.
+33
+

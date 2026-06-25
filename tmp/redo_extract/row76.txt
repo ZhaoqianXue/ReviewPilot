@@ -1,0 +1,619 @@
+=== PDF FIRST PAGE (title region) ===
+Corpas et al., page 1 
+Trustworthy agentic genomics through versioned skill 
+2 
+libraries 
+3 
+ 
+4 
+Manuel Corpas (1,2,*), Alfredo Iacoangeli (3,4,5), Mathieu Bourdenx (6,7), Mahmoud 
+5 
+Aldraimli (1), Nathan Skene (8), Segun Fatumo (9,10), Heinner Guio (2,11,12) 
+6 
+ 
+7 
+1 University of Westminster, London, UK; 2 GENEQ Global, London, UK; 3 Department of 
+8 
+Biostatistics and Health Informatics, Institute of Psychiatry, Psychology & Neuroscience, King’s 
+9 
+College London, London, UK; 4 Perron Institute for Neurological and Translational Science, Perth, 
+10 
+Australia; 5 NIHR South London and Maudsley NHS Foundation Trust, London, UK; 6 UK Dementia 
+11 
+Research Institute, UCL, London, UK; 7 UCL Queen Square Institute of Neurology, London, UK; 8 
+12 
+UK Dementia Research Institute at Imperial College London, and Department of Brain Sciences, 
+13 
+Imperial College London, London, UK; 9 MRC/UVRI and LSHTM Uganda Research Unit, Entebbe, 
+14 
+Uganda; 10 Queen Mary University of London, London, UK; 11 Universidad de Ingenieria y 
+15 
+Tecnologia (UTEC), Lima, Peru; 12 INBIOMEDIC Research Centre, Lima, Peru.  
+16 
+ 
+17 
+*Lead contact: Manuel Corpas, m.corpas@westminster.ac.uk 
+18 
+ 
+19 
+S
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Corpas et al., page 1 
+Trustworthy agentic genomics through versioned skill 
+2 
+libraries 
+3 
+ 
+4 
+Manuel Corpas (1,2,*), Alfredo Iacoangeli (3,4,5), Mathieu Bourdenx (6,7), Mahmoud 
+5 
+Aldraimli (1), Nathan Skene (8), Segun Fatumo (9,10), Heinner Guio (2,11,12) 
+6 
+ 
+7 
+1 University of Westminster, London, UK; 2 GENEQ Global, London, UK; 3 Department of 
+8 
+Biostatistics and Health Informatics, Institute of Psychiatry, Psychology & Neuroscience, King’s 
+9 
+College London, London, UK; 4 Perron Institute for Neurological and Translational Science, Perth, 
+10 
+Australia; 5 NIHR South London and Maudsley NHS Foundation Trust, London, UK; 6 UK Dementia 
+11 
+Research Institute, UCL, London, UK; 7 UCL Queen Square Institute of Neurology, London, UK; 8 
+12 
+UK Dementia Research Institute at Imperial College London, and Department of Brain Sciences, 
+13 
+Imperial College London, London, UK; 9 MRC/UVRI and LSHTM Uganda Research Unit, Entebbe, 
+14 
+Uganda; 10 Queen Mary University of London, London, UK; 11 Universidad de Ingenieria y 
+15 
+Tecnologia (UTEC), Lima, Peru; 12 INBIOMEDIC Research Centre, Lima, Peru.  
+16 
+ 
+17 
+*Lead contact: Manuel Corpas, m.corpas@westminster.ac.uk 
+18 
+ 
+19 
+Summary 
+20 
+Genomics is adopting autonomous AI agents that interpret genomes from natural-
+21 
+language instructions faster than it is building the means to trust them. We report the 
+22 
+first large-scale controlled evaluation of where, in an agentic genomic pipeline, 
+23 
+correctness must reside for the system to be trustworthy at clinical scale. Using 
+24 
+pharmacogenomics, a domain where errors are measurable and sometimes lethal, we 
+25 
+benchmarked nine frontier large language models across 44,550 scored evaluations on 
+26 
+110 pharmacogenomic cases, and tested model interpretation of real star-allele 
+27 
+diplotypes from more than 7,000 individuals in three ancestrally diverse populations. 
+28 
+Trustworthiness proved to be a property of pipeline architecture, not of the model. 
+29 
+Letting the model reason was stochastic and unsafe, and grounding it in the correct 
+30 
+guidelines by retrieval paradoxically increased lethal-class errors. Encoding the 
+31 
+validated decision logic as a versioned skill and executing it as code made the 
+32 
+pharmacogenomic mapping exact, auditable and identical across models, confining all 
+33 
+residual error to a single input-interpretation step. On individual genomes, unguarded 
+34 
+model interpretation degraded along an ancestry gradient; execution removes this 
+35 
+gradient from the clinical mapping, relocating it to the auditable completeness of the 
+36 
+input caller. This establishes a generalisable, auditable architecture for trustworthy 
+37 
+agentic genome interpretation at scale. 
+38 
+ 
+39 
+Highlights 
+40 
+• 
+Correctness must be executed, not reasoned or retrieved, to be trustworthy 
+41 
+• 
+Retrieval raises phenotype accuracy yet increases lethal-class errors; skills do not 
+42 
+• 
+Execution makes the clinical mapping exact and model-invariant; error stays at input 
+43 
+• 
+A deterministic input caller is the predicted route to all-correct emitted answers 
+44 
+ 
+45 
+In brief 
+46 
+Corpas and colleagues show that trustworthy agentic genome interpretation comes not 
+47 
+from making language models reason correctly about biology, but from confining them 
+48 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 2 
+to interpreting input while versioned, validated skills do the reasoning as executed code. 
+49 
+Across nine large language models and 110 pharmacogenomics cases, executing the 
+50 
+skill makes the clinical mapping deterministic, auditable and model-invariant. 
+51 
+ 
+52 
+Significance 
+53 
+Genomics is adopting autonomous, language-model-mediated agents faster than it is 
+54 
+building the standards needed to trust them. On a pharmacogenomic benchmark with 
+55 
+lethal-class consequences, we show that an agent’s trustworthiness is not a property of 
+56 
+the model but of how the agent is constrained: correctness must be moved out of the 
+57 
+stochastic model into a versioned skill executed as code, with the model confined to 
+58 
+interpreting heterogeneous input. This gives the field a transferable architecture for 
+59 
+trustworthy agentic genome interpretation, a predicted route to deploying it so that every 
+60 
+emitted answer is correct (execute the validated skill, call the input deterministically, and 
+61 
+abstain on the irreducible residual), and a way to develop genomic skills as validated, 
+62 
+executable, versioned units rather than prompts. Following a validation framework 
+63 
+described elsewhere, we use clinical-grade to mean determinism, auditability, 
+64 
+traceability to versioned components and population-invariant performance, all achieved 
+65 
+under skill-constrained execution. We distinguish two senses of population 
+66 
+performance: the executed clinical mapping is population-invariant by construction, 
+67 
+verified across European, Latin American and East African origin individuals, whereas 
+68 
+the model’s interpretation of real, ancestrally diverse diplotypes is not, degrading along 
+69 
+an ancestry gradient, which is precisely why the mapping must be executed rather than 
+70 
+reasoned. We do not claim full clinical validation, which would additionally require non-
+71 
+canonical inputs, real-world genomic and clinical data, human comparators and multi-
+72 
+site concordance. 
+73 
+ 
+74 
+Introduction 
+75 
+Genomics has entered a phase in which AI agents can autonomously discover, 
+76 
+configure, execute and chain bioinformatics operations from natural-language 
+77 
+instructions (1). This paradigm, agentic genomics, shifts the bottleneck in computational 
+78 
+biology from building pipelines to validating them (1), and with it comes a new class of 
+79 
+risk: agents can generate results faster than researchers can check them, and the most 
+80 
+dangerous errors are the ones that look plausible but are wrong. A companion 
+81 
+Perspective to this paper (1) sets out a tiered validation framework for agentic genomics 
+82 
+and identifies the clinical-grade tier as the most demanding, requiring outputs that are 
+83 
+deterministic, auditable, traceable to specific versioned components, and population-
+84 
+invariant. Here we operationalise that framework on a single clinical-task substrate, 
+85 
+pharmacogenomic interpretation, to ask the question that decides whether agentic 
+86 
+genome interpretation can be automated at scale: where in an agentic pipeline must 
+87 
+correctness reside for the system to be trustworthy? 
+88 
+ 
+89 
+Two answers dominate practice. The first is to let the model reason from its training 
+90 
+prior. The second, retrieval-augmented generation, grounds the model in retrieved 
+91 
+evidence and lets it reason over that (2, 3, 4); large language models encode 
+92 
+substantial clinical knowledge (5), and the reflex in biology is to surface the relevant 
+93 
+guidelines and let the model apply them. This paper tests a third, structural answer: 
+94 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 3 
+encode the validated decision logic in a versioned skill. In the agentic genomics 
+95 
+framework, a skill is a self-contained, versioned unit of bioinformatics functionality 
+96 
+whose declarative specification (SKILL.md) defines the analytical logic, expected inputs 
+97 
+and outputs, and domain-expert decisions (1, 6). A skill can be used in two ways: the 
+98 
+model can read its rules and reason to an answer, or the validated logic can be 
+99 
+executed as code with the model confined to supplying input. That distinction turns out 
+100 
+to be decisive. 
+101 
+ 
+102 
+Pharmacogenomics is a rigorous test domain: the genotype-to-phenotype-to-
+103 
+recommendation mapping is well-defined by the Clinical Pharmacogenetics 
+104 
+Implementation Consortium (CPIC) Level A guideline corpus (7), errors are clinically 
+105 
+measurable, and the task demands precise adherence to published guidance. The 
+106 
+benchmark includes high-stakes drug-gene pairs with documented lethal 
+107 
+consequences: DPYD variants where standard fluoropyrimidine dosing causes severe 
+108 
+or fatal toxicity in approximately 0.1 to 0.5% of carriers (8); TPMT and NUDT15 
+109 
+deficiencies where standard thiopurine dosing causes lethal myelosuppression (9); 
+110 
+CYP2C19 poor metabolisers where standard clopidogrel dosing fails to prevent stent 
+111 
+thrombosis (10); and HLA risk alleles where exposure to specific drugs causes Stevens-
+112 
+Johnson syndrome, toxic epidermal necrolysis or hypersensitivity reaction (11, 12). 
+113 
+ 
+114 
+Concurrent work applies agents to genomic tasks but does not address this question. 
+115 
+Recent systems generate pharmacogenomic recommendations from the literature 
+116 
+through an agentic pipeline (13), or prioritise rare-disease variants for diagnosis at scale 
+117 
+(14); both build end-to-end pipelines and report task accuracy. Neither isolates where in 
+118 
+the pipeline correctness must reside, neither separates a model that reasons over a skill 
+119 
+from one that executes it as code, and neither establishes determinism, auditability and 
+120 
+model-invariance as properties of execution rather than of the model. That controlled 
+121 
+dissociation, not the construction of another agentic system, is our contribution. 
+122 
+ 
+123 
+We benchmark nine frontier large language models along a five-step constraint gradient 
+124 
+that progressively relocates correctness from the model into an executed skill: (i) free-
+125 
+prompted; (ii) retrieval-augmented from the CPIC corpus; (iii) skill-reasoning, in which 
+126 
+the model applies a versioned skill’s rules and generates the answer; (iv) skill-
+127 
+execution, in which the model supplies a structured input and the validated skill 
+128 
+computes the answer in code; and (v) an answer-supplied positive control. The gradient 
+129 
+shows that trustworthiness is a property of where correctness sits, not of the model: the 
+130 
+unconstrained and retrieval-grounded conditions are stochastic and unsafe; structured 
+131 
+skills make capable models reliable and near model-invariant; execution makes the 
+132 
+clinical mapping exact and confines all residual error to one auditable step; and a 
+133 
+validated deterministic caller for that step closes the pipeline toward complete 
+134 
+correctness among emitted in-scope answers. We frame the contribution as an 
+135 
+architecture and an evaluation for trustworthy agentic genome interpretation at scale, 
+136 
+not as a claim that models become clinically correct in isolation. Figure 1 summarises 
+137 
+the study design. 
+138 
+ 
+139 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 4 
+ 
+140 
+Figure 1. Study design. (A) The five-condition constraint gradient, ordered by how much correctness sits in the 
+141 
+stochastic model versus in the executed skill: free-prompted, retrieval-augmented, skill-reasoning, skill-execution, and 
+142 
+an answer-supplied positive control. (B) Every condition is evaluated on the identical grid: 110 CPIC Level A cases × 
+143 
+nine frontier large language models × three ancestry framings (European, Latin American, East African) × three 
+144 
+replicates (8,910 evaluations per condition, 44,550 in total), each scored on phenotype identification (A1), drug 
+145 
+recommendation (A2) and lethal-class safety action (A3). The two skill conditions exclude Mistral Large 2 from the 
+146 
+headline (rate-limit artefact); the all-nine-model view is reported in the supplement. (C) Two arms. A curated 
+147 
+analytical benchmark with known CPIC ground truth (the five conditions) isolates where correctness must reside; a 
+148 
+real-genome validation arm interprets PyPGx-called diplotypes from three ancestrally distinct cohorts (Corpas family, 
+149 
+Peruvian Genome Project, Uganda Genome Resource) to test whether curated accuracy transfers. 
+150 
+ 
+151 
+ 
+152 
+ 
+153 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 5 
+Results 
+154 
+A constraint-gradient benchmark of agentic pharmacogenomic interpretation 
+155 
+We benchmarked nine frontier large language models (Claude Opus 4, Claude Sonnet 
+156 
+4, GPT-5.2, GPT-4.1, o3, o4-mini, Gemini 2.5 Flash, DeepSeek V3, Mistral Large 2) on 
+157 
+110 CPIC Level A cases spanning 21 markers and 35 gene-drug pairs. The three core 
+158 
+conditions (free-prompted, retrieval-augmented, answer-supplied) were evaluated 
+159 
+across three population contexts and three replicates, producing 26,730 evaluations. 
+160 
+The two skill conditions (skill-reasoning, skill-execution) were run on all nine models 
+161 
+across the same three-population, three-replicate grid, producing a further 17,820 
+162 
+evaluations; Mistral Large 2 is excluded from the reported skill-arm aggregate as a rate-
+163 
+limit artefact (it returned usable output on only 3.7% of skill-arm cells; Methods), so the 
+164 
+headline skill figures are over eight models, and the all-nine-model aggregate is 
+165 
+reported in the supplement. On the common set of eight models for which all five 
+166 
+conditions yield valid output (Mistral fails only under the skill prompts), the constraint 
+167 
+gradient is unchanged: free-prompted 79.6%, retrieval-augmented 89.1%, skill-
+168 
+reasoning 95.5%, skill-execution 93.3% and the answer-supplied control 100%. Outputs 
+169 
+were scored on phenotype identification (A1), drug-specific recommendation (A2) and 
+170 
+lethal-class safety action (A3) by a rigorous rescorer with a justified clinical-equivalence 
+171 
+layer (Methods). 
+172 
+ 
+173 
+The five conditions form a gradient of constraint, ordered by how much correctness sits 
+174 
+in the model versus in the executed skill (Figure 2). 
+175 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 6 
+ 
+176 
+Figure 2. The constraint gradient locates trust. (A) Phenotype accuracy for each frontier model (coloured dot, with 
+177 
+95% confidence interval) across the five conditions, the black tick marking the aggregate (nine models for the free-
+178 
+prompted, retrieval-augmented and answer-supplied control conditions; eight models for the skill conditions, Mistral 
+179 
+excluded). The per-model spread collapses as correctness is constrained; skill-reasoning (95.5%) and skill-execution 
+180 
+(93.3%) reach comparable aggregate accuracy, and the gain over free-prompting (80.6%) comes from constraint 
+181 
+rather than from execution per se. (B) Properties matr
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Corpas et al., page 22 
+4. Zakka, C., Shad, R., Chaurasia, A., Dalal, A.R., Kim, J.L., Moor, M., Fong, R., 
+763 
+Phillips, C., Alexander, K., Ashley, E., et al. (2024). Almanac: retrieval-augmented 
+764 
+language models for clinical medicine. NEJM AI 1, AIoa2300068. 
+765 
+https://doi.org/10.1056/AIoa2300068. 
+766 
+5. Singhal, K., Azizi, S., Tu, T., et al. (2023). Large language models encode clinical 
+767 
+knowledge. Nature 620, 172-180. https://doi.org/10.1038/s41586-023-06291-2. 
+768 
+6. Corpas, M. (2026). ClawBio: Bioinformatics-Native AI Agent Skill Library (v0.5.0). 
+769 
+Zenodo. https://doi.org/10.5281/zenodo.19420648. 
+770 
+7. Relling, M.V., and Klein, T.E. (2011). CPIC: Clinical Pharmacogenetics 
+771 
+Implementation Consortium of the Pharmacogenomics Research Network. Clin. 
+772 
+Pharmacol. Ther. 89, 464-467. https://doi.org/10.1038/clpt.2010.279. 
+773 
+8. Henricks, L.M., Lunenburg, C.A.T.C., de Man, F.M., Meulendijks, D., Frederix, 
+774 
+G.W.J., Kienhuis, E., Creemers, G.-J., Baars, A., Dezentjé, V.O., Imholz, A.L.T., et 
+775 
+al. (2018). DPYD genotype-guided dose individualisation of fluoropyrimidine therapy in 
+776 
+patients with cancer: a prospective safety analysis. Lancet Oncol. 19, 1459-1467. 
+777 
+https://doi.org/10.1016/S1470-2045(18)30686-7. 
+778 
+9. Relling, M.V., Schwab, M., Whirl-Carrillo, M., et al. (2019). Clinical Pharmacogenetics 
+779 
+Implementation Consortium guideline for thiopurine dosing based on TPMT and 
+780 
+NUDT15 genotypes: 2018 update. Clin. Pharmacol. Ther. 105, 1095-1105. 
+781 
+https://doi.org/10.1002/cpt.1304. 
+782 
+10. Lee, C.R., Luzum, J.A., Sangkuhl, K., et al. (2022). Clinical Pharmacogenetics 
+783 
+Implementation Consortium guideline for CYP2C19 genotype and clopidogrel therapy: 
+784 
+2022 update. Clin. Pharmacol. Ther. 112, 959-967. https://doi.org/10.1002/cpt.2526. 
+785 
+11. Mallal, S., Phillips, E., Carosi, G., et al. (2008). HLA-B*5701 screening for 
+786 
+hypersensitivity to abacavir. N. Engl. J. Med. 358, 568-579. 
+787 
+https://doi.org/10.1056/NEJMoa0706135. 
+788 
+12. Chung, W.-H., Hung, S.-I., Hong, H.-S., Hsih, M.-S., Yang, L.-C., Ho, H.-C., Wu, J.-
+789 
+Y., and Chen, Y.-T. (2004). A marker for Stevens-Johnson syndrome. Nature 428, 486. 
+790 
+https://doi.org/10.1038/428486a. 
+791 
+13. Zack, M., Savinkov, A., Stupichev, D., Moore, A., Sokolov, D., Trifonov, I., 
+792 
+Yankovskiy, A., Reshetnikov, K., Ydyrysova, N., and Gobbs, A. (2026). An agentic AI 
+793 
+system for automated pharmacogenomic recommendation generation. npj Digit. Med. 
+794 
+https://doi.org/10.1038/s41746-026-02590-w. 
+795 
+14. Kara, M., Gungor, A.F., Kuday, S.E., Ozcelik, O., Ceylaner, S., Dereli, F., and 
+796 
+Ozden, F. (2026). Deep agentic variant prioritisation for expert-level genetic diagnosis 
+797 
+fast at scale. medRxiv. https://doi.org/10.64898/2026.02.17.26346421. 
+798 
+15. Turpin, M., Michael, J., Perez, E., and Bowman, S.R. (2023). Language models 
+799 
+don’t always say what they think: unfaithful explanations in chain-of-thought prompting. 
+800 
+In Advances in Neural Information Processing Systems 36 (NeurIPS 2023). 
+801 
+https://doi.org/10.48550/arXiv.2305.04388. 
+802 
+16. Sangkuhl, K., Whirl-Carrillo, M., Whaley, R.M., Woon, M., Lavertu, A., Altman, R.B., 
+803 
+Carter, L., Verma, A., Ritchie, M.D., and Klein, T.E. (2020). Pharmacogenomics Clinical 
+804 
+Annotation Tool (PharmCAT). Clin. Pharmacol. Ther. 107, 203-210. 
+805 
+https://doi.org/10.1002/cpt.1568. 
+806 
+17. Chen, L., Zaharia, M., and Zou, J. (2024). How is ChatGPT’s behavior changing 
+807 
+over time? Harvard Data Sci. Rev. 6. https://doi.org/10.1162/99608f92.5317da47. 
+808 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+
+Corpas et al., page 23 
+18. Whirl-Carrillo, M., Huddart, R., Gong, L., Sangkuhl, K., Thorn, C.F., Whaley, R., and 
+809 
+Klein, T.E. (2021). An evidence-based framework for evaluating pharmacogenomics 
+810 
+knowledge for personalized medicine. Clin. Pharmacol. Ther. 110, 563-572. 
+811 
+https://doi.org/10.1002/cpt.2350. 
+812 
+19. Glusman, G., Cariaso, M., Jimenez, R., Swan, D., Greshake, B., Bhak, J., Logan, 
+813 
+D.W., and Corpas, M. (2012). Low budget analysis of Direct-To-Consumer genomic 
+814 
+testing familial data. F1000Research 1, 3. https://doi.org/10.12688/f1000research.1-
+815 
+3.v1. 
+816 
+20. Guio, H., Sanchez, C., Borda, V., Jaramillo-Valverde, L., Caceres, O., Padilla, C., 
+817 
+Trujillo, O., Poterico, J.A., Silva-Carvalho, C., Horton, M., et al. (2025). The Peruvian 
+818 
+Genome Project: expanding the global pool of genome diversity from South America. 
+819 
+Front. Genet. 16, 1614021. https://doi.org/10.3389/fgene.2025.1614021. 
+820 
+21. Gurdasani, D., Carstensen, T., Fatumo, S., Chen, G., Franklin, C.S., Prado-
+821 
+Martinez, J., et al. (2019). Uganda Genome Resource enables insights into population 
+822 
+history and genomic discovery in Africa. Cell 179, 984-1002. 
+823 
+https://doi.org/10.1016/j.cell.2019.10.004.  
+824 
+ 
+825 
+.
+CC-BY 4.0 International license
+available under a 
+(which was not certified by peer review) is the author/funder, who has granted bioRxiv a license to display the preprint in perpetuity. It is made 
+The copyright holder for this preprint
+this version posted June 15, 2026. 
+; 
+https://doi.org/10.64898/2026.06.11.731523
+doi: 
+bioRxiv preprint 
+

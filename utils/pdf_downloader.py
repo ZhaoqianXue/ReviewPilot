@@ -170,6 +170,10 @@ JOURNAL_TO_PUBLISHER = {
     'ios press': 'ios',
     'studies in health technology': 'ios',
 
+    # JoVE
+    'jove': 'jove',
+    'journal of visualized experiments': 'jove',
+
     # Conference proceedings
     'neurips': 'neurips',
     'icml': 'icml',
@@ -275,27 +279,49 @@ class CascadePDFDownloader:
 
         # Enable LLM web search as final fallback (optional)
         self.use_web_search = False
-        self.web_search_model = "gpt-5-mini"
+        self.web_search_model = os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
 
     def set_llm_query_func(self, func):
         """Set the LLM query function for smart publisher detection."""
         self.llm_query_func = func
 
-    def enable_web_search(self, model: str = "gpt-5-mini"):
+    def enable_web_search(self, model: str = None):
         """Enable LLM web search as final fallback for failed downloads."""
         self.use_web_search = True
-        self.web_search_model = model
+        self.web_search_model = model or os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
 
     def _detect_publisher_from_journal(self, journal: str) -> Optional[str]:
         """Detect publisher from journal name using mapping."""
         if not journal:
             return None
 
-        journal_lower = journal.lower().strip()
+        journal_lower = re.sub(r"\s+", " ", journal.lower()).strip()
 
-        # Direct match first
-        for pattern, publisher in JOURNAL_TO_PUBLISHER.items():
-            if pattern in journal_lower:
+        exact_publisher = JOURNAL_TO_PUBLISHER.get(journal_lower)
+        if exact_publisher:
+            return exact_publisher
+
+        strong_indicators = [
+            (r"\bieee\b", "ieee"),
+            (r"\bios press\b", "ios"),
+            (r"\bstudies in health technology\b", "ios"),
+            (r"\bjove\b", "jove"),
+            (r"\bjournal of visualized experiments\b", "jove"),
+        ]
+        for pattern, publisher in strong_indicators:
+            if re.search(pattern, journal_lower):
+                return publisher
+
+        unsafe_broad_patterns = {"journal of", "proceedings of the"}
+        for pattern, publisher in sorted(
+            JOURNAL_TO_PUBLISHER.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if pattern in unsafe_broad_patterns:
+                continue
+            pattern_re = r"(?<![a-z0-9])" + re.escape(pattern) + r"(?![a-z0-9])"
+            if re.search(pattern_re, journal_lower):
                 return publisher
 
         return None
@@ -329,7 +355,7 @@ Return ONLY the publisher name, nothing else."""
             response, _ = self.llm_query_func(
                 text_prompt=prompt,
                 system_prompt="You identify academic publishers. Return only the publisher name.",
-                model="gpt-4o-mini"
+                model=os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
             )
             publisher = response.strip().lower()
             if publisher and publisher != "unknown":
@@ -1636,8 +1662,8 @@ Return ONLY the publisher name, nothing else."""
         Args:
             papers: List of paper metadata dicts
             progress_callback: Optional callback(current, total, paper_title)
-            progress_file: Optional path to save download progress (JSONL format)
-                          Enables resume capability - already downloaded papers are skipped.
+            progress_file: Optional path to save download progress (JSONL format).
+                          Existing progress is not used to skip papers; every run is fresh.
 
         Returns:
             Dict with statistics and results
@@ -1653,29 +1679,7 @@ Return ONLY the publisher name, nothing else."""
             "failed_papers": []
         }
 
-        # Load existing progress if resuming
         already_downloaded = set()
-        if progress_file and os.path.exists(progress_file):
-            try:
-                with open(progress_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        try:
-                            record = json.loads(line.strip())
-                            paper_id = record.get('id') or record.get('doi') or record.get('title')
-                            if paper_id and record.get('pdf_downloaded'):
-                                already_downloaded.add(paper_id)
-                                results["success"] += 1
-                                results["downloaded"].append({
-                                    "title": record.get("title"),
-                                    "method": record.get("pdf_method"),
-                                    "path": record.get("pdf_path")
-                                })
-                        except:
-                            pass
-                if already_downloaded:
-                    print(f"  Resuming: {len(already_downloaded)} papers already downloaded")
-            except Exception as e:
-                print(f"  Error loading progress file: {e}")
 
         for i, paper in enumerate(papers):
             # Check if already downloaded
@@ -1792,8 +1796,9 @@ def _cell_pdf(url: str) -> Optional[str]:
     return None
 
 
-def create_pdf_downloader(email: str = "research@example.com", output_dir: Path = None,
-                          optimized: Optional[bool] = None):
+def create_pdf_downloader(email: str = None, output_dir: Path = None,
+                          optimized: Optional[bool] = None,
+                          semantic_scholar_cache_path: Optional[Path] = None):
     """Create the default Step 3 PDF downloader.
 
     The optimized downloader is the default production path. Set
@@ -1803,6 +1808,13 @@ def create_pdf_downloader(email: str = "research@example.com", output_dir: Path 
     use_optimized = optimized
     if use_optimized is None:
         use_optimized = os.getenv("REVIEWPILOT_LEGACY_PDF_DOWNLOADER") != "1"
+    email = (
+        email
+        or os.getenv("UNPAYWALL_EMAIL")
+        or os.getenv("REVIEWPILOT_API_EMAIL")
+        or os.getenv("REVIEWPILOT_EMAIL")
+        or ""
+    )
 
     if use_optimized:
         try:
@@ -1812,6 +1824,7 @@ def create_pdf_downloader(email: str = "research@example.com", output_dir: Path 
                 email=email,
                 output_dir=output_dir,
                 enable_browser_fallback=True,
+                semantic_scholar_cache_path=semantic_scholar_cache_path,
             )
         except Exception as exc:
             if os.getenv("REVIEWPILOT_STRICT_FAST_PDF_DOWNLOADER") == "1":
@@ -1823,7 +1836,8 @@ def create_pdf_downloader(email: str = "research@example.com", output_dir: Path 
 
 def download_papers_cascade(papers: List[Dict], output_dir: Path, email: str = "research@example.com",
                             progress_callback=None, llm_query_func=None,
-                            progress_file: Optional[str] = None) -> Dict:
+                            progress_file: Optional[str] = None,
+                            semantic_scholar_cache_path: Optional[Path] = None) -> Dict:
     """
     Convenience function to download PDFs for a list of papers.
 
@@ -1838,7 +1852,11 @@ def download_papers_cascade(papers: List[Dict], output_dir: Path, email: str = "
     Returns:
         Download statistics
     """
-    downloader = create_pdf_downloader(email=email, output_dir=output_dir)
+    downloader = create_pdf_downloader(
+        email=email,
+        output_dir=output_dir,
+        semantic_scholar_cache_path=semantic_scholar_cache_path,
+    )
     if llm_query_func:
         downloader.set_llm_query_func(llm_query_func)
     if os.getenv("REVIEWPILOT_ENABLE_PDF_WEB_SEARCH") == "1":

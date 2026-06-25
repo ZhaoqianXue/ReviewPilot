@@ -1,0 +1,394 @@
+=== PDF FIRST PAGE (title region) ===
+SKILL IS NOT DOCUMENT: A QUERY-CONDITIONAL BENCH-
+MARK AND TWO-STAGE RETRIEVER FOR LLM AGENT SKILL
+ROUTING
+Zifei Wang1,∗, Wei Wen2,∗†, Qiang Ji1, Ruizhi Qiao1,2, Xing Sun1,2
+1Tencent IMA Product Center
+2Tencent Youtu Lab
+{zifeiwang, jawnrwen, peasirji, ruizhiqiao, winfredsun}@tencent.com
+ABSTRACT
+LLM agents complete complex tasks by composing multiple skills, and skill re-
+trieval is a front-end stage for agents. Skill retrieval needs a different training signal
+from document retrieval: top-K joint correctness depends not only on the seman-
+tic relevance of each individual query–skill pair, but also on whether the skills
+retrieved together can collaborate to fulfill the task under the given query. This
+“skill compatibility” cannot be derived from independent relevance alone. Yet ex-
+isting LLM-based data synthesis pipelines can produce a direct supervision sig-
+nal for “which skills should not be jointly retrieved under this query”—namely
+the LLM’s own rejection decisions—and this signal is routinely discarded as low-
+quality data. To address this gap, we propose Reject-as-Resource Retriever (R3)
+and construct R3-Skill, a bilingual (Chinese–English) skill retrieval benchmark
+target
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SKILL IS NOT DOCUMENT: A QUERY-CONDITIONAL BENCH-
+MARK AND TWO-STAGE RETRIEVER FOR LLM AGENT SKILL
+ROUTING
+Zifei Wang1,∗, Wei Wen2,∗†, Qiang Ji1, Ruizhi Qiao1,2, Xing Sun1,2
+1Tencent IMA Product Center
+2Tencent Youtu Lab
+{zifeiwang, jawnrwen, peasirji, ruizhiqiao, winfredsun}@tencent.com
+ABSTRACT
+LLM agents complete complex tasks by composing multiple skills, and skill re-
+trieval is a front-end stage for agents. Skill retrieval needs a different training signal
+from document retrieval: top-K joint correctness depends not only on the seman-
+tic relevance of each individual query–skill pair, but also on whether the skills
+retrieved together can collaborate to fulfill the task under the given query. This
+“skill compatibility” cannot be derived from independent relevance alone. Yet ex-
+isting LLM-based data synthesis pipelines can produce a direct supervision sig-
+nal for “which skills should not be jointly retrieved under this query”—namely
+the LLM’s own rejection decisions—and this signal is routinely discarded as low-
+quality data. To address this gap, we propose Reject-as-Resource Retriever (R3)
+and construct R3-Skill, a bilingual (Chinese–English) skill retrieval benchmark
+targeting realistic agent skill routing. R3-Skill spans four language directions, fea-
+tures query phrasings close to real user requests, and is verified through multi-
+expert cross-checking. The dataset contains 10,246 skills grouped into 8 thematic
+super-domains; 41,592 accepted queries; and 32,828 LLM-rejected annotations,
+further organized into an 8-class rejection-reason taxonomy. Unlike prior datasets,
+R3-Skill keeps the rejection signal that is usually thrown away, and uses it as neg-
+ative supervision for compatibility. On R3-Skill, we build a two-stage retrieval
+system comprising R3-Embedding and R3-Reranker, with skill compatibility in-
+corporated as an explicit training signal. We analyze this signal at the gradient
+level: in the bi-encoder, the representation of any single skill is jointly determined
+by multiple queries, so the “push-away” gradient injected by the compatibility sig-
+nal is diluted by bilateral balancing and contributes little at the recall stage; in the
+cross-encoder, each query–skill pair is scored independently, so the compatibility
+signal can be used as graded supervision for ranking without loss. We therefore
+place the compatibility signal at the cross-encoder stage, and ablation studies on
+two datasets confirm this choice. The R3-Embedding + R3-Reranker pipeline at-
+tains Hit@1 = 0.7714, NDCG@10 = 0.8327 and Set-Compat = 0.3525 on R3-Skill.
+The dataset, training code and model weights are released as open source for agent
+skill routing.
+1
+INTRODUCTION
+1.1
+LLM AGENTS AND SKILLS
+Over the past year, agent systems have moved from early ReAct Yao et al. (2023), which interleaves
+reasoning and tool calls into a trajectory, and Toolformer Schick et al. (2023), which enables mod-
+els to learn API calls in a self-supervised manner, toward a higher-level reusable unit—the skill. In
+October 2025, Anthropic formalized the Agent Skills specification ref (2025), packaging what used
+to be scattered prompt templates, function wrappers and documentation snippets into a directory
+∗Equal contribution.
+†Corresponding author. Contact: jawnrwen@tencent.com.
+1
+arXiv:2606.03565v2  [cs.IR]  8 Jun 2026
+
+containing a SKILL.md file with metadata, a body, and supporting scripts, all loaded on demand at
+inference time. Skills have since been adopted by major agent platforms such as Claude Code, Codex
+and Gemini CLI, and the community has accumulated tens to hundreds of thousands of skills within
+months Anthropic (2025). Recent surveys Xu & Yan (2026); Jiang et al. (2026) position skills as the
+third paradigm of agent capability extension, following prompt engineering and tool use. A skill and
+a tool are not the same kind of object: a tool is an atomic “input →call →output” function, whereas
+a skill teaches the agent how to handle a class of problems—covering call constraints, multi-step
+procedures, canonical code and edge cases. Memento-Skills Zhou et al. (2026) further shows that,
+when the skill library is treated as continuously updatable agent memory, improvements to the skills
+themselves yield 26.2% / 116.2% relative accuracy gains on GAIA / HLE respectively. Completing a
+complex task typically requires several skills working together—for example, “transcribe this meet-
+ing recording and then summarize the key takeaways” calls for a speech-to-text skill followed by a
+summarization skill, and a missing or mismatched skill can cause the task to fail.
+What does a skill look like?
+A typical skill contains:
+• name: a short identifier, e.g. SendGrid Email Send;
+• description: a one-line purpose, e.g. “Send transactional emails through SendGrid”;
+• body: detailed call instructions (API shape, parameter constraints, platform dependencies,
+best practices, canonical code), typically tens to hundreds of lines.
+1.2
+WHY SKILL RETRIEVAL MATTERS
+The intuitive approach is to place all skills in the prompt and let the LLM choose. This is not viable
+in real agent deployments:
+(A) The skill inventory keeps growing. Public skill repositories have expanded from ~36K skills
+indexed by SkillFlow Tagkopoulos et al. (2025), ~26K in SRA-Bench Su et al. (2026), and 280K+
+reported by AgentSkillOS Li et al. (2026a), to even larger public corpora. As skill counts grow from
+dozens to thousands or tens of thousands, an “all-prompt” approach runs into three problems: token
+cost, inference latency and context-length limits. Prior work also shows the limits of injecting full skill
+sets directly into the inference context: this approach brings in large amounts of irrelevant context,
+and the model can only use these skills while reading them, rather than absorbing them as its own
+capability Lu et al. (2026). Empirical token-length measurements on R3-Skill (Figure 1) show a long-
+tailed distribution; injecting the entire library at once already exceeds the single-call context window
+of mainstream inference services.
+100
+1k
+10k
+1
+10
+100
+Tokens per skill
+Skills
+median  1,550
+mean  2,073
+p95  5,524
+p99  9,976
+max  31,571
+R3-Skill · 10,246 skills
+Qwen3 tokenizer · name + description + body
+total 21.2M tokens
+Figure 1: Qwen3 tokenizer length distribution over the 10,246 skills in R3-Skill, computed on the concatenation
+of name + description + body. Mean = 2,073 tokens, p95 = 5,526, p99 = 9,983, max = 31,571; loading the entire
+library at once requires roughly 21.2M input tokens—and that is for skill text alone, before counting system
+prompts, user queries and LLM outputs, already far beyond the single-call context windows of mainstream
+inference services.
+(B) Skills are highly similar; descriptions alone do not separate them. Take transactional email
+skills: SendGrid, Mailgun and Postmark are independent skills but their descriptions are almost
+identical—“Send transactional emails”. The differences are buried in the body: SendGrid empha-
+sizes enterprise-scale, high-throughput infrastructure; Mailgun highlights developer flexibility and
+2
+
+webhook callbacks; Postmark physically isolates transactional and marketing email to protect deliv-
+erability (Message Streams). When a user asks “isolate marketing from transactional email while
+preserving deliverability”, the retriever must read the body to pick Postmark. Prior work validates
+this directly on a ~80K skill pool: hiding the skill body lowers routing accuracy by 31–44 percent-
+age points Zheng et al. (2026), which shows that the routing signal lives in the body rather than the
+metadata.
+(C) Multi-skill routing demands “minimal yet suﬀicient”. For each query the agent needs the right
+set of skills: a missing skill makes the task unsolvable, and a conflicting one creates new failures.
+SkillsBench provides a direct quantification: curated skills improve overall pass rate by +16.2pp, but
+16 of 84 tasks show performance regressions Li et al. (2026b); Skills in the Wild further reports
+diminishing returns under more realistic settings Liu et al. (2026); CoEvoSkills also observes that
+human-authored skills bring substantially uneven gains across domains, with clear regressions in
+some Zhang et al. (2026). The retriever must therefore both return the right candidates and order
+them well, since their positions in the top-K shape downstream call success.
+(D) Sandbox provisioning cost in real deployments. In production agent platforms, concurrent users
+typically share an agent through per-session sandboxes: a sandbox is created when a user starts a
+session and is reclaimed by a periodic sweep after the session has been idle for some time, so a one-
+sandbox-per-user model is infeasible. Each sandbox must install the skills it actually needs before the
+agent can run. If every sandbox loads the full skill library, the install / reset latency grows roughly
+linearly with the library size and quickly dominates the user-perceived cold-start time. Routing only
+the K skills each sandbox actually needs is therefore an engineering requirement, not just a quality
+issue.
+1.3
+SKILL RETRIEVAL ̸= DOCUMENT RETRIEVAL
+Document retrieval typically assumes that “two documents being retrieved together for the same
+query” is harmless—if both are relevant, returning them together introduces no error. Skill retrieval
+is different. The retriever returns a set of capabilities the agent will actually invoke. Whether two
+skills can run together under a particular query depends on the query itself; a different query over the
+same pair can flip the verdict (Figure 2). “Whether two skills should be jointly retrieved” is therefore
+not a global binary relation between skills, but must be assessed under a given query. Concurrent
+work Skill-RAG also points out that the bottleneck of many hard cases in RAG lies not in missing
+evidence but in a structural alignment gap between the query and the evidence space, which motivates
+its post-hoc skill selection mechanism Wei et al. (2026). We focus on the retrieval stage itself: in the
+training objective, “relevance” should depend on the specific query rather than be determined by the
+skill alone. We now formalize skill compatibility.
+One pair of skills, two queries, opposite verdicts.
+Take A: Terraform IaC and B: AUR Package
+Publish:
+• query1: “Package an internal tool, publish it to a Linux software repository, and set up an
+IaC pipeline”—both A and B should be jointly retrieved.
+• query2: “Set up basic test infrastructure for the team”—only A is needed; B is unrelated to
+the intent.
+Formalization (modeling decomposition).
+Given a query q and the target skill set S∗
+q ⊆S, we
+decompose the probability of jointly retrieving S∗
+q in the top-K into two factors:
+Pr[ S∗
+q ⊆top-K | q ] ≈
+Y
+s∈S∗
+q
+Pr[ s ∈top-K | q ]
+|
+{z
+}
+relevance
+·
+C(q, S∗
+q )
+|
+{z
+}
+skill compatibility
+The first factor is the product of per-skill recall probabilities, mirroring the implicit assumption of
+document retrieval: documents are mutually independent, so “both are retrieved” is equivalent to
+multiplying the two individual probabilities. The second factor C(q, S∗
+q ) ∈R≥0 captures skill com-
+patibility: C = 1 reduces to the classical assumption (the skills do not affect each other); C < 1
+3
+
+Figure 2: Illustration of skill compatibility. Whether the same skill pair should be jointly retrieved can flip across
+queries—the core distinction between skill retrieval and document retrieval.
+means that even though every member is independently a plausible candidate, the set conflicts under
+query q—e.g. overlapping functionality, inconsistent style, or incompatible ecosystems—and should
+not be jointly retrieved; C > 1 means the opposite, that the skills mutually reinforce each other under
+q. Document retrieval can be approximated by C ≡1; in skill retrieval, C depends strongly on the
+query and tends to be far from 1 in multi-skill scenarios.
+Training on relevance alone is not enough: a skill ranking high on its own does not mean the retrieved
+set is jointly executable, so compatibility needs its own supervision signal. We estimate an empirical
+proxy for this constraint on real data in §2.3.
+1.4
+STATUS QUO AND GAPS IN SKILL RETRIEVAL DATASETS
+Adding skill compatibility into the training objective is mainly limited by the lack of suitable
+training data. Existing skill retrieval datasets fall roughly into two categories: (i) end-to-end task
+benchmarks—SkillsBench, SRA-Bench, SkillFlow—which mainly target the post-retrieval incorpo-
+ration/application stage and lack the scale to train a retriever; (ii) training resources designed specif-
+ically for skill retrieval Cho et al. (2026). Both inherit the contrastive paradigm from document re-
+trieval (the DPR Karpukhin et al. (2020) / ANCE Xiong et al. (2020) / RocketQA Qu et al. (2021) line,
+with BM25 Robertson & Zaragoza (2009) as a sparse baseline) and are fairly mature on document
+retrieval. Toward the goal of agent skill routing, however, three gaps remain:
+1. LLM rejection signal is discarded. Existing query–skill synthesis pipelines drop a sample as
+soon as the LLM judges a skill set “not naturally combinable”—yet this is precisely where
+compatibility-oriented negatives are densest.
+2. Cross-lingual coverage is lacking. Existing skill retrieval resources cover English only. Clus-
+ter analysis of 26,502 public skills on the ClawHub platform by Red Skills or Blue Skills
+shows that English skills lean toward capability modules while Chinese skills lean toward
+scenario packaging Hu et al. (2026)—meaning that the linguistic asymmetry of “a Chinese
+query retrieving English skills” is worse in real deployments. While multilingual retrievers
+(e.g. BGE-M3 Chen et al. (2024)) achieve query–document-level Chinese–English align-
+ment, existing datasets still do not provide a training signal for cross-lingual skill compati-
+bility under given queries.
+3. Test-set query phrasing diverges from real user requests. Queries generated by LLMs under
+structured prompts tend to be long, formal, and dense with technical terms, so a retriever
+can score well just by matching keywords. Skills in the Wild reports a similar phenomenon:
+when the agent must self-retrieve from a 34k real skill pool with progressively more realistic
+test settings, pass rate drops with diﬀiculty and approaches a no-skill baseline at the strictest
+setting.
+4
+
+This work targets the three gaps above: we build R3-Skill, retain LLM-judged non-co-executable
+samples as supervision for skill compatibility, cover four query language directions across Chinese
+and English, and apply LLM rewriting to the test queries to better resemble real user requests. On
+top of this dataset we train two retrieval models, R3-Embedding and R3-Reranker.
+1.5
+CONTRIBUTIONS
+Our contributions:
+• C1 (theory): a formal decomposition of top-K joint correctness in skill retrieval into a rel-
+evance factor and a skill-compatibility factor (with the dual-encoder gradient analysis in
+Appendix B).
+• C2 (data): R3-Skill, a benchmark with 10,246 skills, 41,592 accepted queries, and 32,828
+SKIP annotations, covering 4 query language directions and 6 query styles, with test queries
+close to real user requests and verified by multiple experts.
+• C3 (method): a two-stage retrieval system—R3-Embedding trained with standard InfoNCE;
+R3-Reranker, on a cross-encoder, encodes SKIP partners as a graded label and optimizes
+ranking directly via a listwise CE objective.
+• C4 (empirical): we open-source the two-stage models R3-Embedding and R3-Reranker,
+achieving Hit@1 = 0.7714, NDCG@10 = 0.8327 and Set-Compat = 0.3525 on R3-Skill,
+available for use in agent skill routing.
+2
+R3-SKILL DATASET
+Figure 3 overviews the construction pipeline, from raw collection to the final splits.
+Figure 3: Overview of the R3-Skill data production pipeline: raw 95,212 →cross-source dedup 10,246 →
+clustering →near-neighbor hard-constraint sampling →LLM CoT annotation →8-class reject taxonomy →
+multi-expert verification →spl
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+D.3
+Multi-skill prompts (k = 2 / k = 3, two-stage CoT WRITE/SKIP)
+zh2zh — Chinese skill set →Chinese query.
+你扮演一个真实的中文用户，可能正在做一个比较复杂的任务，需要多个能力配合。
+下面给你{k} 个skill 的能力（name / description / body 摘要）。请按下面两阶段输出：
+第一阶段（思考）：评估这{k} 个skill **同时**被一个用户在**同一句话/同一段需求**
+里自然提出来的合理性。判断标准：
+- 缺一不可：去掉任何一个，需求就完成不了/ 明显残缺；
+- 不强行拼凑：不能是"我顺手再来个X"这种硬塞；
+- 真实合理：现实中真的会有用户这么问。
+第二阶段（决定）：
+- 如果合理：在<DECISION>WRITE</DECISION> 之后输出一段中文用户问题；
+- 如果不合理：在<DECISION>SKIP</DECISION> 之后简短说明原因，不要再写问题。
+写作硬约束（仅当WRITE 时）：
+- 风格要求：{style_desc}
+- 用中文写，长度50~300 字；可叠加1~2 种次要风格；
+- 必须**自然地同时**需要这{k} 个skill；不要列点式"我要A、要B、要C"；
+- 不能出现任何一个skill 的name；不要照抄description / body 原句；
+- 公认缩写（PDF / API / SQL / GitHub）允许。
+输出格式（**严格**）：
+<THOUGHT>
+你的逐条评估和最后判断，3~6 句即可。
+</THOUGHT>
+<DECISION>WRITE</DECISION> 或<DECISION>SKIP</DECISION>
+<QUERY>
+（只在WRITE 时填，写问题本身；SKIP 时此节留空或写一句原因）
+</QUERY>
+下面是{k} 个skill：
+{skills_block}
+en2zh — English skill set →Chinese query.
+你扮演一个真实的中文用户，正要去问AI 助手做一个稍复杂的事。
+下面给你{k} 个**英文skill** 的能力（name / description / body 摘要）。先用中文
+思考它们组合是否合理，再决定是否写出**中文用户问题**。
+第一阶段（思考）：评估这{k} 个skill **同时**被一个用户在**同一句话/同一段需求**
+里自然提出来的合理性。判断标准：
+- 缺一不可：去掉任何一个，需求就完成不了/ 明显残缺；
+- 不强行拼凑；
+- 真实合理。
+第二阶段（决定）：
+- 合理-> <DECISION>WRITE</DECISION> 然后写问题；
+- 不合理-> <DECISION>SKIP</DECISION> 简短说原因。
+写作硬约束（仅当WRITE 时）：
+- 风格要求：{style_desc}
+- **用中文**写，长度50~300 字；
+- 不要出现英文单词（PDF / API / SQL / GitHub 等公认缩写允许）；
+- 不要出现任何一个skill 的英文name 或直译；
+- 不要照抄description / body 的句子。
+输出格式（**严格**）：
+<THOUGHT>
+3~6 句中文评估。
+</THOUGHT>
+<DECISION>WRITE</DECISION> 或<DECISION>SKIP</DECISION>
+<QUERY>
+（仅WRITE 时填）
+</QUERY>
+下面是{k} 个skill：
+{skills_block}
+en2en — English skill set →English query.
+You play a real user asking an AI assistant to help with a somewhat compound
+task. Below are {k} skills (name / description / body excerpt). Use a two-stage
+output:
+Stage 1 (think): Evaluate whether these {k} skills could plausibly be needed
+**together** by **one user in one request**. Tests:
+- Each is necessary: remove any and the request becomes incomplete;
+- No forced stacking ("oh and also X");
+- Realistic: a real person would phrase this.
+18
+
+Stage 2 (decide):
+- Plausible
+-> <DECISION>WRITE</DECISION> then write the user question.
+- Not plausible -> <DECISION>SKIP</DECISION> with a one-line reason; do not
+write a question.
+Writing constraints (only when WRITE):
+- Style: {style_desc}
+- English, 50~300 words; you may layer 1~2 secondary styles;
+- Naturally require **all** {k} skills; do not enumerate "I want A, B, C";
+- Do not surface any skill's name; do not copy sentences from description
+/ body.
+Strict output format:
+<THOUGHT>
+3~6 sentences of evaluation.
+</THOUGHT>
+<DECISION>WRITE</DECISION> or <DECISION>SKIP</DECISION>
+<QUERY>
+(only when WRITE)
+</QUERY>
+The {k} skills:
+{skills_block}
+zh2en — Chinese skill set →English query.
+You play a real user asking an AI assistant in **English** to help with a
+compound task. The {k} skills below are described **in Chinese** (name /
+description / body excerpt). Reason about their joint plausibility, then decide
+whether to write an **English user question**.
+Stage 1 (think): Evaluate whether these {k} skills could plausibly be needed
+**together** by **one user in one request**. Tests:
+- Each is necessary;
+- No forced stacking;
+- Realistic.
+Stage 2 (decide):
+- Plausible
+-> <DECISION>WRITE</DECISION> then write the user question
+in **English**.
+- Not plausible -> <DECISION>SKIP</DECISION> with a one-line reason.
+Writing constraints (only when WRITE):
+- Style: {style_desc}
+- English only, 50~300 words; no Chinese characters;
+- Naturally require **all** {k} skills; no enumeration;
+- Do not surface any skill's name (no direct translation either);
+- Do not copy sentences from description / body.
+Strict output format:
+<THOUGHT>
+3~6 sentences of evaluation (English).
+</THOUGHT>
+<DECISION>WRITE</DECISION> or <DECISION>SKIP</DECISION>
+<QUERY>
+(only when WRITE)
+</QUERY>
+The {k} skills:
+{skills_block}
+19
+

@@ -1,0 +1,292 @@
+=== PDF FIRST PAGE (title region) ===
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR
+FOR SWE-AGENTS
+Zonghan Yang#∗†, Shengjie Wang#∗, Kelin Fu¶, Wenyang He§, Weimin Xiong¶,
+Yibo Liu, Yibo Miao, Bofei Gao¶, Yejie Wang♢, Yingwei Ma, Yanhao Li, Yue Liu♠,
+Zhenxing Hu, Kaitai Zhang¶, Shuyi Wang, Huarong Chen, Flood Sung, Yang Liu#,
+Yang Gao#, Zhilin Yang, Tianyu Liu¶†
+Moonshot AI, #THU, ¶PKU, §UCAS, ♢BUPT, ♠NUS
+GitHub: https://github.com/MoonshotAI/Kimi-Dev
+HuggingFace: https://huggingface.co/moonshotai/Kimi-Dev-72B
+ABSTRACT
+Large Language Models (LLMs) are increasingly applied to software engineering
+(SWE), with SWE-bench as a key benchmark. Solutions are split into SWE-Agent
+frameworks with multi-turn interactions and workflow-based Agentless methods
+with single-turn verifiable steps. We argue these paradigms are not mutually ex-
+clusive: reasoning-intensive Agentless training induces skill priors, including lo-
+calization, code edit, and self-reflection that enable efficient and effective SWE-
+Agent adaptation. In this work, we first curate the Agentless training recipe and
+present Kimi-Dev, an open-source SWE LLM achieving 60.4% on SWE-bench
+Verified, the best amon
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR
+FOR SWE-AGENTS
+Zonghan Yang#∗†, Shengjie Wang#∗, Kelin Fu¶, Wenyang He§, Weimin Xiong¶,
+Yibo Liu, Yibo Miao, Bofei Gao¶, Yejie Wang♢, Yingwei Ma, Yanhao Li, Yue Liu♠,
+Zhenxing Hu, Kaitai Zhang¶, Shuyi Wang, Huarong Chen, Flood Sung, Yang Liu#,
+Yang Gao#, Zhilin Yang, Tianyu Liu¶†
+Moonshot AI, #THU, ¶PKU, §UCAS, ♢BUPT, ♠NUS
+GitHub: https://github.com/MoonshotAI/Kimi-Dev
+HuggingFace: https://huggingface.co/moonshotai/Kimi-Dev-72B
+ABSTRACT
+Large Language Models (LLMs) are increasingly applied to software engineering
+(SWE), with SWE-bench as a key benchmark. Solutions are split into SWE-Agent
+frameworks with multi-turn interactions and workflow-based Agentless methods
+with single-turn verifiable steps. We argue these paradigms are not mutually ex-
+clusive: reasoning-intensive Agentless training induces skill priors, including lo-
+calization, code edit, and self-reflection that enable efficient and effective SWE-
+Agent adaptation. In this work, we first curate the Agentless training recipe and
+present Kimi-Dev, an open-source SWE LLM achieving 60.4% on SWE-bench
+Verified, the best among workflow approaches. With additional SFT adaptation
+on 5k publicly-available trajectories, Kimi-Dev powers SWE-Agents to 48.6%
+pass@1, on par with that of Claude 3.5 Sonnet (241022 version). These results
+show that structured skill priors from Agentless training can bridge workflow and
+agentic frameworks for transferable coding agents.
+1
+INTRODUCTION
+Recent days have witnessed the rapid development of Large Language Models (LLMs) automating
+Software-Engineering (SWE) tasks (Jimenez et al., 2023; Yang et al., 2024a; Xia et al., 2024; An-
+thropic, 2024; Pan et al., 2024; Wang et al., 2025a; Wei et al., 2025; Yang et al., 2025a; Kimi et al.,
+2025; OpenAI, 2025c). Among the benchmarks that track the progress of LLM coding agents in
+SWE scenarios, SWE-bench (Jimenez et al., 2023) stands out as one of the most representative ones:
+Given an issue that reports a bug in a real-world GitHub repository, a model is required to produce
+a patch that fixes the bug, the correctness of which is further judged by whether the corresponding
+unit tests are passed after its application. The difficulty of the task (as of the date the benchmark was
+proposed), the existence of the outcome reward with the provided auto-eval harness, as well as the
+real-world economic value it reflects, have made the SWE-bench a focal point of the field.
+Two lines of solutions have emerged for the SWE-bench task. Agent-based solutions like SWE-
+Agent (Yang et al., 2024a) and OpenHands (Wang et al., 2025a) take an interactionist approach:
+Instructed with the necessary task description, a predefined set of available tools, as well as the
+specific problem statement, the agent is required to interact with an executable environment for
+multiple turns, make change to the source codes, and determine when to stop autonomously. In
+contrast, workflow-based solutions like Agentless (Xia et al., 2024) pre-define the solving progress
+as a pipeline, which consists of steps like localization, bug repair, and test composition. Such task
+decomposition transforms the agentic task into generating correct responses for a chain of single-
+turn problems with verifiable rewards (Guo et al., 2025; Wei et al., 2025; He et al., 2025).
+The two paradigms have been widely viewed as mutually exclusive. On the one hand, SWE-Agents
+are born with higher potential and better adaptability, thanks to the higher degree of freedom of the
+∗Indicates equal contribution. † Joint leads.
+1
+arXiv:2509.23045v3  [cs.AI]  8 Dec 2025
+
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+multi-turn interaction without the fixed routines. However, it has also proved more difficult to train
+with such frameworks due to their end-to-end nature (Luo et al., 2025; Cao et al., 2025). On the other
+hand, Agentless methods offer better modularity and the ease to train with Reinforcement Learning
+with Verifiable Rewards (RLVR) techniques, but more limited exploration space and flexibility, and
+difficulty in behavior monitoring as the erroneous patterns appear only in the single-turn long rea-
+soning contents (Pan et al., 2024). However, we challenge the dichotomy from the perspective of
+training recipe: We argue that Agentless training should not be viewed as the ultimate deliverable,
+but rather as a way to induce skill priors – atomic capabilities such as the localization of buggy im-
+plementations and the update of erroneous code snippets, as well as self-reflection and verification,
+all of which help scaffold the efficient adaptation of more capable and generalizable SWE-agents.
+Guided by this perspective, we introduce Kimi-Dev, an open-source code LLM for SWE tasks.
+Specifically, we first develop an Agentless training recipe, which includes mid-training, cold-start,
+reinforcement learning, and test-time self-play. This results in 60.4% accuracy on SWE-bench Ver-
+ified, the SoTA performance among the workflow-based solutions. Building on this, we show that
+Agentless training induces skill priors: a minimal SFT cold-start from Kimi-Dev with 5k publicly-
+available trajectories enables efficient SWE-agent adaptation and reaches 48.6% pass@1 score, sim-
+ilar to that of Claude 3.5 Sonnet (the 20241022 version, Anthropic (2024)). We demonstrate that
+these induced skills transfer from the non-agentic workflows to the agentic frameworks, and the
+self-reflection in long Chain-of-Thoughts baked through Agentless training further enable the agen-
+tic model to leverage more turns and succeed with a longer horizon. Finally, we also show that the
+skills from Agentless training generalize beyond SWE-bench Verified to broader benchmarks like
+SWE-bench-live (Zhang et al., 2025) and SWE-bench Multilingual (Yang et al., 2025c). Together,
+these results reframe the relationship between Agentless and agentic frameworks: not mutually ex-
+clusive, but as complementary stages in building transferable coding LLMs. This shift offers a prin-
+cipled view that training with structural skill priors could scaffold autonomous agentic interaction.
+The remainder of this paper is organized as follows. Section 2 reviews the background of the frame-
+work dichotomy and outlines the challenges of training SWE-Agents. Section 3 presents our Agent-
+less training recipe and the experimental results. Section 4 demonstrates how these Agentless-
+induced skill priors enable efficient SWE-Agent adaptation, and evaluates the skill transfer and
+generalization beyond SWE-bench Verified.
+2
+BACKGROUND
+In this section, we first review the two dominant frameworks for SWE tasks and their dichotomy in
+Section 2.1. We then summarize the progress and challenges of training SWE-Agents in Section 2.2.
+The background introduction sets the stage for reinterpreting Agentless training as skill priors for
+SWE-Agents, a central theme developed throughout the later sections.
+2.1
+FRAMEWORK DICHOTOMY
+Two paradigms currently dominate the solutions for automating software engineering tasks. Agent-
+less approaches decompose SWE tasks into modular workflows (Xia et al., 2024; Wei et al., 2025;
+Ma et al., 2025a;b; Xie et al., 2025). Typical workflows consist of bug localization, bug repair, and
+test generation. This design provides modularity and stability: each step could be optimized sepa-
+rately as a single-turn problem with verifiable rewards (Wei et al., 2025; He et al., 2025). However,
+such rigidity comes at the cost of flexibility. When encountering scenarios requiring multiple rounds
+of incremental updates, the Agentless approaches struggle to adapt.
+By contrast, SWE-agents adopt an end-to-end, multi-turn reasoning paradigm (Yang et al., 2024a;
+Wang et al., 2025a). Rather than following a fixed workflow, they iteratively plan, act, and reflect,
+resembling how human developers debug complex issues. This design enables greater adaptability,
+but introduces significant difficulties: trajectories often extend over tens or even hundreds of steps,
+context windows of the LLMs must span over the entire interaction history, and the model must
+handle exploration, reasoning, and tool use simultaneously.
+The dichotomy between fixed workflows (e.g., Agentless) and agentic frameworks (e.g., SWE-
+Agent) has shaped much of the community’s perspective. The two paradigms are often regarded
+as mutually exclusive: one trades off flexibility and performance ceiling for modularity and stabil-
+2
+
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+Figure 1: Agentless framework for Kimi-Dev: the duo of BugFixer and TestWriter.
+ity, whereas the other makes the reverse compromise. Our work challenges this dichotomy, as we
+demonstrate that Agentless training induces skill priors that make further SWE-agent training both
+more stable and more efficient.
+2.2
+TRAINING SWE-AGENTS
+Training SWE-agents relies on acquiring high-quality trajectories through interactions with exe-
+cutable environments. Constructing such large-scale environments and collecting reliable trajecto-
+ries, however, requires substantial human labor as well as costly calls to frontier models, making data
+collection slow and resource-demanding (Pan et al., 2024; Badertdinov et al., 2024b). Recent studies
+also attempt to scale environment construction by synthesizing bugs for the reverse construction of
+executable runtime (Jain et al., 2025; Yang et al., 2025c).
+However, credit assignment across long horizons still remains challenging, as outcome rewards
+are sparse and often only available when a final patch passes its tests. Reinforcement learning
+techniques have been proposed, but frequently suffer from instability or collapse when trajectories
+exceed dozens of steps (Luo et al., 2025; Cao et al., 2025). SWE-agent training is also highly
+sensitive to initialization: starting from a generic pre-trained model often leads to brittle behaviors,
+such as failing to use tools effectively or getting stuck in infinite loops of specific action patterns (Pan
+et al., 2024; Yang et al., 2025c).
+These limitations motivate our central hypothesis: instead of training SWE-agents entirely from
+scratch, one can first induce skill priors through agentless training, enhancing the atomic capabilities
+like localization, repair, test composition, and self-reflection. These priors lay a foundation that
+makes subsequent agentic training both more efficient and more generalizable.
+3
+AGENTLESS TRAINING RECIPE
+Instead of training SWE-agents from scratch, we leverage Agentless training to induce skill priors.
+Skill priors enhanced by Agentless training include but are not limited to bug localization, patch gen-
+eration, self-reflection and verification, which lay the foundation for end-to-end agentic interaction.
+In this section, we elaborate our Agentless training recipe: the duo framework design of BugFixer
+and TestWriter, mid-training and cold-start, reinforcement learning, and test-time self-play. Sec-
+tions 3.1–3.4 detail these ingredients, and Section 3.5 presents the experimental results for each of
+them. This training recipe results in Kimi-Dev, an open-source 72B model that achieves 60.4% on
+SWE-bench Verified, the SoTA performance among the workflow-based solutions.
+3.1
+FRAMEWORK: THE DUO OF BUGFIXER AND TESTWRITER
+In GitHub issue resolution, we conceptualize the process as the collaboration between two important
+roles: the BugFixer, who produces patches that correctly address software bugs, and the TestWriter,
+who creates reproducible unit tests that capture the reported bug. A resolution is considered suc-
+cessful when the BugFixer’s patch passes the tests provided for the issue, while a high-quality test
+from the TestWriter should fail on the pre-fix version of the code and pass once the fix is applied.
+Each role relies on two core skills: (i) file localization, the ability to identify the specific files relevant
+to the bug or test, and (ii) code edit, the ability to implement the necessary modifications. For Bug-
+Fixer, effective code edits repair the defective program logic, whereas for TestWriter, they update
+precise unit test functions that reproduce the issue into the test files. As illustrated in Figure 1, these
+two skills constitute the fundamental abilities underlying GitHub issue resolution. Thus, we enhance
+these skills through the following training recipes, including mid-training, cold-start, and RL.
+3
+
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+3.2
+MID-TRAINING & COLD START
+To enhance the model’s prior as both a BugFixer and a TestWriter, we perform mid-training with
+∼150B tokens in high-quality and real-world data. With the Qwen 2.5-72B-Base (Qwen et al.,
+2024) model as a starting point, we collect millions of GitHub issues and PR commits to form its
+mid-training dataset, which consists of (i) ∼50B tokens in the form of Agentless derived from the
+natural diff patch, (ii) ∼20B tokens of curated PR commit packs, and (iii) ∼20B tokens of synthetic
+data with reasoning and agentic interaction patterns (upsampled by a factor of 4 during training).
+The data recipe is carefully constructed to enable the model to learn how human developers reason
+with GitHub issues, implement code fixes, and develop unit tests. We also performed strict data
+decontamination to exclude any repository from the SWE-bench Verified test set. Mid-training
+sufficiently enhances the knowledge in the model about practical bug fixes and unit tests, making it
+a better starting point for later stages. The details of the recipe are covered in Appendix A.
+To activate the model’s long Chain-of-Thought (CoT) capability, we also construct a cold-start
+dataset with reasoning trajectories based on the SWE-Gym (Pan et al., 2024) and SWE-bench-extra
+(Badertdinov et al., 2024a) datasets, generated by the DeepSeek R1 model (Luo et al. (2025), the
+20250120 version). In this setup, R1 acts the roles of Bugfixer and Testwriter, producing out-
+puts such as file localization and code edits. Through supervised finetuning as a cold start with
+this dataset, we enable the model to acquire essential reasoning skills, including problem analysis,
+method sketching, self-refinement, and exploration of alternative solutions.
+3.3
+REINFORCEMENT LEARNING
+After mid-training and cold-start, the model demonstrates strong performance in localization.
+Therefore, reinforcement learning (RL) focuses solely on the code edit stage.
+We construct a
+training set specifically for this stage, where each prompt is equipped with an executable environ-
+ment. We further employ multiple localization rollouts from the initial model to generate varied file
+location predictions, which diversifies the prompts used in code-edit RL.
+For the RL algorithm, we adopt the policy optimization method proposed by Kimi k1.5 (Team
+et al., 2025), which has shown promising results on reasoning tasks in both math and coding. Kimi
+k1.5 (Team et al., 2025) adopts a simpler policy gradient approach based on the REINFORCE al-
+gorithm (Williams, 1992). Similarly to GRPO (Shao et al., 2024), we use the average rewards of
+multiple rollouts as the baseline to normalize the returns. When adapting the algorithm in our SWE-
+bench setting, we highlight the following 3 key desiderata:
+1. Outcome-based reward only: We rely solely on the final execution outcome from the
+environment as the raw reward (0 or 1), without incorporating any format- or process-
+based signals. For BugFixer, a positive reward is given if the generated patch passes all
+ground-truth unittests. For TestWriter, a positive reward is assigned when (i) the predicted
+test raises a failure in the repo without the ground-truth bugfix patch applied, AND (ii) the
+failure is resolved once the ground-truth bugfix patch is applied.
+2. Adaptive prompt selection: Prompts with pass@16 = 0 are initially discarded as they do
+not contribute to the batch loss. This results in an i
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+Now, I can submit the changes.
+<function=submit>
+</function>
+Listing 21: The interaction made by the RL prior with 221 SWE-Agent SFT tokens and end-to-end
+SWE-Agent RL on matplotlib matplotlib-13989.
+It can be seen that the two types of patterns are significantly different from each other:
+• The patterns of the heavy SFT model appear to be more regulated, with explicitly labeled
+steps 1 to 5 along the intermediate reasoning process. The reasoning content is generally
+short as well. This reflects the behavior of the model shaped by the heavy SFT data from
+the proprietary models.
+• The patterns of the light SFT + end-to-end RL model, in contrast, are much more under-
+regulated. More turns of interaction are spent at repo exploration, and a significantly larger
+amount of tokens are generated at the code edit steps before the action is made. This is the
+reflection behavior shaped by end-to-end RL (and less impacted by the expert data), as the
+sign of reasoning-intensive skill priors is retained in the agentic scenario.
+G.4
+GENERALIZATION TO OTHER TASKS
+In this section, we study whether the skills incentivized by Agentless training and SWE-Agent adap-
+tation through SWE-Smith trajectories could transfer to other SWE tasks. We use SWE-bench-live
+and SWE-bench Multilingual as our testbeds.
+SWE-bench-live (Zhang et al., 2025) is a benchmark for real-world issue resolution, evaluating AI
+systems on software engineering tasks. Using an automated curation pipeline, it is updated monthly
+to ensure fresh tasks and rigorous, contamination-free evaluation. For our experiments, we selected
+the default set of 300 tasks, with data collected between October 2024 and March 2025. Compared
+to SWE-bench Verified, SWE-bench-live exhibits a higher degree of distributional shift.
+SWE-bench Multilingual (Yang et al., 2025c) introduces 300 curated tasks from 42 GitHub repos-
+itories across 9 programming languages, including Rust, Java, PHP, Ruby, JavaScript/TypeScript,
+Go, and C/C++, covering domains such as web frameworks, data tools, core utilities, and libraries.
+Compared to SWE-bench Verified, which focuses exclusively on Python, SWE-bench Multilingual
+exhibits greater linguistic and domain diversity, posing additional challenges in cross-language gen-
+eralization and transferability of software engineering capabilities.
+Similar to previous experiments, we evaluated four model stages as the priors: the original Qwen2.5-
+72B (Base), the mid-trained model (MT), the model activated with reasoning data through super-
+vised finetuning (SFT), and the model after RL training (RL). We still use the open-source SWE-
+smith trajectories to activate the agentic capabilities of each prior.
+Figures 11 and 12 show the performance of the four priors on SWE-bench-Live and SWE-bench
+Multilingual under varied amounts of agentic trajectories for adaptation (221 as one-step gradient
+descent, 223, 1.1 × 227, and 1.5 × 228 as 100, 2,000, and 5,016 training trajectories). Each SWE-
+Agent adaptation experiment is conducted through lightweight supervised finetuning, the training
+time of which ranges from several minutes to two hours at most.
+Compared to the Base prior, those specifically enhanced with Agentless skills (SFT and RL) demon-
+strate stronger task generalization, especially under the data-scarce settings. However, when more
+SWE-Smith trajectories are used for adaptation, the performances of the Base and the MT priors
+become closer to those of the SFT and the RL priors. This could be attributed to the gaps between
+the different SWE tasks. The exploration for recipes that enable stronger out-of-distribution and
+task-agnostic generalization is left for future work.
+67
+
+KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS
+(a) #SFT = 221.
+(b) #SFT = 223.
+(c) #SFT = 1.1 × 227.
+(d) #SFT = 1.5 × 228.
+Figure 11: Generalization analysis on SWE-bench-Live.
+(a) #SFT = 221.
+(b) #SFT = 223.
+(c) #SFT = 1.1 × 227.
+(d) #SFT = 1.5 × 228.
+Figure 12: Generalization analysis on SWE-bench Multilingual.
+H
+USE OF LARGE LANGUAGE MODELS
+The initial draft of this paper was written entirely by the authors. A large language model (gpt-
+5) was used only to aid with polishing the language (e.g., grammar and clarity). All conceptual
+contributions, experimental designs, analyses, and conclusions are the work of the authors.
+68
+

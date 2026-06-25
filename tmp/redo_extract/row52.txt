@@ -1,0 +1,412 @@
+=== PDF FIRST PAGE (title region) ===
+OPENSKILL: Open-World Self-Evolution for
+LLM Agents
+Zhiling Yan1,∗, Dingjie Song1,∗, Hanrong Zhang2, Wei Liang1, Yuxuan Zhang3,4, Yutong Dai5,
+Lifang He1, Philip S. Yu2, Ran Xu5, Xiang Li6, Lichao Sun1,†
+1Lehigh University, 2University of Illinois Chicago, 3University of British Columbia, 4Vector Institute,
+5Salesforce AI Research, 6Massachusetts General Hospital and Harvard Medical School
+∗Equal contribution, †Corresponding author
+Self-evolving agents requires adaptation after deployment, but existing approaches assume a usable
+learning loop, such as curated skills, successful trajectories, or verifier signals. Real open-world
+deployments may provide none of these, offering only a task prompt. In this work, we study open-
+world self-evolution, where an agent must build both its skills and its own verification signals from
+scratch, using open-world resources but no target-task supervision.
+We propose OpenSkill, a
+framework that bootstraps this loop: it acquires grounded knowledge and verification anchors from
+documentation, repositories, and the web, synthesizes them into transferable skills, and refines those
+skills against self-built virtual tasks grounded in the anchors rather t
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+OPENSKILL: Open-World Self-Evolution for
+LLM Agents
+Zhiling Yan1,∗, Dingjie Song1,∗, Hanrong Zhang2, Wei Liang1, Yuxuan Zhang3,4, Yutong Dai5,
+Lifang He1, Philip S. Yu2, Ran Xu5, Xiang Li6, Lichao Sun1,†
+1Lehigh University, 2University of Illinois Chicago, 3University of British Columbia, 4Vector Institute,
+5Salesforce AI Research, 6Massachusetts General Hospital and Harvard Medical School
+∗Equal contribution, †Corresponding author
+Self-evolving agents requires adaptation after deployment, but existing approaches assume a usable
+learning loop, such as curated skills, successful trajectories, or verifier signals. Real open-world
+deployments may provide none of these, offering only a task prompt. In this work, we study open-
+world self-evolution, where an agent must build both its skills and its own verification signals from
+scratch, using open-world resources but no target-task supervision.
+We propose OpenSkill, a
+framework that bootstraps this loop: it acquires grounded knowledge and verification anchors from
+documentation, repositories, and the web, synthesizes them into transferable skills, and refines those
+skills against self-built virtual tasks grounded in the anchors rather than in target answers. The
+open world thus supplies both the knowledge to be learned and a supervision-independent practice
+environment, with target-task supervision reserved for final evaluation. Across three benchmarks and
+two target agents, OpenSkill attains the best automated pass rate while satisfying the no-supervision
+constraint. Analysis shows its skills transfer across models without model-specific adaptation, and its
+self-built verifier aligns with ground-truth outcomes despite never accessing them.
+Code: https://github.com/OpenLAIR/OpenSkill
+Website: https://openlair.github.io/openskill/
+1
+Introduction
+LLM agents can use tools and external resources to solve open-ended tasks beyond text generation (Yao
+et al., 2022; Schick et al., 2023; Zhou et al., 2023; Nakano et al., 2021; Yang et al., 2024). Because such tasks
+change across environments, self-evolving agents aim to improve after deployment by accumulating reusable
+knowledge or behavior (Shinn et al., 2023; Wang et al., 2023; Zhang et al., 2026b; Xia et al., 2026).
+Existing self-evolving agents often assume a usable learning loop, such as curated skills, successful traces, or
+task feedback (Zhang et al., 2026b; Xia et al., 2026). Real open-world deployments may provide only a seed
+task prompt, with no initial skills or verifier for judging improvement.
+We call this capability open-world self-evolution (Figure 1). Here the agent starts from only a seed task prompt
+and open-world resources, and must build both its skills and its verification signals from scratch. These
+resources include independently accessible evidence such as documentation, repositories, papers, tutorials,
+and web pages, but exclude hidden target answers, rewards, verifier outputs, or solution traces. Facts alone
+are not enough: the same evidence must supply the learning loop itself. This means building two coupled
+components: skill content that captures what to learn, and a verification signal that can improve those skills
+without target-task supervision.
+Limitation 1: skill construction. Existing approaches often rely on human-written skills, model-generated
+knowledge, or skills distilled from successful trajectories (Wang et al., 2023; Zhang et al., 2026b; Huang
+et al., 2025a; Ma et al., 2026; Yang et al., 2026). These sources are costly, bounded by prior knowledge, or
+unavailable before successful task attempts. In an open-world setting, the agent must instead infer what to
+learn, acquire external evidence, and turn it into reusable skills. This matters because many tasks require
+current or domain-specific knowledge, and recent benchmarks show that skill quality is often the limiting
+1
+arXiv:2606.06741v1  [cs.AI]  4 Jun 2026
+
+Figure 1 Paradigms for self-evolving agent skills. Unlike human-curated, LLM-generated, or supervised self-
+evolution paradigms, OpenSkill (ours) acquires skills from the open world and verifies them with self-built virtual
+tasks, making it simultaneously scalable, grounded, and supervision-free.
+factor (Li et al., 2026; Liu et al., 2026b).
+Limitation 2: verification construction. Existing self-improvement loops often revise behavior using task-
+level feedback, self-feedback, or verifier outputs (Shinn et al., 2023; Zhou et al., 2023; Madaan et al., 2023;
+Zhang et al., 2026b,a; Wang et al., 2025). This works in curated benchmarks, but open-world deployment
+may expose no reliable feedback during learning. The agent must therefore construct a separate practice
+environment whose supervision comes from open-world knowledge rather than hidden target-task answers.
+This points to a sharper central question:
+Can an LLM agent self-evolve in the open world?
+To answer this, we propose OpenSkill, a framework for open-world self-evolution. Given only a task prompt,
+a base model, tool access, and open-world resources, OpenSkill bootstraps a learning loop from scratch.
+It proceeds in three stages: open-world knowledge acquisition retrieves grounded knowledge and verification
+anchors from the open world; leakage-free skill evolution drafts skills and refines them against self-built virtual
+tasks rather than target answers; and zero-shot target evaluation deploys the refined skill to the target agent.
+Open-world resources thus supply both the knowledge to be learned and a supervision-independent practice
+environment, and target-task supervision is reserved for final evaluation alone. Empirically, OpenSkill
+delivers the best automated pass rate in every benchmark–agent setting (e.g., +8.9 / +8.8 over the strongest
+closed-world baseline on SkillsBench), transfers across models without adaptation, and builds a verifier covering
+88.9% of ground-truth test intents—all without target-task supervision during learning. This paper makes
+three contributions:
+• We define open-world self-evolution: from only a task prompt, an agent must build both its skills and its
+own verification signals from open-world resources, with no target-task supervision.
+• We propose OpenSkill, which bootstraps this loop and yields skills that transfer across models, with a
+practice environment for refining them.
+• We show that OpenSkill achieves the best automated pass rate across three benchmarks and two model
+families, and transfers across models—without target-task supervision during learning.
+2
+Open-World Self-Evolution
+We introduce open-world self-evolution, a setting in which an LLM agent must improve from only a task prompt
+and open-world resources, with no initial skills, demonstrations, rewards, or verifiers. We formalize it and its
+supervision constraint (Section 2.1), then present OpenSkill, a three-stage pipeline that acquires open-world
+knowledge, refines skills against self-generated virtual tasks, and deploys them zero-shot (Section 2.2).
+2
+
+Task Inputs
+Open-World Knowledge Acquisition
+Leakage-Free Evolution 
+Final Evaluation
+Leakage barrier: target 
+supervision cannot enter evolution
+Task
+instruction
+Ii
+Environment
+Ei
+Excluded during evolution
+Target solution
+Target test /
+ground-truth
+verifier TiGT
+Not accessible during
+skill construction
+Skill
+Planner
+Open World K:
+documentation, repositories,
+papers, tutorials, web resources
+Task Executor
+Freeze final skill Si*
+(finalized skill)
+Failure Diagnosis
+               
+               Diagnostic 
+               Retriever
+Open World K
+retrieve missing
+knowledge
+iterate j = 0, 1, …, J
+Target Task
+(environment, data)
+—
+Knowledge Doc ki: 
+background concepts, 
+best practices,
+citations, APIs
+Skill Plan pi:
+- skill architecture,
+- key procedures,
+- domain rules
+                 Verification         
+       Knowledge kiv:
+- reference values 
+- statistical invariants of datasets 
+- cross-validation procedures
+- domain standards 
+Generate skill Si(0)
+Execute agent
+Refine skill Si(j)
+Virtual-Task Verifier
+Build virtual test environment
+Check execution outputs
+with deterministic assertions
+bug? 
+knowledge gap?
+targeted open-world search 
+for missing knowledge
+Frozen final
+skill Si*
+LLM Agent +
+Execution
+Harness
+Target test /
+solution TiGT
+Unlocked
+only here
+Pass / Fail on GT test
+Pass
+Fail
+Knowledge
+Gap
+Bug
+Sandbox
+j = j + 1
+Base 
+Agent
+Query
+Base 
+Agent
+Figure 2 Overview of the OpenSkill framework. A base agent acquires open-world knowledge from external resources
+to build a skill plan, then iteratively generates, executes, and refines the skill in a sandbox, using a virtual-task
+verifier and diagnostic retriever to fix bugs and knowledge gaps. A leakage barrier keeps target supervision out of skill
+construction, unlocking it only for final evaluation.
+2.1
+Problem Setting
+Consider a set of n target tasks {(Ii, Ei)}n
+i=1, where Ii is a natural-language instruction and Ei is an execution
+environment. An LLM agent πθ executes in Ei and produces a terminal state xi = πθ(Ii, Ei). Each task is
+paired with a ground-truth test suite T GT
+i
+∈{0, 1}.
+An agent can self-evolve either by modifying its weights θ (e.g., via fine-tuning or reinforcement learning) or
+by augmenting its context with external knowledge artifacts. We adopt the latter, as it is computationally
+cheap, transferable across models, and inspectable, whereas weight modification is expensive, model-specific,
+and opaque. We formalize such an artifact as a skill set Si = {si,1, . . . , si,m} that conditions the agent’s
+behavior, xi = πθ(Ii, Si, Ei), without altering θ. Self-evolution then reduces to constructing, for each task, a
+skill set under which the augmented agent passes its test suite: T GT
+i
+(πθ(Ii, Si, Ei)) = 1.
+The difficulty of the open-world setting is that this construction must proceed without target-task supervision.
+The agent observes only the instruction Ii and the environment Ei; the ground-truth test suite T GT
+i
+, reference
+solutions, and human feedback are hidden. Observing the input (Ii, Ei) is not supervision: we reserve the term
+supervision for dependence on the hidden signal T GT
+i
+(a gold answer, reward, or verifier output). Inspecting
+the input is thus permitted, while any dependence on T GT
+i
+is not. We call a construction procedure f
+supervision-free when it neither observes T GT
+i
+during skill construction nor reverse-engineers it to build the
+virtual tests used for refinement (Section 2.2.2). The skill set is then built purely from the observable input:
+ˆSi = f(Ii, Ei).
+(1)
+The observable input alone, however, is rarely sufficient to construct competent skills. We therefore let the
+agent interact with the open world and acquire open-world knowledge K, such as public documentation, code
+repositories, papers, and tutorials, none of which reveals target-task supervision. The construction problem
+then expands to:
+ˆSi = f(Ii, Ei, K),
+(2)
+where f is the proposed OpenSkill pipeline.
+2.2
+The OPENSKILL Pipeline
+OpenSkill includes three stages (Figure 2): acquiring domain knowledge from the open world, refining skills
+against self-generated virtual tasks, and deploying the final skill zero-shot to the target agent. The stages are
+3
+
+connected by the artifacts they pass on: Stage 1 produces ki, pi, and kv
+i ; Stage 2 drafts skills from (pi, ki) and
+refines them against virtual tests built from kv
+i , emitting a frozen ˆS∗
+i that Stage 3 deploys. A leakage barrier
+keeps the hidden T GT
+i
+out of Stages 1–2.
+2.2.1
+Stage 1: Open-World Knowledge Acquisition
+Prior skill creation methods (Anthropic, 2025; Yang et al., 2026) construct skills entirely from the LLM’s
+parametric knowledge Kθ, the knowledge stored in the frozen weights θ, as opposed to the open-world
+knowledge K of Section 2.1. This limits the resulting skills to what the model already knows, which is
+insufficient for tasks that require up-to-date APIs, project-specific conventions, or niche domain rules.
+OpenSkill expands the knowledge base by querying the open world. Given (Ii, Ei), the pipeline first retrieves
+task-relevant knowledge from the open world ki = D(Ii, K), ki ⊂K, where D is an open-world retrieval
+function that traverses K and returns knowledge documents containing background concepts, best practices,
+API documentation, and source citations. A structured skill plan pi is then synthesized based on (Ii, Ei, ki),
+specifying the skill architecture, key procedures, and domain rules (implementation in Appendix B.1).
+In addition to knowledge for skill construction, the pipeline retrieves verification knowledge kv
+i = Dv(Ii, K),
+kv
+i ⊂K, which provides independently verifiable anchors for later quality assessment, including reference
+values from official documentation, statistical invariants of well-known datasets, cross-validation procedures
+from domain standards, and expected output formats. kv
+i is used in Stage 2 to ground virtual test generation
+(implementation in Appendix B.2).
+To prevent answer leakage, all queries issued by D and Dv are filtered to exclude the benchmark name and
+any identifiers that could lead to T GT; we audit this information isolation in Appendix F.
+2.2.2
+Stage 2: Leakage-Free Skill Evolution
+Given (Ii, Ei, pi, ki), the base agent πθ generates an initial skill set ˆS(0)
+i
+= {ˆs(0)
+i,1 , . . . , ˆs(0)
+i,m}, whose size m
+(1 ≤m ≤4) is fixed by the Stage-1 plan pi, and refines all m skills jointly within a single agent session.
+To assess the skill without ground-truth feedback, the pipeline constructs a virtual test suite ˜Ti = {˜ti,1, . . . , ˜ti,K}
+grounded in the verification knowledge kv
+i obtained in Stage 1:
+˜Ti = g(Ii, Ei, kv
+i ),
+(3)
+˜Ti serves as a proxy for T GT
+i
+to guide skill refinement. The pipeline f (Eq. 2) calls g internally: it scores
+each round’s skills with g’s tests to drive refinement, never observing T GT
+i
+. Each virtual test ˜ti,k ∈{0, 1} is a
+deterministic assertion anchored to independently verifiable facts rather than guessing what the ground-truth
+tests might check. For example, it checks the known row count of a public dataset, the expected range of a
+standard metric, or the documented output format of a library function. The generator g is realized as an
+isolated verifier LLM session that emits a deterministic pytest suite (Appendix B.3).
+The pipeline iterates for up to J rounds. At each round j, the current skill set ˆS(j)
+i
+is executed and evaluated
+against ˜Ti. The virtual pass rate:
+˜r(j) =
+1
+| ˜Ti|
+K
+X
+k=1
+˜ti,k
+ πθ(Ii, ˆS(j)
+i
+, Ei)
+
+(4)
+serves as a proxy for skill quality. This proxy is reliable only if ˜r aligns with the hidden T GT
+i
+; otherwise
+refinement may reward skills that overfit the virtual tests. We treat this alignment as an empirical question
+and measure it directly in Section 4.2.
+Diagnostic-driven refinement. When ˜r(j) < 1, the pipeline produces a structured failure diagnostic F(j)
+comprising per-assertion results, root-cause analysis, and revision suggestions, then refines the skill:
+ˆS(j+1)
+i
+= πθ( ˆS(j)
+i
+, F(j) | Ii, Ei, pi, ki).
+(5)
+4
+
+When the diagnostic indicates a knowledge gap rather than an implementation bug, the pipeline triggers a
+targeted retrieval k(gap)
+i
+= D(F(j), K) and injects the result into the refinement context. The gap-versus-bug
+decision is made by an LLM classifier; we detail it and the targeted-retrieval budget in Appendix B.5.
+The loop terminates when ˜r(j) = 1 or after at most J refinement rounds, whichever comes first; if ˜r(j) < 1
+throughout, it exhausts the J-round budget (we set J=3). Auxiliary stall- and budget-based early stops are
+detailed in Appendix B.4.
+2.2.3
+Stage 3: Zero-Shot Target Evaluation
+After evolution, the final skill set ˆS∗
+i —the last refined version at loop termination, edited in place rather than
+a best-of-N snapshot (Appendix B.4, B.6)—is deployed to the target agent πθ′ in a zero-shot setting: the
+agent executes the target tasks with ˆS∗
+i , and T GT
+i
+∈{0, 1} determines pass or fail. Because the skill is an
+explicit artifact rather than model weights, it can be deployed to any target age
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Result
+No-Skill
+OpenSkill
+Per-run time, mean (s)
+465.0
+845.4
+Per-run time, median (s)
+347.6
+368.2
+Mean reward
+25.5%
+43.6%
+Table 8 Per-run evaluation cost on SkillsBench (Opus 4.6 backbone). It reports GT evaluation time, excluding skill
+creation.
+Code-level isolation.
+The base agent accepts exactly two inputs: the task instruction and environment files
+(input data, Dockerfile). Its function signature explicitly excludes solution and test paths. The independent
+verifier (independent_verifier.py) instantiates a separate LLM session with no shared context from the skill
+creator, preventing any cross-agent information leakage.
+Container-level isolation.
+Each task runs inside a Docker container built from the task’s environment/-
+Dockerfile. The GT test directory (tests/) and solution directory (solution/) reside on the host filesystem as
+siblings to environment/ and are never mounted or copied into the container. The verifier agent can only
+observe files under /app/environment/ and outputs written by the creator agent.
+GT oracle bypass.
+The OpenSkill evolution loop overrides the parent class’s GT oracle, ensuring the GT
+oracle is never invoked during skill creation. The loop exits upon surrogate test passage, without ever reaching
+the GT evaluation code path. The only GT-derived signal is a single pass/fail bit used when the verifier is
+re-invoked to write deeper tests; no GT test content, assertion details, or expected values are exposed.
+Log-level verification.
+We audited evolution_run_log.json files. Zero references to GT test files appear
+in agent execution trajectories. The only GT-related entries reside in post-hoc pipeline evaluation fields that
+are recorded after the agent has exited and are never fed back to any agent.
+Prompt-level enforcement.
+Both the surrogate writer and independent verifier system prompts contain
+explicit instructions: “You must ONLY use information from the task instruction and environment files. You
+have NO access to the solution or ground-truth tests.”
+G
+Baseline Prompts
+G.1
+Self-Generated Skills Prompt
+This prompt replicates the self-generation condition of SkillsBench (Li et al., 2026) (Appendix C.6). It is
+appended to the task instruction; the agent generates skills in-session before solving the task, with no external
+verification.
+Self-Generated Skills Prompt
+Important: Generate Skills First
+Before attempting to solve this task:
+1. Analyze the task requirements and identify what domain knowledge, APIs, or techniques are needed.
+2. Write 1–5 modular skill documents.
+3. Save each skill as a markdown file in environment/skills/.
+4. Then solve the task using the skills you created as reference.
+G.2
+CoT-Guided Self-Generation Prompt
+This prompt extends the Self-Generated Skills baseline with a structured five-step chain-of-thought workflow.
+Despite the added structure, the agent still lacks external verification feedback, and this condition achieves
+only 30.7% pass rate (comparable to the no-skill baseline).
+19
+
+CoT-Guided Self-Generation Prompt
+Step 1: Task Analysis – identify domain, tools, output format, pitfalls
+Step 2: Skill Architecture Design – plan 1–3 focused skills
+Step 3: Write Skills with Progressive Disclosure
+(a) YAML frontmatter: name and description
+(b) Key constraints and rules
+(c) Step-by-step workflow with decision points
+(d) Common mistakes to avoid and edge cases
+(e) If helpful, include scripts/ with reusable utility code
+Step 4: Self-Verify – re-read instruction, check every requirement has coverage
+Step 5: Execute
+20
+

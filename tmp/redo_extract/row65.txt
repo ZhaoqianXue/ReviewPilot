@@ -1,0 +1,434 @@
+=== PDF FIRST PAGE (title region) ===
+ExpGraph: Model-Agnostic Experience Learning with
+Graph-Structured Memory for LLM Agents
+Tao Feng1, Chongrui Ye1, Tianyang Luo1, Jingjun Xu1, Xueqiang Xu1, Haozhen Zhang2
+Zhigang Hua3, Yan Xie3, Shuang Yang3, Ge Liu1, Jiaxuan You1
+1University of Illinois Urbana-Champaign
+2Nanyang Technological University
+3Meta Monetization AI
+Abstract
+Large language model (LLM) agents have shown strong capabilities in reason-
+ing, tool use, and multi-step environment interaction, yet they often solve each
+task from scratch and fail to systematically reuse successful strategies or failure
+lessons accumulated from prior interactions. A common solution is to fine-tune
+the executor on collected experience, but this becomes increasingly inflexible as
+LLMs evolve rapidly: when stronger or more suitable executors emerge, executor-
+specific training may need to be repeated. To address this limitation, we propose
+ExpGraph, a model-agnostic experience learning framework that enables frozen
+and replaceable LLM executors to improve through external experience reuse
+without modifying their parameters. ExpGraph summarizes historical trajectories
+into reusable skills and failure lessons, organizes them as nodes i
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+ExpGraph: Model-Agnostic Experience Learning with
+Graph-Structured Memory for LLM Agents
+Tao Feng1, Chongrui Ye1, Tianyang Luo1, Jingjun Xu1, Xueqiang Xu1, Haozhen Zhang2
+Zhigang Hua3, Yan Xie3, Shuang Yang3, Ge Liu1, Jiaxuan You1
+1University of Illinois Urbana-Champaign
+2Nanyang Technological University
+3Meta Monetization AI
+Abstract
+Large language model (LLM) agents have shown strong capabilities in reason-
+ing, tool use, and multi-step environment interaction, yet they often solve each
+task from scratch and fail to systematically reuse successful strategies or failure
+lessons accumulated from prior interactions. A common solution is to fine-tune
+the executor on collected experience, but this becomes increasingly inflexible as
+LLMs evolve rapidly: when stronger or more suitable executors emerge, executor-
+specific training may need to be repeated. To address this limitation, we propose
+ExpGraph, a model-agnostic experience learning framework that enables frozen
+and replaceable LLM executors to improve through external experience reuse
+without modifying their parameters. ExpGraph summarizes historical trajectories
+into reusable skills and failure lessons, organizes them as nodes in a self-evolving
+experience graph, and connects related experiences to support retrieval beyond flat
+nearest-neighbor matching. For each task, a lightweight retrieval copilot adaptively
+controls graph diffusion and utility-aware ranking, retrieving experiences that are
+both task-relevant and historically useful for the frozen executor. The copilot
+is optimized with reinforcement learning using utility-grounded feedback that
+compares executor performance with and without retrieved experiences, while the
+experience graph is updated online from downstream task outcomes. We evaluate
+ExpGraph on ExpSuite, covering single-turn question answering, mathematical
+reasoning, code generation, and multi-step agentic environments including ALF-
+World and AppWorld. Across static tasks, ExpGraph improves over the strongest
+baseline by 12.2% with the smaller executor and 4.7% with the larger executor.
+In agentic environments, the gains further increase to 21.4% and 12.7%, respec-
+tively, while reducing average interaction steps by 12.7% and 21.6% compared
+with the most efficient baseline. Ablation studies show that graph-structured
+experience, utility-aware ranking, and adaptive retrieval jointly enable effective
+experience reuse across diverse tasks and executor models, providing a practi-
+cal and executor-agnostic path for LLM agents to learn from experience without
+retraining the underlying executor. Our code for ExpGraph will be released at
+https://github.com/ulab-uiuc/ExpGraph.
+1
+Introduction
+LLM agents have demonstrated strong capabilities in complex tasks requiring reasoning, tool use,
+and multi-step environment interaction [52, 41]. A key bottleneck, however, is that most agents still
+operate as one-shot executors: each task is solved largely from scratch, and successful strategies,
+failure lessons, and transferable insights accumulated from prior interactions are discarded rather than
+systematically reused. A natural remedy is to fine-tune the executor on its own experience, but this
+solution becomes increasingly inflexible as LLM capabilities evolve rapidly. Whenever a stronger
+Preprint.
+arXiv:2605.30712v1  [cs.CL]  29 May 2026
+
+Table 1: Comparison with representative experience learning methods. ExpGraph is the only
+framework that jointly supports graph-structured experience, graph diffusion, utility-aware ranking,
+and adaptive retrieval for effective experience reuse.
+Method
+Graph-Structured Experience
+Graph Diffusion
+Utility-Aware Ranking
+Adaptive Retrieval
+ExpeL [56]
+✗
+✗
+✗
+✗
+Mem0 [4]
+✓
+✗
+✗
+✗
+MemRL [55]
+✗
+✗
+✓
+✗
+S3 [19]
+✗
+✗
+✗
+✓
+ExpGraph
+✓
+✓
+✓
+✓
+or more suitable executor is released, executor-specific training may need to be repeated, making
+experience learning tightly coupled to a particular model instance. This limitation is especially
+problematic because many capable LLMs are either too large, expensive to update, or inaccessible
+for parameter-level modification. These observations motivate a more flexible research question: how
+can an LLM agent learn from accumulated experience while keeping the executor itself frozen and
+replaceable?
+Existing experience learning methods as summarized in Table 1, provide partial solutions to this
+problem, including textual experience distillation [56], memory organization [4], utility-aware
+experience selection [55], and adaptive retrieval or search policies [19]. However, these capabilities
+are usually developed in isolation, and reusable experience is often treated as isolated records or
+locally matched candidates. Building a unified experience learning framework is therefore non-trivial.
+First, surface relevance is not the same as experience utility. An experience that appears similar
+to the current task may provide little downstream benefit, while a useful experience may encode a
+transferable strategy, shared sub-goal, or failure pattern that is not among the nearest neighbors of the
+task embedding. Second, useful experience is often relational rather than isolated. Past trajectories
+may be connected through common strategies, environmental constraints, or recurring mistakes,
+so treating them as independent text entries misses important relations among experiences. Third,
+retrieval must adapt to both the task and the executor. Some tasks benefit from broad exploration over
+related experience neighborhoods, while others require focused selection of high-utility experiences.
+Meanwhile, different executors vary in reasoning, planning, and instruction-following ability, so an
+experience learning system should improve the executor through external context without assuming
+that the executor itself can be retrained.
+To address these challenges, we propose ExpGraph, a model-agnostic experience learning framework
+that improves frozen LLM executors through a self-evolving relational memory of reusable experience
+and a trainable retrieval copilot. Rather than modifying the executor, ExpGraph treats it as a
+replaceable task solver and learns how to provide useful experience through the input context. This
+design decouples experience learning from executor training: when stronger or different LLMs
+become available, the same external experience system can be reused or adapted without retraining
+the executor itself. Specifically, ExpGraph summarizes historical trajectories into compact experience
+units, including skills distilled from successful trajectories and lessons distilled from failures. These
+units are organized as nodes in an experience graph, where edges connect semantically or strategically
+related experiences. The graph allows retrieval to move beyond flat nearest-neighbor matching by
+expanding from initially matched experiences to related ones that may share transferable strategies,
+sub-goals, or failure patterns with the current task. On top of this relational memory, ExpGraph uses a
+lightweight retrieval copilot to predict task-adaptive retrieval controls, determining both how broadly
+retrieval explores the graph and how strongly final ranking balances semantic relevance against
+historical utility. To learn which experiences are actually useful, ExpGraph uses utility-grounded
+feedback from downstream task performance. The executor is evaluated both with and without
+retrieved experiences, allowing the retrieval system to estimate whether selected experiences truly
+improve the executor rather than merely matching the task semantically. This feedback optimizes the
+retrieval copilot and updates experience-node utility statistics, gradually favoring experiences that
+are not only relevant but empirically beneficial. Throughout this process, the executor LLM is never
+updated, enabling ExpGraph to support different frozen executors across model scales, capabilities,
+and deployment settings.
+We evaluate ExpGraph on ExpSuite, covering both single-turn static tasks (question answering,
+mathematical reasoning, and code generation) and multi-step agentic environments (ALFWorld and
+AppWorld). Across static tasks, ExpGraph improves over the strongest baseline by 12.2% with the
+2
+
+smaller executor and 4.7% with the larger executor. The advantage becomes more pronounced in
+agentic environments, where ExpGraph improves the weighted average score over the strongest
+baseline by 21.4% and 12.7% with the smaller and larger executors, respectively. Meanwhile,
+ExpGraph also improves decision efficiency, reducing average interaction steps by 12.7% and
+21.6% compared with the most efficient competing baseline. These results suggest that modeling
+relations among experiences and learning utility-aware adaptive retrieval are especially valuable when
+tasks require long-horizon decision-making and when the executor must improve through external
+experience rather than parameter updates. Ablation studies further confirm that experience relations,
+graph diffusion, utility-aware ranking, and adaptive retrieval copilot training each contribute to the
+overall gains.
+2
+Preliminaries
+2.1
+Model-Agnostic LLM Agents
+We consider an LLM agent that solves a task x ∈X by producing an output y, which can be an
+action, answer, or code sequence, and receives a task score s = S(x, y) ∈R from the environment
+or evaluator. The agent is built around an executor LLM πexec, which maps the task input to
+an output, i.e., y = πexec(x). We adopt a model-agnostic view of the executor: the experience
+learning mechanism should not depend on the internal architecture, parameters, gradients, logits,
+or training procedure of πexec. Instead, πexec is treated as a frozen and replaceable task solver,
+which can be closed-source, costly to update, specialized for a domain, or newly released. The
+improvement mechanism interacts with the executor only through its input-output behavior and
+task-level feedback. This setting decouples experience learning from executor training, allowing the
+same external experience system to improve different frozen executors through input context rather
+than parameter updates.
+2.2
+Experience-Augmented Learning
+To improve the executor through its input, we equip the agent with an external experience system
+M that stores reusable knowledge distilled from historical trajectories. A trajectory is denoted as
+τ = (x, ξ, y, s), where x is the task input, ξ denotes the intermediate execution process, y is the
+final response or action sequence, and s ∈R is the task score. Specifically, ξ corresponds to the
+agent interaction trace in agentic environments, and to the intermediate thinking process in question-
+answering or reasoning tasks. Each trajectory is summarized into a compact natural-language
+experience unit e = Summarize(τ) and stored in M. At execution time, the agent retrieves a subset
+of experiences E ⊆M and injects them into the executor’s input context, yielding y = πexec(x, E).
+The task score s = S(x, y) then depends indirectly on the choice of E.
+Since πexec is fixed, the learnable component is the retrieval policy πret, which selects E from M
+given the current task. The learning objective is to maximize expected task performance over a task
+distribution D:
+max
+πret Ex∼D[ S(x, πexec(x, E)) ] ,
+E ∼πret(· | x, M).
+(1)
+This formulation decouples execution from experience learning: πexec solves the task, while πret
+decides which experiences should be provided as context.
+3
+ExpGraph: Utility-Guided Experience Graph Retrieval
+3.1
+Overview
+ExpGraph is a model-agnostic experience learning framework for LLM agents. Given a task x,
+ExpGraph improves a frozen executor LLM πexec by retrieving useful external experiences without
+modifying the executor. The key idea is to decouple execution from experience learning: rather than
+updating the executor, a retrieval copilot learns which experiences to provide as context, making the
+framework compatible with arbitrary executor instances. As shown in Figure 1, ExpGraph operates
+as a closed loop over three components. First, historical trajectories are compressed into experience
+units and organized as a graph-structured experience system. Second, a retrieval copilot predicts
+task-adaptive controls to navigate the graph via semantic seeding, graph diffusion, and utility-aware
+ranking. Third, downstream feedback updates both the copilot and graph statistics, biasing future
+retrieval toward experiences that are empirically useful rather than merely semantically related.
+3
+
+Task 1
+Task 2
+Task t
+Task T
+……
+……
+𝒙𝟏
+𝒙𝟐
+𝒙𝒕
+𝒙𝑻
+Retrieval Policy 𝜋𝑟𝑒𝑡
+𝑡
+𝑅𝑡: diffusion depth
+Task 𝒙𝒕
+Frozen Executor 𝜋𝑒𝑥𝑒𝑐 
+Retrieval on  Experience Graph 𝐺𝑡 
+(a) Semantic Seeding
+(c) Utility-Aware 
+Ranking
+Top-M by Cosine
+Similarity
+Seed set 𝑆0 
+𝒔𝒄𝒐𝒓𝒆𝒗|𝒙
+= 𝟏−𝜶
+∙෢
+𝒔𝒊𝒎𝒗, 𝒙𝒕+ ෢
+𝜸𝒃𝒗
+…
+𝑬𝒕= {𝒗𝟏, … , 𝒗𝒕}
+Top-K 
+Ranked 
+by Score
+Task 𝒙t
+With Memory: 𝑆𝑤𝑖𝑡ℎ
+𝑡
+ 
+Without Memory: 𝑆𝑤𝑖𝑡ℎ𝑜𝑢𝑡
+𝑡
+ 
+Downstream Performance
+Reward Computation
+𝒓𝒕= 𝑆𝑤𝑖𝑡ℎ
+𝑡
+− 𝑆𝑤𝑖𝑡ℎ𝑜𝑢𝑡
+𝑡
++ 𝜼𝑆𝑤𝑖𝑡ℎ
+𝑡
+Proximal Policy
+Optimization
+New task arrives
+Embedding ℎ𝑥𝑡 
+𝑊𝑡: sim-utility trade-off
+𝑊𝑡
+𝑅𝑡
+Co-evolution: Update Both Retrieval Copilot and Experience Graph
+Update Retrieval Copilot
+Use 𝒓𝒕 to optimize retrieval 
+strategy via RL
+𝜋𝑟𝑒𝑡
+𝑡
+𝜋𝑟𝑒𝑡
+𝑡+1
+Learns to adapt:
+• When to diffuse far
+• When to trust utility more
+Update Experience Graph
+Update visited nodes, add new experience, and maintain the graph
+(1) Update 
+Retrieved Nodes
+(2) Add New 
+Experience
+(3) Insert & 
+Maintain the graph
+Graph Evolve
+For each 𝑣∈𝐸𝑡
+• 𝑛𝑣←𝑛𝑣+ 1
+• 𝑢𝑣←1 −𝛽𝑢𝑣+
+𝛽𝑟𝑡
+𝑢𝑣: utility
+𝑛𝑣: count
+trajectory 𝑟𝑡
+′
+LLM(𝑟𝑡
+′)→𝑒𝑡
+′
+Create node 𝑣𝑡
+′ 
+∙Connect 𝑣𝑡
+′ to 
+top-K neighbors 
+with sim ≥𝜃 
+∙Prune low-
+quality nodes if 
+over capacity 
+Update
+𝐺𝑡
+𝐺𝑡+1
+Figure 1: Overview of ExpGraph. ExpGraph enables a frozen and replaceable executor LLM to
+improve through a self-evolving experience graph and a trainable retrieval copilot. For each incoming
+task xt, the task is embedded as hxt and passed to the retrieval copilot πt
+ret, which predicts two
+adaptive controls: Rt for graph diffusion depth and Wt for the similarity–utility trade-off. Retrieval
+is performed on the current experience graph Gt through three steps: (a) Semantic Seeding, which
+selects a seed set S0 by cosine similarity; (b) Graph Diffusion, which expands from the seeds using
+personalized PageRank controlled by ρ; and (c) Utility-Aware Ranking, which combines semantic
+relevance and utility confidence to select the top-K experiences Et. The frozen executor πexec is then
+evaluated with and without retrieved experiences, producing st
+with and st
+without. Their difference,
+together with the absolute task score, forms the reward rt = (st
+with −st
+without) + ηst
+with. This reward
+drives a co-evolution process: it updates the retrieval copilot via PPO and updates the experience
+graph by refining visited-node utilities, adding new experience nodes, connecting them to similar
+neighbors, and pruning low-quality nodes when necessary. Only the retrieval copilot and experience
+graph evolve; the executor LLM remains frozen throughout.
+3.2
+Experience Graph Construction
+Trajectory-to-experience conversion. Let a historical trajectory be denoted as τ = (x, ξ, y, s),
+where x is the task input, ξ denotes the intermediate execution process, y is the final response or
+action sequence, and s ∈R is the task score returned by the environment or evaluator. Specifically, ξ
+corresponds to the agent interaction trace in agentic environments, and to the intermediate thinking
+process in question-answering or reasoning tasks. ExpGraph converts each trajectory into a compact
+natural-language experience unit:
+e = Summarize(τ).
+(2)
+The summarizer does not aim to preserve the full trajectory. Instead, it extracts reusable knowledge
+from the trajectory. High-scoring trajectories are distilled into skills, such as successful reasoning
+patterns, planning strategies, or task-specific heuristics. Low-scoring trajectories are distilled into
+lessons, such as failure modes, invalid actions, or c
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Table 100: ExpGraph case study in QA.
+Question: Which property best explains why a metal spoon feels colder than a wooden spoon at the same room
+temperature?
+Options: (A) higher density, (B) higher thermal conductivity, (C) lower melting point, (D) stronger magnetism.
+Ground Truth: (B) higher thermal conductivity.
+Retrieved Experience Graph Neighborhood:
+Seed experience: When two objects have the same temperature, perceived coldness often depends on how quickly heat
+leaves the skin, not on the object’s actual temperature.
+Connected experience: Metals transfer heat faster than wood or plastic; this makes metal feel colder because it draws
+heat from the hand more rapidly.
+Utility signal: Similar heat-transfer explanations previously improved science QA accuracy, while density-based distractors
+were often misleading.
+The retrieved experiences separate the relevant physical mechanism from surface distractors. Since the spoon and wooden
+spoon are at the same room temperature, the answer must explain the sensation of coldness. The useful experience
+indicates that heat-transfer rate is the key factor, and the connected experience identifies metals as high-conductivity
+materials. Therefore, the metal spoon feels colder because it conducts heat away from the skin faster.
+Prediction: (B) higher thermal conductivity. ✓
+Table 101: ExpGraph case study in Math.
+Question: A store sells notebooks for $3 each and pens for $2 each. Alice buys 4 more pens than notebooks and spends
+$38 in total. How many notebooks does she buy?
+Ground Truth: 6 notebooks.
+Retrieved Experience Graph Neighborhood:
+Seed experience: For two-item purchase problems, define the smaller quantity as x and express the larger quantity using
+the stated difference.
+Connected experience: Always verify the solution by substituting the quantity back into the total-cost equation.
+Connected failure lesson: Do not answer immediately after solving the equation; check whether the result is an integer
+and satisfies all constraints.
+Let x be the number of notebooks. Then the number of pens is x + 4. The total cost equation is 3x + 2(x + 4) = 38.
+Thus 3x + 2x + 8 = 38, so 5x = 30 and x = 6. Verification: notebooks cost 6 × 3 = 18, pens cost 10 × 2 = 20, and
+the total is 38.
+Prediction: 6 notebooks. ✓
+62
+
+Table 102: ExpGraph case study in Code Generation.
+Question: Write a function count_vowels(s) that returns the number of vowels in a string. Treat both uppercase and
+lowercase vowels as valid.
+Tests: assert count_vowels("Apple") == 2, assert count_vowels("WHY") == 0.
+Ground Truth: Count characters whose lowercase form is in "aeiou".
+Retrieved Experience Graph Neighborhood:
+Seed experience: For character-counting tasks, normalize the input before applying membership tests.
+Connected experience: Use a set for constant-time membership when checking whether characters belong to a small
+category.
+Connected failure lesson: Do not forget uppercase cases when the problem explicitly says the match should be case-
+insensitive.
+The graph retrieves both the algorithmic pattern and the common failure mode. The implementation should lowercase the
+string before counting vowels, and a set is sufficient for checking membership. This directly handles "Apple" because
+"A" becomes "a", and it returns zero for "WHY" because none of the characters are vowels after lowercasing.
+“‘python
+def count_vowels(s):
+vowels = set("aeiou")
+return sum(1 for ch in s.lower() if ch in vowels)
+“‘
+Prediction: Passes the tests. ✓
+Table 103: ExpGraph case study in ALFWorld.
+Task: Put a clean mug in the cabinet.
+Ground Truth Plan: Find mug →take mug →clean mug at sink →go to cabinet →put mug in cabinet.
+Retrieved Experience Graph Neighborhood:
+Seed experience: For clean-and-place tasks, first secure the target object, then clean it at a sinkbasin before moving to the
+destination receptacle.
+Connected experience: After cleaning, avoid re-checking unrelated rooms; go directly to the target receptacle if it has
+already been observed.
+Connected failure lesson: A common failure is putting the object away before cleaning it, which completes the wrong
+state and causes task failure.
+The retrieved experiences provide both a high-level plan and a constraint to avoid a known failure. The agent first locates
+and takes the mug, moves to the sinkbasin, cleans the mug, and then navigates directly to the cabinet. Because the graph
+also retrieves a failure lesson about premature placement, the agent avoids putting the mug into the cabinet before cleaning
+it.
+Outcome: Success with fewer redundant exploration steps.
+Table 104: ExpGraph case study in AppWorld.
+Task: Find the user’s unread email from Bob about a dinner reservation and create a calendar event for the reservation
+time.
+Ground Truth Plan: Search unread emails from Bob →extract restaurant, date, and time →create calendar event with
+the extracted details.
+Retrieved Experience Graph Neighborhood:
+Seed experience: For email-to-calendar tasks, first filter by unread status and sender, then parse the message body for
+time, date, title, and location.
+Connected experience: Calendar creation tasks often require all structured fields, including title, start time, end time, and
+location, not just the time.
+Connected failure lesson: Missing optional-looking fields such as restaurant name or location can still fail strict AppWorld
+validation.
+The retrieved experiences emphasize both the API workflow and the strict validation requirement. The agent searches
+unread emails from Bob, identifies the reservation email, extracts the restaurant name, date, and time, and creates a
+calendar event with a title such as Dinner Reservation, the correct start and end time, and the restaurant as the location.
+The failure lesson prevents the agent from creating an underspecified event.
+Outcome: Success under strict validation.
+63
+

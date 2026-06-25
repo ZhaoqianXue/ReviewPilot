@@ -1,0 +1,638 @@
+=== PDF FIRST PAGE (title region) ===
+FederatedSkill: Federated Learning for Agentic Skill Evolution
+Jingbo Yang1*
+Guanyu Yao1*
+Yang Zhang2
+Ramana Rao Kompella3
+Gaowen Liu3
+Shiyu Chang1
+1UC Santa Barbara
+2MIT-IBM Watson AI Lab
+3Cisco Research
+Abstract
+Modern LLM agents increasingly rely on skill
+libraries to handle complex tasks, making skill
+evolution a primary driver of self-improvement.
+However, isolated single-user task streams lack
+the diversity required to build comprehensive
+skills. While cross-user collaboration can over-
+come this data bottleneck, current trajectory-
+sharing approaches compromise user privacy
+and impose a uniform global library that fails
+to accommodate client heterogeneity. We in-
+troduce FederatedSkill, a privacy-preserving
+framework for collaborative agent evolution.
+Moving beyond raw trajectory sharing, Feder-
+atedSkill utilizes semantic skill diffs, structured
+patches over local libraries, as the fundamental
+unit of communication. On the server side,
+an evolution agent aggregates these patches
+to dynamically model client-specific capabil-
+ity boundaries, facilitating strictly personalized
+skill evolution rather than a suboptimal global
+average. Evaluated across 20 distinct agent
+task fami
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+FederatedSkill: Federated Learning for Agentic Skill Evolution
+Jingbo Yang1*
+Guanyu Yao1*
+Yang Zhang2
+Ramana Rao Kompella3
+Gaowen Liu3
+Shiyu Chang1
+1UC Santa Barbara
+2MIT-IBM Watson AI Lab
+3Cisco Research
+Abstract
+Modern LLM agents increasingly rely on skill
+libraries to handle complex tasks, making skill
+evolution a primary driver of self-improvement.
+However, isolated single-user task streams lack
+the diversity required to build comprehensive
+skills. While cross-user collaboration can over-
+come this data bottleneck, current trajectory-
+sharing approaches compromise user privacy
+and impose a uniform global library that fails
+to accommodate client heterogeneity. We in-
+troduce FederatedSkill, a privacy-preserving
+framework for collaborative agent evolution.
+Moving beyond raw trajectory sharing, Feder-
+atedSkill utilizes semantic skill diffs, structured
+patches over local libraries, as the fundamental
+unit of communication. On the server side,
+an evolution agent aggregates these patches
+to dynamically model client-specific capabil-
+ity boundaries, facilitating strictly personalized
+skill evolution rather than a suboptimal global
+average. Evaluated across 20 distinct agent
+task families, FederatedSkill demonstrates
+substantial gains over self-evolving baselines,
+achieving up to a 44.4% increase in success
+rate and a 37.5% reduction in computational
+cost. Our code is available at https://github.
+com/UCSB-NLP-Chang/FederatedSkill.
+1
+Introduction
+Recently, the use of a library of skills has become
+a mainstream paradigm for agentic systems, in-
+cluding the autonomous agent harnesses, such as
+OpenClaw and Claude Code. Agentic skills refer to
+reusable procedural memories that encode how to
+call tools, navigate environments, and chain multi-
+step actions (Xu and Yan, 2026; Ling et al., 2026;
+Li et al., 2026), and can enable a great diversity
+of agentic tasks, ranging from short-form question
+answering to long-horizon web navigation, enter-
+prise automation, and scientific tool use (Liu et al.,
+*Equal
+contribution.
+Correspondence
+to:
+jingbo@ucsb.edu, gyao@ucsb.com
+2026; Merrill et al., 2026; Yang et al., 2026a, 2025;
+Patwardhan et al., 2025).
+In such paradigms, the primary way for agents
+to perform self-improvement is to evolve the skill
+library (Ouyang et al., 2026; Zhang et al., 2026a;
+Xia et al., 2026; Shi et al., 2026). This involves
+adding new procedures, refining existing work-
+flows, and pruning stale entries. Yet, a single user’s
+task stream covers only a narrow slice of the skills
+they will eventually need. Consequently, agents
+often fail at new tasks before these experiences can
+be converted into skills, or they fail to learn from
+repeated attempts because they lack successful ref-
+erence examples to provide guidance.
+A natural way to break this single-user data bot-
+tleneck is to evolve skills collaboratively across
+multiple users, which can expand the coverage of
+long-tail and challenging tasks. Recent collabora-
+tive skill-evolution frameworks (Ma et al., 2026)
+pursue this through a trajectory-sharing paradigm:
+users upload their raw execution trajectories to
+a central server, which summarizes them into a
+shared skill library for redistribution. However,
+this paradigm faces two fundamental obstacles that
+no existing approach jointly resolves. First, raw
+trajectories often embed sensitive content (such as
+private information on the webpage, or confiden-
+tial data in a spreadsheet) that users cannot safely
+transmit to an external server, even a trusted one.
+Second, a single global skill library is rarely op-
+timal for everyone. Recent studies show that the
+most effective skill for a task depends on the user’s
+specific model family, their agent framework, and
+their actual task distribution (Li et al., 2026; Zhong
+et al., 2026; Liu et al., 2026; Wang et al., 2025).
+Consequently, naive aggregation yields a general-
+ized library that underserves heterogeneous users.
+Together, these obstacles raise the central question:
+can users collaboratively evolve skills while pre-
+serving privacy, and still obtain a skill library that
+is tailored to their specific needs?
+1
+arXiv:2606.03143v1  [cs.LG]  2 Jun 2026
+
+User 1
+Model: Qwen
+CLI: Qwen Coder
+Task: Web Navigation
+Raw Trajectories
+Private screenshots
+…
+User N
+Model: Claude
+CLI: Claude Code
+Task: Data Analytics
+Raw Trajectories
+Confidential Data
+Prior Collaborative Skill Evolution
+Cloud Evolution
+Trajectory Analysis
+Identify Root Cause
+Propose New Skills
+General
+Skills
+Confidential data leaked in
+the references of the skills.
+FederatedSkill (Ours)
+Model-specific experience
+does not transfer.
+…
+User N
+Model: Claude
+CLI: Claude Code
+Personalized Evolution
+User 1
+Model: Qwen
+CLI: Qwen Coder
+Raw Trajectories
+Condense
++
+Condense
++
+Raw Trajectories
+Skill Patch w/
+new experience
+Skill Patch w/
+new experience
+…
+Uploaded Skill Patches
+Workflow Repo
+Update
+…
+Per-User
+Capability
+Memory
+Evolution Plan
+…
+Skill Evolution
+Agent
+Figure 1: Overview of FederatedSkill. Each client agent self-reflects on its local trajectories and distills them into a
+structured skill patch consisting of ADD, EDIT, or DELETE operations over the existing skill library, and uploads only
+the patch. A server-side merger agent reads patches together with each client’s agent profile and returns per-client
+personalized skill updates. Raw trajectories never leave the client.
+In this paper, we propose FederatedSkill, a
+privacy-preserving, collaborative skill-evolution
+framework. To resolve the first challenge on pri-
+vacy preservation, FederatedSkill avoids uploading
+the client’s local trajectories, but instead lets the
+clients evolve their skills locally based on their
+own trajectories, and only uploads the resulting
+skill patch, which documents add, edit, or delete
+operations applied to their skill libraries.
+This
+concept is analogous to federated learning, where
+the transmission of the sensitive training data is
+avoided by transmitting the local model weight up-
+dates (McMahan et al., 2017). As illustrated in
+Figure 1, each client agent self-reflects on its own
+trajectories (Shinn et al., 2023), generates a skill
+patch, and uploads only that patch. A central server
+then merges these patches across clients (similar to
+merging concurrent git commits) and redistributes
+the updated library. Because the system exchanges
+semantically meaningful, user-reviewable patches
+rather than raw interaction logs, trajectories remain
+strictly local by construction. This design effec-
+tively eliminates the data-leakage vulnerabilities
+that the traditional trajectory-sharing paradigm can-
+not resolve.
+To address the second challenge on client hetero-
+geneity, FederatedSkill augments the server with
+an evolution agent designed to achieve customized
+skill evolution. Rather than relying on a static pro-
+file, the evolution agent actively analyzes the skill
+patches uploaded by each client over time. Through
+these patch submissions, the evolution agent im-
+plicitly models the client’s capability boundaries.
+Crucially, this modeling is continuously updated
+throughout the evolution process. Using this dy-
+namic understanding, the evolution agent selects,
+adapts, and specializes skills from the global pool,
+projecting them into a personalized library tailored
+to that specific client. This approach places Fed-
+eratedSkill alongside personalized federated learn-
+ing (Fallah et al., 2020), but introduces a crucial
+distinction. Unlike traditional federated learning
+that operates at the parameter level, FederatedSkill
+achieves personalization at the semantic-skill level
+via the evolution agent. This approach generalizes
+to a more heterogeneous client setup (i.e., different
+models and agent harnesses), which is unsupported
+by personalized federated learning.
+We evaluate FederatedSkill on SkillFlow (Zhang
+et al., 2026d), a recent benchmark for agent skill
+evolution spanning 20 distinct tasks. Compared
+to self-evolution, FederatedSkill consistently im-
+proves client agent performance, achieving up to
+a 44.4% gain in success rate and a 37.5% reduc-
+tion in costs, all while strictly preserving client
+privacy. Moreover, ablation studies highlight the
+necessity of personalization. By maintaining client-
+specific skill libraries rather than a single global
+library, FederatedSkill achieves an average perfor-
+mance gain of 12.2% across heterogeneous client
+settings.
+2
+Related Work
+Agent Self-Evolution.
+Agent self-evolution en-
+ables agents to autonomously improve through
+their own execution experiences. An early line of
+work focused on trajectory-level reflection, where
+agents verbalize lessons from past attempts to serve
+2
+
+as context for subsequent trials (Shinn et al., 2023;
+Zhang et al., 2024). Building upon this, persistent
+experience stores convert past trajectories into re-
+trievable insights (Zhao et al., 2024), structured
+memories (Zhang et al., 2026b,c; Wang et al.,
+2024), or transferable reasoning patterns (Ouyang
+et al., 2025). A more recent paradigm treats the
+skill library itself as the locus of evolution, as se-
+mantic skills are inherently easier to reuse and gen-
+eralize (Ouyang et al., 2026; Zhang et al., 2026a;
+Xia et al., 2026; Shi et al., 2026; Yang et al.,
+2026b). However, these approaches predominantly
+follow a single-user paradigm, inevitably suffer-
+ing from data scarcity. To bridge this gap, Skill-
+Claw (Ma et al., 2026) explores multi-party skill
+evolution; yet, it suffers from privacy leakage by
+sharing raw trajectories and yields only a single,
+non-personalized global skill. FederatedSkill re-
+solves both critical limitations by exchanging se-
+mantic skill patches instead of raw trajectories and
+executing per-client personalized evolution on the
+server. Furthermore, while Fed-SE (Chen et al.,
+2025) also investigates federated agent evolution,
+its reliance on parameter-level LoRA aggregation
+severely limits its generalizability across heteroge-
+neous clients.
+Agent Skills.
+The skill paradigm organizes an
+agent’s procedural knowledge into a library of
+reusable artifacts, retrieved and composed dy-
+namically at runtime. While earlier research ex-
+plores skills for lifelong agent learning (Wang
+et al., 2023; Zheng et al., 2025), these approaches
+predominantly treat skills merely as in-context
+prompt components.
+More recently, agent har-
+nesses such as Claude Code and OpenClaw have
+converged on filesystem-based skill specifications
+(e.g., SKILL.md). This shift elevates the skill li-
+brary from a transient in-context scratchpad to a
+first-class deployment artifact. In parallel, emerg-
+ing benchmarks measure how effectively agents
+utilize a fixed skill set (Li et al., 2026; Liu et al.,
+2026) or evolve one over a task sequence (Zhang
+et al., 2026d; Zhong et al., 2026), firmly establish-
+ing the skill library as an independent unit of study.
+3
+Problem Formulation
+We formalize cross-client skill evolution as a fed-
+erated optimization problem over N clients and T
+rounds. At round t, each client i holds a task distri-
+bution Di, a static profile ρi (backbone model and
+agent harness), and a skill library Lt
+i. Raw trajecto-
+ries and Di never leave the client; only structured
+skill patches are communicated.
+Client-side Execution Agent.
+Client i runs its
+agent policy πi(· | Lt
+i, ρi) on tasks x ∼Di. The
+expected performance of a library L is:
+Ji(L) = Ex∼Di, τ∼πi
+
+Ri,x(τ)
+
+.
+(1)
+From its local trajectory batch Bt
+i, the client applies
+a reflection procedure gi to extract a semantic skill
+patch:
+δt
+i = gi
+ Lt
+i, Bt
+i, ρi
+
+,
+(2)
+where δt
+i consists of high-level edits (e.g., ADD,
+EDIT, DELETE) to Lt
+i. By uploading only δt
+i in-
+stead of Bt
+i, the framework preserves privacy by
+construction.
+Server-side Evolution Agent.
+We cast the server-
+side aggregation as a Partially Observable Markov
+Decision Process (POMDP). At round t, the LLM-
+based evolution agent M receives only partial ob-
+servations of the clients’ true environments: Ot =
+{(ρi, δt
+i)}N
+i=1. Because raw trajectories are hidden,
+M must dynamically infer each client’s underlying
+capability boundaries from the semantic content
+of δt
+i. Based on this inferred state, it generates a
+personalized update ∆t
+i for each client, yielding
+Lt+1
+i
+= Apply(Lt
+i, ∆t
+i).
+Given client weights qi, the population perfor-
+mance is ¯Jt = P
+i qiJi(Lt
+i). The objective of M is
+to maximize the expected cumulative performance
+gain across T rounds, subject to the constraint that
+it only observes Ot at each round:
+max
+M
+E
+"T−1
+X
+t=0
+  ¯Jt+1 −¯Jt
+#
+.
+(3)
+4
+FederatedSkill
+FederatedSkill runs as a privacy-preserving client-
+server loop. Section 4.1 covers the client side: local
+agents execute tasks and distill trajectories into
+skill patches. Section 4.2 covers the server side: an
+evolution agent models each client’s capabilities
+and emits personalized library updates.
+4.1
+Client Execution and Patch Distillation
+The client pipeline has two stages: local task execu-
+tion collects a trajectory batch Bt
+i, then local patch
+distillation converts the batch into a skill patch δt
+i.
+3
+
+4.1.1
+Trial Execution
+During round t, client i constructs the trajectory
+batch Bt
+i by executing a set of sampled tasks
+x ∼Di. Specifically, the local agent is conditioned
+on its current skill library Lt
+i and its specific LLM
+backbone. The agent autonomously searches the
+library and issues tool calls to generate an execu-
+tion trajectory τ. Each trajectory is then evaluated
+by the environment to assign a verification reward
+Ri,x(τ). Crucially, the base policy of the execution
+agent remains frozen across all federated rounds;
+thus, any performance gains stem strictly from the
+evolution of the skill library.
+4.1.2
+Per-Client Patch Distillation
+A local patcher, which shares the same backbone
+LLM as the execution LLM, converts the raw trial
+artifacts into the skill patch δt
+i.
+Patch Generation.
+The patcher generates δt
+i via
+a single LLM call, based on three inputs: ❶Com-
+pacted Trajectory: A compressed sequence retain-
+ing at most Kstep agentic steps (the initial step plus
+the Kstep −1 most recent steps). Execution met-
+rics are stripped, and environment observations
+are truncated to Kobs characters via an explicit
+<truncated> marker.
+❷Library Snapshot: A
+JSON snapshot of the current library Lt
+i detail-
+ing all file paths and their corresponding contents.
+❸Trial Outcome: Summary metadata including
+the task name, a quality signal Ri,x(τ), exception
+types, the final agent message, and verification sub-
+test failures (if available).
+Patch Schema.
+The patcher outputs a structured
+four-tuple:
+δt
+i =
+ Ut
+i , Dt
+i, Ri,x(τ), st
+i
+
+,
+(4)
+where each component is defined as follows:
+• Ut
+i is a dictionary of file upserts, keyed by rela-
+tive paths within the library and valued by full
+file contents. Each skill resides in a capability-
+named directory containing a SKILL.md file
+with frontmatter, alongside optional scripts/,
+references/, and assets/ subfolders.
+• Dt
+i is a list of relative paths proposed for deletion
+from Lt
+i.
+• st
+i is a one-sentence natural language sum-
+mary explaining the rationale behind the patch,
+recorded for downstream auditing.
+• Ri,x(τ) is the task reward.
+Privacy-Preserving Design.
+The patch δt
+i is the
+only artifact that leaves the client. The raw trial arti-
+facts stay on the local worker, including full trajec-
+tories, verifier output, intermediate files, and task
+inputs. Three design choices enforce this minimiza-
+tion. First, every field encodes only library-level se-
+mantics: Ut
+i contains reusable playbooks intended
+to generalize across tasks (explicitly prompted to
+omit task-specific values, IDs, or one-off outputs),
+and Dt
+i contains only structural paths. No field
+carries raw interaction text. Second, because distil-
+lation runs entirely on the client’s local backbone,
+the server only receives what the client model it-
+self judges to be a generalizable lesson, never the
+raw trajectory that justified it. Third, as a system
+security measure, all paths in Ut
+i ∪Dt
+i are rigor-
+ously validated 
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+cosine similarity (true vs. reconstruction)
+0
+2
+4
+6
+8
+10
+Count
+0.36
+0.53
+0.80
+Different family (lower bd.)
+Strawman summary (upper bd.)
+FederatedSkill patch
+Figure 6: Task-reconstruction attack. Cosine similarity
+between the true task description and reconstructions
+derived from various sources. The patch-based recon-
+struction (navy) clusters near the lower bound (teal),
+demonstrating that semantic patches effectively obscure
+the original task shape.
+Canary value
+Type
+Leaked in
+Marcia Doleba
+person
+0 / 9
+Vinh Kostov-Reilly
+person
+0 / 9
+EMP-99317-XJ
+internal id
+0 / 9
+412-77-8831
+SSN-shape
+0 / 9
+mdoleba@acme-internal.test
+internal email
+0 / 9
+PROJ-CONFIDENTIAL-7Q
+project code
+0 / 9
+Total
+0 / 54
+Table 9: Stage 7 synthetic-PII canary survival. Each
+canary was injected into the user task prompt, agent
+reasoning, and a tool observation of 9 Compensation-
+Scenario-Modeling trajectories; each modified trajec-
+tory was re-distilled into a skill patch by an LLM patcher.
+“Leaked in” counts patches in which the canary survives
+either an exact substring match or a Sonnet semantic-
+leak judge call. All 54 audits returned 0.
+and entirely suppressed by the abstraction process.
+F
+Potential Risks and Broader Impact
+While FEDERATEDSKILL is designed to enhance
+the capability and efficiency of productive LLM
+agents in a privacy-preserving manner, we acknowl-
+edge several potential risks and broader impacts
+associated with its real-world deployment:
+Dual-Use and Malicious Skill Evolution.
+As a
+general-purpose framework for collaborative agent
+self-improvement, the semantic patch-sharing pro-
+tocol could theoretically be adapted for malicious
+objectives. For instance, adversarial actors might
+deploy a similar federated loop to collaboratively
+evolve networks of agents optimized for executing
+automated cyberattacks, bypassing web-security
+filters, or coordinating sophisticated phishing cam-
+paigns. Countering this risk necessitates strict ac-
+cess controls on the evolution server and the devel-
+opment of proactive patch-screening protocols.
+Misplaced Trust in Empirical Privacy.
+Al-
+though our rigorous privacy audit (§E) demon-
+strates that semantic abstraction reduces sensitive
+entity leakage to near-baseline levels (0.09% in
+the personalized update), FEDERATEDSKILL re-
+lies on empirical validation rather than hard cryp-
+tographic guarantees (such as formal Differential
+Privacy). There is a minor risk that deployment
+organizations might overestimate the system’s pri-
+vacy boundaries, leading to a false sense of abso-
+lute security when handling highly regulated or
+extreme-sensitivity data without additional encryp-
+tion layers.
+Bias Amplification and Behavior Homogeniza-
+tion.
+Aggregating skill patches across multiple
+independent clients risks propagating latent behav-
+ioral biases or flawed heuristics from dominant
+users to the rest of the federation. If specific client
+agents frequently upload patches reflecting biased
+reasoning paths, a server-side aggregation agent
+without explicit fairness or algorithmic alignment
+constraints might inadvertently standardize these
+anti-patterns, leading to capability homogenization
+and the spread of suboptimal workflows across be-
+nign clients.
+G
+Artifact Licenses and Intended Use
+In this work, we utilize the SkillFlow bench-
+mark (Zhang et al., 2026d) alongside three large
+language models: Qwen3.6-Plus, GLM-5, and
+Kimi K2.5. We ensure that our usage of these
+artifacts strictly adheres to their respective licenses
+and terms of service.
+Specifically, the SkillFlow benchmark is utilized
+solely for academic evaluation purposes in accor-
+dance with its open-source research license. Ac-
+cess to the backbone models is governed by the
+API terms and acceptable use policies provided
+by Alibaba Cloud (Qwen), Zhipu AI (GLM), and
+Moonshot AI (Kimi). Our usage of these mod-
+els to conduct automated agent task executions,
+extract semantic skill patches, and evaluate col-
+laborative evolution is strictly for non-commercial
+academic research. This is fully consistent with
+19
+
+their intended use cases.
+Furthermore, we do not distribute any propri-
+etary model weights or internal data from the API
+providers. The code, framework infrastructure, and
+the federated skill patches generated during this
+study will be open-sourced under an MIT license
+to facilitate future research in agent collaboration,
+aligning with standard community practices.
+20
+

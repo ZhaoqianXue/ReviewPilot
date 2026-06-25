@@ -48,6 +48,8 @@ data-scholar/
     └── human_interaction.py
 ```
 
+> **Local-only note:** `agent_skill/` is a private scratch directory for a minor collaborator task. It is not part of the `agents/` system, not a project skill, and is intentionally ignored by Git.
+
 ## Quick Start
 
 ### 1. Install dependencies

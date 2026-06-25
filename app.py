@@ -8,6 +8,9 @@ import streamlit as st
 import json
 import pandas as pd
 import os
+import re
+import shutil
+import time
 from pathlib import Path
 from datetime import datetime
 import sys
@@ -21,6 +24,51 @@ from utils.memory import MemoryManager, ExtractionSchema, ExtractionField, Scree
 from utils.agent_memory import AgentMemory
 from main import AcademicSearcher
 from pydantic import BaseModel, Field, create_model
+
+
+def app_llm_model() -> str:
+    """Single model used by the Streamlit app for LLM-assisted steps."""
+    return os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
+
+
+def is_valid_api_email(email: str) -> bool:
+    email = (email or "").strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return False
+    return not email.lower().endswith("@example.com")
+
+
+def default_api_email(config: dict = None) -> str:
+    config = config or {}
+    candidates = [
+        config.get("api_email"),
+        config.get("email"),
+        os.getenv("UNPAYWALL_EMAIL"),
+        os.getenv("REVIEWPILOT_API_EMAIL"),
+        os.getenv("REVIEWPILOT_EMAIL"),
+    ]
+    for candidate in candidates:
+        candidate = (candidate or "").strip()
+        if is_valid_api_email(candidate):
+            return candidate
+    return ""
+
+
+def new_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def archive_path_if_exists(path: Path, label: str = "stale") -> Path:
+    """Move old run artifacts aside so a new user action starts from scratch."""
+    if not path.exists():
+        return path
+    archive = path.with_name(f"{path.name}.{label}-{new_run_id()}")
+    counter = 1
+    while archive.exists():
+        archive = path.with_name(f"{path.name}.{label}-{new_run_id()}-{counter}")
+        counter += 1
+    shutil.move(str(path), str(archive))
+    return archive
 
 # Page config
 st.set_page_config(
@@ -1385,7 +1433,7 @@ def detect_intent_with_tools(user_message: str, system_prompt: str, tools: list,
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=app_llm_model(),
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -1639,7 +1687,7 @@ Return ONLY valid JSON (no markdown):
   "domain": "research field"
 }}"""
 
-    for model in ["gpt-4o-mini", "gpt-4o"]:  # Use known working models
+    for model in [app_llm_model()]:
         try:
             response, _ = query_llm(
                 text_prompt=prompt,
@@ -1683,7 +1731,7 @@ Domain: {domain}
 Suggest 5-7 specific fields to extract from each paper. Return ONLY a JSON array of field names.
 Example: ["datasets used", "model architecture", "evaluation metrics", "key findings"]"""
 
-    for model in ["gpt-5-mini", "gpt-4o-mini"]:
+    for model in [app_llm_model()]:
         try:
             response, _ = query_llm(
                 text_prompt=prompt,
@@ -1788,7 +1836,7 @@ Return ONLY valid JSON in this format:
             }
 
     schema = default_schema
-    for model in ["gpt-4o-mini", "gpt-4o"]:
+    for model in [app_llm_model()]:
         try:
             response, _ = query_llm(
                 text_prompt=fields_prompt,
@@ -2086,7 +2134,7 @@ Return ONLY a valid JSON object with the field names as keys."""
         response, _ = query_llm(
             text_prompt=prompt,
             system_prompt="You are an expert researcher. Extract information from the paper details provided. Return only valid JSON.",
-            model="gpt-4o-mini"
+            model=app_llm_model()
         )
 
         # Parse JSON response
@@ -2130,27 +2178,13 @@ def run_collection(config: dict, output_dir: Path = None, progress_callback=None
     collected_dir = None
     if output_dir:
         collected_dir = output_dir / "collected"
+        archive_path_if_exists(collected_dir, "previous-run")
         collected_dir.mkdir(parents=True, exist_ok=True)
 
     all_papers = []
     platform_stats = {}
     query_stats = {}
     seen_ids = set()  # For deduplication across queries
-
-    # Load existing papers if resuming
-    if collected_dir:
-        for jsonl_file in collected_dir.glob("*.jsonl"):
-            try:
-                with open(jsonl_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        paper = json.loads(line.strip())
-                        paper_id = paper.get('id') or paper.get('doi') or paper.get('title', '')
-                        if paper_id and paper_id not in seen_ids:
-                            seen_ids.add(paper_id)
-                            all_papers.append(paper)
-                print(f"Resumed: loaded {len(all_papers)} existing papers")
-            except Exception as e:
-                print(f"Error loading {jsonl_file}: {e}")
 
     # Run each search query
     for sq in search_queries:
@@ -2169,7 +2203,7 @@ def run_collection(config: dict, output_dir: Path = None, progress_callback=None
                     query=query,
                     platforms=[platform],
                     max_results=config.get("max_results", 100),
-                    output_folder=str(collected_dir) if collected_dir else None
+                    output_folder=None
                 )
 
                 papers = results.get(platform, [])
@@ -2309,7 +2343,7 @@ Abstract: {abstract if abstract else "No abstract available"}
 Is this paper relevant? Answer true or false."""
 
         is_relevant = None
-        for model in ["gpt-5-mini", "gpt-4o-mini"]:
+        for model in [app_llm_model()]:
             try:
                 response, _ = query_llm(
                     text_prompt=user_prompt,
@@ -2665,7 +2699,7 @@ Apply the changes. Return ONLY the modified query, no explanation. Keep (term1 O
                             from openai import OpenAI
                             client = OpenAI(api_key=load_api_key('openai'))
                             response = client.chat.completions.create(
-                                model="gpt-4o-mini",
+                                model=app_llm_model(),
                                 messages=[
                                     {"role": "system", "content": "You modify Boolean search queries. Return only the modified query, no explanation or markdown."},
                                     {"role": "user", "content": modify_prompt}
@@ -2730,7 +2764,7 @@ Return ONLY the query string, nothing else."""
                                 from openai import OpenAI
                                 client = OpenAI(api_key=load_api_key('openai'))
                                 response = client.chat.completions.create(
-                                    model="gpt-4o-mini",
+                                    model=app_llm_model(),
                                     messages=[
                                         {"role": "system", "content": "Generate academic Boolean search query. Return only the query."},
                                         {"role": "user", "content": new_query_prompt}
@@ -3040,7 +3074,7 @@ Be specific and use terminology from the samples."""
                         client = OpenAI(api_key=load_api_key('openai'))
 
                         chat_response = client.chat.completions.create(
-                            model="gpt-4o-mini",
+                            model=app_llm_model(),
                             messages=[
                                 {"role": "system", "content": "You are a research analyst creating semantic categories for academic paper data."},
                                 {"role": "user", "content": prompt}
@@ -3125,7 +3159,7 @@ Keep response concise and actionable."""
                     client = OpenAI(api_key=load_api_key('openai'))
 
                     chat_response = client.chat.completions.create(
-                        model="gpt-4o-mini",
+                        model=app_llm_model(),
                         messages=[
                             {"role": "system", "content": "You are ReviewPilot, a friendly and knowledgeable research assistant. Be conversational, give specific advice, and suggest next steps."},
                             {"role": "user", "content": context}
@@ -3496,7 +3530,7 @@ Click **"Finalize Criteria"** when satisfied."""
                             decision = None
                             exclusion_reasons = []
 
-                            for model in ["gpt-4o-mini", "gpt-4o"]:
+                            for model in [app_llm_model()]:
                                 try:
                                     response, _ = query_llm(
                                         text_prompt=user_prompt,
@@ -3659,42 +3693,47 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
         st.divider()
 
         if not st.session_state.pdfs_downloaded:
-            email = st.text_input("Email for API access", "research@example.com",
+            email = st.text_input("Email for API access", default_api_email(config),
                                   help="Required by Unpaywall and other APIs")
 
             if st.button("Download PDFs", type="primary", use_container_width=True):
+                email = (email or "").strip()
+                if not is_valid_api_email(email):
+                    st.error("Enter a real email address for Unpaywall/PubMed API access before downloading PDFs.")
+                    st.stop()
+                config["api_email"] = email
+                config_path = output_dir / "search_conditions.json"
+                save_json(str(config_path), config)
+                get_agent_memory().save_run_config(config["project_name"], config)
+
                 add_message("assistant", f"""Starting PDF download for {len(papers)} papers...
 
 **Please be patient** - this process typically takes 1-3 minutes per 10 papers, depending on source availability. Each paper requires checking multiple sources sequentially (Unpaywall, PubMed Central, publisher sites, etc.).
 
-**Note:** Progress is saved in real-time. If interrupted, click "Download PDFs" again to resume.
+**Note:** This starts a fresh download attempt. Previous PDF progress is not reused.
 
 **Reminder:** Papers from subscription-based publishers (Elsevier, Wiley, Springer, etc.) may fail if no open access version is available. These can be manually downloaded from your institution's library resources after the process completes.""")
 
+                archive_path_if_exists(pdf_dir, "previous-run")
                 pdf_dir.mkdir(parents=True, exist_ok=True)
+                for paper in papers:
+                    paper["pdf_downloaded"] = False
+                    paper.pop("pdf_path", None)
+                    paper.pop("pdf_method", None)
 
-                # Progress file for real-time saving and resume capability
-                progress_file = str(pdf_dir / "download_progress.jsonl")
+                run_id = new_run_id()
+                started_at = datetime.now()
+                started_perf = time.perf_counter()
+                progress_file = str(pdf_dir / f"download_progress_{run_id}.jsonl")
 
-                downloader = create_pdf_downloader(email=email, output_dir=pdf_dir)
+                downloader = create_pdf_downloader(
+                    email=email,
+                    output_dir=pdf_dir,
+                )
+                semantic_cache_file = getattr(downloader, "semantic_scholar_cache_path", None)
                 downloader.set_llm_query_func(query_llm)
                 if os.getenv("REVIEWPILOT_ENABLE_PDF_WEB_SEARCH") == "1":
-                    downloader.enable_web_search(model="gpt-5-mini")
-
-                # Load existing progress to check how many are already downloaded
-                already_downloaded = set()
-                if os.path.exists(progress_file):
-                    with open(progress_file, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            try:
-                                record = json.loads(line.strip())
-                                paper_id = record.get('id') or record.get('doi') or record.get('title')
-                                if paper_id and record.get('pdf_downloaded'):
-                                    already_downloaded.add(paper_id)
-                            except:
-                                pass
-                    if already_downloaded:
-                        st.info(f"Resuming: {len(already_downloaded)} papers already downloaded")
+                    downloader.enable_web_search(model=app_llm_model())
 
                 progress = st.progress(0)
                 status = st.empty()
@@ -3708,9 +3747,21 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                     progress_callback=progress_cb,
                     progress_file=progress_file,
                 )
+                results["run_id"] = run_id
+                results["started_at"] = started_at.isoformat()
+                results["completed_at"] = datetime.now().isoformat()
+                results["duration_seconds"] = round(time.perf_counter() - started_perf, 3)
+                results["progress_file"] = progress_file
+                if semantic_cache_file:
+                    results["semantic_scholar_cache_file"] = str(semantic_cache_file)
 
                 # Track failed papers for manual download table.
                 import re as _re
+                raw_failed_by_key = {}
+                for failed in results.get("failed_papers", []):
+                    for key in (failed.get("doi"), failed.get("title")):
+                        if key:
+                            raw_failed_by_key[key] = failed
                 failed_papers = []
                 for paper in papers:
                     if paper.get("pdf_downloaded"):
@@ -3719,13 +3770,26 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                     safe_title = _re.sub(r'\s+', '_', safe_title)[:60]
                     paper_id = paper.get("paper_id", "")
                     expected_file = f"{paper_id}_{safe_title}.pdf" if paper_id else f"{safe_title}.pdf"
+                    raw_failure = raw_failed_by_key.get(paper.get("doi")) or raw_failed_by_key.get(paper.get("title"), {})
                     failed_papers.append({
                         "title": paper.get("title", "Unknown"),
                         "doi": paper.get("doi", "N/A"),
                         "url": paper.get("url", "N/A"),
-                        "save_as": expected_file
+                        "save_as": expected_file,
+                        "failure_class": raw_failure.get("failure_class") if isinstance(raw_failure, dict) else None,
+                        "failure_detail": raw_failure.get("failure_detail") if isinstance(raw_failure, dict) else None,
+                        "failure_classes": raw_failure.get("failure_classes") if isinstance(raw_failure, dict) else [],
+                        "error": raw_failure.get("error") if isinstance(raw_failure, dict) else None,
                     })
                 results["failed_papers"] = failed_papers
+
+                quality_audit_func = getattr(downloader, "build_quality_audit", None)
+                if quality_audit_func:
+                    quality_audit = quality_audit_func(papers)
+                    quality_audit_file = pdf_dir / "pdf_quality_audit.json"
+                    save_json(str(quality_audit_file), quality_audit)
+                    results["quality_audit_file"] = str(quality_audit_file)
+                    results["quality_audit_summary"] = quality_audit.get("summary", {})
 
                 close_downloader = getattr(downloader, "close", None)
                 if close_downloader:
@@ -3894,9 +3958,9 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
             else:
                 extraction_model = st.selectbox(
                     "Extraction Model",
-                    ["gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5.1"],
-                    index=2,
-                    help="gpt-5.1 recommended for best quality"
+                    [app_llm_model()],
+                    index=0,
+                    help="Configured by REVIEWPILOT_LLM_MODEL"
                 )
 
                 if st.button("Run Extraction", type="primary", use_container_width=True):
@@ -4353,7 +4417,7 @@ Return JSON:
                                         text_prompt=prompt,
                                         system_prompt="You are a research analyst creating meaningful categories for academic paper data. Focus on semantic understanding, not keyword matching.",
                                         provider="openai",
-                                        model="gpt-4o-mini"
+                                        model=app_llm_model()
                                     )
 
                                     parsed = extract_json(response)
@@ -4478,7 +4542,7 @@ Return category names separated by ", " (comma space). Only include categories t
                                                 text_prompt=cat_prompt,
                                                 system_prompt="You are categorizing research paper data. Return only category names, no explanations.",
                                                 provider="openai",
-                                                model="gpt-4o-mini"
+                                                model=app_llm_model()
                                             )
                                             # Clean response
                                             assigned = cat_response.strip().strip('"').strip("'")

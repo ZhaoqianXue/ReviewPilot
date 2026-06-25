@@ -1,0 +1,502 @@
+{
+  "row74": {
+    "rid": "row74",
+    "final": {
+      "L": "Automatically learn repository-specific skill documents for coding agents.",
+      "M": "Skill generation/optimization framework; coding agents.",
+      "N": "Evolutionary optimization refines natural-language SKILL.md docs from agent feedback.",
+      "O": "Model-generated, failure-driven: reflective LLM proposer iteratively writes skills.",
+      "P": "Generate verifiable tasks -> run agent -> reflect on failures -> propose skill -> Pareto-select best.",
+      "Q": "Inference-time skill invocation; no fine-tuning, NL-space optimization loop.",
+      "R": "Pass@1 / resolve rate; average task duration.",
+      "S": "Two-repo eval (jinja, bleve) with baseline vs. skill, cross-agent transfer.",
+      "T": "Skills regeneratable as codebase evolves; no audit/security governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check confirmed: gskill PRODUCES reusable, inspectable SKILL.md artifacts in the standardized agent-skill format, deployed as .claude/skills/{repo}/SKILL.md and invoked at inference. Optimization is explicitly in natural-language space with NO fine-tuning/gradient/weight internalization (lines 237-240, 91-94) — the artifact persists externally and transfers cross-agent/model, so this is skill generation/synthesis, not the internalization trap. Only change: tightened P to note Pareto-based candidate selection (lines 233-236); all other cells kept.",
+      "confidence": "high"
+    }
+  },
+  "row76": {
+    "rid": "row76",
+    "final": {
+      "L": "Trustworthy agentic pharmacogenomic interpretation via versioned, executable skills.",
+      "M": "Skill-execution architecture; pharmacogenomics benchmark.",
+      "N": "Versioned skill (SKILL.md) encodes validated decision logic, executed as code with the model confined to input.",
+      "O": "Expert-validated versioned skill artifact (SKILL.md in the ClawBio library) invoked as executable code.",
+      "P": "Interpret input -> select versioned skill -> execute decision logic as code -> emit auditable mapping.",
+      "Q": "Inference-time skill execution (skill-as-code) versus skill-reasoning over the same skill.",
+      "R": "Phenotype accuracy (A1); drug recommendation (A2); lethal-class safety action (A3).",
+      "S": "44,550-evaluation constraint-gradient benchmark across nine LLMs with five-condition ablation.",
+      "T": "Versioning, determinism, auditability, traceability to versioned components; gap: not full clinical validation.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check is correct and robust: skill persists as an external versioned artifact (SKILL.md) in a published skill library (ClawBio, Zenodo ref 6), is executed as code (not dissolved into weights), and the paper is also a skill benchmark/eval (five-condition gradient, 44,550 evals) — three independent grounds for check. This is the inverse of the internalization trap: the thesis is moving correctness OUT of the model into the executed skill; models are off-the-shelf with zero training/RL. Edits: tightened M ('Skill-execution'); softened O from 'Human-authored, expert-validated' to 'Expert-validated' (paper supports domain-expert decisions/validated logic but not 'human-authored' verbatim); clarified Q ('over the same skill'); reworded T to label the gap explicitly. L,N,P,R,S kept.",
+      "confidence": "high"
+    }
+  },
+  "row78": {
+    "rid": "row78",
+    "final": {
+      "L": "Pre-install behavioral integrity audit of third-party AI agent skills.",
+      "M": "Skill security/governance auditing framework.",
+      "N": "Typed declared-vs-actual capability set comparison over a 29-capability taxonomy.",
+      "O": "Hybrid extraction: deterministic code analyzers plus LLM capability extraction from metadata/instructions.",
+      "P": "Skill package (M,C,I) -> extract declared/actual capabilities -> typed deviation evidence -> taxonomy/root-cause/malicious detection.",
+      "Q": "Static install-time audit before skill runtime use.",
+      "R": "F1; recall; real-world recall; FPR.",
+      "S": "906-skill malicious-skill benchmark with rule-based and LLM-only baselines; backend ablations.",
+      "T": "Strong pre-install integrity audit; no post-install/runtime monitoring or update loop.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. NOT a skill-internalization paper: LLM backends run at frozen weights with hash-versioned prompts (no training/fine-tuning/distillation). Deliverable is a skill security/governance system (BIV) that statically audits third-party skill packages over a registry (49,943 skills), produces a persisting inspectable artifact (typed deviation evidence Phi(s) plus published taxonomy/v1.json), and ships a 906-skill malicious-skill benchmark. Satisfies check on security/governance + benchmark + managed-skill-registry grounds. Draft L-U all confirmed accurate and on-style; no changes needed.",
+      "confidence": "high"
+    }
+  },
+  "row79": {
+    "rid": "row79",
+    "final": {
+      "L": "Evaluating and evolving agent skills for agentic long video generation.",
+      "M": "Skill evolution framework with agent harness and benchmark.",
+      "N": "Agent composes foundation skills into composition/creator skills; agent-as-judge feedback drives skill refinement and pair-wise merge.",
+      "O": "Human-authored foundation skills plus failure-driven, judge-feedback skill evolution and pair-wise merge.",
+      "P": "Instruct -> compose foundation skills -> execute and judge trace+video -> refine/merge skills -> evolved skill library.",
+      "Q": "Inference-time multi-step skill invocation with offline skill-evolution refinement.",
+      "R": "6 process + 7 output metrics with human-judge alignment.",
+      "S": "VideoWeaver benchmark (16 categories, 285 cases) with multi-framework/model baselines and ablations.",
+      "T": "Agent-as-judge evaluator with skill refine/merge loop; no security/permission governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly (PDF p1 and front matter). U=check confirmed: paper produces/manages a persistent reusable skill library (Table 9 named foundation/composition skills with descriptions), a pair-wise-skill-merge skill that maintains an accumulator skill directory, a judge-driven skill-evolution algorithm that refines/merges category-level composition and creator skills, plus a skill benchmark. Skills are inspectable artifacts invoked at inference, not dissolved into weights — NOT skill-internalization. Minor copyedits to M and R only (split into two phrases); other cells kept as draft.",
+      "confidence": "high"
+    }
+  },
+  "row80": {
+    "rid": "row80",
+    "final": {
+      "L": "Database-native substrate for storing and retrieving agent skill catalogs.",
+      "M": "Skill-catalog memory substrate; storage/retrieval system.",
+      "N": "Stores skills as agent-shaped memory: indexed metadata columns, opaque body, append-only outcome events with top-K retrieval.",
+      "O": "Agent-written skills via define-style API with write-time schema validation.",
+      "P": "Agent writes skill -> validate at write API -> index in DB -> top-K retrieval -> log outcome events.",
+      "Q": "Runtime skill write/retrieval pipeline (YantrikDB single-node).",
+      "R": "Token cost; p50/p95 latency; invalid-skill admission rate.",
+      "S": "5,000-skill corpus with filesystem baselines, kill-test and tokenizer ablations.",
+      "T": "Write-time admission control and append-only audit log; no multi-tenant/failover or downstream task-success governance (deferred).",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title exact-matches PDF. U=check is correct: paper delivers YantrikDB, a persistent open-source skill-catalog DB system (indexed columns + opaque body + append-only outcome events) with top-K retrieval, write-time schema validation/admission control, and audit log. Skills persist as reusable inspectable artifacts and are the managed object; NOT a training/internalization/RL paper (zero model training). All L-T cells source-grounded, short-phrase, supervisor style; no changes needed.",
+      "confidence": "high"
+    }
+  },
+  "row81": {
+    "rid": "row81",
+    "final": {
+      "L": "Induce SWE skill priors via Agentless training to bootstrap transferable coding agents.",
+      "M": "Training recipe; skill-prior internalization into a policy model.",
+      "N": "Mid-training, cold-start SFT, and outcome-reward RL bake localization/code-edit/self-reflection into weights.",
+      "O": "Skills internalized into model weights, not a standalone skill library.",
+      "P": "Mid-train -> cold-start SFT -> outcome-reward RL -> minimal SFT adapt to SWE-Agent.",
+      "Q": "Training-time RL/SFT; deliverable is a SWE LLM policy at inference.",
+      "R": "SWE-bench Verified accuracy and pass@1; generalization on SWE-bench-live/Multilingual.",
+      "S": "Ablate four priors (Base/MT/SFT/RL) vs baselines across trajectory budgets.",
+      "T": "No skill artifact or lifecycle/security governance; skills dissolved into weights.",
+      "U": "No",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=No confirmed: textbook skill-prior internalization trap. Paper explicitly states Agentless training \"should not be viewed as the ultimate deliverable, but rather as a way to induce skill priors\" (localization, code edit, self-reflection) that are baked into Kimi-Dev's weights via mid-training/cold-start SFT/outcome-reward RL. Inference-time deliverable is a skill-free SWE LLM policy; no persisting reusable/inspectable skill artifact, library, retrieval/routing, invocation control, or governance. \"Skill\" used as generic capability = not enough. Kept draft substance; lightly tightened N (added outcome-reward), R (combined into one phrase), and S (clarified the four-prior ablation across trajectory budgets) for short-phrase style.",
+      "confidence": "high"
+    }
+  },
+  "row82": {
+    "rid": "row82",
+    "final": {
+      "L": "Runtime-verified benchmark of malicious AI coding-agent skills.",
+      "M": "Security benchmark; malicious skill dataset.",
+      "N": "3,944 malicious skills over a 3D taxonomy (108 cells) with sandbox-verified malicious behavior.",
+      "O": "Closed-loop Generate-Verify-Feedback synthesis migrating real attack patterns into skill format.",
+      "P": "Mine attack patterns -> embed into benign skills -> sandbox-verify behavior -> feedback -> evaluate detectors.",
+      "Q": "Offline dataset construction plus unified detector benchmarking.",
+      "R": "Verification yield; recall; F1; false positives.",
+      "S": "Benchmark of 12 detection tools with wild/generated/benign baselines.",
+      "T": "Runtime verification gives behavioral ground truth; benchmark only, no live skill-lifecycle governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches source exactly. U=check upheld: paper releases an open-sourced, inspectable benchmark/catalog of 3,944 labeled malicious agent skills (a skill artifact as the managed object) plus a unified detector-evaluation harness over 12 tools — a skill benchmark/eval and skill security artifact. No skill-internalization/distillation into weights; deliverable is a persisting dataset+harness, not a skill-free policy. All L-T cells accurate, on-style, and unchanged.",
+      "confidence": "high"
+    }
+  },
+  "row83": {
+    "rid": "row83",
+    "final": {
+      "L": "Recurrent instance-level agent skill evolution from verifiable rewards.",
+      "M": "RL skill-evolution framework: a trained skill generator edits external skills over a frozen task LLM.",
+      "N": "Lightweight skill generator revises external natural-language skill artifacts from prior rollouts and verified outcomes to steer a frozen task LLM.",
+      "O": "Model-generated: trained skill generator produces/edits reusable external skill artifacts (e.g., edited pdb skill); task LLM frozen.",
+      "P": "Select skill from bank -> rollout frozen LLM -> verify -> append history -> generate revised skill -> bi-level GRPO update.",
+      "Q": "Inference-time skill invocation; training-time bi-level GRPO on the skill generator only.",
+      "R": "Verifier reward; task success across reasoning/tool-use benchmarks; per-generation gains.",
+      "S": "Benchmarks vs no-skill and standard-GRPO baselines; intra/inter-generation advantage (lambda) ablation.",
+      "T": "Verifier-gated recurrent revision; no skill audit, security, or permission governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly (lines 3/26). U=check confirmed: NOT the internalization trap. Task LLM stays frozen (lines 47-49, 130-131); skills are defined as reusable artifacts EXTERNAL to task-model parameters (Def 2.1, lines 147-150), drawn from a skill space S / per-instance skill bank Bx (lines 143-146, 213), and the trained generator produces/evolves these persisting inspectable artifacts (concrete evolved pdb skill in Appendix A.1.2, lines 419-453). The deliverable that operates at inference is an external skill artifact, not a skill-free policy; this is skill generation + evolution + managed skill bank = check. Draft U and reasoning correct. Tightened M (was list-like 'framework; generator'), O, P (added skill-bank source), Q, S, T for parallelism and brevity; L/N/R kept.",
+      "confidence": "high"
+    }
+  },
+  "row84": {
+    "rid": "row84",
+    "final": {
+      "L": "Repository-aware security analysis of the agent skill ecosystem.",
+      "M": "Skill security analysis/governance framework; large-scale ecosystem measurement.",
+      "N": "Re-scores scanner-flagged skills using surrounding GitHub repository context to cut false positives.",
+      "O": "Three-stage measurement pipeline: cross-platform collection + static analysis, scanner classification, repository-context adjudication.",
+      "P": "Collect skills cross-platform -> scan/classify -> add repository context -> verdict (benign/suspicious).",
+      "Q": "Offline marketplace-scale scanning with LLM repository-context judgement (~$0.002-0.01 per skill-repo pair).",
+      "R": "Malicious classification rate; cross-scanner agreement; suspicious-skill share (0.52%); per-skill cost.",
+      "S": "238,180-skill dataset across three marketplaces and GitHub; five-scanner comparison.",
+      "T": "Repository-context audit, supply-chain governance (immutable snapshots, namespace retirement, provenance) and new attack-vector discovery; gap: no continuous monitoring loop, no definitive ground truth.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check upheld: the paper is a skill-security/governance system whose managed objects are reusable SKILL.md artifacts (repository-aware scanning, supply-chain defenses, attack-vector discovery, published dataset/code) — fits the explicit security/governance branch of the rule. NOT a skill-internalization/RL/trajectory-tuning paper: no model training dissolves skills into weights; the deliverable is an inspectable analysis pipeline over persisting skill artifacts. Refined M (added governance), O (named three-stage pipeline), Q (added cost), R (added 0.52%), S (five scanners, not vague \"multi-scanner\"), T (added supply-chain governance specifics + explicit gap). Draft N, P, L kept.",
+      "confidence": "high"
+    }
+  },
+  "row85": {
+    "rid": "row85",
+    "final": {
+      "L": "Ecosystem-scale organization, orchestration, and benchmarking of agent skills.",
+      "M": "Skill management/orchestration framework plus skill-invocation benchmark.",
+      "N": "Capability-tree skill organization with DAG-based multi-skill retrieval and orchestration.",
+      "O": "Human-authored markdown skills organized via LLM recursive categorization and retrieval-based invocation.",
+      "P": "Build capability tree -> task-driven retrieval -> DAG orchestration -> multi-skill execution.",
+      "Q": "Inference-time skill retrieval and DAG-orchestrated invocation (no weight updates).",
+      "R": "Bradley-Terry quality scores from LLM-based pairwise judging.",
+      "S": "30-task benchmark across five categories; vanilla-Claude and skill-free baselines; orchestration ablation.",
+      "T": "Offline tree update, usage-frequency queue, dormant-skill index; names governance but implements no security/quality controls.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly (PDF lines 2-3). Genuine skill-system + benchmark paper (AgentSkillOS): skills are markdown artifacts organized in a capability tree, retrieved, and DAG-orchestrated at inference; no training/internalization — deliverable is a managed library/orchestrator, not a policy. U=check confirmed. Minor edits: O notes skills are markdown artifacts; Q flags no weight updates; T sharpened to note governance is named as a challenge but not implemented (the real gap).",
+      "confidence": "high"
+    }
+  },
+  "row86": {
+    "rid": "row86",
+    "final": {
+      "L": "Runtime permission governance for untrusted agent skills.",
+      "M": "Skill permission/security framework.",
+      "N": "Treats skills as permission-bearing executable artifacts; dual-plane governance of context influence and action side effects.",
+      "O": "Human-designed framework with auto-generated skill manifests plus permission-inference mini-agent.",
+      "P": "Declare skill manifest -> map tool calls to canonical capabilities -> user consent -> deny-by-default enforce -> monitor/audit.",
+      "Q": "Runtime permission enforcement during agent skill execution.",
+      "R": "Object coverage; manifest F1; attack success rate; task success rate.",
+      "S": "315 real-world skills (SkillsMP) and SkillInject benchmark with adversarial injections.",
+      "T": "Runtime monitoring/audit logs and rug-pull-aware manifests; partial defense (attacks reduced, not eliminated).",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly. Genuine skill-security/governance system: SkillGuard treats skills as permission-bearing executable artifacts via manifests, runtime access control, deny-by-default enforcement, capability inference, and audit logs; also produces a permission taxonomy + uses SkillInject benchmark. Skill persists as a managed, inspectable manifest artifact, not internalized into weights -> \"check\" (security/governance/permissions + benchmark). Draft U correct. Minor edits: P/N/S tightened to add \"executable artifact,\" \"canonical capabilities,\" and SkillsMP source.",
+      "confidence": "high"
+    }
+  },
+  "row87": {
+    "rid": "row87",
+    "final": {
+      "L": "Autonomous AI agent platform with universal skill auto-loading and multi-provider model routing.",
+      "M": "Skill library/injection system plus self-hostable autonomous agent platform.",
+      "N": "Indexes 6,182 unique SKILL.md files from 13 repos and auto-injects task-matched domain skills into the agent context.",
+      "O": "Human-authored SKILL.md artifacts with curated SKILL_MAP task-to-skill routing (not semantic search).",
+      "P": "Classify task -> route via SKILL_MAP -> load top-3 skills (4K-char cap) -> inject as systemContext -> Plan->Execute->Verify.",
+      "Q": "Inference-time skill injection into executor system prompt; model-agnostic, no training.",
+      "R": "Indexing latency (10,414 files/757ms); task success; cost tracking; functional multi-file output.",
+      "S": "Feature comparison vs Devin/OpenHands/Suna; local (Qwen/Ollama) vs cloud (Groq/Claude) model evaluation.",
+      "T": "Governance via dedup + metadata normalization + verifier confidence gate; gap: no skill audit/security/permission or lifecycle control.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check is correct and NOT the internalization trap: skills persist as inspectable standalone SKILL.md artifacts in a 6,182-file indexed library with curated retrieval/routing (SKILL_MAP) and inference-time injection as systemContext; explicitly model-agnostic with zero training/distillation/RL — no skill-free trained policy. Genuine skill library + routing + invocation system. Kept draft substance; lightly tightened N/O/Q/R/S/T to add specifics (13 repos, no-semantic-search rationale, no-training, indexing numbers, local/cloud model names) and sharpen the governance/gap phrasing.",
+      "confidence": "high"
+    }
+  },
+  "row88": {
+    "rid": "row88",
+    "final": {
+      "L": "Executable-skill learning for autonomous LLM web agents.",
+      "M": "Skill library/graph framework; web agent.",
+      "N": "Executable skills pairing parameterized action programs with step-level NL guidance, retrieved via URL skill graph.",
+      "O": "Experience-distilled: skills mined and abstracted from synthetic agent trajectories via LLM generalization.",
+      "P": "Mine trajectories -> abstract+curate skills -> index URL skill graph -> retrieve -> grounded/guided deploy.",
+      "Q": "Inference-time skill retrieval and invocation (grounded auto-execution or guided instructions).",
+      "R": "Task success rate on WebArena and WebVoyager.",
+      "S": "WebArena/WebVoyager benchmarks with baseline comparison and design-axis ablations.",
+      "T": "Online dedup, LLM add/update/skip curation, executability validation; no security/permission governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches exactly. U=check confirmed: WebXSkill produces and manages a persisting, inspectable library of executable skills (parameterized action program + step-level NL guidance) organized in a URL skill graph, with extraction/curation (dedup, add/update/skip, executability validation) and inference-time retrieval/invocation. The skill is the managed external artifact, not a fine-tuned skill-free policy, so it is NOT a skill-internalization/trajectory-tuning case. Draft L-T accurate, on-style, concise; no cell changes needed.",
+      "confidence": "high"
+    }
+  },
+  "row89": {
+    "rid": "row89",
+    "final": {
+      "L": "Defending terminal/coding agents against skill-file injection attacks.",
+      "M": "Skill-injection security/defense framework plus benchmark extension.",
+      "N": "Guardian LLM mediates/rewrites skill files; attack reframing stress-tests defenses.",
+      "O": "Human-designed guardian subagent (dynamic MCP mediation; static build-time rewrite).",
+      "P": "Install skill -> guardian intercepts/sanitizes -> agent reads clean skill -> execute -> measure ASR/TSR.",
+      "Q": "Inference-time skill mediation (dynamic MCP) and build-time skill rewriting (static).",
+      "R": "Attack success rate (ASR, lower better); task success rate (TSR, higher better).",
+      "S": "Skill-Inject benchmark extension; prompt-only baselines; guardian-model and attack-reframing ablations.",
+      "T": "Runtime/build-time skill filtering; static-rewrite laundering risk; no continuous lifecycle monitoring.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check confirmed: deliverable is a skill-security/governance SYSTEM (guardian mediates/sanitizes/rewrites skill .md files as the managed inspectable artifacts) plus a skill-injection benchmark extension (Skill-Inject). No model training, no skill-internalization/trajectory-tuning — guardians are prompted subagents, skills persist as inspectable artifacts. This is the artifact/system-management + benchmark/eval case. Kept draft L/N/O/P/Q/T; tightened M (benchmark extension not new benchmark), R (added direction notes), S (reframing) for style.",
+      "confidence": "high"
+    }
+  },
+  "row90": {
+    "rid": "row90",
+    "final": {
+      "L": "Reusable agent skills augmenting coding agents for scientific visualization tasks.",
+      "M": "Domain agent-skill collection; SciVis benchmark.",
+      "N": "Version-pinned procedural skills encode tool conventions, API patterns, exemplars for ParaView/napari/VMD/TTK.",
+      "O": "Human-authored, failure-driven refinement distilling docs and SciVis-agent code.",
+      "P": "Specify environment -> align docs -> add exemplars -> failure-aware refine -> load skill at inference.",
+      "Q": "Inference-time skill invocation via progressive disclosure in coding-agent harness.",
+      "R": "pass@k and pass^k; mean task scores; token efficiency.",
+      "S": "SciVisAgentBench (108 tasks) with/without skills on Codex and Claude Code.",
+      "T": "Author review and sandbox testing; no benchmark leakage; no runtime lifecycle/security governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches PDF exactly (lines 2-3, 32-33). U=check confirmed: paper releases a persisting, inspectable, reusable skill-artifact collection (four version-pinned skills, GitHub release, YAML+Markdown format, progressive disclosure) loaded at inference WITHOUT changing model parameters (explicitly stated line 104-105) — a genuine skill library + skill benchmark/eval. This is the opposite of skill-internalization; the deliverable is the artifact, not a trained policy. Draft L-T accurate, on-style, well-grounded; no corrections needed.",
+      "confidence": "high"
+    }
+  },
+  "row91": {
+    "rid": "row91",
+    "final": {
+      "L": "RL-based self-improving tool-using agent backed by a persistent skill library.",
+      "M": "Skill library agent (CodeAct-based) plus SAGE RL framework for skill generation/use.",
+      "N": "Agent retrieves, uses, generates, updates, and saves executable skill functions in a persistent library M during task solving.",
+      "O": "Model-generated executable skill functions accumulated across a task chain via Sequential Rollout and a Skill-integrated Reward.",
+      "P": "Retrieve skills -> use/generate skill -> validate/update -> save to library -> skill-integrated reward back-propagated across task chain.",
+      "Q": "Training-time RL (SAGE extends GRPO, after SFT) plus inference-time skill-library invocation at test time.",
+      "R": "Scenario/Task Goal Completion (SGC/TGC); interaction steps; generated tokens; skill-use success rate.",
+      "S": "AppWorld (Test Normal/Challenge) vs prompting and GRPO-without-library baselines, with ablations.",
+      "T": "Skill update/save validation loop (re-execute on failure); no security/permission governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check upheld: skill library M is the managed, persisting artifact with explicit Retrieve/Use/Generate/Update/Save operations; skills remain standalone executable functions read/written at test time, NOT dissolved into weights — RL (SAGE) only augments reward to improve skill quality/usage, so this is a genuine skill SYSTEM, not the internalization trap. Tightened M (named CodeAct base + SAGE), Q (added SFT-then-RL), R (SGC/TGC as headline metrics), S (named Test Normal/Challenge + correct baselines); L/N/O/P/T kept near draft.",
+      "confidence": "high"
+    }
+  },
+  "row92": {
+    "rid": "row92",
+    "final": {
+      "L": "Optimizing agent skill packages for spreadsheet/table-QA domains.",
+      "M": "Training-free skill evolution/optimization framework; xlsx spreadsheet agent.",
+      "N": "Treats the structured skill package (metadata/SKILL.md/L3) as a parameter; text gradients from diagnoses drive layer-aware edits.",
+      "O": "Failure-driven plus contrastive diagnosis with momentum-memory overlay, applied by an LLM patcher.",
+      "P": "Execute skill -> collect trajectory loss evidence -> diagnose text gradients -> accumulate momentum -> patch skill artifact.",
+      "Q": "Iterative training-free skill optimization; inference-time progressive skill loading/invocation.",
+      "R": "Held-out task accuracy; in-domain and OOD; token cost.",
+      "S": "SpreadsheetBench Verified and WikiTableQuestions vs training-based baselines (EvoSkill, Trace2Skill) with ablations.",
+      "T": "Iterative patch/update loop with momentum memory; no security/permission governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly. U=check confirmed and is the opposite of the internalization trap: the deliverable is the optimized, inspectable skill package itself (patched SKILL.md + references/*.md L3 files), explicitly training-free with only a conceptual/analogical gradient framing (\"no literal derivative\"); no weights updated, skills never dissolved into a policy. Genuine skill evolution/composition + layer-aware invocation routing on a persisting reusable artifact. Tightened M/N/O/P/Q/S for fidelity (training-free, structured-package parameter, named baselines, conceptual analogy); kept L/R/T draft intent.",
+      "confidence": "high"
+    }
+  },
+  "row93": {
+    "rid": "row93",
+    "final": {
+      "L": "Scaling terminal-agent training data using agent skills as the synthesis primitive.",
+      "M": "Automated data-synthesis + SFT pipeline; skill-driven triple generation.",
+      "N": "Each skill (what/when/how) co-derives task instruction, environment, and teacher trajectory.",
+      "O": "External skills collected and filtered to synthesize training data; no reusable skill library produced.",
+      "P": "Collect skills -> generate tasks -> build envs -> collect trajectories -> SFT model.",
+      "Q": "Skill-guided data synthesis distilled into agent policy weights via SFT.",
+      "R": "Pass@1/Pass@3; steps; commands; command-failure rate.",
+      "S": "6 benchmarks vs terminal-agent baselines (e.g. Nemotron-Terminal-32B).",
+      "T": "Pytest verifier and 3-stage skill filter; no skill lifecycle, retrieval, or security governance.",
+      "U": "No",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF. U=No confirmed: agent skills are an upstream data-synthesis primitive sourced from external hubs (ClawHub/SkillMP), filtered, and dissolved into trained policy weights (Terminal-World-8B/14B/32B) via SFT. Deliverable is a skill-free model; no skill artifact is produced, curated into a reusable library, retrieved at inference, or managed as the persisting object. Canonical skill-prior/internalization trap. Kept draft L-T; light style edits to M/O/P/Q/S/T for supervisor-sample concision and to make the distillation/no-library point explicit.",
+      "confidence": "high"
+    }
+  },
+  "row94": {
+    "rid": "row94",
+    "final": {
+      "L": "Privacy-preserving collaborative evolution of agentic skill libraries across heterogeneous users.",
+      "M": "Federated skill-evolution framework; per-client personalized skill library.",
+      "N": "Clients distill local trajectories into semantic skill patches (ADD/EDIT/DELETE); server evolution agent merges into per-client personalized libraries.",
+      "O": "Self-reflection over local trials yields experience-distilled patches; server-side agentic merging infers client capability and personalizes.",
+      "P": "Execute tasks -> distill skill patch -> upload patch only -> server evolution agent merges -> personalized per-client library update.",
+      "Q": "Inference-time skill-library invocation with frozen base policy; iterative client-server evolution loop, no weight updates.",
+      "R": "Success rate; computational cost; PII canary leakage; task-reconstruction cosine similarity.",
+      "S": "SkillFlow benchmark (20 task families) vs self-evolution baselines, with personalization ablations.",
+      "T": "Patch summaries for auditing, path validation, PII canary audits govern; gap: empirical privacy only, no formal DP/cryptographic guarantee or full security governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check confirmed: the managed/produced deliverable is a persisting, inspectable filesystem skill library (SKILL.md + scripts/references/assets, \"first-class deployment artifact\") evolved via semantic ADD/EDIT/DELETE patches and server-side agentic merge/personalization — squarely skill-library evolution/composition/governance. Internalization trap explicitly avoided: \"the base policy of the execution agent remains frozen across all federated rounds; any performance gains stem strictly from the evolution of the skill library\" (no weight updates). Paper itself contrasts with parameter-level LoRA aggregation (Fed-SE), which would be No. Governance present (path validation, canary audits, patch auditing) but only empirical privacy, no formal DP — captured in T. Minor cell tightenings: S notes \"20 task families\" (paper varies between 20 tasks/task families), O/Q/T sharpened for accuracy and arrow style; substance of draft was correct.",
+      "confidence": "high"
+    }
+  },
+  "row95": {
+    "rid": "row95",
+    "final": {
+      "L": "Improve generalization of RL-trained LLM agents via compressible successful trajectories.",
+      "M": "Agentic RL training method; MDL compression regularizer.",
+      "N": "Extracts a skill dictionary from successes and penalizes high segmentation cost in the GRPO objective.",
+      "O": "Skills dissolved into the policy via MDL-regularized RL training, not a persisting skill artifact.",
+      "P": "Sample successes -> extract skill dictionary (E-step) -> compute segmentation cost -> add to GRPO reward (M-step) -> update policy.",
+      "Q": "Training-time RL with per-trajectory compression penalty.",
+      "R": "In- and out-of-distribution task success rate.",
+      "S": "ALFWorld/TextWorld-Cooking/Countdown-Stepwise vs vanilla GRPO and round-length baselines, with ablations.",
+      "T": "EM re-extraction of dictionary each batch; no skill artifact persistence, audit, or security governance.",
+      "U": "No",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=No confirmed: REUSERL re-extracts a transient skill dictionary online each batch (E-step) and uses its segmentation cost only as a per-trajectory penalty in the GRPO reward (M-step); the dictionary is amortized within a batch and recomputed, dissolved into policy weights. Inference-time deliverable is a skill-free policy. Tables 10/11 phrases are post-hoc diagnostics (qualitative correspondence to SkillRL Skillbank), not a managed library/retrieval/governance/benchmark system. Classic skill-internalization/skill-prior trap despite \"skill\" in title. L-T accurate, on-style, faithful; kept verbatim.",
+      "confidence": "high"
+    }
+  },
+  "row96": {
+    "rid": "row96",
+    "final": {
+      "L": "Scaling LLM coding agents by mastering atomic software-engineering skills via joint RL.",
+      "M": "Agent RL training paradigm; atomic skill dimensions.",
+      "N": "Joint RL over five atomic skills (localization, editing, unit-test gen, issue reproduction, review) that generalize to composite tasks.",
+      "O": "Trained: skills internalized into the agent policy via joint reinforcement learning, not authored as artifacts.",
+      "P": "Formalize 5 atomic skills -> joint RL training -> internalize into policy -> generalize to composite coding tasks.",
+      "Q": "Training-time joint RL; resulting skill-free agent policy at inference.",
+      "R": "Average performance gain (+18.7%) across 5 atomic skills and 5 composite tasks.",
+      "S": "Extensive experiments over atomic and composite coding benchmarks (abstract only).",
+      "T": "No skill library/audit/lifecycle governance; abstract-only source, no full text available.",
+      "U": "No",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches source exactly. U=No upheld: classic skill-internalization trap — the five \"atomic skills\" are training objectives dissolved into the agent policy via joint RL; inference-time deliverable is a skill-free coding-agent model with no persisting reusable skill artifact, library, retrieval, invocation, or governance system. Abstract-only source (arXiv 404); confidence capped at moderate per instructions, but the abstract is unambiguous on the RL-internalization framing. L-T draft cells kept verbatim — accurate, short, supervisor-style; P is a valid arrow chain; T notes both governance gap and source limit.",
+      "confidence": "moderate"
+    }
+  },
+  "row97": {
+    "rid": "row97",
+    "final": {
+      "L": "Learnable, evolving memory skills for self-evolving LLM agent memory.",
+      "M": "Skill-evolution framework with a shared agent-memory skill bank.",
+      "N": "Controller selects skills from a shared bank; LLM executor generates skill-guided memories; designer evolves the bank.",
+      "O": "RL-trained skill selection plus failure-driven LLM skill refinement and new-skill proposal.",
+      "P": "Segment span -> select skills -> execute memory update -> task reward -> designer evolves skill bank.",
+      "Q": "Inference-time skill-conditioned memory construction with periodic skill-bank evolution.",
+      "R": "Downstream QA/task accuracy (LLM-judge score); cross-setting generalization.",
+      "S": "LoCoMo/LongMemEval/HotpotQA/ALFWorld vs strong baselines, plus component analyses.",
+      "T": "Closed-loop skill refinement from hard cases; privacy/consent/access-control left to future deployment.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=check upheld: the skill bank is a shared, persisting, inspectable natural-language artifact (each skill = Description + Purpose/When/How/Constraints) that is generated, selected/retrieved, composed, and evolved by an LLM designer; RL trains only the selection controller, and the executor reads the skill bank at inference, so no skill-free policy/internalization (paper explicitly contrasts itself with latent-memory MemGen and distillation-based ReasoningBank). This is a genuine skill library + generation + routing + evolution system. Minor L-T tightening for supervisor style; substance unchanged.",
+      "confidence": "high"
+    }
+  },
+  "row98": {
+    "rid": "row98",
+    "final": {
+      "L": "Measure and benchmark harmful agent skills across open skill ecosystems (ClawHub, Skills.Rest).",
+      "M": "Security/governance benchmark; large-scale harmful-skill measurement and agent-safety eval.",
+      "N": "LLM-driven scoring system detects harmful skills against a taxonomy; benchmark tests agent refusal under installed skills.",
+      "O": "98,440 crawled skills scored vs 21-category harmful-skill taxonomy; 200 human-verified benchmark skills (SKILL.md) curated.",
+      "P": "Crawl registries -> LLM-score (GPT-5.4-Mini, >0.60) vs taxonomy -> flag harmful skills -> build HarmfulSkillBench -> evaluate 6 LLMs.",
+      "Q": "Inference-time evaluation of off-the-shelf agents with pre-installed skills across four conditions.",
+      "R": "Harmful rate (4.93%); detector F1 (0.82); refusal rate; mean harm score (0.27->0.47->0.76); HiTL/AI-disclosure rates.",
+      "S": "HarmfulSkillBench: 200 skills, 20 categories, 4 conditions, 6 LLMs.",
+      "T": "Responsible disclosure plus gated benchmark release; no continuous registry audit/monitoring loop.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches exactly. U=check upheld: deliverables are persisting inspectable skill artifacts (200 SKILL.md benchmark entries, gated release) plus an LLM-driven harmful-skill detection/scoring system over crawled registries — hits the skill benchmark/eval AND security/governance branches; skills are the managed object, not dissolved into weights. The 6 LLMs are evaluated off-the-shelf at inference, so no skill-internalization trap. Tightened L/N/O/P/R for accuracy: taxonomy is 21 categories (2 tiers) while benchmark covers 20; corrected detector (GPT-5.4-Mini, threshold >0.60); fixed R to report the 0-scale mean harm scores (0.27->0.47->0.76) rather than conflating with the 1-5 judge rubric; added 4.93% harmful rate and 98,440 corpus size. M/Q/S/T kept near-draft.",
+      "confidence": "high"
+    }
+  },
+  "row99": {
+    "rid": "row99",
+    "final": {
+      "L": "Self-evolving RL training of SWE coding agents that distills solving traces into agent skills to generate targeted repair-task curricula.",
+      "M": "Closed-loop self-evolution framework; skill-guided synthetic task generation for RL.",
+      "N": "Distills historical traces into an Agent Skill Registry that guides a Generator to synthesize repository-grounded repair tasks for training the Solver.",
+      "O": "Experience-distilled skills (name/desc/conditions/ops) recomputed once per iteration to constrain task generation, then effectively dissolved into the Solver policy via RL.",
+      "P": "Solver traces -> distill Agent Skill Registry -> generate repair tasks -> execution-validate/gradient-score -> RL-train Solver -> new traces.",
+      "Q": "Training-time RL (GDPO + gradient-alignment reward); skills used only for curriculum generation, never invoked at inference.",
+      "R": "Resolve rate on SWE-bench Verified/Lite/Pro and Terminal-Bench 2.0 (50.40% Verified after 3 iters).",
+      "S": "Comparison against self-evolving baselines (SSR, base agent) under a fixed 36k-instance compute budget.",
+      "T": "Execution-based validation gate (format/grounding/execution/semantics) plus gradient-alignment reward; skills are transient training aids with no lifecycle/security/inference governance.",
+      "U": "No",
+      "changed_u": false,
+      "changed_cols": true,
+      "title_match": true,
+      "notes": "Title matches PDF exactly. U=No upheld: the Agent Skill Registry is recomputed once per iteration purely to guide Generator task synthesis; the deliverable is a self-evolved Solver policy (Qwen3.5-9B via GDPO RL) with no skill artifact invoked at inference — textbook skill-internalization/skill-prior trap despite \"Agent Skills\" in the title. Skills never persist as a reusable, inspectable, inference-time-invoked library. Light edits to L-T for the supervisor short-phrase style and to add concrete numbers/details; draft substance was correct.",
+      "confidence": "high"
+    }
+  },
+  "row100": {
+    "rid": "row100",
+    "final": {
+      "L": "Evaluating LLM synthesis of reusable clinical coding skills for EHR reasoning agents.",
+      "M": "Skill benchmark; clinical autoformalization pipeline.",
+      "N": "Autoformalizes clinical guidelines into verified, reusable Python skill libraries; benchmarks compositional/longitudinal reasoning.",
+      "O": "Model-generated via offline autoformalization with iterative LLM refinement against labeled cases.",
+      "P": "NL guideline -> ReACT code-as-reasoning loop -> verify vs labeled cases -> reusable Python skill library -> reuse at query time.",
+      "Q": "Offline library construction; inference-time skill invocation by agent.",
+      "R": "Decision accuracy/consistency; per-query token usage (up to 40% reduction); compositional/longitudinal success.",
+      "S": "CodeClinic benchmark on MIMIC-IV with zero-shot/single-tool/toolbox baselines and GRPO finetuning.",
+      "T": "Code verified against labeled EHR cases; institution-specific grounding; no runtime audit/security/update governance.",
+      "U": "check",
+      "changed_u": false,
+      "changed_cols": false,
+      "title_match": true,
+      "notes": "Title matches PDF exactly (lines 2-3). U=check upheld: paper is both a skill benchmark (CodeClinic) and a skill-library generation system producing a reusable, inspectable, verified Python skill library that is constructed once offline and reused at query time (lines 59-62,103-106) — a persisting managed artifact, not dissolved into weights. Internalization trap does not apply: GRPO finetuning (line 323) is only a comparison baseline, not the deliverable. L-T accurate and on-style; kept draft wording.",
+      "confidence": "high"
+    }
+  }
+}

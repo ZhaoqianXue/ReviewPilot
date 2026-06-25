@@ -1,0 +1,535 @@
+=== PDF FIRST PAGE (title region) ===
+Preprint. Under review.
+CoEvoSkills: Self-Evolving Agent Skills via Co-Evolutionary
+Verification
+Hanrong Zhang1∗
+Shicheng Fan1∗
+Henry Peng Zou1
+Yankai Chen2,3†
+Zhenting Wang2
+Jiayu Zhou4
+Chengze Li1
+Wei-Chieh Huang1
+Yifei Yao5
+Kening Zheng1
+Xue (Steve) Liu2,3
+Xiaoxiao Li6
+Philip S. Yu1
+1University of Illinois Chicago
+2MBZUAI
+3McGill University
+4Columbia University
+5Zhejiang University
+6University of British Columbia
+{hzhan135, psyu}@uic.edu
+xiaoxiao.li@ece.ubc.ca
+Abstract
+Anthropic proposes the concept of skills for LLM agents to tackle multi-step
+professional tasks that simple tool invocations cannot address. A tool is
+a single, self-contained function, whereas a skill is a structured bundle
+of interdependent multi-file artifacts. Currently, skill generation is not
+only label-intensive due to manual authoring, but also may suffer from
+human–machine cognitive misalignment, which can lead to degraded agent
+performance, as evidenced by evaluations on SkillsBench. Therefore, we
+aim to enable agents to autonomously generate skills. However, exist-
+ing self-evolving methods designed for tools cannot be directly applied
+to skills due to their increased complexity. To address these issues
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Preprint. Under review.
+CoEvoSkills: Self-Evolving Agent Skills via Co-Evolutionary
+Verification
+Hanrong Zhang1∗
+Shicheng Fan1∗
+Henry Peng Zou1
+Yankai Chen2,3†
+Zhenting Wang2
+Jiayu Zhou4
+Chengze Li1
+Wei-Chieh Huang1
+Yifei Yao5
+Kening Zheng1
+Xue (Steve) Liu2,3
+Xiaoxiao Li6
+Philip S. Yu1
+1University of Illinois Chicago
+2MBZUAI
+3McGill University
+4Columbia University
+5Zhejiang University
+6University of British Columbia
+{hzhan135, psyu}@uic.edu
+xiaoxiao.li@ece.ubc.ca
+Abstract
+Anthropic proposes the concept of skills for LLM agents to tackle multi-step
+professional tasks that simple tool invocations cannot address. A tool is
+a single, self-contained function, whereas a skill is a structured bundle
+of interdependent multi-file artifacts. Currently, skill generation is not
+only label-intensive due to manual authoring, but also may suffer from
+human–machine cognitive misalignment, which can lead to degraded agent
+performance, as evidenced by evaluations on SkillsBench. Therefore, we
+aim to enable agents to autonomously generate skills. However, exist-
+ing self-evolving methods designed for tools cannot be directly applied
+to skills due to their increased complexity. To address these issues, we
+propose CoEvoSkills1, a self-evolving skills framework that enables agents
+to autonomously construct complex, multi-file skill packages. Specifically,
+CoEvoSkills couples a Skill Generator that iteratively refines skills with a
+Surrogate Verifier that co-evolves to provide informative and actionable
+feedback without access to ground-truth test content. On SkillsBench,
+CoEvoSkills achieves the highest pass rate among five baselines on both
+Claude Code and Codex, and also exhibits strong generalization capabilities
+to six additional LLMs.
+1
+Introduction
+LLM agents have advanced rapidly in reasoning, planning, and interaction with their
+environments (Zhang et al., 2024; Zou et al., 2025; Huang et al., 2026; Zou et al., 2026;
+Huang et al., 2025; Min et al., 2025b;a). Among the key drivers of this progress is the
+ability to invoke external tools and APIs (Schick et al., 2023; Qin et al., 2023; Patil et al.,
+2023). However, professional open-ended tasks, such as complex software repair, multi-step
+scientific analysis, and enterprise data pipeline orchestration, require far more than isolated
+tool invocations. Agents must orchestrate a coherent procedure across multiple steps and
+artifacts: decomposing goals, coordinating tools, recovering from failures, and validating
+intermediate outputs. This is profoundly challenging because decisions are long-horizon,
+instructions and scripts are tightly coupled, and reliable environmental feedback is often
+sparse or delayed.
+To bridge the gap, Anthropic proposed the concept of agent skills (Anthropic, 2025c). Fig. 1
+illustrates the difference between a tool and a skill: a tool is usually a simple function,
+whereas a skill is a structured package of workflow instructions, executable scripts, and
+domain references (Xu & Yan, 2026). According to the systematic evaluation presented in
+SkillsBench (Li et al., 2026b), equipping agents with well-crafted skills yields consistent
+∗Equal contribution.
+†Corresponding author: yankaichen@acm.org
+1Project page: https://zhang-henry.github.io/CoEvoSkills/
+1
+arXiv:2604.01687v2  [cs.AI]  12 Apr 2026
+
+Preprint. Under review.
+performance gains across a broad spectrum of professional domains, including software
+engineering and scientific analysis etc., confirming that structured procedural guidance
+substantially augments task-solving capability beyond what bare tool access affords.
+Despite the demonstrated utility of skills, the prevailing paradigm relies almost entirely
+on human authoring, a process that is both labor-intensive and difficult to scale, with
+no systematic guarantee of output quality. As demonstrated in Fig. 6, the SkillsBench
+evaluation (Li et al., 2026b) reveals that human-curated skills yield highly uneven gains:
+while certain domains benefit substantially, others, such as Natural Science, even exhibit
+degraded performance after skill integration. We hypothesize that a key driver of this
+inconsistency is human–machine cognitive misalignment: workflows and abstractions
+designed to be intuitive for human experts do not naturally match how LLM agents process
+context, reason, and act under execution constraints.
+Figure 1: Tool–skill difference illustration.
+To reduce manual effort,
+recent approaches have
+shifted from pre-defining
+static tools or APIs to self-
+evolve tools or tools li-
+braries by the LLM agent
+itself (Chen et al., 2026;
+Li et al., 2026a; Lu et al.,
+2026; Wang et al., 2023;
+Xia et al., 2025).
+How-
+ever, these methods suf-
+fer from a fundamental
+tool–skill gap:
+they are
+inherently designed for
+one-shot generation of simple, self-contained functions, and are inadequate for the creation
+of structured, multi-file skill packages that coordinate workflow instructions, executable
+scripts, and domain references across multiple artifacts. Moreover, the work Alzubi et al.
+(2026) relies heavily on ground-truth supervision for failure diagnosis, limiting applicabil-
+ity in real-world settings where such signals are unavailable.
+0
+(baseline)
+1
+2
+3
+4
+5
+Evolution Iteration
+0
+20
+40
+60
+80
+100
+Pass Rate (%)
+32%
+53%
+34%
+32%
+32%
+44%
+63%
+72%
+75%
+Agent with skills created by our method
+Agent with no skills
+Agent with human-curated skills
+Agent with Anthropic's naive skill-creator
+Figure 2: Skill quality improvement across 5 evolution
+rounds. CoEvoSkills surpasses human-curated skills within
+5 evolution iterations.
+To address these challenges,
+we propose a self-evolving
+skills framework CoEvoSkills.
+To overcome the inherent un-
+reliability of one-shot multi-
+file skill generation, we de-
+sign a main component, the
+Skill
+Generator, to itera-
+tively generate and refine
+skill bundles, with skill qual-
+ity steadily improving across
+evolution rounds, as shown
+in Fig. 2.
+It also main-
+tains a persistent conversa-
+tion context that accumulates
+high-fidelity feedback from
+another main component, the
+Surrogate
+Verifier, across
+iterations.
+The Surrogate
+Verifier, a separate LLM session without inheriting the generator’s biases, is designed
+to address the lack of ground-truth feedback in the real world. It synthesizes test cases
+and scripts according to the task instructions and environment, and provides high-fidelity
+feedback to the Skill Generator to co-evolutionarily improve skill generation quality.
+In summary, our key contributions are as follows: ❶We introduce CoEvoSkills, a co-
+evolutionary framework for LLM agents to self-evolve robust multi-file skill packages.
+❷We demonstrate key insights on autonomous skill generation: (i) agents create better skills
+2
+
+Preprint. Under review.
+than human-curated ones by capturing the reasoning patterns and tool-use strategies that
+agents actually need; (ii) self-evolved skills are portable across different model families, as the
+evolved packages encode reusable task structure rather than model-specific artifacts. ❸We
+conduct extensive experiments on SkillsBench, CoEvoSkills achieves the highest pass rate
+of 71.1% (+40.5pp over the no-skill baseline), substantially surpassing all five baselines.
+Furthermore, skills evolved by a single frontier LLM transfer effectively to six additional
+LLMs from five companies, yielding 35–45pp gains over their respective no-skill baselines.
+2
+Related Work
+LLM Agent Skills.
+Anthropic introduced Agent Skills (Anthropic, 2025c) as shown in
+Fig. 1. A recent systematization (Jiang et al., 2026) further distinguishes skills from atomic
+tools and one-off plans, defining them as reusable modules with explicit applicability and
+termination conditions. SkillsBench (Li et al., 2026b) provides the first systematic bench-
+mark for evaluating agent skills, comprising 87 tasks across 11 domains with deterministic
+verifiers. Several learning-based approaches attempt to close this gap. SAGE (Wang et al.,
+2025) trains agents on chains of related tasks with a skill-integrated reward, yet the resulting
+skills remain single-file programmatic functions rather than structured multi-file packages.
+SkillRL (Xia et al., 2026) distills trajectories into a hierarchical skill bank via reinforcement
+learning, but relies on teacher-guided distillation and produces prompt-level heuristics
+rather than executable artifacts. CoEvoSkills instead generates structured, multi-file skill
+packages and evolves them through iterative verification.
+Self-evolving LLM Agents.
+A growing body of work automates the self-improvement
+of agent capabilities, yet existing methods exhibit two recurring shortcomings. First, most
+self-evolving pipelines produce only single tools or function APIs or just prompt heuris-
+tics (Wang et al., 2023; Li et al., 2026a; Xia et al., 2025; Lu et al., 2026; Chen et al., 2026; He
+et al., 2026), and none can construct the multi-file structure a full skill package demands.
+Moreover, AutoSkill (Yang et al., 2026) and AutoRefine (Qiu et al., 2026) extract reusable
+knowledge as prompt templates rather than executable packages, while SEAgent (Sun et al.,
+2025) internalizes capabilities into model weights, making them non-inspectable and non-
+transferable (Jiang et al., 2026). Second, some methods heavily rely on ground-truth signals
+for failure diagnosis, limiting applicability when such supervision is unavailable (Alzubi
+et al., 2026; Sun et al., 2025). CoEvoSkills addresses both limitations by iteratively generating
+and evolving structured, multi-file skill packages, and employs information-isolated surro-
+gate verification to provide structured failure diagnostics and feedback instead of relying
+on ground-truth signals.
+3
+Method
+3.1
+Method Overview
+To answer the research question posed in Sec. 1, two core difficulties must be overcome:
+(1) generating a multi-file skill bundle in a single pass is inherently unreliable; and (2) the
+agent lacks ground-truth feedback during self-evolution. CoEvoSkills addresses both chal-
+lenges by co-evolving the agent’s skill and a corresponding surrogate verifier. Fig. 3 illus-
+trates the overall framework, and Alg. 1 formalizes the complete co-evolutionary procedure.
+Given a task input, the Skill Generator produces candidate skills and executes them
+to obtain task outputs. An informationally isolated Surrogate Verifier then indepen-
+dently generates and evolves test assertions against those outputs, providing structured
+failure diagnostics back to the generator. The two components co-evolve through iterative
+generate–verify–refine cycles: whenever the surrogate tests pass, a ground-truth oracle
+test re-executes the skill in a fresh environment and returns only an opaque success/failure
+signal. If the oracle passes, the final evolved skill is deployed to the target LLM agent (e.g.,
+Claude Code (Anthropic, 2025a) and Codex (OpenAI, 2025)); otherwise, the signal triggers a
+new co-evolution iteration, in which the verifier escalates its tests and the generator refines
+3
+
+Preprint. Under review.
+Task Input
+(Instruction & 
+Constrains)
+Self-Reflection
+If surrogate
+passes
+Figure 3: Overview of the CoEvoSkills co-evolutionary framework. The Skill Generator and
+Surrogate Verifier co-evolve through iterative refinement. The verifier provides structured
+failure feedback to drive skill improvement, while a ground-truth oracle test returns only an
+opaque pass/fail signal, triggering test escalation and ensuring strict information isolation.
+the skill accordingly. Next, we formalize the task setting as a partially observable Markov
+decision process (POMDP) in Sec. 3.2 and present CoEvoSkills in detail in Sec. 3.3.
+3.2
+Problem Formulation
+Task Definition.
+Since the LLM agent never knows what the held-out ground-truth tests
+actually check, i.e., the success criteria remain entirely hidden, we define the task environ-
+ment as a POMDP M = ⟨X , A, T, O, Ω, R⟩. Here, X is the underlying state space, i.e., the
+complete filesystem and processes, A comprises the agent’s actions, i.e., terminal commands
+and file edits, T(x′ | x, a) is the deterministic state transition upon executing action a in
+state x and reaching successor state x′, O is the observation space, i.e., command execution
+results, Ω(o | x, a) maps post-action states to partial observations, and R(xT) ∈[0, 1] evalu-
+ates the output files in final state xT against hidden ground-truth tests. Because the agent
+only receives partial observations ot ∼Ω(· | xt, at), it acts based on the observation–action
+history ht = (o1, a1, . . . , at−1, ot).
+Optimization Objective.
+Unlike atomic tools that offer simple functional interfaces, a
+skill S (Anthropic, 2025c) is a structured bundle of domain-specific instructions, executable
+scripts, and reference materials that collectively guide an agent in navigating a task space.
+The skill conditions the agent’s policy:
+at ∼πθ(at | ht, S),
+(1)
+where πθ is an LLM policy. We define the expected terminal reward under skill S as:
+J(S) ≜Eτ∼P(τ|πθ, S, M)
+R(xT)
+
+,
+(2)
+where τ = (o1, a1, . . . , aT−1, oT) is the execution trajectory. Our objective is to discover an
+optimal skill S∗that maximizes J:
+S∗= arg max
+S
+J(S).
+(3)
+3.3
+CoEvoSkills Framework
+However, directly optimizing J(S) (Eq. 3) is intractable: ground-truth evaluation is com-
+putationally expensive and returns only an opaque pass/fail signal; no test content or
+failure details are revealed to the agent. To provide dense, actionable feedback, we intro-
+duce a surrogate verifier reward ˜R(x, V), defined by a suite of deterministic test assertions
+V = {e1, . . . , e|V|} generated by an independent verifier
+˜R(x, V) ≜
+1
+|V|
+|V|
+∑
+k=1
+1[ek(x)] ∈[0, 1],
+(4)
+4
+
+Preprint. Under review.
+Algorithm 1 CoEvoSkills co-evolution Algorithm
+Require: Instruction I, environment E, meta-skill Smeta (skill-creator)
+Require: Evolution iters N=5, surrogate iters M=15, context cap β=0.7
+Require: LLM policy πθ (generator), independent verifier policy πV
+θ
+Ensure: Final evolved skill S∗
+1: C ←(I, Smeta)
+// in: instruction I, meta-skill; out: initial context C
+2: S(0) ∼πθ(· | C)
+// in: context C; out: skill bundle S(0) (code + SKILL.md)
+3: V(0) ←∅
+// surrogate verifier test suite
+4: i ←0; j ←0; n ←0; r ←0
+// skill version; test-suite version; evolution iter.; surrogate iter.
+5: Rbest ←0; S∗←S(0)
+// Rbest: best oracle score so far
+6: while n < N and r < M do
+7:
+// — Skill Generator: execute and produce outputs —
+8:
+x(i) ←Φ(S(i), E)
+// Φ: execute skill in env and collect outputs; out: artifacts x(i)
+9:
+if LLM context usage proportion > β then
+10:
+break
+// prevent LLM context overflow
+11:
+end if
+12:
+// — Surrogate Verifier: evaluate and refine (Eq. 4, Eq. 5) —
+13:
+˜R(i,j) ←˜R(x(i), V(j))
+// ˜R: surrogate reward; in: artifacts, tests; out: pass rate ∈[0, 1]
+14:
+if ˜R(i,j) < 1 then
+15:
+F (i,j) ∼πV
+θ
+
+· | I, x(i), V(j)
+// in: I, artifacts x(i), tests V(j); out: diagnostic F
+16:
+C ←C ⊕F (i,j)
+// append error diagnostic F to generator context C
+17:
+S(i+1) ∼πθ
+
+· | S(i), C
+
+// skill refinement (Eq. 7)
+18:
+i ←i+1; r ←r+1; continue
+// evolve S; V(j) locked
+19:
+end if
+20:
+// — Ground-Truth Oracle Test: independent re-execution in fresh environment —
+21:
+ˆx(i) ←Φ(S(i), E′)
+// in: skill S(i), fresh env E′; out: artifacts ˆx(i)
+22:
+R(i) ←R( ˆx(i)); n ←n+1
+// R: ground-truth oracle reward; out: score ∈[0, 1]
+23:
+if R(i) = 1 then
+24:
+S∗←S(i); return S∗
+// early exit: perfect score
+25:
+else if R(i) > Rbest then
+26:
+Rbest ←R(i); S∗←S(i)
+// save best snapshot
+27:
+end if
+28:
+// — Co-evolution: test escalation (Eq. 6, Eq. 8) —
+29:
+C ←C ⊕1[R(i)<1]
+// 1[·]: indicator fn; append oracle pass/fail bit to C (no test content)
+30:
+V(j+1) ∼πV
+θ
+
+· | I, x(i), V(j)
+// verifier escalation (Eq. 8)
+31:
+j ←j+1
+// V evolves; S(i) re-evaluated next iteration
+32: end while
+33: return S∗
+// save best skill
+where x denotes the output files produced by skill execution and 1[ek(x)] indicates whether
+assertion ek passes on x. However, the surrogate is only useful insofar as it faithfully
+approximates the hi
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Preprint. Under review.
+c. Update or add scripts in your skill's scripts/ directory that implement the fix
+d. Re-run your skill's script to regenerate the output from scratch
+e. After fixing any import errors, also update SKILL.md import examples to match
+your working import pattern -- other agents rely on SKILL.md for guidance.
+Do NOT edit output files directly -- always fix the skill logic and re-run.
+Then: sed -i 's/- \[ \] P5/- [x] P5/' /root/progress.md
+PHASE 3 -- SUMMARIZE:
+10. WRITE SUMMARY [P6]: Write an evolution summary to /root/evolution_summary.md containing:
+- Skills created/updated this run and what knowledge they capture
+- Specific improvements the next run should make
+- Any remaining issues or gaps you identified
+Then: sed -i 's/- \[ \] P6/- [x] P6/' /root/progress.md
+11. VERIFY PROGRESS: cat /root/progress.md -- confirm ALL phases are [x].
+If any are unchecked, complete them NOW before signaling task_complete.
+12. Signal task_complete.
+RULES:
+- You MUST write /root/progress.md at the START and update it after each phase
+- You MUST create or update skills BEFORE executing the task
+- You MUST load skill-creator to create skills properly
+- When you signal task_complete, the host will run an independent verifier
+- If the verifier finds failures, fix your skill scripts and re-run -- do NOT edit output files directly
+- You MUST write /root/evolution_summary.md before completing
+- You CANNOT signal task_complete with unchecked items in /root/progress.md
+- When tests fail, you MUST update your evo-* skill BEFORE regenerating output -- skills are persistent
+memory
+- WRITE BACK ALL RUNTIME FIXES: Any bug fix, missing function, or workaround you apply during execution
+MUST be written back into the skill's scripts/ files -- the skill must work standalone for a
+fresh agent
+- COMPUTATIONAL BUDGET: All scripts must complete within the task timeout. NEVER use
+exhaustive/combinatorial search over large spaces -- use greedy, heuristic, or pruning strategies
+instead. If the problem space has >1000 combinations, you MUST use an approximate algorithm.
+- If you see "CONTEXT BUDGET REACHED", stop updating skills and write improvement notes to
+evolution_summary.md
+---
+Task Description:
+{instruction}
+{terminal_state}
+F.2
+Skill Discovery Hint
+The following instruction is appended to the task description when pre-installed skills are
+available (both evolved and human-curated conditions). Without this hint, agents frequently
+fail to discover installed skills because skill metadata descriptions alone are insufficiently
+salient.
+Skill Discovery Hint
+Important: Specialized skills are available as slash commands. Run the relevant
+skill command before starting to get domain-specific guidance, code utilities, and
+best practices for this task. Background reference documents are also available at
+/root/environment/doc/. Read all documents there before starting.
+F.3
+Skill-Creator Autonomous Mode Instruction
+For the Skill-Creator baseline (Sec. 4.2), the original skill-creator tool requires human
+interaction at several steps (e.g., reviewing drafts, selecting test cases, approving iterations).
+Because every method in our evaluation including CoEvoSkills operates without any human
+involvement, retaining these interactive steps would introduce an inconsistency: Skill-
+Creator would be the only condition receiving human guidance. We therefore replace
+the interactive steps with autonomous equivalents, enabling fully unattended two-phase
+operation: a first session generates skills and a second session uses the pre-installed results.
+This ensures a fair, apples-to-apples comparison across all conditions under the same fully
+automated protocol.
+21
+
+Preprint. Under review.
+Skill-Creator Generate-Only Instruction
+You are in SKILL GENERATION MODE (AUTONOMOUS — no human in the loop). Your ONLY job
+is to create high-quality, reusable skills for the task described above.
+Rules:
+1. Do NOT solve the task. Do NOT produce any task output files.
+2. Use the skill-creator to generate skills. Follow its full workflow: draft,
+test, iterate (at least 3 iterations).
+3. Save
+final
+skills
+to
+BOTH:
+/root/.claude/skills/
+(in-container)
+and
+/logs/agent/generated-skills/ (for extraction).
+4. Each skill must have proper YAML frontmatter (name, description).
+5. Focus on domain knowledge, constraints, edge cases — not step-by-step
+solutions.
+AUTONOMOUS MODE — skip all human interaction: Do NOT wait for feedback. Make all
+decisions yourself. Do NOT launch eval-viewer or browser. For test cases: design,
+run (spawn subagents), and grade them yourself. For iteration: analyze failures,
+improve skill, re-test. Repeat at least 3 times.
+F.4
+Self-Generated Skills Prompt (Self-Generated Skills Baseline)
+This prompt replicates the self-generation condition from SkillsBench (Li et al., 2026b)
+(Appendix C.6). It is appended to the task instruction; the agent generates skills in-session
+before solving the task, with no external verification.
+Self-Generated Skills Prompt
+Important: Generate Skills First
+Before attempting to solve this task:
+1. Analyze the task requirements and identify what domain knowledge, APIs, or
+techniques are needed.
+2. Write 1–5 modular skill documents.
+3. Save each skill as a markdown file in environment/skills/.
+4. Then solve the task using the skills you created as reference.
+F.5
+CoT-Guided Self-Generation Prompt
+This prompt extends the Self-Generated Skills baseline with a structured five-step chain-of-
+thought workflow. Despite the added structure, the agent still lacks external verification
+feedback, and this condition achieves only 30.7% pass rate (comparable to the no-skill
+baseline).
+CoT-Guided Self-Generation Prompt
+Step 1: Task Analysis — identify domain, tools, output format, pitfalls
+Step 2: Skill Architecture Design — plan 1–3 focused skills
+Step 3: Write Skills with Progressive Disclosure
+(a) YAML frontmatter: name and description
+(b) Key constraints and rules
+(c) Step-by-step workflow with decision points
+(d) Common

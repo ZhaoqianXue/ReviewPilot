@@ -1,0 +1,787 @@
+=== PDF FIRST PAGE (title region) ===
+SKILLC: Learning Autonomous Skill Internalization in LLM Agents via
+Contrastive Credit Assignment
+Hongxiang Lin, Zhirui Kuai, Erpeng Xue*, Lei Wang
+Meituan
+linhx0@hotmail.com
+{kuaizhirui, wanglei46, xueerpeng}@meituan.com
+Abstract
+Structured skill prompts improve exploration
+in long-horizon agentic reinforcement learn-
+ing (RL). Skill-augmented RL methods re-
+tain external skills at inference, while skill-
+internalization RL methods withdraw them
+during training to enable autonomous perfor-
+mance. However, existing internalization ap-
+proaches only use skill-helpfulness contrast
+for curriculum control, leaving the policy up-
+date unchanged and unable to distinguish skill-
+dependent from autonomous success. We pro-
+pose SKILLC, a framework based on Con-
+trastive Skill Credit Assignment (CSCA) that
+converts this contrast into a direct learning sig-
+nal for internalization. SKILLC samples paired
+skill-injected and skill-free rollouts for tasks
+from active skill types within the same policy
+update, and injects their task-level contrast into
+optimization via a dual-stream advantage esti-
+mator that preserves global ranking while ap-
+plying a one-sided correction toward skill-free
+succes
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SKILLC: Learning Autonomous Skill Internalization in LLM Agents via
+Contrastive Credit Assignment
+Hongxiang Lin, Zhirui Kuai, Erpeng Xue*, Lei Wang
+Meituan
+linhx0@hotmail.com
+{kuaizhirui, wanglei46, xueerpeng}@meituan.com
+Abstract
+Structured skill prompts improve exploration
+in long-horizon agentic reinforcement learn-
+ing (RL). Skill-augmented RL methods re-
+tain external skills at inference, while skill-
+internalization RL methods withdraw them
+during training to enable autonomous perfor-
+mance. However, existing internalization ap-
+proaches only use skill-helpfulness contrast
+for curriculum control, leaving the policy up-
+date unchanged and unable to distinguish skill-
+dependent from autonomous success. We pro-
+pose SKILLC, a framework based on Con-
+trastive Skill Credit Assignment (CSCA) that
+converts this contrast into a direct learning sig-
+nal for internalization. SKILLC samples paired
+skill-injected and skill-free rollouts for tasks
+from active skill types within the same policy
+update, and injects their task-level contrast into
+optimization via a dual-stream advantage esti-
+mator that preserves global ranking while ap-
+plying a one-sided correction toward skill-free
+success. A smoothed validation-level signal fur-
+ther drives an adaptive curriculum over attribu-
+tion strength, rollout allocation, and monotonic
+active-set pruning. Experiments on ALFWorld
+and WebShop show that, without runtime skill
+access, SKILLC surpasses the strongest prior
+skill-internalization RL baseline by 5.5% and
+4.4%, respectively, while remaining competi-
+tive with skill-augmented RL methods.
+1
+Introduction
+Structured skill prompts (Xu and Yan, 2026; Zhang
+et al., 2026a; Liu et al., 2026b) have become a prac-
+tical mechanism for training long-horizon LLM
+agents. By providing reusable procedural guidance
+during interaction, they improve exploration and
+sample efficiency in agentic reinforcement learning
+(RL) (Li et al., 2026b,c; Su et al., 2026; Cho et al.,
+2026). Recent work has advanced this paradigm
+through skill augmentation and co-evolving skill
+*Corresponding author.
+Task
+x
+Success Rate
+steps
+Skill bank
+Skill-injected Rollouts
+Continually
+Updating ↑
+Skills
+Failed
+analysis
+Continually
+Updating ↑
+(a) Skill-Augmented RL (eg. SkillRL / D2Skill)
+Gap
+never
+close
+with-skill SR
+without-skill SR
+Task
+x
+Success Rate
+steps
+Skill-Augmented
+(b) Skill-Internalization RL (eg. Skill0)
+Curriculum
+Switch
+Step k*
+Skill-Free
+∆𝒙=?
+Task
+x
+Success Rate
+steps
+Skill-injected Rollouts
+(c) SkillC (Ours)
+with-skill SR
+without-skill SR
+∆%(𝑥)
+Skill-Free Rollouts
+Driven by ∆!"#(𝑘)
+Layer 1:
+Attribution Strength 𝜆
+Layer 2:
+Rollout Budget
+Layer 3:
+Active Skill set
+Adaptive Curriculum
+Gap
+close
+automatically
+with-skill SR
+without-skill SR
+Figure 1:
+Comparison of paradigms for skill use
+in Agentic RL. (a) Skill-augmented RL methods
+keep skills available at inference time and optimize
+performance with runtime skill support.
+(b) Skill-
+internalization RL methods withdraw skills during train-
+ing and may estimate skill helpfulness for control,
+but leave task-level credit assignment unchanged. (c)
+SKILLC turns helpfulness comparison into contrastive
+credit assignment for autonomous success, while adapt-
+ing attribution strength, rollout allocation, and the active
+skill set through a validation-driven curriculum.
+banks (Li et al., 2026c), skill distillation (Wang
+et al., 2026b; Xia et al., 2026), and skill lifecycle
+management (Pu et al., 2026; Ouyang et al., 2026;
+Shen et al., 2026). Yet most of these approaches
+remain in the skill-augmented regime shown in
+Figure 1(a): skills are treated as external runtime
+support, and autonomous performance without re-
+trieval is not the optimization target.
+A more ambitious goal is skill internalization,
+illustrated in Figure 1(b), where skills are used only
+during training and gradually withdrawn so that the
+arXiv:2605.27899v1  [cs.AI]  27 May 2026
+
+final policy can act autonomously. SKILL0 (Lu
+et al., 2026b) is a representative example. Cur-
+rent internalization methods can already estimate
+whether a skill remains useful and use that infor-
+mation to control withdrawal. What remains un-
+changed, however, is the policy objective. Within
+each GRPO update (Shao et al., 2024), all rollouts
+for a task are still generated under a single prompt
+condition, so optimization reinforces success un-
+der the current regime rather than autonomy after
+withdrawal. The training loop may know that a
+skill is still globally useful, yet it cannot determine
+whether a particular successful trajectory is already
+independent of that skill.
+We term this optimization mismatch internaliza-
+tion blindness. To address it, we propose SKILLC,
+a framework based on Contrastive Skill Credit As-
+signment (CSCA) that converts this contrast into a
+direct learning signal for internalization. For tasks
+from active skill types, SKILLC samples paired
+skill-injected and skill-free rollouts within the same
+policy update, injecting their task-level contrast
+into optimization via a dual-stream advantage esti-
+mator that preserves global ranking while applying
+one-sided correction toward skill-free success. A
+smoothed validation-level counterpart of the same
+contrastive quantity further drives a hybrid adaptive
+curriculum. For multi-category environments like
+ALFWorld, this curriculum jointly controls attri-
+bution strength, rollout allocation, and monotone
+active-set pruning; for single-skill environments
+like WebShop, it controls attribution strength and
+rollout allocation uniformly. Together, these mech-
+anisms yield the contrastive internalization regime
+illustrated in Figure 1(c).
+Our main contributions are as follows:
+• We identify trajectory-level credit assignment
+limitations in fixed-schedule skill internaliza-
+tion where all rollouts share a single prompt
+condition, preventing the gradient from distin-
+guishing autonomous versus skill-dependent
+success. We propose SKILLC with paired
+contrastive rollouts and adaptive curriculum
+scheduling to address this.
+• We implement CSCA in SKILLC through
+three coordinated mechanisms. Paired skill-
+injected and skill-free rollouts expose task-
+level internalization gaps, a dual-stream ad-
+vantage estimator with per-condition normal-
+ization redirects credit toward autonomous
+success, and a validation-driven curriculum
+adapts attribution strength and rollout alloca-
+tion.
+• Critical characterization of applicability re-
+veals CSCA’s effectiveness is signal-quality-
+dependent.
+Strong contrastive signals en-
+able substantial gains (Heat +10.5%, Cool
++11.1%, Pick2 +33.4%), while weak sig-
+nals on ceiling-effect tasks cause regression
+(Pick −11.5%), and single-skill environments
+yield only marginal improvements (WebShop
++3.1%).
+2
+Related Work
+2.1
+Agentic Reinforcement Learning
+Reinforcement learning has become a key post-
+training paradigm for language model agents.
+GRPO (Shao et al., 2024) introduced critic-free pol-
+icy optimization using group-relative advantages.
+Building on this foundation, agentic RL methods
+address agent-specific challenges through hierar-
+chical RL for long-horizon credit assignment (Li
+et al., 2026c), self-evolution mechanisms for policy
+co-adaptation (Fan et al., 2026; Shi et al., 2026), ex-
+perience reuse for continuous adaptation (Chhikara
+et al., 2025; Liu et al., 2026a), and prompt-based
+reasoning like ReAct (Yao et al., 2022b) and Reflex-
+ion (Shinn et al., 2023). However, a key challenge
+remains: how to leverage intermediate guidance
+during training while ensuring the final policy ac-
+quires genuine autonomous competence rather than
+guidance-dependent behaviors.
+2.2
+Skill Libraries for Agents
+Structured skills have become a core mechanism
+for extending agent capabilities beyond parametric
+memory. Early work recognized that raw trajec-
+tory retrieval incurs substantial token overhead and
+noise, motivating abstraction into reusable proce-
+dural knowledge (Xia et al., 2026; Lu et al., 2026b).
+Recent skill-based systems span multiple dimen-
+sions: hierarchical skill organization and discov-
+ery through reflection (Tu et al., 2026; Wang et al.,
+2026a), dependency-aware retrieval via graph struc-
+tures (Li et al., 2026a), and dynamic lifecycle man-
+agement including retention and retirement (Shen
+et al., 2026; Pu et al., 2026). For skill selection,
+approaches range from frozen embedding-based re-
+trieval to learned routing and policy-driven ranking
+(Xia et al., 2026; Cho et al., 2026). For utilization,
+RL-based methods condition policies on selected
+skills with hierarchical reward structures (Tu et al.,
+
+2026; Shi et al., 2026). For distillation, methods
+span prompt-based extraction and self-reflection to
+co-evolving skill generators (Xia et al., 2026; Wang
+et al., 2026b). However, existing skill-augmented
+RL methods do not jointly optimize all three stages
+with unified learning signals, and existing skill in-
+ternalization approaches progressively withdraw
+skills according to curriculum schedules but leave
+the policy update itself unchanged during train-
+ing. Within each gradient step, all rollouts share
+the same prompt condition, preventing the gradi-
+ent from observing which behaviors are already
+autonomous versus skill-dependent. This creates
+an optimization mismatch we term internalization
+blindness.
+3
+Method
+We propose SKILLC, addressing a key limitation
+in skill internalization: within each policy update,
+standard GRPO jointly normalizes skill-injected
+and skill-free trajectories, inflating the reward base-
+line when skill-injected rollouts dominate and sup-
+pressing credit for autonomous success. SKILLC
+resolves this through three mechanisms: (1) sam-
+pling paired skill-injected and skill-free rollouts to
+measure task-level internalization gaps, (2) using
+per-condition advantage normalization to redirect
+credit toward autonomous behaviors, and (3) adapt-
+ing the curriculum via validation-level contrastive
+signals to balance attribution strength, rollout allo-
+cation, and skill retention.
+3.1
+Problem Formulation
+For a task x ∼X, we maintain a fixed skill bank
+B = {Sk}k and an active task-type set K(t)
+active. Let
+z ∈{0, 1} denote the prompt condition: z = 1 for
+skill-injected rollouts and z = 0 for skill-free. For
+active task types k(x) ∈K(t)
+active, we sample paired
+rollouts τ + ∼πθ(· | x, Sk(x)) and τ −∼πθ(· | x).
+For retired types, only τ −is sampled. Both use the
+same policy parameters, yielding self-contrastive
+design.
+Task-Level Contrastive Gap.
+Unlike skill-
+augmented methods, SKILLC targets without-skill
+success at inference. The task-level contrastive gap
+is
+∆(x) = E[R | x, z = 1; πθ]−E[R | x, z = 0; πθ],
+(1)
+where z ∈{0, 1} indicates skill injection. Posi-
+tive ∆(x) indicates skill dependence; ∆(x) ≈0
+indicates internalization. Standard GRPO cannot
+observe this signal because all rollouts share one
+prompt condition.
+SKILLC exposes it through
+paired rollouts.
+3.2
+Paired Contrastive Rollouts
+SKILLC enforces paired rollouts for every active
+task type. At each step t, the curriculum gate value
+gate(t)(k) is converted into a skill-injected rollout
+fraction:
+ρ(t)
+with(k) = ρmin +(1−2ρmin)[2gate(t)(k)−1]+.
+(2)
+This mapping reduces skill injection from dominant
+early-training levels to a small probing budget ρmin
+as internalization progresses.
+For
+each
+active
+task
+x,
+we
+sam-
+ple
+G
+rollouts
+and
+assign
+n(t)
++ (x)
+=
+clip(round(Gρ(t)
+with(k(x))), 1, G −1)
+to
+the
+skill-injected branch,
+with the remainder to
+skill-free. Let µ+(x) and µ−(x) denote the mean
+rewards of the two branches.
+The batch-level
+contrastive signal is
+ˆ∆(x) = clip
+
+EMAαbatch
+ µ+(x)−µ−(x)
+
+, −δ, δ
+
+,
+(3)
+where δ is a clipping bound. Unlike utility-based
+skill scoring or reward shaping, this contrastive
+signal is used exclusively for credit assignment
+and curriculum control; it is never converted into
+skill bonuses or trajectory rewards. For retired task
+types, ˆ∆(x) = 0 by convention.
+3.3
+Dual-Stream Advantage Estimation
+SKILLC injects this signal via a dual-stream ad-
+vantage estimator. When skills are beneficial, skill-
+injected trajectories achieve higher rewards. Stan-
+dard joint normalization inflates the baseline, sup-
+pressing advantages for successful skill-free trajec-
+tories precisely when internalization is most critical.
+To address this, SKILLC decomposes the advantage
+into two complementary streams:
+ˆACSCA(i, x) = Φ(Ri, Rbatch) + ω · Acond
+contra(i, x),
+(4)
+where Stream 1 preserves global ranking via
+Φ(Ri, Rbatch) = (Ri −µep)/(σep + ϵ), and the
+correction magnitude is
+C(x) = λeff(x)[ ˆ∆(x)]+,
+(5)
+where λeff(x) = λ(t)
+dyn(k(x))/(1 + βfreqnx) scales
+the signal by internalization progress and task fre-
+quency.
+
+𝑔𝑎𝑡𝑒(𝑘) →𝜆!"#, 𝜌$%&', 𝑆()&%*+
+Paired
+rollouts & ∆.(𝑥)
+Internalization-Aware Curriculum
+Skill Bank dynamically shrinks as 𝑔𝑎𝑡𝑒(𝑘) →0
+Valida&on Loop (triggered every d steps)
+𝜋, evaluated on held-out set 𝑉- with/without 𝑆-
+∆!"#(𝑘)
+𝐸𝑀𝐴 𝑠𝑖𝑔𝑚𝑜𝑖𝑑
+𝑔𝑎𝑡𝑒(𝑘) ∈(0,1)
+𝑔𝑎𝑡𝑒≈1
+𝑔𝑎𝑡𝑒≈0
+Internalization Progress
+𝜆$%& 𝑘= 𝜆8 𝑔𝑎𝑡𝑒(𝑘)
+𝜌'()* 𝑘= 𝑔𝑎𝑡𝑒(𝑘)
+A"ribu'on strength in Stream 2
+Fraction of skill-injected rollouts
+Activate skill set pruning
+Skill Bank Evolution
+Full skill support
+t+(𝐸𝑎𝑟𝑙𝑦)
+t,(𝑀𝑖𝑑)
+t-(𝐿𝑎𝑡𝑒)
+∆!"#→0
+∆!"#→0
+𝜌'()*ℎ𝑖𝑔ℎ
+𝑔𝑎𝑡𝑒≈1
+𝑔𝑎𝑡𝑒≈0.5
+𝑔𝑎𝑡𝑒≈0
+Par.al internaliza.on
+Near-autonomous policy
+Agent
+𝜋!
+Policy Update
+Paired Contrastive Rollouts
+S = +1 (skill-injected)
+Skill Bank
+Skil-injected rollouts
+𝑅!
+𝑅!
+𝜏"
+!, … , 𝜏#/%
+!
+S = -1 (skill-free)
+𝑅&
+𝑅&
+𝜏"
+&, … , 𝜏#/%
+&
+Skil-free rollouts
+Same 𝜋',
+No extra model
+Policy 𝜋,
+Self-contrastive dual-stream sampling from a single policy
+Task 𝓍+ Skill Doc 𝑆
+Task 𝓍
+∆F(𝑥) = 
+𝜇. −𝜇/
+Dual-Stream Advantage Estimation
+𝐴6./.0 = Stream 1 + 𝜔 × Stream 2
+Shared normalization baseline
+Independent per-condi'on baselines
+Stream 1: Global Quality
+All G
+trajectories
+compute
+𝜇!", 𝜎!"
+→𝑜𝑢𝑡𝑝𝑢𝑡 𝜙𝑅# =
+𝑅# −𝜇!"
+𝜎!"
+Stream 2: Internalization Pressure
+𝜏$𝑔𝑟𝑜𝑢𝑝→𝜇$, 𝜎$ →𝑛𝑜𝑟𝑚𝑎𝑙𝑖𝑧𝑒→+𝜆!%% : ∆<(𝑥)
+𝜏&𝑔𝑟𝑜𝑢𝑝→𝜇&, 𝜎& →𝑛𝑜𝑟𝑚𝑎𝑙𝑖𝑧𝑒→−𝜆!%% : ∆<(𝑥)
+∆.(𝑥)
+contrastive
+gap
+all
+trajectories
+𝑅"
+𝐴J0102 
+Policy Update
+𝐴6./.0 
+⊕
+Stream 1
+𝜔 × 
+Stream 2
+𝐾"3)(!4
+())
+= 𝑇𝑜𝑝𝐾( 𝑘: ∆!"#≥0 , 𝐾))
+Figure 2: Overview of SKILLC. Paired contrastive rollouts expose residual skill dependence for each task, a
+dual-stream advantage estimator redirects credit toward autonomous success without mixed-normalization bias, and
+a internalization-aware curriculum adapts attribution strength, rollout allocation, and active skill set.
+Stream 2 performs condition-wise normalization
+and reallocates credit according to the contrastive
+signal:
+Acond
+contra(i, x) =
+
+
+
+
+
+
+
+Ri −µ+(x)
+σ+(x) + ϵ −C(x),
+zi = 1,
+Ri −µ−(x)
+σ−(x) + ϵ + C(x),
+zi = 0.
+(6)
+When ˆ∆(x) > 0 (skill is still helpful), Stream
+2 downweights skill-dependent trajectories (sub-
+tracting C(x)) while upweighting skill-free suc-
+cesses (adding C(x)), encoding the learning ob-
+jective: "succeed without skill support." This sig-
+nal is transient by design: as internalization pro-
+gresses and ˆ∆(x) narrows, C(x) →0 and Stream
+2 degenerates to stratified normalization, a well-
+established variance-reduction technique. When
+ˆ∆(x) ≤0, skills are no longer helpful and the cor-
+rection is clipped to zero; the curriculum handles
+skill retirement. This architecture avoids mixed-
+normalization bias while maintaining interpretabil-
+ity and computational efficiency.
+3.4
+Internalization-Aware Curriculum
+SKILLC employs the contrastive signal at two
+timescales. The advantage estimator uses batch-
+level ˆ∆(x) for fine-grained per-task credit assign-
+ment, while the curriculum uses a validation-level
+counterpart for coarser-grained withdrawal control.
+This separation is important because per-batch esti-
+mates are noisy and optimized for gradient direc-
+tion, whereas curriculum decisions require stability.
+For each task type k, we periodically (every d
+training steps) compute a validation contrastive gap
+and smooth it across checkpoints:
+∆(t)
+val(k) = SR(t)
+with(k) −SR(t)
+without(k),
+¯∆(t)
+val(k) = αval ¯∆(t−1)
+val
+(k) + (1 −αval)∆(t)
+val(k),
+gate(t)(k) = σ
+
+¯∆(t)
+val(k)/T
+
+.
+(7)
+The gate controls thr
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+0
+30
+60
+90
+120
+150
+180
+Training Step
+80
+100
+Validation SR (%)
+(a)  Pick
+w/ skill
+w/o skill
+0
+30
+60
+90
+120
+150
+180
+Training Step
+40
+60
+80
+100
+Validation SR (%)
+(b)  Look
+w/ skill
+w/o skill
+0
+30
+60
+90
+120
+150
+180
+Training Step
+40
+60
+80
+100
+Validation SR (%)
+(c)  Clean
+w/ skill
+w/o skill
+0
+30
+60
+90
+120
+150
+180
+Training Step
+20
+40
+60
+80
+100
+Validation SR (%)
+(d)  Heat
+w/ skill
+w/o skill
+0
+30
+60
+90
+120
+150
+180
+Training Step
+20
+40
+60
+80
+100
+Validation SR (%)
+(e)  Cool
+w/ skill
+w/o skill
+0
+30
+60
+90
+120
+150
+180
+Training Step
+0
+20
+40
+60
+80
+100
+Validation SR (%)
+(f)  Pick2
+w/ skill
+w/o skill
+Figure 6: Per-task training dynamics across six ALFWorld task categories. Each subplot shows the with-skill (solid
+line) and without-skill (dashed line) validation success rates (SRwith and SRwithout) for one task type over 180
+training steps.
+Core CSCA hyperparameters (both environ-
+ments).
+Key hyperparameters are λ=1.0 (attri-
+bution strength), ω=0.4 (stream weight), δ=2.0
+(advantage clipping bound), batch EMA de-
+cay αbatch=0.9, gate temperature T=0.1, and
+validation-gate EMA αval=0.7. The minimal prob-
+ing budget is ρmin=0.1, frequency-penalty weight
+is βfreq=0.01, and the retirement threshold is
+τretire=0.0. In early optimization steps, the con-
+trastive gate rises gradually as reliable paired evi-
+dence accumulates, reflecting the contrastive learn-
+ing signal rather than a separate initialization trick.
+B
+Per-Task Training Dynamics Analysis
+Figure 6 presents a comprehensive breakdown of
+the training dynamics across all six ALFWorld task
+categories over the full 180-step training horizon.
+All curves represent data collected from a single
+SkillC training run on the Qwen2.5-7B-Instruct
+base model.
+Task-specific internalization patterns.
+The per-
+task breakdown reveals that internalization speed
+and baseline performance vary substantially across
+task categories.
+High-performance tasks (Pick,
+Look, Clean) begin training with with-skill SR
+already near 80 to 90 percent, reflecting their in-
+herent simplicity or close alignment with the base
+model’s capabilities. These tasks show rapid con-
+vergence and minimal internalization gap through-
+out the training run. In contrast, lower-performance
+tasks (Heat, Cool, Pick2) start below 50 percent
+with-skill SR and exhibit larger internalization gaps
+in early training (steps 0 to 50). For these harder
+tasks, the training from step 50 to 150 shows clear
+gap reduction as the policy learns to handle core
+task logic without skill assistance.
+Stability post internalization.
+Figure 6 demon-
+strates that once the internalization gap closes (typ-
+ically by step 100 to 120), both with-skill and
+without-skill curves stabilize and track closely to-
+gether. In the later training regime (steps 150 to
+180), performance stabilizes at the learned level for
+most tasks, with minor fluctuations reflecting natu-
+ral variance in the validation signal. This conver-
+gence validates the core hypothesis that continuous
+contrastive feedback enables the policy to acquire
+autonomous competence gradually, rather than ex-
+periencing sudden performance degradation at a
+curriculum switch. The fact that without-skill per-
+formance remains robust in the later stages (steps
+130 to 180) confirms that SkillC has successfully in-
+ternalized task knowledge rather than merely learn-
+ing to suppress skill usage.
+C
+Theoretical Justification
+This appendix provides theoretical justification for
+the dual-stream design of CSCA. We focus on the
+core asymptotic behavior to show that the con-
+
+trastive correction term automatically decays as
+the policy internalizes skills, preventing permanent
+bias.
+C.1
+Asymptotic Correction Decay
+We first formalize the limiting regime in which
+internalization is complete and the explicit con-
+trastive correction should disappear automatically.
+Lemma C.1 (Asymptotic Correction Decay). Sup-
+pose πθ has fully internalized skill S, i.e., for all
+tasks x, states s, and actions a,
+P(a | s, x, S; πθ) = P(a | s, x; πθ).
+Then ∆(x) = 0, and as ˆ∆(x) →0, the SKILLC
+estimator reduces to
+ˆACSCA(i, x)
+ˆ∆→0
+−−−→Aep(i) + ω · Ri −µcond(x)
+σcond(x) + ϵ ,
+where Aep(i) is the global ranking term, and
+µcond(x), σcond(x) are the within-condition statis-
+tics of the branch to which trajectory i belongs.
+Proof. If the policy fully internalizes S, then by
+definition P(a | s, x, S; πθ) = P(a | s, x; πθ) for
+all tasks x, states s, and actions a. This implies
+that the trajectory distributions τ + and τ −become
+identical, so ∆(x) = E[R | x, z = 1] −E[R |
+x, z = 0] = 0. Since ˆ∆(x) is a smoothed estimate
+via EMA, we have ˆ∆(x) →0 as internalization
+progresses. Therefore, C(x) = λeff(x)[ ˆ∆(x)]+ →
+0.
+By construction, the condition-wise advantage
+term is
+Acond
+contra(i, x) = Ri −µcond(x)
+σcond(x) + ϵ ± C(x),
+where the sign is negative for skill-injected trajec-
+tories (zi = 1) and positive for skill-free (zi = 0).
+As C(x) →0, the correction terms ±C(x) van-
+ish identically, leaving only the within-condition
+normalization:
+Acond
+contra(i, x) →Ri −µcond(x)
+σcond(x) + ϵ .
+Therefore, the full CSCA advantage approaches
+ˆACSCA(i, x) →Aep(i) + ω · Ri −µcond(x)
+σcond(x) + ϵ ,
+which is the sum of a global ranking term and a
+stratified within-condition term. This completes
+the proof.
+C.2
+Design Implications
+The limiting form in Lemma C.1 has three impor-
+tant implications for the CSCA design.
+Automatic correction decay.
+The key insight is
+that the correction term C(x) = λeff(x)[ ˆ∆(x)]+
+automatically decays to zero as the policy internal-
+izes each skill, eliminating the risk of permanent
+bias. Unlike methods that apply fixed correction
+terms or external bonuses, CSCA ensures that its
+contrastive signal is transient and task-dependent,
+vanishing precisely when no longer needed.
+Stratified advantage structure.
+At convergence,
+CSCA reduces to a decomposition of global rank-
+ing plus per-condition stratification. The stratified
+term provides variance reduction when the skill-
+injected and skill-free branches have heterogeneou

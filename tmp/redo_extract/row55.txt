@@ -1,0 +1,617 @@
+=== PDF FIRST PAGE (title region) ===
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+Yang Zhao * Chengxiao Dai * Yue Xiu Mengying Kou Yuliang Zheng Dusit Niyato
+Abstract
+Agentic large language model (LLM) systems
+rely on external memory for long-horizon state
+and concurrent multi-agent execution, but cen-
+tralized indexes and heuristic partitions become
+bottlenecks as memory volume and parallel access
+grow. We present ShardMemo, a budgeted tiered
+memory service with Tier A per-agent working
+state, Tier B sharded evidence with shard-local ap-
+proximate nearest neighbor (ANN) indexes, and
+Tier C, a versioned skill library. Tier B enforces
+scope-before-routing: structured eligibility con-
+straints mask ineligible shards before routing or
+ANN search. We cast shard probing as masked
+mixture-of-experts (MOE) routing over eligible
+shards, probing up to Bprobe shards via Top-
+Bprobe or adaptive Top-P, and use cost-aware
+gating over profile/observation/session shard fami-
+lies; the router is trained from evidence→shard su-
+pervision. On LoCoMo, ShardMemo improves
+over the strongest baseline (GAM) by +5.11–
++6.82 F1 across question categories. Under a
+fixed-budget routing setting (Bprobe=3), Shard-
+Memo improves ov
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+Yang Zhao * Chengxiao Dai * Yue Xiu Mengying Kou Yuliang Zheng Dusit Niyato
+Abstract
+Agentic large language model (LLM) systems
+rely on external memory for long-horizon state
+and concurrent multi-agent execution, but cen-
+tralized indexes and heuristic partitions become
+bottlenecks as memory volume and parallel access
+grow. We present ShardMemo, a budgeted tiered
+memory service with Tier A per-agent working
+state, Tier B sharded evidence with shard-local ap-
+proximate nearest neighbor (ANN) indexes, and
+Tier C, a versioned skill library. Tier B enforces
+scope-before-routing: structured eligibility con-
+straints mask ineligible shards before routing or
+ANN search. We cast shard probing as masked
+mixture-of-experts (MOE) routing over eligible
+shards, probing up to Bprobe shards via Top-
+Bprobe or adaptive Top-P, and use cost-aware
+gating over profile/observation/session shard fami-
+lies; the router is trained from evidence→shard su-
+pervision. On LoCoMo, ShardMemo improves
+over the strongest baseline (GAM) by +5.11–
++6.82 F1 across question categories. Under a
+fixed-budget routing setting (Bprobe=3), Shard-
+Memo improves over cosine-to-prototype shard
+routing by +6.87 F1 while reducing retrieval
+work (VecScan 521→414, –20.5%) and p95 la-
+tency (95→76 ms). On long-context HotpotQA,
+ShardMemo achieves 63.41/61.88/57.95 F1 at
+56K/224K/448K tokens. On ToolBench, Tier C
+reaches 0.97 Precision@3 and 1.94 StepRed
+(+10.2% and +7.2% over embedding-similarity
+retrieval).
+1. Introduction
+Agentic large language model (LLM) systems increasingly
+operate as long-horizon programs: they decompose goals
+into sub-tasks, interleave tool calls with verification, and
+accumulate experience over repeated interactions (Yao et al.,
+2022; Schick et al., 2023; Shinn et al., 2023; Wu et al.,
+2024). External memory is therefore a core systems com-
+. Correspondence to: Anonymous <anonymous>.
+Preprint. January 30, 2026.
+ponent for preserving state across sessions and enabling
+concurrent multi-agent execution (Packer et al., 2024; Park
+et al., 2023; Maharana et al., 2024). At deployment scale,
+memory access becomes a bottleneck: retrieval cost grows
+with corpus size, shared indexes contend under concurrent
+reads and writes, and tail latency worsens under load (Dean
+& Barroso, 2013; Guu et al., 2020; Lewis et al., 2020; Douze
+et al., 2025; Jayaram Subramanya et al., 2019).
+Memory access in agentic workloads is heterogeneous
+in both content and intent.
+Many requests require re-
+trieving declarative evidence from long-horizon interaction
+logs (Maharana et al., 2024; Park et al., 2023), while others
+benefit from reusing previously successful tool-use proce-
+dures (Wang et al., 2023). Treating these cases as a single re-
+trieval problem increases context pressure and can reduce re-
+liability, motivating a tiered design that separates short-lived
+working state, persistent evidence, and reusable skills, and
+allocates explicit per-request budgets across tiers (Packer
+et al., 2024; Wang et al., 2023).
+Sharding the evidence store is a common approach to scal-
+ing retrieval: shard-local indexes reduce per-query work,
+improve parallelism, and strengthen isolation in multi-tenant
+settings (Douze et al., 2025; Malkov & Yashunin, 2018; Ja-
+yaram Subramanya et al., 2019; Jin et al., 2024). Sharding
+introduces a routing problem: given a query with hard struc-
+tured constraints (tenant, scope, permissions), the system
+must select a small set of shards to probe while maintaining
+high evidence coverage. Probing many shards undermines
+efficiency; probing too few can miss required evidence and
+degrade downstream quality.
+Most deployments rely on static partitions with heuristic
+routing (Douze et al., 2025). These mechanisms are dif-
+ficult to sustain in agentic settings because (i) correctness
+under structured constraints should not depend on a heuris-
+tic or learned router (Jin et al., 2024; Gollapudi et al., 2023),
+(ii) shard access costs are heterogeneous, for example, pro-
+files/summaries versus episodic traces, and (iii) workload
+drift can lead either to degraded coverage or to conservative
+probing that increases latency.
+We present ShardMemo, a tiered memory service that en-
+forces scope-correct and budgeted access over sharded stor-
+age. Tier A maintains bounded per-agent working state un-
+der budget M to stabilize short-term context. In Tier B (ev-
+1
+arXiv:2601.21545v1  [cs.AI]  29 Jan 2026
+
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+idence), ShardMemo applies scope-before-routing: meta-
+data/eligibility constraints first define the admissible shard
+set and routing is masked so ineligible shards cannot be
+probed (Jin et al., 2024; Gollapudi et al., 2023). We cast
+shard selection as masked mixture-of-experts (MOE) rout-
+ing: each shard is an expert with its own shard-local ap-
+proximate nearest neighbor (ANN) index, and a router ac-
+tivates at most Bprobe eligible shards using Top-Bprobe or
+adaptive Top-P (capped by Bprobe) (Shazeer et al., 2017;
+Fedus et al., 2022; Lepikhin et al., 2020). To trade accu-
+racy for cost, Tier B organizes memories into heterogeneous
+shard families (profile/observation/session) and uses cost-
+aware gating to prioritize low-cost shards with escalation to
+episodic shards when needed (Packer et al., 2024). When
+evidence→shard supervision is available, we train the router
+with labeled shard targets (Maharana et al., 2024). Tier C
+stores reusable procedures as versioned skills retrieved un-
+der budget R with safe fallback to Tier B on inapplicability
+or failure (Wang et al., 2023).
+We evaluate Tier B on LoCoMo and HotpotQA (56K–448K
+tokens) and Tier C on ToolBench, reporting task quality
+and retrieval efficiency (VecScan and tail latency) under
+matched budgets.
+Contributions. This paper makes three contributions:
+• System. We introduce ShardMemo, a tiered memory
+architecture for agentic LLM systems that separates
+per-agent working state (Tier A), sharded evidence
+memory with provenance and shard-local ANN in-
+dexes (Tier B), and a versioned skill library for reusable
+procedures (Tier C). A lightweight tier gate selects
+Tier B, Tier C, or both under explicit budgets.
+• Method. We propose a scope-correct routing mecha-
+nism for sharded evidence retrieval by casting shard se-
+lection as masked MOE routing under a hard probe cap
+Bprobe. The design includes heterogeneous shard fam-
+ilies and cost-aware gating, together with Top-Bprobe
+or adaptive Top-P probe selection.
+• Training and evaluation. We provide a supervised
+router-training protocol from evidence→shard labels
+(LoCoMo) using a multi-positive set-likelihood objec-
+tive, and evaluate both task quality and memory-access
+behavior (probes, vectors scanned, and p95/p99 la-
+tency). We additionally evaluate Tier C skill reuse on a
+tool-use benchmark and report adoption and efficiency
+metrics.
+Roadmap. Section 2 surveys related work. Section 3 formu-
+lates the budgeted problem. Section 4 describes the Shard-
+Memo architecture. Section 5 presents the experimental
+evaluation.
+2. Related Work
+External memory for LLMs and agents.
+Retrieval-
+augmented generation (RAG) conditions generation on re-
+trieved evidence, decoupling per-request context length
+from the lifetime of stored information (Lewis et al.,
+2020; Karpukhin et al., 2020; Guu et al., 2020). Practi-
+cal systems typically use ANN-based, multi-stage retrieval
+pipelines (Johnson et al., 2019; Guo et al., 2020). Re-
+cent agentic systems extend retrieval to persistent state
+and long-horizon execution, e.g., paging between bounded
+working context and external stores (Packer et al., 2024),
+maintaining profiles and episodic records (Park et al.,
+2023), or reusing prior trajectories via reflection and self-
+improvement loops (Shinn et al., 2023). Benchmarks such
+as LoCoMo emphasizes long-horizon conversational mem-
+ory evaluation (Maharana et al., 2024), while multi-hop QA
+datasets (e.g., HotpotQA) are frequently used to stress evi-
+dence retrieval under longer contexts (Yang et al., 2018). In
+contrast to work that primarily targets modeling or prompt-
+ing, ShardMemo focuses on memory access at scale: bud-
+geted retrieval with constraints under sharded storage.
+Procedural memory and skill reuse. Tool-using agents in-
+terleave reasoning with action execution (e.g., ReAct, Tool-
+former) (Yao et al., 2022; Schick et al., 2023). Systems
+such as Voyager maintain reusable skill libraries to reduce
+replanning on recurring task families (Wang et al., 2023),
+and workflow-oriented memory stores and retrieves reusable
+action trajectories (Wang et al., 2024). Tool-use benchmarks
+such as ToolBench provide a complementary evaluation axis
+focused on executability and action efficiency (Qin et al.,
+2023). Tier C in ShardMemo operationalizes procedural
+reuse via versioned, schema-checked skill artifacts retrieved
+under explicit budgets with a bounded fallback to evidence
+retrieval when skills are inapplicable.
+Budgeted routing for sharded retrieval. Sharding and
+multi-index vector search improve scalability and paral-
+lelism (e.g., FAISS), but routing is often heuristic, trading
+recall against retrieval work (Douze et al., 2025; Malkov
+& Yashunin, 2018; Jayaram Subramanya et al., 2019; John-
+son et al., 2019; Guo et al., 2020). Relatedly, federated
+search and resource selection study how to choose a small
+set of collections/shards under budgets using collection sum-
+maries (Callan, 2002; Shokouhi et al., 2011). Structured con-
+straints have been addressed via filtered or constraint-aware
+ANN search (Gollapudi et al., 2023; Jin et al., 2024). Shard-
+Memo builds on these lines by enforcing scope-before-
+routing (eligibility masking prior to any semantic selection)
+and casting shard probing as masked MOE routing (Shazeer
+et al., 2017; Lepikhin et al., 2020; Fedus et al., 2022), en-
+abling supervised router training from evidence→shard la-
+bels when available and cost-aware gating over heteroge-
+neous shard families.
+2
+
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+Tier A: Working Memory 𝑨𝒕
+Tier 
+Gate
+Input 
+Request 𝒒𝒕
+Tier B: Evidence Memory (Read Path)
+Tier C: Skill Library (Read Path)
+A
+B
+C
+(Write Path)
+Fast- Access 
+Buffer
+Generator
+(LLMs)
+Scopes:
+(𝝍𝒕
+𝑨, 𝝍𝒕
+𝑩, 𝝍𝒕
+𝑪)
+𝑴, 𝑩𝒑𝒓𝒐𝒃𝒆, 𝑲, 𝑹
+Budgets:
+ෝ𝒈= 𝒈𝝓𝒒𝒕
+𝝐𝑩, 𝑪, 𝑩+ 𝑪
+𝑨𝒕⇐𝑹𝒆𝒂𝒅𝑨𝒒𝒕, 𝝍𝒕
+𝑨 , 𝑨𝒕< 𝑴
+Short-lived per-agent 
+state (high-frequency 
+updates)
+Scope
+Before
+Routing
+𝑺𝒕= 𝑺𝝍𝒕
+𝑩
+Fallback(Failure/Inapplicable)
+(Scope
+Mask)
+Eligible 
+Shards 
+Probe 
+Selection
+Top-B or 
+adaptive 
+Top-P
+(capped)
+Masked MoE 
+Router
+Masked Softmax
+Skill Repository
+…..
+Expert 1
+(profile)
+Expert 2
+(obs:k)
+Expert S
+(sess:k)
+𝑷𝒕,𝒋 = 
+𝐒𝐨𝐟𝐭𝒎𝒂𝒙
+𝒔𝒕,𝒌𝒌∈𝒔𝒕𝒋
+𝑷𝒕⊆𝑺𝒕
+Score eligible 
+shards
+𝑺𝒕,𝒋= 𝒇𝜽𝒓𝒕, 𝝈𝒋−𝒂𝒄𝒕,𝒋
+𝒋∈𝑺𝒕
+𝑷𝒕≤𝑩𝒑𝒓𝒐𝒃𝒆
+𝑺𝒉𝒂𝒓𝒅𝒋: 𝑨𝑵𝑵𝒋𝒛𝒕
+Experts
+(Shards)
+i𝒏𝒑𝒂𝒓𝒂𝒍𝒍𝒆𝒍, 𝒋∈𝑷𝒕
+Aggregator 
+& 
+Filter Layer
+𝑴𝒆𝒓𝒈𝒆
++
+𝑭𝒊𝒍𝒕𝒆𝒓𝝍𝒕𝑩
++
+𝑮𝒍𝒐𝒃𝒂𝒍𝑻𝒐𝒑𝒌
+Eligibility / 
+Scope Mask
+Top-R Skill Retrieval
+Try Execute
+Executed 
+𝑾𝒕= 𝒔: 𝜳𝒕
+𝑪𝒎𝒔
+𝒖𝒕= 𝑻𝑶𝑷𝒔∈𝒘𝒕𝒔𝒊𝒎(𝒒𝒕,𝒔), 𝒖𝒕≤𝑹
+𝒐𝒌, 𝒔∗ ⇐𝑻𝒓𝒚𝑬𝒙ecute
+𝒖𝒕, 𝒒𝒕, 𝑹𝒕
+𝑩
+Tier B Write (Evidence)
+（Chunk, Embed）
+Successful
+𝑨𝒕< 𝑴
+Evidence: 
+𝑹𝒕
+𝑩 (≤𝑲)
+Skill Result
+Working
+Context: 
+:Tier-B shard-local ANN.
+: Outputs to Generator (A/B/C).
+:Tier-C versioned skills.
+: C→B fallback on failed execution.
+Trace
+Bootstrap / 
+Cold-start
+Tier C Write (Induction)
+（Canonicalize, Version）
+Init-once
+Figure 1. ShardMemo architecture overview.
+3. Problem Formulation
+Agentic LLM systems need memory access that improves
+task quality while enforcing (i) hard isolation and compati-
+bility across tenants/tools/schemas and (ii) strict per-request
+cost/latency budgets. We model tiered memory access as a
+constrained optimization.
+For a request q ∼D, the service may return Tier A working
+context A(q), Tier B evidence RB(q) obtained by probing
+a shard set P(q), and/or Tier C skills U(q). Each stored
+item x carries metadata m(x). Each tier τ ∈{A, B, C}
+defines a scope predicate ψτ(m, q) ∈{0, 1} that is true iff
+metadata m is permitted and compatible with request q un-
+der Tier-τ constraints. For sequential workloads, we index
+requests by t and write qt and ψτ
+t (m) ≜ψτ(m, qt). We de-
+note per-request budgets by (M, Bprobe, K, R), which cap
+Tier A context size, the number of probed Tier B shards, the
+number of returned Tier B evidence items, and the number
+of retrieved Tier C skills, respectively.
+We seek a tier gate g, a Tier B shard router πθ, and a Tier C
+skill retrieval policy based on a similarity function sim that
+maximize expected task quality under these budgets and
+scope constraints:
+max
+g,πθ,sim Eq∼D
+
+Quality
+ q; g, πθ, sim
+
+s.t. |A(q)| ≤M, |P(q)| ≤Bprobe, |RB(q)| ≤K,
+|U(q)| ≤R, P(q) ⊆S
+ ψB(·, q)
+
+,
+∀x ∈RB(q) : ψB m(x), q
+
+,
+∀s ∈U(q) : ψC m(s), q
+
+.
+Tier A (working memory). Tier A stores short-lived, per-
+agent state and returns a bounded context :
+At = ReadA(qt, ψA
+t ),
+|At| ≤M.
+Tier B (evidence memory).
+Tier B stores declarative
+evidence objects partitioned into S shards (indexed by
+j ∈{1, . . . , S}), each with a shard-local ANN index
+ANNj. Scope-before-routing induces an eligible shard set
+St = S(ψB
+t ) ⊆{1, . . . , S}. Let zt denote the embedding
+of request qt. A budgeted router selects a probe set
+Pt = πθ(zt, ψB
+t ) ⊆St,
+|Pt| ≤Bprobe.
+Each probed shard returns local candidates, which are
+merged and re-ranked to produce Top-K evidence:
+RB
+t = TopKx∈∪j∈PtANNj(zt) score(zt, x),
+∀x ∈RB
+t : ψB
+t
+ m(x)
+
+.
+Tier C (skill library). Tier C stores reusable procedures as
+versioned skill artifacts in a library W. The Tier C scope
+predicate induces an eligible skill set Wt = {s ∈W :
+ψC
+t (m(s))}. Given budget R, Tier C retrieves a bounded
+set of eligible skills by similarity:
+Ut = TopR
+s∈Wt
+sim(qt, s) s.t. |Ut| ≤R.
+4. Method
+4.1. ShardMemo Overview
+ShardMemo is a tiered memory service for agentic
+LLMs. Each request qt specifies tier-level scope predicates
+3
+
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+(ψA
+t , ψB
+t , ψC
+t ) and hard budgets (M, Bprobe, K, R). Shard-
+Memo enforces (i) scope correctness (all returned items sat-
+isfy the corresponding predicate) and (ii) budgeted access
+(per-request work is bounded by (M, Bprobe, K, R)); Fig. 1
+overviews the design.
+Design summary. Tier B enforces scope-before-routing:
+structured eligibility constraints induce an eligible shard set
+St = S(ψB
+t ) before any semantic scoring, and the router is
+masked to St. Within St, a masked MoE router probes at
+most Bprobe shards (Top-Bprobe/Top-P) and merges shard-
+local ANN results into a global Top-K evidence set (with an
+additional post-filter by ψB
+t ). Tier C maintains a versioned,
+test-validated skill library retrieved under budget R, with
+bounded fallback to Tier B when no skill applies.
+We instantiate Section 3 with a learned tier gate gϕ, a shard
+scorer fθ (inducing πθ via Top-Bprobe/Top-P), and a simi-
+larity function sim for Tier C retrieval.
+Read path. Given qt, ShardMemo (1) reads Tier A work-
+ing context At = ReadA(qt, ψA
+t ) with |At| ≤M, (2) pre-
+dicts ˆg = gϕ(qt) ∈{B, C, B+C}, and (3) executes the
+selected operators under the same budgets. If ˆg = C and
+no retrieved skill applies (or execution fails), ShardMemo
+falls back to Tier B under (Bprobe, K). Alg. 1 provides
+pseudocode.
+Algorithm 1 ShardMemo end-to-end read path
+Require: Request qt; budgets (M, Bprobe, K, R); scopes
+(ψA
+t , ψB
+t , ψC
+t )
+Ensure: Working context At, evidence RB
+t , retrieved skills
+Ut
+1: At ←ReadA(qt, ψA
+t ) {|At| ≤M}
+2: zt ←Embed(qt); φt ←φ(qt); rt ←[zt; φt]
+3: ˆg ←gϕ(qt) ∈{B, C, B+C}
+4: RB
+t ←∅; Pt ←∅; Ut ←∅
+5: if ˆg ∈{B, B+C} then
+6:
+(RB
+t , Pt) ←TIERBREAD(zt, rt, ψB
+t , Bprobe, K)
+7: end if
+8: if ˆg ∈{C, B+C} then
+9:
+(Ut, ok, s⋆) ←TIERCREAD(qt, ψC
+t , R, RB
+t )
+10:
+if not ok and ˆg = C then
+11:
+(RB
+t , Pt) ←TIERBREAD(zt, rt, ψB
+t , Bprobe, K)
+{C→B fallback}
+12:
+end if
+13: end if
+14: return (At, RB
+t , Ut)
+Write path.
+Writes enforce scope correctness by validat-
+ing required metadata and rejecting malformed or cross-
+scope inserts. Tier A maintains mutable per-agent/session
+w
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+References
+Callan, J. Distributed information retrieval. In Advances
+in information retrieval: Recent research from the Cen-
+ter for Intelligent Information Retrieval, pp. 127–150.
+Springer, 2002.
+Chhikara, P., Khant, D., Aryan, S., Singh, T., and Yadav, D.
+Mem0: Building production-ready ai agents with scalable
+long-term memory. arXiv preprint arXiv:2504.19413,
+2025.
+Dean, J. and Barroso, L. A. The tail at scale. Communica-
+tions of the ACM, 56(2):74–80, 2013.
+Douze, M., Guzhva, A., Deng, C., Johnson, J., Szilvasy, G.,
+Mazar´e, P.-E., Lomeli, M., Hosseini, L., and J´egou, H.
+The faiss library. IEEE Transactions on Big Data, 2025.
+Fang, J., Deng, X., Xu, H., Jiang, Z., Tang, Y., Xu, Z.,
+Deng, S., Yao, Y., Wang, M., Qiao, S., et al. Lightmem:
+Lightweight and efficient memory-augmented generation.
+arXiv preprint arXiv:2510.18866, 2025.
+Fedus, W., Zoph, B., and Shazeer, N. Switch transformers:
+Scaling to trillion parameter models with simple and ef-
+ficient sparsity. Journal of Machine Learning Research,
+23(120):1–39, 2022.
+Gollapudi, S., Karia, N., Sivashankar, V., Krishnaswamy, R.,
+Begwani, N., Raz, S., Lin, Y., Zhang, Y., Mahapatro, N.,
+Srinivasan, P., et al. Filtered-diskann: Graph algorithms
+for approximate nearest neighbor search with filters. In
+Proceedings of the ACM Web Conference 2023, pp. 3406–
+3416, 2023.
+Guo, R., Sun, P., Lindgren, E., Geng, Q., Simcha, D., Chern,
+F., and Kumar, S. Accelerating large-scale inference with
+anisotropic vector quantization. In International Con-
+ference on Machine Learning, pp. 3887–3896. PMLR,
+2020.
+Guu, K., Lee, K., Tung, Z., Pasupat, P., and Chang, M.
+Retrieval augmented language model pre-training. In
+International conference on machine learning, pp. 3929–
+3938. PMLR, 2020.
+Jayaram Subramanya, S., Devvrit, F., Simhadri, H. V., Kr-
+ishnawamy, R., and Kadekodi, R. Diskann: Fast accurate
+billion-point nearest neighbor search on a single node.
+Advances in neural information processing Systems, 32,
+2019.
+Jin, Y., Wu, Y., Hu, W., Maggs, B. M., Zhang, X., and Zhuo,
+D. Curator: Efficient indexing for multi-tenant vector
+databases. arXiv preprint arXiv:2401.07119, 2024.
+Johnson, J., Douze, M., and J´egou, H. Billion-scale similar-
+ity search with gpus. IEEE Transactions on Big Data, 7
+(3):535–547, 2019.
+Karpukhin, V., Oguz, B., Min, S., Lewis, P. S., Wu, L.,
+Edunov, S., Chen, D., and Yih, W.-t. Dense passage
+retrieval for open-domain question answering. In EMNLP
+(1), pp. 6769–6781, 2020.
+Lepikhin, D., Lee, H., Xu, Y., Chen, D., Firat, O., Huang, Y.,
+Krikun, M., Shazeer, N., and Chen, Z. Gshard: Scaling
+giant models with conditional computation and automatic
+sharding. arXiv preprint arXiv:2006.16668, 2020.
+Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V.,
+Goyal, N., K¨uttler, H., Lewis, M., Yih, W.-t., Rockt¨aschel,
+T., et al. Retrieval-augmented generation for knowledge-
+intensive nlp tasks. Advances in neural information pro-
+cessing systems, 33:9459–9474, 2020.
+Li, Z., Xi, C., Li, C., Chen, D., Chen, B., Song, S., Niu, S.,
+Wang, H., Yang, J., Tang, C., et al. Memos: A memory
+os for ai system. arXiv preprint arXiv:2507.03724, 2025.
+Maharana, A., Lee, D.-H., Tulyakov, S., Bansal, M., Bar-
+bieri, F., and Fang, Y.
+Evaluating very long-term
+conversational memory of llm agents. arXiv preprint
+arXiv:2402.17753, 2024.
+Malkov, Y. A. and Yashunin, D. A. Efficient and robust
+approximate nearest neighbor search using hierarchical
+navigable small world graphs. IEEE transactions on
+pattern analysis and machine intelligence, 42(4):824–
+836, 2018.
+Nguyen, H. D. and Chamroukhi, F. Practical and theoreti-
+cal aspects of mixture-of-experts modeling: An overview.
+Wiley Interdisciplinary Reviews: Data Mining and Knowl-
+edge Discovery, 8(4):e1246, 2018.
+Packer, C., Wooders, S., Lin, K., Fang, V., Patil, S. G.,
+Stoica, I., and Gonzalez, J. E. Memgpt: Towards llms
+as operating systems, 2024. URL https://arxiv.
+org/abs/2310.08560.
+Park, J. S., O’Brien, J., Cai, C. J., Morris, M. R., Liang,
+P., and Bernstein, M. S. Generative agents: Interactive
+simulacra of human behavior. In Proceedings of the 36th
+annual acm symposium on user interface software and
+technology, pp. 1–22, 2023.
+Qin, Y., Liang, S., Ye, Y., Zhu, K., Yan, L., Lu, Y.-T., Lin,
+Y., Cong, X., Tang, X., Qian, B., Zhao, S., Tian, R.,
+Xie, R., Zhou, J., Gerstein, M. H., Li, D., Liu, Z., and
+Sun, M. Toolllm: Facilitating large language models to
+master 16000+ real-world apis. ArXiv, abs/2307.16789,
+2023.
+URL https://api.semanticscholar.
+org/CorpusID:260334759.
+9
+
+ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory
+Schick, T., Dwivedi-Yu, J., Dess`ı, R., Raileanu, R., Lomeli,
+M., Hambro, E., Zettlemoyer, L., Cancedda, N., and
+Scialom, T. Toolformer: Language models can teach
+themselves to use tools. Advances in Neural Information
+Processing Systems, 36:68539–68551, 2023.
+Shazeer, N., Mirhoseini, A., Maziarz, K., Davis, A., Le,
+Q., Hinton, G., and Dean, J. Outrageously large neural
+networks: The sparsely-gated mixture-of-experts layer.
+arXiv preprint arXiv:1701.06538, 2017.
+Shinn, N., Cassano, F., Gopinath, A., Narasimhan, K., and
+Yao, S. Reflexion: Language agents with verbal rein-
+forcement learning. Advances in Neural Information
+Processing Systems, 36:8634–8652, 2023.
+Shokouhi, M., Si, L., et al. Federated search. Foundations
+and trends® in information retrieval, 5(1):1–102, 2011.
+Tsoumakas, G., Katakis, I., and Vlahavas, I. Mining multi-
+label data. Data mining and knowledge discovery hand-
+book, pp. 667–685, 2010.
+Wang, G., Xie, Y., Jiang, Y., Mandlekar, A., Xiao, C., Zhu,
+Y., Fan, L., and Anandkumar, A. Voyager: An open-
+ended embodied agent with large language models. arXiv
+preprint arXiv:2305.16291, 2023.
+Wang, Z. Z., Mao, J., Fried, D., and Neubig, G. Agent
+workflow memory. arXiv preprint arXiv:2409.07429,
+2024.
+Wu, Q., Bansal, G., Zhang, J., Wu, Y., Li, B., Zhu, E., Jiang,
+L., Zhang, X., Zhang, S., Liu, J., et al. Autogen: Enablin

@@ -1,0 +1,417 @@
+=== PDF FIRST PAGE (title region) ===
+Reinforcement Learning for Self-Improving Agent with Skill Library
+Jiongxiao Wang1*
+Qiaojing Yan2
+Yawei Wang2
+Yijun Tian2
+Soumya Smruti Mishra2
+Zhichao Xu2
+Megha Gandhi2
+Panpan Xu2†
+Lin Lee Cheong2
+1University of Wisconsin–Madison; 2AWS Agentic AI
+jwang2929@wisc.edu; {qiaojiny, yawenwan, yijunt, soumish, xzhichao, ganmegha, xupanpan, lcheong}@amazon.com
+Abstract
+Large Language Model (LLM)-based agents
+have demonstrated remarkable capabilities in
+complex reasoning and multi-turn interactions
+but struggle to continuously improve and adapt
+when deployed in new environments.
+One
+promising approach is implementing skill li-
+braries that allow agents to learn, validate, and
+apply new skills. However, current skill library
+approaches rely primarily on LLM prompting,
+making consistent skill library implementation
+challenging. To overcome these challenges, we
+propose a Reinforcement Learning (RL)-based
+approach to enhance agents’ self-improvement
+capabilities with a skill library. Specifically,
+we introduce Skill Augmented GRPO for self-
+Evolution (SAGE), a novel RL framework that
+systematically incorporates skills into learn-
+ing. The framework’s key component, Sequen-
+tial Rollout, iterat
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Reinforcement Learning for Self-Improving Agent with Skill Library
+Jiongxiao Wang1*
+Qiaojing Yan2
+Yawei Wang2
+Yijun Tian2
+Soumya Smruti Mishra2
+Zhichao Xu2
+Megha Gandhi2
+Panpan Xu2†
+Lin Lee Cheong2
+1University of Wisconsin–Madison; 2AWS Agentic AI
+jwang2929@wisc.edu; {qiaojiny, yawenwan, yijunt, soumish, xzhichao, ganmegha, xupanpan, lcheong}@amazon.com
+Abstract
+Large Language Model (LLM)-based agents
+have demonstrated remarkable capabilities in
+complex reasoning and multi-turn interactions
+but struggle to continuously improve and adapt
+when deployed in new environments.
+One
+promising approach is implementing skill li-
+braries that allow agents to learn, validate, and
+apply new skills. However, current skill library
+approaches rely primarily on LLM prompting,
+making consistent skill library implementation
+challenging. To overcome these challenges, we
+propose a Reinforcement Learning (RL)-based
+approach to enhance agents’ self-improvement
+capabilities with a skill library. Specifically,
+we introduce Skill Augmented GRPO for self-
+Evolution (SAGE), a novel RL framework that
+systematically incorporates skills into learn-
+ing. The framework’s key component, Sequen-
+tial Rollout, iteratively deploys agents across
+a chain of similar tasks for each rollout. As
+agents navigate through the task chain, skills
+generated from previous tasks accumulate in
+the library and become available for subse-
+quent tasks. Additionally, the framework en-
+hances skill generation and utilization through
+a Skill-integrated Reward that complements
+the original outcome-based rewards. Experi-
+mental results on AppWorld demonstrate that
+SAGE, when applied to supervised-finetuned
+model with expert experience, achieves 8.9%
+higher Scenario Goal Completion while re-
+quiring 26% fewer interaction steps and gen-
+erating 59% fewer tokens, substantially out-
+performing existing approaches in both accu-
+racy and efficiency. Our code is available at
+https://github.com/amazon-science/SAGE.
+1
+Introduction
+Large language model (LLM)-based agents have
+been widely applied to automate complex tasks
+*Work was done during an internship at AWS Agentic AI.
+†Corresponding author: Panpan Xu, Email: xupanpan@
+amazon.com
+through active environmental interactions, includ-
+ing coding agent (Yang et al., 2024; Novikov et al.,
+2025), deep research (OpenAI, 2025), assistant
+agent (Yao et al., 2024; Chen et al., 2025), and
+web browsing (Yao et al., 2022; Zhou et al., 2024).
+To enhance the performance of these multi-turn in-
+teractive agents, researchers have successfully inte-
+grated reinforcement learning (RL) techniques into
+their frameworks (Chen et al., 2025; Qi et al., 2025;
+Zhou et al., 2025a; Wang et al., 2025a). Recent
+advances, particularly in reinforcement learning
+with verifiable rewards (RLVR) (Shao et al., 2024;
+Guo et al., 2025), have enabled effective end-to-end
+agent training for improved performance (Jin et al.,
+2025). However, despite RL’s effectiveness, sig-
+nificant limitations persist: RL-trained agents are
+often limited to specific training scenarios (Zheng
+et al., 2024a; Li et al., 2024). When deployed in
+new environments, they struggle to demonstrate
+continual learning capabilities to effectively utilize
+valuable on-going experiences for future tasks.
+To address these limitations, one potential solu-
+tion is enabling agents to transform their previous
+interaction experiences into reusable skills, which
+can be stored in a skill library for future reference.
+When agents encounter similar tasks, these pre-
+viously acquired skills can be leveraged through
+experience replay to improve task success rates,
+particularly in scenarios that were not encountered
+during training but experienced during deployment.
+Furthermore, since each skill is composed of a list
+of actions, utilization of these skills can enhance
+agent efficiency by condensing complex action se-
+quences into reusable operations.
+Recent research has made significant strides in
+enabling agents to compose reusable skills (Wang
+et al., 2024a; Cai et al., 2024; Nguyen et al., 2024;
+Wang et al., 2024c; Zheng et al., 2025; Wang et al.,
+2025b). For instance, Wang et al. (2025b) focuses
+on inducing high-level web browsing skills from
+successful action trajectories, transforming primi-
+1
+arXiv:2512.17102v2  [cs.AI]  10 Mar 2026
+
+Figure 1: Illustration for Skill Library Agent and Sequential Rollout with Skill-integrated Reward.
+tive actions like click and search into more complex
+operations such as search product. While these
+works have demonstrated the effectiveness of skill
+libraries for deployed agents, they predominantly
+rely on manually crafted prompts for skill genera-
+tion and utilization. This prompt-based approach,
+however, is inherently constrained by the instruc-
+tion following capabilities of the base model, lim-
+iting both the quality and adaptability of the skill
+library.
+In this paper, we explore enhancing agents’ self-
+improvement capabilities through RL with a skill
+library. Given the diverse frameworks of agents for
+various tasks, we focus specifically on tool-using
+agents that interact with environments through API
+calls and receive corresponding feedback. Our
+implementation extends the CodeAct framework
+(Wang et al., 2024b), which enables agents to com-
+pose code by combining multiple APIs with ba-
+sic programming constructs (such as for loops)
+to solve complex tasks. Building upon this foun-
+dation, we develop a specialized framework for
+self-improving agents with skill library (referred
+to as skill library agents for simplicity). Unlike
+previous frameworks such as Agent Skill Induc-
+tion (Wang et al., 2025b), which typically define
+reusable skills only after task completion, we im-
+plement a unified format for both task solving and
+skill generation, following Nguyen et al. (2024).
+In our approach, when the agent model interacts
+with the environment through APIs, it generates
+programmatic functions that can be saved as skills
+and subsequently called to execute, rather than us-
+ing multiple APIs directly. Given that in-context
+prompting struggles to adapt open-source models
+to this newly proposed skill library agent, super-
+vised fine-tuning (SFT) is first applied before RL
+using high-quality trajectories collected through
+expert experience generated by advanced LLMs.
+Based on the SFT model, we propose a novel RL
+framework for skill library agents. Traditional RL
+approaches typically consider rewards only for in-
+dividual examples, limiting their scope to ongoing
+task performance. For skill library agents, the focus
+is on developing high-quality, reusable skills while
+improving accurate skill usage from the library for
+task optimization. To realize this, we extend Group
+Relative Policy Optimization (GRPO) (Shao et al.,
+2024) and propose Skill Augmented GRPO for
+self-Evolution (SAGE), consisting of Sequential
+Rollout and Skill-integrated Reward. Instead of
+single-task trajectories, the agent is trained with
+chains of similar tasks. We implement the Sequen-
+tial Rollout process on the task chain, where skills
+generated in the previous tasks are preserved and
+made available for use in the following ones. Under
+this framework, the final Skill-integrated Reward is
+computed as the sum of two components: the veri-
+fiable outcome-based reward and an extra reward
+for high-quality skill generation and utilization.
+To evaluate the effectiveness of SAGE for skill li-
+brary agents, we conducted experiments on the Ap-
+pWorld dataset (Trivedi et al., 2024), where agents
+interact with their environment through API docu-
+2
+
+mentation lookup, API calls, and logical program-
+ming constructs to solve complex practical tasks.
+AppWorld utilizes the Scenario Goal Completion
+(SGC) metric, which measures the success rate
+of scenarios where all three similar tasks within
+a scenario are successfully completed. This met-
+ric effectively evaluates how well generated skills
+transfer across similar tasks. After applying SAGE
+to Qwen2.5-32B-Instruct, we observe significant
+improvements compared to prompting-based ap-
+proaches. Our method achieves more than 3x SGC
+score while requiring less than half of generated
+tokens. Analysis of skill utilization reveals that
+agents trained with SAGE demonstrate more than
+2x success rates when utilizing learned skills.
+Furthermore, our approach achieves state-of-the-
+art performance on both Test Normal and Test Chal-
+lenge datasets compared to previous training meth-
+ods which also applied RL but without a skill li-
+brary. For example, our method achieves 72.0%
+Task Goal Completion (TGC) and 60.7% SGC with
+an average of 12.1 interaction steps and 1,475 gen-
+erated tokens on the Test Normal set. This repre-
+sents substantial improvement over baseline train-
+ing with GRPO, which achieved 69.2% TGC and
+51.8% SGC while requiring 16.4 average steps and
+3,613 tokens. These improvements demonstrate
+the effectiveness of our approach in enhancing both
+task performance and efficiency through the skill
+library agent.
+2
+Related Work
+LLM-based Agent.
+Recent advancements in
+instruction-tuned LLMs have enabled them to fol-
+low user instructions for interacting with exter-
+nal environments as autonomous agents. Various
+frameworks have been developed to enhance these
+backbone LLMs’ capabilities in performing agentic
+tasks. Yao et al. (2023) pioneered a "reason-then-
+act" pipeline, guiding LLMs to generate interactive
+actions for agents after a text reasoning process.
+Erdogan et al. (2025) extended this approach by
+incorporating an additional planning phase. Ad-
+ditionally, Wang et al. (2024b) demonstrated that
+generating executable Python code and then run
+it within a code interpreter could significantly im-
+prove agent performance. To further enhance agent
+capabilities, researchers have applied both super-
+vised fine-tuning (Schick et al., 2023; Chen et al.,
+2023; Zeng et al., 2024; Zhang et al., 2024) and re-
+inforcement learning (Song et al., 2024; Bai et al.,
+2024; Wang et al., 2025a; Chen et al., 2025; Qi
+et al., 2025; Zhou et al., 2025a) to develop more
+effective and adaptive agent backbone LLMs.
+Self-Improving Agent with Skill Library. While
+RL algorithms have enabled agents to self-improve
+through valuable experiences explored during roll-
+outs (Zhou et al., 2025b; Putta et al., 2024; Qi et al.,
+2025), enabling continuous self-improvement after
+deployment, especially in new environments, re-
+mains challenging. Wang et al. (2024a) pioneered
+the use of a skill library to record successful be-
+haviors for later retrieval in Minecraft exploration.
+Subsequently, numerous studies have demonstrated
+the effectiveness of such skill libraries across vari-
+ous agentic tasks, including web exploration (Wang
+et al., 2024c; Zheng et al., 2025; Wang et al.,
+2025b), computer control (Zheng et al., 2024b; Wu
+et al., 2024), and math problems (Nguyen et al.,
+2024). These skills can take two forms: natural
+language experience memories serving as a refer-
+ence, or executable skills that can be directly im-
+plemented in the environment. In this paper, we
+focus on leveraging RL to enhance agents’ self-
+improvement capabilities by teaching them to gen-
+erate executable skills for the skill library during
+test time.
+3
+Method
+In this section, we first detail the skill library agent.
+We then present our new RL framework specifi-
+cally designed to integrate the skill library during
+training process. An illustrative figure of our skill
+library agent and Sequential Rollout with Skill-
+integrated Reward design is shown in Figure 1.
+3.1
+Skill Library Agent
+Before implementing RL, we first need to develop a
+self-improving agent that integrates the skill library
+for tool-using agents. This framework will serve
+as the foundation for RL rollout process and task
+evaluations.
+Existing frameworks for skill library agents,
+such as Agent Skill Induction (Wang et al., 2025b),
+Agent Workflow Memory (Wang et al., 2024c),
+and Voyager (Wang et al., 2024a), typically de-
+fine reusable skills after completing entire tasks.
+While this approach allows agents to observe com-
+plete task trajectories before determining skill defi-
+nitions, it limits the RL process in two ways: (1) In
+long-horizon tasks, the additional skill generation
+process further extends the context length, poten-
+3
+
+tially exceeding the model’s limitations; (2) The
+separation between task execution and skill gen-
+eration creates an inconsistency that may impact
+learning effectiveness.
+To address these limitations, we follow the Dy-
+naSaur approach (Nguyen et al., 2024) and imple-
+ment a unified format for both task solving and skill
+generation. Specifically, when the agent model in-
+teracts with the API environments, it first generates
+a skill function and then calls it to process, instead
+of using multiple APIs. An example of the format
+difference is presented in Appendix A.
+Formally, given a task set Q, our agent is de-
+signed to perform online learning from start to
+finish with a skill library M, which can be ini-
+tialized with either an empty set or previously de-
+fined skills. For each task q ∼Q, the agent first
+retrieves a skill subset [a1, ..., ak] from the skill
+library M and adds them into context before per-
+forming the task. After that, the agent can auto-
+matically perform the following actions to interact
+with the skill library: (1) Skill Usage: Perform
+skill ai ∈[a1, ..., ak] to process the task; (2) Skill
+Generation: Define a skill function ˆa composed of
+multiple actions aimed at solving the task and then
+immediately call it to process the task; (3) Skill
+Update: If the skill a, either from the skill library
+or newly defined, fails to execute, update the skill
+and recall it to process the task; (4) Skill Save: If
+the skill can be executed without error, add the new
+skill or update the existing skill in the skill library
+M. Additionally, direct API calls are allowed for
+cases where defining a function skill is unnecessary
+for task processing.
+3.2
+SAGE for Skill Library Agent
+We begin the description of our SAGE framework
+by introducing the preliminary GRPO algorithms,
+followed by our specifically-designed components
+for skill library agents: Sequential Rollout and
+Skill-integrated Reward.
+3.2.1
+Preliminary
+In this paper, we build our SAGE based on GRPO
+(Shao et al., 2024). For each query q, GRPO first
+samples a group of outputs {o1, ..., oG} from the
+old policy πθold and then optimizes the policy by
+maximizing the following objective:
+JGRPO(θ) =E[q∼Q,{oi}G
+i=1∼πθold(O|q)]
+1
+G
+G
+X
+i=1
+1
+|oi|
+|oi|
+X
+t=1
+{min[si,t ˆAi,t,
+clip (si,t, 1 −ϵ, 1 + ϵ) ˆAi,t] −βDKL}
+where si,t =
+πθ(oi,t|q,oi,<t)
+πθold(oi,t|q,oi,<t), ϵ is the clip ratio
+and β is the ratio of KL penalty between pol-
+icy model πθ and reference model πref.
+ˆAi,t is
+the advantage calculated based on the relative re-
+wards of the outputs inside each group. Given
+rewards r = {r1, r2, ..., rG} of the outputs un-
+der the same group, the advantage is defined as
+ˆAi,t = ri−mean(r)
+std(r)
+.
+3.2.2
+Sequential Rollout
+A principled method to augment agents’ self-
+improving ability with skill library is through end-
+to-end RL. However, skill generation and usage
+processes often need multiple tasks to reveal the
+quality of skills. One potential solution to enabling
+the end-to-end RL is that instead of one task, we
+could give the agent a chain of tasks. Then a se-
+quential rollout process is performed across these
+tasks, enabling the agent to progressively accumu-
+late skills in its library throughout the task chain.
+Any skills learned in earlier tasks could be used in
+subsequent tasks. In this way, rewards signal from
+the successful usage of skills in later tasks can be
+back-propagated to the skill generation in the pre-
+vious tasks. To ensure that the generated skills can
+be immediately applied to subsequent tasks, we
+construct the sequential tasks with examples under
+the same scenario, in which all tasks share similar
+instructions.
+While a longer task chain with multiple exam-
+ples would bet
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Figure 10: Task Execution Examples for Baseline GRPO
+Figure 11: Task Execution Examples for Skill Library Agent
+Figure 12: Task Execution Examples for SFT
+20
+
+Figure 13: Task Execution Examples for SAGE
+21
+

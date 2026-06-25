@@ -1,0 +1,316 @@
+=== PDF FIRST PAGE (title region) ===
+2026-06-01
+SkillDAG: Self-Evolving Typed Skill Graphs for
+LLM Skill Selection at Scale
+Tong Bai1∗
+Zhenglin Wan2∗
+Pengfei Zhou2
+Xingrui Yu3‡
+Wangbo Zhao2
+Yang You2
+Ivor W. Tsang3
+1Fudan University
+2National University of Singapore
+3CFAR, A*STAR
+# yu_xingrui@a-star.edu.sg
+∗Equal Contribution.
+‡ Corresponding Author.
+Figure 1 | SkillDAG per-episode workflow. The agent issues search to obtain a three-field response
+(matches, neighbors, conflicts), calls show to fetch any skill body, acts in the environment, and may commit
+an evidence-backed graph edit through the propose-edge/edit-edge pair. Every commit passes acyclicity
+and non-contradiction checks with an append-only log enabling rollback; the updated graph feeds subsequent
+search calls. The LLM, not a graph-ranking policy, decides what to load.
+Abstract As LLM agents adopt large skill libraries, selecting the right subset becomes a structural
+problem rather than a similarity-matching one: skills depend on, conflict with, specialize, or duplicate one
+another, a structure invisible to both full enumeration and embedding similarity. We present SkillDAG,
+which models inter-skill relationships as a typed directed graph and exposes it to
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+2026-06-01
+SkillDAG: Self-Evolving Typed Skill Graphs for
+LLM Skill Selection at Scale
+Tong Bai1∗
+Zhenglin Wan2∗
+Pengfei Zhou2
+Xingrui Yu3‡
+Wangbo Zhao2
+Yang You2
+Ivor W. Tsang3
+1Fudan University
+2National University of Singapore
+3CFAR, A*STAR
+# yu_xingrui@a-star.edu.sg
+∗Equal Contribution.
+‡ Corresponding Author.
+Figure 1 | SkillDAG per-episode workflow. The agent issues search to obtain a three-field response
+(matches, neighbors, conflicts), calls show to fetch any skill body, acts in the environment, and may commit
+an evidence-backed graph edit through the propose-edge/edit-edge pair. Every commit passes acyclicity
+and non-contradiction checks with an append-only log enabling rollback; the updated graph feeds subsequent
+search calls. The LLM, not a graph-ranking policy, decides what to load.
+Abstract As LLM agents adopt large skill libraries, selecting the right subset becomes a structural
+problem rather than a similarity-matching one: skills depend on, conflict with, specialize, or duplicate one
+another, a structure invisible to both full enumeration and embedding similarity. We present SkillDAG,
+which models inter-skill relationships as a typed directed graph and exposes it to an LLM agent as an
+inference-time, agent-callable structural retrieval interface, queried and evolved during execution rather
+than baked into a fixed retrieval pipeline: each search returns vector matches, typed-edge neighbors,
+and conflict signals, and a propose-then-commit protocol lets the agent register execution-backed edges
+so the graph accumulates structure across episodes. On ALFWorld and SkillsBench with MiniMax-M2.7,
+SkillDAG reaches 67.1% success and 27.3% reward, exceeding the strongest reported Graph-of-Skills
+baseline by +12.8 and +8.6 points; the advantage ports to gpt-5.2-codex, and intrinsic SkillsBench
+Ret@K rises from 65.5 to 78.2 under matched queries. These gains trace to isolable mechanisms:
+candidate ranking that stays robust as the pool grows 10× where a fixed seeding–diffusion pipeline
+degrades, and set-monotone online edits that enlarge ground-truth recall without evicting prior hits.
+Code and data: https://github.com/Ericbai06/SkillDAG
+arXiv:2606.03056v1  [cs.AI]  2 Jun 2026
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+1. Introduction
+Large language model agents increasingly rely on external skill libraries to extend their capabilities
+beyond the procedural knowledge in model weights. A skill is a self-contained package: a unique
+identifier, a natural-language description of when it applies, and a body of instructions or code
+the agent runs when invoked, often with auxiliary scripts and prerequisite notes [Liu et al., 2026].
+Voyager [Wang et al., 2023a], JARVIS-1 [Wang et al., 2023b], and ToolLLM [Qin et al., 2024] report
+large gains once an agent is equipped with a curated skill collection. As collections grow to thousands
+of entries, the bottleneck shifts from authoring to skill selection: which subset to load cannot be decided
+from a name or embedding alone, and retrieval over large tool collections is itself a measurable failure
+mode of LLM agents [Shi et al., 2025].
+Two strategies dominate practice. Concatenating the whole library is feasible only at small scale:
+token cost grows linearly and descriptions are lost in an overloaded prompt [Liu et al., 2024a]. Flat
+retrieval instead embeds the task and concatenates the top-𝐾skills by cosine similarity [Karpukhin
+et al., 2020, Reimers and Gurevych, 2019] or BM25 [Robertson and Zaragoza, 2009]. Both hide the
+library’s relational structure: the top match names the task while a functionally necessary prerequisite
+(a parser, converter, or setup utility) is silently omitted; analogous gaps arise from skills that interfere
+when co-selected, near-duplicates that waste context budget, and pairs that jointly enable a capability
+neither provides alone. Curation can mask these failures at small scale, but its cost grows with the
+library.
+Prior work models inter-skill structure but stops short of letting the LLM reason over it directly.
+SkillNet [Liang et al., 2026] builds a 500,000-skill graph used for platform organization rather than
+runtime routing. Graph of Skills [GoS; Liu et al., 2026] runs Personalized PageRank [Haveliwala,
+2003, Page et al., 1999] over a typed skill graph at inference time and reports gains on SkillsBench
+and ALFWorld, but computes the bundle through a fixed seeding–diffusion–reranking pipeline and
+hands the agent opaque context: it cannot ask why a skill was chosen, retract a noisy retrieval, or
+record a relationship the offline pipeline missed. XSkill [Jiang et al., 2026] and CUA-Skill [Chen
+et al., 2026] address skill acquisition and execution respectively, not inter-skill relations.
+We propose SkillDAG, built on the inverse design choice: rather than the substrate of a fixed retrieval
+algorithm, the graph is exposed to the LLM as an inference-time, agent-callable structural retrieval
+interface, on the same footing as the tools the agent already uses for execution. The LLM, not a
+graph-ranking policy, decides how structural evidence should affect execution; the graph in turn
+accumulates structural knowledge across episodes through evidence-backed agent edits.
+Our contributions are summarized as follows:
+• We identify that flat retrieval over large skill libraries silently omits structurally necessary skills
+and concatenates redundant or interfering ones—a failure mode invisible to similarity matching
+alone.
+• We propose SkillDAG, an agent-callable structural retrieval interface that exposes a typed skill
+relation graph to the LLM via search/show/propose-edge/edit-edge, replacing a fixed
+graph-ranking policy with structural evidence the agent reasons over directly.
+• We design an online propose-then-commit edit protocol under three structural invariants
+(acyclicity, non-contradiction, append-only reversibility) that grows the graph from single-
+episode evidence, paired with a two-view cold-start constructor that recovers cross-functional
+pairs flat self-similarity misses.
+• Experiments on ALFWorld [Shridhar et al., 2021] and SkillsBench [Liu et al., 2026] with
+MiniMax-M2.7 and gpt-5.2-codex show SkillDAG reaches 67.1%/93.6% ALFWorld success
+2
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+and 27.3%/36.8% SkillsBench reward, with intrinsic Ret@K of 78.2 stable across a 10× skill-pool
+expansion.
+2. Related Work
+Skill and tool libraries. LLM agents are augmented with external capabilities exposed as tools [Patil
+et al., 2024, Qin et al., 2024, Schick et al., 2023], skills [Wang et al., 2023a,b], code actions [Liang
+et al., 2023, Wang et al., 2024b], or grounded primitives [Ahn et al., 2022, Huang et al., 2022]. As
+libraries scale, selection rather than authoring becomes the bottleneck: ToolkenGPT [Hao et al., 2023]
+learns per-tool embeddings, AnyTool [Du et al., 2024] adds a hierarchical API retriever, CRAFT [Yuan
+et al., 2024] creates and retrieves specialized tool-sets, and library-learning methods compress
+trajectories into documented reusable code [Grand et al., 2024]. SkillNet [Liang et al., 2026]
+organizes 500K+ skills as a graph for developer navigation, CUA-Skill [Chen et al., 2026] models
+skills as executable DAGs, and GraSP [Xia et al., 2026] adds DAG repair for intra-task sequencing;
+none expose inter-skill structure to the agent at runtime, so flat selection still misses prerequisites
+and conflicts as the library grows.
+Skill retrieval and structured RAG. Beyond flat top-𝐾RAG [Lewis et al., 2020], recent work injects
+structure: GraphRAG [Edge et al., 2024] indexes a community graph for offline summarization,
+HuggingGPT [Shen et al., 2023] composes models by task decomposition over a flat catalog, Hip-
+poRAG [Gutiérrez et al., 2024] retrieves by Personalized PageRank over a KG memory, LightRAG [Guo
+et al., 2025] maintains an incrementally updated graph index, and GeAR [Shen et al., 2025] performs
+agent-driven graph expansion. For tools specifically, Re-Invoke [Chen et al., 2024] rewrites queries
+for zero-shot retrieval and ToolGen [Wang et al., 2025] folds lookup into generation via tool tokens.
+Graph of Skills [GoS; Liu et al., 2026], the closest baseline, builds a typed skill graph offline and
+retrieves a bundle by reverse-aware Personalized PageRank that is concatenated into context as opaque
+text. SkillDAG inverts two choices: the graph is an agent-callable structural retrieval interface rather
+than a fixed retriever’s substrate, and its edges are editable during execution rather than frozen at
+construction.
+Self-evolving agent. ReAct [Yao et al., 2023b] interleaves reasoning [Wei et al., 2022] and action, ex-
+tended by deliberate search [Yao et al., 2023a]; Reflexion [Shinn et al., 2023] and Self-Refine [Madaan
+et al., 2023] add verbal self-correction; ExpeL [Zhao et al., 2024], AutoAct [Qiao et al., 2024], and
+Agent-Pro [Zhang et al., 2024] distill experience into reusable insights or policies. Closer to skill
+accumulation, Agent Workflow Memory [Wang et al., 2024c] induces reusable workflows online,
+ICAL [Sarch et al., 2024] and STE [Wang et al., 2024a] abstract trajectories into memory, Auto-
+Guide [Fu et al., 2024] retrieves state-conditioned guidelines, and OS-Copilot [Wu et al., 2024]
+accumulates skills in a tool-rich OS; surveys frame these as non-parametric self-evolution [Gao et al.,
+2025]. Generative Agents [Park et al., 2023] and MemGPT [Packer et al., 2023] manage free-text
+memory, and XSkill [Jiang et al., 2026] updates individual skills. Recent systems also externalize
+or compress agent execution context: AgentOCR renders interaction history into compact visual
+memory [Feng et al., 2026], while CaveAgent treats a persistent runtime as the central state store
+with runtime-integrated skill management [Ran et al., 2026]. In embodied settings, multi-memory
+frameworks similarly structure spatial, temporal, episodic, and semantic experience for long-horizon
+interaction [Lei et al., 2026]. Our propose/edit-edge mechanism instead mutates a typed relational
+structure shared by all future agents, enabling precise, auditable updates.
+Agent benchmarks. We evaluate on ALFWorld [Shridhar et al., 2021] and SkillsBench [Liu et al.,
+2026], within a landscape spanning cross-domain tasks [Liu et al., 2024b], web environments [Zhou
+et al., 2024], general assistants [Mialon et al., 2024], desktop/OS control [Xie et al., 2024], API-rich
+3
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+Figure 2 | A six-node subgraph from the post-run ALFWorld graph exercising all five typed relations:
+cold-start specializes/similar_to edges plus an agent-registered depends_on and a later
+conflicts_with on the same pair.
+apps [Trivedi et al., 2024], tool-agent-user dialogue [Yao et al., 2024], and function calling [Patil
+et al., 2025]. All share the pressure point motivating SkillDAG: retrieval over a growing capability
+surface is itself a measurable failure mode [Shi et al., 2025].
+3. Method
+3.1. Overview
+SkillDAG starts from a simple inversion: the typed graph is not hidden inside a fixed retrieval
+pipeline, but exposed as an agent-callable interface the LLM can query, inspect, and revise during
+execution. This makes graph structure an explicit part of the agent’s decision context rather than an
+opaque ranking heuristic. The typed relation graph gives otherwise flat skill libraries operational
+structure: prerequisite and specialization edges organize reusable progressions, composition and
+similarity edges surface adjacent skills, and conflict edges mark combinations the agent should
+avoid. The search/show interface turns that structure into action by returning semantic matches,
+typed neighbors, and conflicts as separate evidence channels while loading full skill bodies only on
+demand. To initialize such structure before any episode runs, the cold-start constructor links skills
+from two complementary views: what a skill does and what it needs. Static structure is inevitably
+incomplete, however, so the online protocol lets the agent propose and commit execution-backed
+edits while acyclicity, non-contradiction, and append-only reversibility keep the graph from drifting
+into incoherence. The formal graph, interface, cold-start constructor, and online edit protocol are
+specified in §3.2–§3.5, with full pseudocode in Appendix A.
+4
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+Figure 3 | Cold-start construction: read the library, embed each skill in two views (𝑒self for what it
+does, 𝑒needs for what it requires), apply an adaptive cosine threshold, run an LLM pair classifier, and
+materialize the initial graph. conflicts_with is reserved for the online protocol because co-use
+harm cannot be inferred from static text alone.
+3.2. Skill Relation Graph Definition
+Prerequisites, alternatives, and conflicts collapse onto a single cosine score under the default retrieval
+baseline (rank skills by self-description similarity and concatenate the top-𝐾), so a hard prerequisite
+and an interchangeable alternative both surface as “high-cosine neighbors,” even though loading
+the former unlocks the task while loading the latter wastes context and dilutes the agent’s attention.
+To prevent this collapse, we elevate the relation type itself to be part of the agent-facing semantics,
+so the LLM acts on what kind of relation it sees rather than merely how similar two skills look. We
+instantiate this principle as a typed graph. Let the skill library be a finite set C = {𝑠1, . . . , 𝑠𝑛} of
+skill packages, where 𝑠𝑖is also the unique identifier; the graph 𝐺= (𝑉, 𝐸, 𝜏) has 𝑉= C and a typing
+function 𝜏assigning each edge one of five operationally specified types: depends_on(𝐴, 𝐵) marks 𝐴
+as requiring the prerequisite 𝐵; specializes(𝐷, 𝐴) marks 𝐷as the narrower variant to prefer over
+𝐴; composes_with marks synergistic co-use; similar_to marks functional redundancy (pick one);
+and conflicts_with marks pairs that should not be co-selected.
+Two operational constraints make this typed graph usable as an agent-facing interface. Conflicts as
+a pruning signal, not a navigation edge. We deliberately exclude conflicts_with from traversal
+because navigating a conflict edge would actively undermine retrieval by surfacing the very skills
+the LLM has been told to avoid; the four positive types are walked by the retrieval interface, while
+conflicts_with is only used to exclude co-selection (§3.3). Acyclicity on the backbone. We reserve
+depends_on and specializes as the directed backbone whose acyclicity gives SkillDAG its
+name; the invariant is enforced at commit time (§3.5). Figure 2 shows a six-node post-run ALFWorld
+subgraph exercising all five types.
+3.3. Agent-Callable Structural Retrieval Interface
+Having typed the edges, we must decide how to expose the graph to the agent at inference time. The
+default move in prior graph retrievers is to collapse typed structure back into one ranked bundle,
+but doing so would undo the work of §3.2, hiding from the LLM exactly the distinctions we built
+the graph to preserve. We therefore designed search (Figure 1) as an agent-callable interface that
+returns semantic matches, typed neighbors, and conflicts as three separate evidence channels the
+LLM reasons over independently.
+5
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+A single search(𝑞, 𝐾, 𝐷) call returns three fields, each answering a distinct question the LLM would
+otherwise have to ask separately: matches (“what is topically close to 𝑞?”), the top-𝐾skills by query–
+node embedding cosine [Karpukhin et al., 2020]; neighbors (“what does the typed graph attach to
+those matches?”), skills reached by bounded breadth-first traversal of depth 𝐷over the four walkable
+edge types; and conflicts (“what should I not co-load with them?”), the one-hop conflicts_with
+edges incident to any match.
+We chose to keep these channels separate, rather than
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+Models and embeddings. Agent runs use MiniMax-M2.7 (via the official MiniMax Anthropic-
+compatible endpoint) and gpt-5.2-codex (via the OpenAI Codex CLI with reasoning_effort=high).
+Cold-start pair classification uses gpt-5-nano. Query embedding at runtime uses text-embedding-3-large,
+matching each GoS workspace’s embedding configuration.
+Step and attempt budgets. ALFWorld episodes are capped at 30 steps with 𝑛attempts = 2 following
+Liu et al. [2026] §4.1. SkillsBench uses 𝑛attempts = 1 for the MiniMax cross-scale retrieval replay
+and 𝑛attempts = 2 for main task-reward results; the gpt-5.2-codex retrieval row replays the codex
+agent’s queries under the same 𝑛attempts = 2 budget.
+Online edit logging. Each accepted edit-edge writes an entry with origin (cold-start vs. online),
+reason (natural-language justification), and task_id (the episode that produced the supporting
+evidence) into the graph’s edge metadata.
+Cold-start cost. At scale 1000 the cold-start construction takes approximately 200 gpt-5-nano calls
+in batched bucket mode (one call per anchor skill, classifying all candidate pairs in that bucket), plus
+one embedding call per skill for each of the two views (𝑒self and 𝑒needs).
+E. Worked Example Subgraph
+Edges are unweighted (present or absent); the LLM decides whether to add, remove, or retype an
+edge based on execution evidence, not statistical accumulation. Table 3 lists the runtime role of each
+type; the main-text Figure 2 shows a worked subgraph exercising all five.
+Table 3 | Edge type taxonomy; runtime roles.
+Type
+Runtime role
+depends_on
+Selecting 𝐴pulls in 𝐵as
+prerequisite
+composes_with
+Surfaces composition op-
+portunities
+similar_to
+De-duplication: select one,
+not both
+conflicts_with
+Prune:
+selecting
+𝐴ex-
+cludes 𝐵
+specializes
+Prefer specialized 𝐷over
+general 𝐴
+F. Search Interface Field Semantics
+Matches. Cosine similarity is computed between the query embedding and each node’s pre-computed
+embedding; the top-𝐾are returned, ranked by similarity.
+Neighbors. From the match set, BFS proceeds along walkable types (specializes, composes_with,
+depends_on, similar_to) up to depth 𝐷, traversed bidirectionally so the agent sees both ends of
+a relationship (for depends_on, both the prerequisite and any skill requiring the match as setup);
+the typed label travels with the edge. Each neighbor records its shortest distance from a match,
+predecessor, and edge type. conflicts_with is not traversed. Skills already matched are excluded.
+18
+
+SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale
+Conflicts. All conflicts_with edges incident to any match within one hop are returned separately.
+They have opposite polarity from neighbors: skills that should not be co-selected. No transitive
+expansion (conflicts-of-conflicts are undefined).
+Properties. (i) The agent issues queries on its own schedule and rephrases as understanding evolves,
+rather than receiving one episode-start bundle. (ii) The three-field decomposition lets the agent drop
+a whole field under tight budget rather than truncating an opaque concatenation. (iii) Edges carry an
+explicit type and reason, so the agent’s trace documents selection/exclusion. After search, the agent
+issues show for chosen candidates; the decision is unconstrained (all matches, only typed neighbors,
+or skip the graph).
+G. Online-Edit Protocol Detail
+The protocol separates inspection from mutation. propose-edge performs a dry-run returning
+what the change would do and surfacing all existing edges and recent history entries for the same
+skill pair, so the agent sees what prior episodes established before proceeding. edit-edge com-
+mits, appending a history entry with task ID, natural-language reason, and timestamp. The per-
+edit reason and task_id log preserve auditability without gating the edit, placing graph-quality
+responsibility on the same agent that consumes it. The three commit-time invariants (acyclicity
+of the depends_on/specializes backbone; non-contradiction, meaning no conflicts_with
+edge on a pair that already carries a positive surfacing edge such as depends_on, specializes,
+composes_with, or similar_to; and rollback by recency or task ID via the append-only log) are
+enforced on both propose-edge and edit-edge.
+H. Cold-Start Pipeline Detail
+The first view 𝑒self(𝑣) embeds 𝑣’s identifier, description, and a body preview. The second view 𝑒needs(𝑣)
+prompts an LLM to imagine two or three concrete tasks invoking 𝑣in a longer chain and summarize the
+shared prerequisites in one sentence, which is embedded; skills with no clear shared prerequisite emit
+self-contained and are excluded from the second view. Candidate pairs come from two rankings:
+cos(𝑒self(𝑖), 𝑒self( 𝑗)) over all pairs, and cos(𝑒needs(𝑖), 𝑒self( 𝑗)) for each 𝑖with non-empty needs. A pair is
+kept when its cosine exceeds an adaptive threshold max(0.35, min(0.75, 𝜇+ 𝜎)) (𝜇, 𝜎the mean/SD
+of that ranking’s similarities). The two-view design exists because 𝑒self alone misses cross-functional
+pairs: a cooling skill and a pickup skill are distant under 𝑒self, but the cooling skill’s needs text (“object
+in hand”) bridges to the pickup skill’s self-description. The candidate union is bucketed by anchor
+(lower-index skill) and sent to an LLM in one call per bucket assigning similar_to, specializes,
+depends_on, composes_with, or none; none pairs are discarded and the rest become cold-start
+edges carrying the LLM’s reason.
+19
+

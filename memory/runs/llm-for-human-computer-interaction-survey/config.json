@@ -1,0 +1,24 @@
+{
+  "project_name": "llm-for-human-computer-interaction-survey",
+  "search_terms": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "primary_topic": "Using large language models in human-computer interaction",
+  "domain": "Human-Computer Interaction (HCI)",
+  "description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+  "search_queries": [
+    {
+      "name": "query1",
+      "query": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 100,
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  },
+  "api_email": "zx136@georgetown.edu"
+}

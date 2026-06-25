@@ -1,0 +1,798 @@
+{
+  "row51": {
+    "row_id": "row51",
+    "phys": 52,
+    "title": "Black-Box Skill Stealing Attack from Proprietary LLM Agents: An Empirical Study",
+    "doi": "10.48550/arxiv.2604.21829",
+    "url": "https://openalex.org/W7155533524",
+    "pdf": "row51_Black-Box_Skill_Stealing_Attack_from_Proprietary_LLM_Agents_An_Empirical_Study.pdf",
+    "rejected_risk": false,
+    "pages": 23,
+    "pdf_title_head": "1 Black-Box Skill Stealing Attack from Proprietary LLM Agents: An Empirical Study Zihan Wang, Rui Zhang, Yu Liu, Chi Liu, Qingchuan Zhao, Hongwei Li, and Guowen Xu Abstract—Large language model (LLM) agents increasingly rely on skills to package reus",
+    "all_candidates": [
+      "row51_Black-Box_Skill_Stealing_Attack_from_Proprietary_LLM_Agents_An_Empirical_Study.pdf"
+    ],
+    "abstract": "Large language model (LLM) agents increasingly rely on skills to package reusable capabilities through instructions, tools, and resources. High-quality skills embed expert knowledge, curated workflows, and execution constraints into agents, fueling a growing skill economy through their value and scalability. Yet this ecosystem also creates a new attack surface, as adversaries can interact with public agent interfaces to extract hidden proprietary skill content. We present the first systematic study of black-box skill stealing against LLM agent systems. Compared with conventional system prompt stealing, skill stealing targets modular and structured capability packages whose leakage is directly actionable for copying, redistribution, and monetization, making the resulting harm potentially greater. To study this threat, we derive an attack taxonomy from prior prompt-stealing methods and build an automated stealing prompt generation agent. Starting from model-generated seed prompts, the framework expands attacks through scenario rationalization and structure injection while enforcing diversity via embedding-based filtering, yielding a reproducible pipeline for evaluating proprietary agent systems. We evaluate these attacks across commercial agent platforms and representative LLMs. Our results show that agent skills can often be extracted easily, posing a serious copyright risk. To mitigate this threat, we design defenses across the agent pipeline, focusing on input, inference, and output phase. Although these defenses substantially reduce leakage, the attack remains inexpensive and repeatable, and a single successful attempt is sufficient to compromise the protected skill. Overall, our findings suggest that these copyright risks remain largely overlooked across proprietary agent ecosystems, motivating stronger protection mechanisms."
+  },
+  "row52": {
+    "row_id": "row52",
+    "phys": 53,
+    "title": "OpenSkill: Open-World Self-Evolution for LLM Agents",
+    "doi": null,
+    "url": "https://openalex.org/W7164090336",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row52_openskill_open-world_self-evolution_for_llm_agents.pdf",
+    "rejected_risk": false,
+    "pages": 20,
+    "pdf_title_head": "OPENSKILL: Open-World Self-Evolution for LLM Agents Zhiling Yan1,∗, Dingjie Song1,∗, Hanrong Zhang2, Wei Liang1, Yuxuan Zhang3,4, Yutong Dai5, Lifang He1, Philip S. Yu2, Ran Xu5, Xiang Li6, Lichao Sun1,† 1Lehigh University, 2University of Illinois Ch",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row52_openskill_open-world_self-evolution_for_llm_agents.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row52_openskill_open-world_self-evolution_for_llm_agents.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row52_openskill_open-world_self-evolution_for_llm_agents.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row52_openskill_open-world_self-evolution_for_llm_agents.pdf"
+    ],
+    "abstract": "Self-evolving agents requires adaptation after deployment, but existing approaches assume a usable learning loop, such as curated skills, successful trajectories, or verifier signals. Real open-world deployments may provide none of these, offering only a task prompt. In this work, we study open-world self-evolution, where an agent must build both its skills and its own verification signals from scratch, using open-world resources but no target-task supervision. We propose OpenSkill, a framework that bootstraps this loop: it acquires grounded knowledge and verification anchors from documentation, repositories, and the web, synthesizes them into transferable skills, and refines those skills against self-built virtual tasks grounded in the anchors rather than in target answers. The open world thus supplies both the knowledge to be learned and a supervision-independent practice environment, with target-task supervision reserved for final evaluation. Across three benchmarks and two target agents, OpenSkill attains the best automated pass rate while satisfying the no-supervision constraint. Analysis shows its skills transfer across models without model-specific adaptation, and its self-built verifier aligns with ground-truth outcomes despite never accessing them."
+  },
+  "row53": {
+    "row_id": "row53",
+    "phys": 54,
+    "title": "From Human Guidance to Autonomy: Agent Skill System for End-to-End LLM Deployment on Spatial NPUs",
+    "doi": "10.48550/arxiv.2606.07586",
+    "url": "https://openalex.org/W7163996892",
+    "pdf": "row53_From_Human_Guidance_to_Autonomy_Agent_Skill_System_for_End-to-End_LLM_Deploymen.pdf",
+    "rejected_risk": false,
+    "pages": 6,
+    "pdf_title_head": "Accepted to the Machine Learning for Architecture and Systems Workshop (MLArchSys), co-located with ISCA 2026. From Human Guidance to Autonomy: Agent Skill System for End-to-End LLM Deployment on Spatial NPUs Jiajie Li Erwei Wang∗ Zhiru Zhang Samuel ",
+    "all_candidates": [
+      "row53_From_Human_Guidance_to_Autonomy_Agent_Skill_System_for_End-to-End_LLM_Deploymen.pdf"
+    ],
+    "abstract": "Spatial neural processing units (NPUs) provide an energy-efficient platform for edge LLM inference, but efficiently deploying an LLM end-to-end on such hardware remains labor-intensive. Although AI coding agents have begun to lower this cost, existing studies have largely focused on single-kernel optimization rather than end-to-end LLM deployment on resource-constrained spatial NPUs. We present a two-stage methodology, instantiated on the AMD XDNA 2 NPU, that progresses from human-guided development to agent autonomy. In the first stage, we develop a reference deployment of Llama-3.2-1B through human-guided agent assistance. The resulting implementation achieves a speedup of 2.2x on prefill and 4.0x on decode over the hand-optimized baseline, with the optimization trajectory and its lessons recorded as structured documentation throughout. In the second stage, we distill the documentation into an agent skill system consisting of eight phases, orchestrating the optimization and debugging skill sets, with numerical correctness strictly enforced at each phase. Using our agent skill system, we autonomously deploy eight additional decoder-only LLMs (Llama-3.2-3B, SmolLM2-1.7B, Qwen2.5-{0.5B, 1.5B, 3B}, Qwen3-{0.6B, 1.7B, 4B}) end-to-end on the AMD XDNA 2 NPU using the open-source compiler stack. To our knowledge, these models have not previously been deployed on AMD NPUs via any open-source software stack. Each deployment completes in 0.5-4 hours of agent wall time with almost no human guidance, and passes the numerical-correctness gates, demonstrating functional generalization to previously unencountered LLMs. Three of the eight match or exceed the sustained performance of our Llama-3.2-1B reference deployment, suggesting that the resulting implementations can be competitive without additional model-specific human engineering."
+  },
+  "row54": {
+    "row_id": "row54",
+    "phys": 55,
+    "title": "Skill Is Not Document: A Query-Conditional Benchmark and Two-Stage Retriever for LLM Agent Skill Routing",
+    "doi": "10.48550/arxiv.2606.03565",
+    "url": "https://openalex.org/W7163374377",
+    "pdf": "row54_Skill_Is_Not_Document_A_Query-Conditional_Benchmark_and_Two-Stage_Retriever_for.pdf",
+    "rejected_risk": false,
+    "pages": 19,
+    "pdf_title_head": "SKILL IS NOT DOCUMENT: A QUERY-CONDITIONAL BENCH- MARK AND TWO-STAGE RETRIEVER FOR LLM AGENT SKILL ROUTING Zifei Wang1,∗, Wei Wen2,∗†, Qiang Ji1, Ruizhi Qiao1,2, Xing Sun1,2 1Tencent IMA Product Center 2Tencent Youtu Lab {zifeiwang, jawnrwen, peasirj",
+    "all_candidates": [
+      "row54_Skill_Is_Not_Document_A_Query-Conditional_Benchmark_and_Two-Stage_Retriever_for.pdf"
+    ],
+    "abstract": "LLM agents complete complex tasks by composing multiple skills, and skill retrieval is a front-end stage for agents. Skill retrieval differs fundamentally from traditional document retrieval at the supervision level: top-K joint correctness depends not only on the semantic relevance of each individual query-skill pair, but also on whether the skills retrieved together can collaborate to fulfill the task under the given query. Such \"skill compatibility\" cannot be derived from independent relevance alone. Yet existing LLM-based data synthesis pipelines can produce a direct supervision signal for \"which skills should not be jointly retrieved under this query\" -- namely the LLM's own rejection decisions -- and this signal is routinely discarded as low-quality data. To address this gap, we propose Reject-as-Resource Retriever (R3) and construct R3-Skill, a bilingual (Chinese-English) skill retrieval benchmark targeting realistic agent skill routing. R3-Skill spans four language directions, features query phrasings close to real user requests, and is verified through multi-expert cross-checking. On R3-Skill, we build a two-stage retrieval system (R3-Embedding + R3-Reranker) with skill compatibility as an explicit training signal. Gradient analysis shows that the \"push-away\" signal is diluted by bilateral balancing in the bi-encoder but acts as lossless graded ranking supervision in the cross-encoder -- motivating its placement at the cross-encoder stage, as confirmed by ablations on two datasets. The R3-Embedding + R3-Reranker pipeline attains Hit@1 = 0.7714, NDCG@10 = 0.8327 and Set-Compat = 0.3525 on R3-Skill. The dataset, training code and model weights are released as open source for agent skill routing."
+  },
+  "row55": {
+    "row_id": "row55",
+    "phys": 56,
+    "title": "ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory",
+    "doi": "10.48550/arxiv.2601.21545",
+    "url": "https://openalex.org/W7126267767",
+    "pdf": "row55_ShardMemo_Masked_MoE_Routing_for_Sharded_Agentic_LLM_Memory.pdf",
+    "rejected_risk": false,
+    "pages": 10,
+    "pdf_title_head": "ShardMemo: Masked MoE Routing for Sharded Agentic LLM Memory Yang Zhao * Chengxiao Dai * Yue Xiu Mengying Kou Yuliang Zheng Dusit Niyato Abstract Agentic large language model (LLM) systems rely on external memory for long-horizon state and concurrent",
+    "all_candidates": [
+      "row55_ShardMemo_Masked_MoE_Routing_for_Sharded_Agentic_LLM_Memory.pdf"
+    ],
+    "abstract": "Agentic large language model (LLM) systems rely on external memory for long-horizon state and concurrent multi-agent execution, but centralized indexes and heuristic partitions become bottlenecks as memory volume and parallel access grow. We present ShardMemo, a budgeted tiered memory service with Tier A per-agent working state, Tier B sharded evidence with shard-local approximate nearest neighbor (ANN) indexes, and Tier C, a versioned skill library. Tier B enforces scope-before-routing: structured eligibility constraints mask ineligible shards before routing or ANN search. We cast shard probing as masked mixture-of-experts (MoE) routing over eligible shards, probing up to $B_{\\mathrm{probe}}$ shards via Top-$B_{\\mathrm{probe}}$ or adaptive Top-$P$, and use cost-aware gating over profile/observation/session shard families; the router is trained from evidence-to-shard supervision. On LoCoMo, ShardMemo improves over the strongest baseline (GAM) by +5.11 to +6.82 F1 across question categories. Under a fixed-budget routing setting ($B_{\\mathrm{probe}}=3$), ShardMemo improves over cosine-to-prototype shard routing by +6.87 F1 while reducing retrieval work (VecScan 521-&gt;414, -20.5%) and p95 latency (95-&gt;76 ms). On long-context HotpotQA, ShardMemo achieves 63.41/61.88/57.95 F1 at 56K/224K/448K tokens. On ToolBench, Tier C reaches 0.97 Precision@3 and 1.94 StepRed (+10.2% and +7.2% over embedding-similarity retrieval)."
+  },
+  "row56": {
+    "row_id": "row56",
+    "phys": 57,
+    "title": "Do Self-Evolving Agents Forget? Capability Degradation and Preservation in Lifelong LLM Agent Adaptation",
+    "doi": null,
+    "url": "https://openalex.org/W7161091951",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row56_do_self-evolving_agents_forget_capability_degradation_and_pr.pdf",
+    "rejected_risk": false,
+    "pages": 25,
+    "pdf_title_head": "Do Self-Evolving Agents Forget? Capability Degradation and Preservation in Lifelong LLM Agent Adaptation Ye Yu1, Xiaopeng Yuan1, Haibo Jin1, Heming Liu1, Yaoning Yu1, Haohan Wang1∗ 1 University of Illinois Urbana-Champaign, IL, USA Abstract Recent ad",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row56_do_self-evolving_agents_forget_capability_degradation_and_pr.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row56_do_self-evolving_agents_forget_capability_degradation_and_pr.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row56_do_self-evolving_agents_forget_capability_degradation_and_pr.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row56_do_self-evolving_agents_forget_capability_degradation_and_pr.pdf"
+    ],
+    "abstract": "Recent advances in LLM agents enable systems that autonomously refine workflows, accumulate reusable skills, self-train their underlying models, and maintain persistent memory. However, we show that such self-evolution is often non-monotonic: adapting to new task distributions can progressively degrade previously acquired capabilities across all major evolution channels. We identify this phenomenon as \\emph{capability erosion under self-evolution} and show that it consistently emerges across workflow, skill, model, and memory evolution. To mitigate this issue, we propose \\emph{Capability-Preserving Evolution} (CPE), a general stabilization principle that constrains destructive capability drift during continual adaptation. Across all four evolution dimensions, CPE consistently improves retained capability stability while preserving adaptation performance. For example, in workflow evolution, CPE improves retained simple-task performance from 41.8\\% to 52.8\\% under GPT-5.1 optimization while simultaneously achieving stronger complex-task adaptation. Our findings suggest that stable long-horizon self-evolving agents require not only acquiring new capabilities, but also explicitly preserving previously learned ones during continual adaptation."
+  },
+  "row57": {
+    "row_id": "row57",
+    "phys": 58,
+    "title": "SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale",
+    "doi": "10.48550/arxiv.2606.03056",
+    "url": "https://openalex.org/W7163317726",
+    "pdf": "row57_SkillDAG_Self-Evolving_Typed_Skill_Graphs_for_LLM_Skill_Selection_at_Scale.pdf",
+    "rejected_risk": false,
+    "pages": 19,
+    "pdf_title_head": "2026-06-01 SkillDAG: Self-Evolving Typed Skill Graphs for LLM Skill Selection at Scale Tong Bai1∗ Zhenglin Wan2∗ Pengfei Zhou2 Xingrui Yu3‡ Wangbo Zhao2 Yang You2 Ivor W. Tsang3 1Fudan University 2National University of Singapore 3CFAR, A*STAR # yu_x",
+    "all_candidates": [
+      "row57_SkillDAG_Self-Evolving_Typed_Skill_Graphs_for_LLM_Skill_Selection_at_Scale.pdf"
+    ],
+    "abstract": "As LLM agents adopt large skill libraries, selecting the right subset becomes a structural problem rather than a similarity-matching one: skills depend on, conflict with, specialize, or duplicate one another, a structure invisible to both full enumeration and embedding similarity. We present SkillDAG, which models inter-skill relationships as a typed directed graph and exposes it to an LLM agent as an inference-time, agent-callable structural retrieval interface, queried and evolved during execution rather than baked into a fixed retrieval pipeline: each search returns vector matches, typed-edge neighbors, and conflict signals, and a propose-then-commit protocol lets the agent register execution-backed edges so the graph accumulates structure across episodes. On ALFWorld and SkillsBench with MiniMax-M2.7, SkillDAG reaches 67.1% success and 27.3% reward, exceeding the strongest reported Graph-of-Skills baseline by +12.8 and +8.6 points; the advantage ports to gpt-5.2-codex, and intrinsic SkillsBench Ret@K rises from 65.5 to 78.2 under matched queries. These gains trace to isolable mechanisms: candidate ranking that stays robust as the pool grows 10x where a fixed seeding-diffusion pipeline degrades, and set-monotone online edits that enlarge ground-truth recall without evicting prior hits."
+  },
+  "row58": {
+    "row_id": "row58",
+    "phys": 59,
+    "title": "Lessons Learned: A Multi-Agent Framework for Code LLMs to Learn and Improve",
+    "doi": "10.48550/arxiv.2505.23946",
+    "url": "https://openalex.org/W4414855616",
+    "pdf": "row58_Lessons_Learned_A_Multi-Agent_Framework_for_Code_LLMs_to_Learn_and_Improve.pdf",
+    "rejected_risk": false,
+    "pages": 50,
+    "pdf_title_head": "Lessons Learned: A Multi-Agent Framework for Code LLMs to Learn and Improve Yuanzhe Liu1∗ Ryan Deng2† Tim Kaler2 Xuhao Chen2,3 Charles E. Leiserson2 Yao Ma1 Jie Chen4 1Rensselaer Polytechnic Institute 2Massachusetts Institute of Technology 3Michigan ",
+    "all_candidates": [
+      "row58_Lessons_Learned_A_Multi-Agent_Framework_for_Code_LLMs_to_Learn_and_Improve.pdf"
+    ],
+    "abstract": "Recent studies show that LLMs possess different skills and specialize in different tasks. In fact, we observe that their varied performance occur in several levels of granularity. For example, in the code optimization task, code LLMs excel at different optimization categories and no one dominates others. This observation prompts the question of how one leverages multiple LLM agents to solve a coding problem without knowing their complementary strengths a priori. We argue that a team of agents can learn from each other's successes and failures so as to improve their own performance. Thus, a lesson is the knowledge produced by an agent and passed on to other agents in the collective solution process. We propose a lesson-based collaboration framework, design the lesson solicitation--banking--selection mechanism, and demonstrate that a team of small LLMs with lessons learned can outperform a much larger LLM and other multi-LLM collaboration methods."
+  },
+  "row59": {
+    "row_id": "row59",
+    "phys": 60,
+    "title": "Procedural Skill Memory for LLM Agent Systems: Architecture, Benchmark, and Honest Limits of a First Implementation",
+    "doi": "10.5281/zenodo.19227514",
+    "url": "https://openalex.org/W7140276500",
+    "pdf": "EXTERNAL: zenodo PAPER_TECHNICAL_SECTIONS.md (10.5281/zenodo.19227514)",
+    "rejected_risk": false,
+    "pages": null,
+    "pdf_title_head": null,
+    "all_candidates": [],
+    "abstract": "Current AI agent systems operate primarily as stateless executors: they do not retain procedural experience across tasks. I propose five desirable properties for experience-driven agent systems and present OrKa Brain, an open-source prototype that implements a procedural skill memory loop (learn, persist, retrieve, apply, feedback, decay) within a YAML-based LLM agent orchestration framework. I evaluate the system on a 30-task benchmark across two tracks (cross-domain transfer and same-domain accumulation) using an LLM-as-judge evaluation protocol. Results show a consistent but modest advantage for the Brain-augmented condition: 63.3% pairwise win rate, with the strongest signal in perceived trustworthiness (19/28 wins). Absolute rubric deltas remain small (+0.10 overall on a 10-point scale), revealing a ceiling effect: the underlying LLM already possesses the procedural knowledge the Brain recalls. The current implementation uses rule-based keyword extraction rather than semantic understanding, and the benchmark carries significant confounds (unequal pipeline lengths, single model, single run). I report both the positive signals and the negative ones, identify the bottlenecks, and outline the architectural slots designed for progressive upgrade.",
+    "source_note": "No local/publisher PDF; used authoritative author markdown from Zenodo record 19227514"
+  },
+  "row60": {
+    "row_id": "row60",
+    "phys": 61,
+    "title": "CraftUtopia: A LLM-based Multi-Agent System for Collaborative Construction in Minecraft",
+    "doi": "10.65109/puij7087",
+    "url": "https://openalex.org/W7162246218",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row60_craftutopia_a_llm-based_multi-agent_system_for_collaborative.pdf",
+    "rejected_risk": false,
+    "pages": 3,
+    "pdf_title_head": "CraftUtopia: A LLM-based Multi-Agent System for Collaborative Construction in Minecraft Demonstration Track Wanli Fu∗ Shanghai Artificial Intelligence Laboratory Northwestern Polytechnical University Shanghai, China Hao Li∗ Shanghai Artificial Intell",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row60_craftutopia_a_llm-based_multi-agent_system_for_collaborative.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row60_craftutopia_a_llm-based_multi-agent_system_for_collaborative.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row60_craftutopia_a_llm-based_multi-agent_system_for_collaborative.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row60_craftutopia_a_llm-based_multi-agent_system_for_collaborative.pdf"
+    ],
+    "abstract": "LLM-based multi-agent construction is a growing research area but prior works still suffer from low success rates for construction, reliance on predefined templates, and poor scalability as the number of agents increases. To address these challenges, we present CraftUtopia, an LLM-based multi-agent system (MAS) that constructs 3D structures in Minecraft from a single 2D reference image. CraftUtopia operates in two stages: Design, which converts the image into a Minecraft-compatible 3D blueprint, and Build, which decomposes the blueprint into spatially disjoint subtasks for parallel execution. CraftUtopia scales efficiently via two mechanisms: (i) hierarchical coordination, which organizes agents in a manager–foreman–worker hierarchy to separate responsibilities, and (ii) skill acquisition, which distills recurring action sequences into a shared skill library to reduce repeated LLM replanning. Across three representative builds, CraftUtopia achieves 100% success over five trials using only 2D inputs, scales effectively with more workers, and exhibits emergent human-like behaviors. A full demo is available at: https://github.com/craftutopia-demo/CraftUtopia."
+  },
+  "row61": {
+    "row_id": "row61",
+    "phys": 62,
+    "title": "Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents",
+    "doi": "10.48550/arxiv.2602.01869",
+    "url": "https://openalex.org/W7127324322",
+    "pdf": "row61_Skill-Pro_Learning_Reusable_Skills_from_Experience_via_Non-Parametric_PPO_for_L.pdf",
+    "rejected_risk": false,
+    "pages": 22,
+    "pdf_title_head": "Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents Qirui Mi 1 Zhijian Ma 2 3 Mengyue Yang 4 Haoxuan Li 5 Yisen Wang 5 Haifeng Zhang 2 Jun Wang 6 Abstract LLM-driven agents excel at sequential decision- making bu",
+    "all_candidates": [
+      "row61_Skill-Pro_Learning_Reusable_Skills_from_Experience_via_Non-Parametric_PPO_for_L.pdf"
+    ],
+    "abstract": "LLM-driven agents excel at sequential decision-making but often rely on on-the-fly reasoning, re-deriving solutions even in recurring scenarios. This insufficient experience reuse leads to computational redundancy and instability. To bridge this gap, we propose Skill-Pro, a framework enabling agents to autonomously learn reusable procedural skills from interaction experiences without parameter updates. By formalizing a Skill-MDP, Skill-Pro transforms passive episodic narratives into executable Skills defined by activation, execution, and termination conditions to ensure executability. To achieve reliable reusability without capability degradation, we introduce Non-Parametric PPO, which leverages semantic gradients for high-quality candidate generation and a PPO Gate for robust Skill verification. Through score-based maintenance, Skill-Pro sustains compact, high-quality procedural memory. Experimental results across in-domain, cross-task, and cross-agent scenarios demonstrate that Skill-Pro achieves superior reuse rates and significant gains with extreme memory compression. Visualized evolutionary trajectories and Skill distributions further reveal how Skill-Pro transparently accumulates, refines, and reuses procedural knowledge to facilitate long-term autonomy."
+  },
+  "row62": {
+    "row_id": "row62",
+    "phys": 63,
+    "title": "LEGO: An LLM Skill-Based Front-End Design Generation Platform",
+    "doi": null,
+    "url": "https://openalex.org/W7158423607",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row62_lego_an_llm_skill-based_front-end_design_generation_platform.pdf",
+    "rejected_risk": false,
+    "pages": 7,
+    "pdf_title_head": "LEGO: An LLM Skill-Based Front-End Design Generation Platform Jincheng Lou1, Ruohan Xu2, Jiecheng Ma3, Runzhe Tao1, Xinyu Qu1, and Yibo Lin1,4,5,* 1School of IC, Peking University, 2School of EECS, Peking University, 3School of Microelectronics, Xidi",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row62_lego_an_llm_skill-based_front-end_design_generation_platform.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row62_lego_an_llm_skill-based_front-end_design_generation_platform.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row62_lego_an_llm_skill-based_front-end_design_generation_platform.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row62_lego_an_llm_skill-based_front-end_design_generation_platform.pdf"
+    ],
+    "abstract": "Existing LLM-based EDA agents are often isolated task-specific systems. This leads to repeated engineering effort and limited reuse of successful design and debugging strategies. We present LEGO, a unified skill-based platform for front-end design generation. It decomposes the digital front-end flow into six independent steps and represents every agent capability as a standardized composable circuit skill within a plug-and-play architecture. To build this skill library, we survey more than 100 papers, select 11 representative open-source projects, and extract 42 executable circuit skills within a six-step finite state machine formulation. Circuit Skill Builder automates skill extraction with linear scalability. Agent Skill RAG achieves submillisecond retrieval without relying on embedding models. Empirical evaluation on a hard subset of 41 VerilogEval v2 problems that gpt-5.2-codex fails to solve under extra-high reasoning effort shows that individual circuit skills constructed within LEGO raise Pass@1 from 0.000 to 0.805. This is an 80.5% gain over the baseline. Cross-project skill compositions also reach 0.805 Pass@1. They outperform hierarchy-verilog by 14.6% and VerilogCoder by 2.5%. They also match MAGE. These results show that modular skill composition supports both effective and flexible RTL design automation. The LEGO platform and all circuit skills are publicly available at GitHub: https://github.com/loujc/LEGO-An-LLM-Skill-Based-Front-End-Design-Generation-Platform"
+  },
+  "row63": {
+    "row_id": "row63",
+    "phys": 64,
+    "title": "SKILLC: Learning Autonomous Skill Internalization in LLM Agents via Contrastive Credit Assignment",
+    "doi": "10.48550/arxiv.2605.27899",
+    "url": "https://openalex.org/W7162652987",
+    "pdf": "row63_SKILLC_Learning_Autonomous_Skill_Internalization_in_LLM_Agents_via_Contrastive.pdf",
+    "rejected_risk": false,
+    "pages": 12,
+    "pdf_title_head": "SKILLC: Learning Autonomous Skill Internalization in LLM Agents via Contrastive Credit Assignment Hongxiang Lin, Zhirui Kuai, Erpeng Xue*, Lei Wang Meituan linhx0@hotmail.com {kuaizhirui, wanglei46, xueerpeng}@meituan.com Abstract Structured skill pr",
+    "all_candidates": [
+      "row63_SKILLC_Learning_Autonomous_Skill_Internalization_in_LLM_Agents_via_Contrastive.pdf"
+    ],
+    "abstract": "Structured skill prompts improve exploration in long-horizon agentic reinforcement learning (RL). Skill-augmented RL methods retain external skills at inference, while skill-internalization RL methods withdraw them during training to enable autonomous performance. However, existing internalization approaches only use skill-helpfulness contrast for curriculum control, leaving the policy update unchanged and unable to distinguish skill-dependent from autonomous success. We propose SkillC, a framework based on Contrastive Skill Credit Assignment (CSCA) that converts this contrast into a direct learning signal for internalization. \\textsc{SkillC} samples paired skill-injected and skill-free rollouts for tasks from active skill types within the same policy update, and injects their task-level contrast into optimization via a dual-stream advantage estimator that preserves global ranking while applying a one-sided correction toward skill-free success. A smoothed validation-level signal further drives an adaptive curriculum over attribution strength, rollout allocation, and monotonic active-set pruning. Experiments on ALFWorld and WebShop show that, without runtime skill access, SkillC surpasses the strongest prior skill-internalization RL baseline by 5.5\\% and 4.4\\%, respectively, while remaining competitive with skill-augmented RL methods."
+  },
+  "row64": {
+    "row_id": "row64",
+    "phys": 65,
+    "title": "AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement",
+    "doi": "10.48550/arxiv.2601.22758",
+    "url": "https://openalex.org/W7127071411",
+    "pdf": "row64_AutoRefine_From_Trajectories_to_Reusable_Expertise_for_Continual_LLM_Agent_Refi.pdf",
+    "rejected_risk": false,
+    "pages": 40,
+    "pdf_title_head": "AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement Libin Qiu * 1 Zhirong Gao * 1 Junfu Chen 1 Yuhang Ye 1 Weizhi Huang 1 Xiaobo Xue 1 Wenkai Qiu 1 Shuo Tang 1 Abstract Large language model agents often fail to accu",
+    "all_candidates": [
+      "row64_AutoRefine_From_Trajectories_to_Reusable_Expertise_for_Continual_LLM_Agent_Refi.pdf"
+    ],
+    "abstract": "Large language model agents often fail to accumulate knowledge from experience, treating each task as an independent challenge. Recent methods extract experience as flattened textual knowledge, which cannot capture procedural logic of complex subtasks. They also lack maintenance mechanisms, causing repository degradation as experience accumulates. We introduce AutoRefine, a framework that extracts and maintains dual-form Experience Patterns from agent execution histories. For procedural subtasks, we extract specialized subagents with independent reasoning and memory. For static knowledge, we extract skill patterns as guidelines or code snippets. A continuous maintenance mechanism scores, prunes, and merges patterns to prevent repository degradation. Evaluated on ALFWorld, ScienceWorld, and TravelPlanner, AutoRefine achieves 98.4%, 70.4%, and 27.1% respectively, with 20-73% step reductions. On TravelPlanner, automatic extraction exceeds manually designed systems (27.1% vs 12.1%), demonstrating its ability to capture procedural coordination."
+  },
+  "row65": {
+    "row_id": "row65",
+    "phys": 66,
+    "title": "ExpGraph: Model-Agnostic Experience Learning with Graph-Structured Memory for LLM Agents",
+    "doi": "10.48550/arxiv.2605.30712",
+    "url": "https://openalex.org/W7163012325",
+    "pdf": "row65_ExpGraph_Model-Agnostic_Experience_Learning_with_Graph-Structured_Memory_for_LL.pdf",
+    "rejected_risk": false,
+    "pages": 63,
+    "pdf_title_head": "ExpGraph: Model-Agnostic Experience Learning with Graph-Structured Memory for LLM Agents Tao Feng1, Chongrui Ye1, Tianyang Luo1, Jingjun Xu1, Xueqiang Xu1, Haozhen Zhang2 Zhigang Hua3, Yan Xie3, Shuang Yang3, Ge Liu1, Jiaxuan You1 1University of Illi",
+    "all_candidates": [
+      "row65_ExpGraph_Model-Agnostic_Experience_Learning_with_Graph-Structured_Memory_for_LL.pdf"
+    ],
+    "abstract": "Large language model (LLM) agents have shown strong capabilities in reasoning, tool use, and multi-step interaction, but they often solve tasks from scratch and fail to reuse successful strategies or failure lessons from prior experience. Fine-tuning on collected experience can improve reuse, but it is inflexible when stronger or more suitable executors emerge. We propose ExpGraph, a model-agnostic experience learning framework that enables frozen and replaceable LLM executors to improve through external experience reuse without parameter updates. ExpGraph summarizes historical trajectories into reusable skills and failure lessons, organizes them as nodes in a self-evolving experience graph, and retrieves useful experiences through graph diffusion and utility-aware ranking. A lightweight retrieval copilot is trained with reinforcement learning using feedback that compares executor performance with and without retrieved experiences, while the graph is updated online from downstream task outcomes. We evaluate ExpGraph on ExpSuite, covering question answering, mathematical reasoning, code generation, and multi-step agentic environments including ALFWorld and AppWorld. ExpGraph improves over the strongest baseline by 12.2% and 4.7% on static tasks with smaller and larger executors, and by 21.4% and 12.7% in agentic environments, while reducing average interaction steps by 12.7% and 21.6%. Ablations show that graph-structured experience, utility-aware ranking, and adaptive retrieval jointly enable effective experience reuse across diverse tasks and executor models."
+  },
+  "row66": {
+    "row_id": "row66",
+    "phys": 67,
+    "title": "SKILLS: Structured Knowledge Injection for LLM-Driven Telecommunications Operations",
+    "doi": "10.48550/arxiv.2603.15372",
+    "url": "https://openalex.org/W7138185929",
+    "pdf": "row66_SKILLS_Structured_Knowledge_Injection_for_LLM-Driven_Telecommunications_Operati.pdf",
+    "rejected_risk": false,
+    "pages": 6,
+    "pdf_title_head": "SKILLS: Structured Knowledge Injection for​ LLM-Driven Telecommunications Operations Ivo Brett, CISSP, B.Eng, MSc Solution Architect / Educator​ independent.academia.edu/ivobrett Abstract As telecommunications operators accelerate adoption of AI-enab",
+    "all_candidates": [
+      "row66_SKILLS_Structured_Knowledge_Injection_for_LLM-Driven_Telecommunications_Operati.pdf"
+    ],
+    "abstract": "As telecommunications operators accelerate adoption of AI-enabled automation, a practical question remains unresolved: can general-purpose large language model (LLM) agents reliably execute telecom operations workflows through real API interfaces, or do they require structured domain guidance? We introduce SKILLS (Structured Knowledge Injection for LLM-driven Service Lifecycle operations), a benchmark framework comprising 37 telecom operations scenarios spanning 8 TM Forum Open API domains (TMF620, TMF621, TMF622, TMF628, TMF629, TMF637, TMF639, TMF724). Each scenario is grounded in live mock API servers with seeded production-representative data, MCP tool interfaces, and deterministic evaluation rubrics combining response content checks, tool-call verification, and database state assertions. We evaluate open-weight models under two conditions: baseline (generic agent with tool access but no domain guidance) and with-skill (agent augmented with a portable SKILL.md document encoding workflow logic, API patterns, and business rules). Results across 5 open-weight model conditions and 185 scenario-runs show consistent skill lift across all models. MiniMax M2.5 leads (81.1% with-skill, +13.5pp), followed by Nemotron 120B (78.4%, +18.9pp), GLM-5 Turbo (78.4%, +5.4pp), and Seed 2.0 Lite (75.7%, +18.9pp)."
+  },
+  "row67": {
+    "row_id": "row67",
+    "phys": 68,
+    "title": "EvoTrainer: Co-Evolving LLM Policies and Training Harnesses for Autonomous Agentic Reinforcement Learning",
+    "doi": "10.48550/arxiv.2606.03108",
+    "url": "https://openalex.org/W7163428483",
+    "pdf": "row67_EvoTrainer_Co-Evolving_LLM_Policies_and_Training_Harnesses_for_Autonomous_Agent.pdf",
+    "rejected_risk": false,
+    "pages": 19,
+    "pdf_title_head": "EvoTrainer: Co-Evolving LLM Policies and Training Harnesses for Autonomous Agentic Reinforcement Learning Guhong Chen1, Yingcheng Shi2, Yongbin Li2,†, Binhua Li2, Xander Xu3, Hu Wei3, Shiwen Ni4, Min Yang1,4,†, Jieping Ye2 1Shenzhen Institutes of Adv",
+    "all_candidates": [
+      "row67_EvoTrainer_Co-Evolving_LLM_Policies_and_Training_Harnesses_for_Autonomous_Agent.pdf"
+    ],
+    "abstract": "Autonomous LLM training is often framed as recipe search, which leaves the training harness largely static. This limitation sharpens in agentic RL, where shifting bottlenecks and scalar rewards mask diverse failure modes. We introduce EvoTrainer, an autonomous training framework that co-evolves LLM policies and training-side harnesses through empirical feedback: it diagnoses rollout-level evidence, revises diagnostics, backtests interventions, and accumulates reusable skills. Evaluated on mathematical reasoning, competitive-programming code generation, and repository-level software engineering, EvoTrainer matches or exceeds the human-engineered RL references under the same data, codebase, and evaluation protocol, with the largest gain on long-horizon agentic SWE. Trajectory analyses show that retained strategies diverge across domains, evolving diagnostics prevent invalid high-scoring branches from being promoted, and reusable skills shape later search. Autonomous LLM RL should move beyond recipe search toward joint evolution of policies and the training harnesses that interpret them."
+  },
+  "row68": {
+    "row_id": "row68",
+    "phys": 69,
+    "title": "SkVM: Revisiting Language VM for Skills across Heterogenous LLMs and Harnesses",
+    "doi": "10.48550/arxiv.2604.03088",
+    "url": "https://openalex.org/W7151028516",
+    "pdf": "row68_SkVM_Revisiting_Language_VM_for_Skills_across_Heterogenous_LLMs_and_Harnesses.pdf",
+    "rejected_risk": false,
+    "pages": 14,
+    "pdf_title_head": "SkVM: Revisiting Language VM for Skills across Heterogenous LLMs and Harnesses Le Chen Shanghai Jiao Tong University Shanghai, China Erhu Feng Shanghai Jiao Tong University Shanghai, China Yubin Xia Shanghai Jiao Tong University Shanghai, China Haibo",
+    "all_candidates": [
+      "row68_SkVM_Revisiting_Language_VM_for_Skills_across_Heterogenous_LLMs_and_Harnesses.pdf"
+    ],
+    "abstract": "LLM agents increasingly adopt skills as a reusable unit of composition. While skills are shared across diverse agent platforms, current systems treat them as raw context, causing the same skill to behave inconsistently for different agents. This fragility undermines skill portability and execution efficiency. To address this challenge, we analyze 118,000 skills and draw inspiration from traditional compiler design. We treat skills as code and LLMs as heterogeneous processors. To make portability actionable, we decompose a skill's requirements into a set of primitive capabilities, and measure how well each model-harness pair supports them. Based on these capability profiles, we propose SkVM, a compilation and runtime system designed for portable and efficient skill execution. At compile time, SkVM performs capability-based compilation, environment binding, and concurrency extraction. At runtime, SkVM applies JIT code solidification and adaptive recompilation for performance optimization. We evaluate SkVM across eight LLMs of varying scales and three agent harnesses, covering SkillsBench and representative skill tasks. Results demonstrate that SkVM significantly improves task completion rates across different models and environments while reducing token consumption by up to 40%. In terms of performance, SkVM achieves up to 3.2x speedup with enhanced parallelism, and 19-50x latency reduction through code solidification."
+  },
+  "row69": {
+    "row_id": "row69",
+    "phys": 70,
+    "title": "CaveAgent: Transforming LLMs into Stateful Runtime Operators",
+    "doi": "10.48550/arxiv.2601.01569",
+    "url": "https://openalex.org/W7118618871",
+    "pdf": "row69_CaveAgent_Transforming_LLMs_into_Stateful_Runtime_Operators.pdf",
+    "rejected_risk": false,
+    "pages": 31,
+    "pdf_title_head": "CaveAgent: Transforming LLMs into Stateful Runtime Operators Maohao Ran∗1,2, Zhenglin Wan∗1,3, Cooper Lin4, Yanting Zhang1, Hongyu Xin1, Hongwei Fan7, Yibo Xu1, Beier Luo4, Yaxin Zhou5, Wangbo Zhao3, Lijie Yang8, Lang Feng6, Fuchao Yang6, Jingxuan Wu",
+    "all_candidates": [
+      "row69_CaveAgent_Transforming_LLMs_into_Stateful_Runtime_Operators.pdf"
+    ],
+    "abstract": "LLM-based agents are increasingly capable of complex task execution, yet current agentic systems remain constrained by text-centric paradigms that struggle with long-horizon tasks due to fragile multi-turn dependencies and context drift. We present CaveAgent, a framework that shifts tool use from ``LLM-as-Text-Generator'' to ``LLM-as-Runtime-Operator.'' CaveAgent introduces a dual-stream architecture that inverts the conventional paradigm: rather than treating the LLM's text context as the primary workspace with tools as auxiliary, CaveAgent elevates the persistent Python runtime as the central locus of state, with a lightweight semantic stream serving as its orchestrator. Beyond leveraging code generation to resolve interdependent sub-tasks (e.g., loops, conditionals) in a single step, CaveAgent introduces \\textit{Stateful Runtime Management}: it injects, manipulates, and retrieves complex Python objects (e.g., DataFrames, database connections) that persist across turns, unlike existing code-based approaches that remain text-bound. CaveAgent further provides a runtime-integrated skill management system that extends the Agent Skills open standard, enabling ecosystem interoperability through executable skill injections. This persistence mechanism serves as a high-fidelity external memory that reduces context drift in multi-turn interactions and preserves processed data for downstream applications without information loss. Evaluations show consistent improvement across challenging benchmarks, enabling CaveAgent to handle data scales that cause context overflow in both JSON-based and code-based agents. The accessible runtime state further provides programmatically verifiable feedback, enabling automated evaluation and reward signal generation without human annotation and establishing a structural foundation for future research in Reinforcement Learning with Verifiable Rewards (RLVR)."
+  },
+  "row70": {
+    "row_id": "row70",
+    "phys": 71,
+    "title": "SCALAR: Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding",
+    "doi": "10.48550/arxiv.2603.09036",
+    "url": "https://openalex.org/W7134946402",
+    "pdf": "row70_SCALAR_Learning_and_Composing_Skills_through_LLM_Guided_Symbolic_Planning_and_D.pdf",
+    "rejected_risk": false,
+    "pages": 43,
+    "pdf_title_head": "SCALAR: Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding Renos Zabounidis 1 Yue Wu 1 Simon Stepputtis 2 Woojun Kim 1 Yuanzhi Li 1 Tom Mitchell 1 Katia Sycara 1 Abstract LLM-based agents excel when given high-le",
+    "all_candidates": [
+      "row70_SCALAR_Learning_and_Composing_Skills_through_LLM_Guided_Symbolic_Planning_and_D.pdf"
+    ],
+    "abstract": "LM-based agents excel when given high-level action APIs but struggle to ground language into low-level control. Prior work has LLMs generate skills or reward functions for RL, but these one-shot approaches lack feedback to correct specification errors. We introduce SCALAR, a bidirectional framework coupling LLM planning with RL through a learned skill library. The LLM proposes skills with preconditions and effects; RL trains policies for each skill and feeds back execution results to iteratively refine specifications, improving robustness to initial errors. Pivotal Trajectory Analysis corrects LLM priors by analyzing RL trajectories; Frontier Checkpointing optionally saves environment states at skill boundaries to improve sample efficiency. On Craftax, SCALAR achieves 88.2% diamond collection, a 1.9x improvement over the best baseline, and reaches the Gnomish Mines 9.1% of the time where prior methods fail entirely."
+  },
+  "row71": {
+    "row_id": "row71",
+    "phys": 72,
+    "title": "Library Drift: Diagnosing and Fixing a Silent Failure Mode in Self-Evolving LLM Skill Libraries",
+    "doi": "10.48550/arxiv.2605.19576",
+    "url": "https://openalex.org/W7161850881",
+    "pdf": "row71_Library_Drift_Diagnosing_and_Fixing_a_Silent_Failure_Mode_in_Self-Evolving_LLM.pdf",
+    "rejected_risk": false,
+    "pages": 9,
+    "pdf_title_head": "Library Drift: Diagnosing and Fixing a Silent Failure Mode in Self-Evolving LLM Skill Libraries Xing Zhang 1 Yanwei Cui 1 Guanghui Wang 1 Ziyuan Li 2 Wei Qiu 2 Bing Zhu 2 Peiyang He 1 Abstract Self-evolving skill libraries face a silent failure mode ",
+    "all_candidates": [
+      "row71_Library_Drift_Diagnosing_and_Fixing_a_Silent_Failure_Mode_in_Self-Evolving_LLM.pdf"
+    ],
+    "abstract": "Self-evolving skill libraries face a silent failure mode we term \\emph{library drift}: unbounded skill accumulation without outcome-driven lifecycle management causes retrieval degradation, false-positive injections, and performance stagnation. Recent evaluation confirms the symptom--LLM-authored skills deliver +0.0pp gain while human-curated ones deliver +16.2pp (SkillsBench)--yet the underlying mechanism has not been isolated. We provide (1) a reproducible trigger: ablations that isolate drift--one disables skill injection (flat floor, +0.002), one imposes premature retirement (active harm, $-$0.019); (2) trace-level diagnostics: an append-only evidence log with per-skill contribution scores, attribution verdicts, and router engagement metrics that make the failure visible before it reaches end-task scores; and (3) a verified fix: a minimal governance recipe (outcome-driven retirement + bounded active-cap + meta-skill authoring prior) that lifts held-out pass@1 from a 0.258 baseline to a late-window mean of 0.584 (rolling gain $+$0.328) on MBPP+ hard-100 over 100 rounds. Eight ablations decompose which governance mechanisms are load-bearing and which are subsumed, providing a concrete playbook for diagnosing library drift in any self-evolving agent."
+  },
+  "row72": {
+    "row_id": "row72",
+    "phys": 73,
+    "title": "Empowering Large Language Model Agents through Action Learning",
+    "doi": "10.48550/arxiv.2402.15809",
+    "url": "https://openalex.org/W4392223772",
+    "pdf": "row72_Empowering_Large_Language_Model_Agents_through_Action_Learning.pdf",
+    "rejected_risk": false,
+    "pages": 19,
+    "pdf_title_head": "Published as a conference paper at COLM 2024 Empowering Large Language Model Agents through Action Learning Haiteng Zhao1 Chang Ma3 Guoyin Wang2 Jing Su2 Lingpeng Kong3 Jingjing Xu2 Zhi-Hong Deng1 Hongxia Yang2 1 Peking University 2 ByteDance 3 The U",
+    "all_candidates": [
+      "row72_Empowering_Large_Language_Model_Agents_through_Action_Learning.pdf"
+    ],
+    "abstract": "Large Language Model (LLM) Agents have recently garnered increasing interest yet they are limited in their ability to learn from trial and error, a key element of intelligent behavior. In this work, we argue that the capacity to learn new actions from experience is fundamental to the advancement of learning in LLM agents. While humans naturally expand their action spaces and develop skills through experiential learning, LLM agents typically operate within fixed action spaces, limiting their potential for growth. To address these challenges, our study explores open-action learning for language agents. We introduce a framework LearnAct with an iterative learning strategy to create and improve actions in the form of Python functions. In each iteration, LLM revises and updates the currently available actions based on the errors identified in unsuccessful training tasks, thereby enhancing action effectiveness. Our experimental evaluations across Robotic Planning and Alfworld environments reveal that after learning on a few training task instances, our approach to open-action learning markedly improves agent performance for the type of task (by 32 percent in AlfWorld compared to ReAct+Reflexion, for instance) highlighting the importance of experiential action learning in the development of more intelligent LLM agents."
+  },
+  "row73": {
+    "row_id": "row73",
+    "phys": 74,
+    "title": "SkillOpt: Executive Strategy for Self-Evolving Agent Skills",
+    "doi": "10.48550/arxiv.2605.23904",
+    "url": "https://openalex.org/W7162340582",
+    "pdf": "row73_SkillOpt_Executive_Strategy_for_Self-Evolving_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 27,
+    "pdf_title_head": "May 2026 SkillOpt: Executive Strategy for Self-Evolving Agent Skills Yifan Yang1,∗,‡ Ziyang Gong2,∗ Weiquan Huang3,∗ Qihao Yang2,∗ Ziwei Zhou4,∗ Zisu Huang4,∗ Yan Li2 Xuemei Gao1 Qi Dai1 Bei Liu1 Kai Qiu1 Yuqing Yang1 Dongdong Chen1 Xue Yang2,‡ Chong",
+    "all_candidates": [
+      "row73_SkillOpt_Executive_Strategy_for_Self-Evolving_Agent_Skills.pdf"
+    ],
+    "abstract": "Agent skills today are hand-crafted, generated one-shot, or evolved through loosely controlled self-revision, none of which behaves like a deep-learning optimizer for the skill, and none of which reliably improves over its starting point under feedback. We argue the skill should instead be trained as the external state of a frozen agent, with the same discipline that makes weight-space optimization reproducible. SkillOpt is, to our knowledge, the first systematic controllable text-space optimizer for agent skills: a separate optimizer model turns scored rollouts into bounded add/delete/replace edits on a single skill document, and an edit is accepted only when it strictly improves a held-out validation score. A textual learning-rate budget, rejected-edit buffer, and epoch-wise slow/meta update make skill training stable while adding zero inference-time model calls at deployment. Across six benchmarks, seven target models, and three execution harnesses (direct chat, Codex, Claude Code), SkillOpt is best or tied on all 52 evaluated (model, benchmark, harness) cells and beats every per-cell competitor among human, one-shot LLM, Trace2Skill, TextGrad, GEPA, and EvoSkill skills. On GPT-5.5 it lifts the average no-skill accuracy by +23.5 points in direct chat, by +24.8 inside the Codex agentic loop, and by +19.1 inside Claude Code. Transfer experiments further show that optimized skill artifacts retain value when moved across model scales, between Codex and Claude Code execution environments, and to a nearby math benchmark without further optimization. Code: https://aka.ms/skillopt"
+  },
+  "row74": {
+    "row_id": "row74",
+    "phys": 75,
+    "title": "Automatically Learning Skills for Coding Agents",
+    "doi": "10.1145/3786335.3813196",
+    "url": "https://openalex.org/W7162114202",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row74_automatically_learning_skills_for_coding_agents.pdf",
+    "rejected_risk": false,
+    "pages": 6,
+    "pdf_title_head": "Automatically Learning Skills for Coding Agents Shangyin Tan∗ University of California, Berkeley Berkeley, USA shangyin@berkeley.edu Lakshya A Agrawal∗ UC Berkeley Berkeley, USA lakshyaaagrawal@berkeley.edu Rohit Sandadi University of California, Ber",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row74_automatically_learning_skills_for_coding_agents.pdf",
+      "remaining_step3_20260620_004325/quality_rejected_pdfs/row74_automatically_learning_skills_for_coding_agents.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row74_automatically_learning_skills_for_coding_agents.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row74_automatically_learning_skills_for_coding_agents.pdf"
+    ],
+    "abstract": "Coding agents powered by large language models can solve a wide range of software engineering tasks, yet they often struggle on unfamiliar repositories whose conventions, testing patterns, and project structure differ from their training data. We introduce gskill, a fully automated pipeline that learns repository-specific skills, concise natural-language documents that capture the knowledge an agent needs to work effectively within a given codebase. gskill combines two components: (1) SWE-smith, a data-generation pipeline that creates diverse, verifiable software engineering tasks from any GitHub repository, and (2) optimize_anything, an evolutionary optimization loop that iteratively refines skill documents using LLM-generated feedback. Skills learned by gskill on a lightweight agent (Mini-SWE-Agent with GPT-5-mini) transfer directly to stronger agents: on the bleve repository, Claude Code with Claude Haiku 4.5 improves from 79.3% to 100.0% pass rate while also reducing average task duration from 173s to 130s. On jinja, Claude Haiku 4.5 improves from 93.9% to 98.5% while Claude Sonnet 4.5 maintains a perfect 100%. Our results demonstrate that automatically learned, repository-specific skills provide a lightweight and transferable mechanism for improving coding agent performance without model fine-tuning. gskill is publicly available at https://github.com/gepa-ai/gepa/tree/main/src/gepa/gskill."
+  },
+  "row75": {
+    "row_id": "row75",
+    "phys": 76,
+    "title": "Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts",
+    "doi": "10.48550/arxiv.2404.09248",
+    "url": "https://openalex.org/W4394867908",
+    "pdf": "row75_Knowledgeable_Agents_by_Offline_Reinforcement_Learning_from_Large_Language_Model.pdf",
+    "rejected_risk": false,
+    "pages": 25,
+    "pdf_title_head": "KNOWLEDGEABLE AGENTS BY OFFLINE REINFORCEMENT LEARNING FROM LARGE LANGUAGE MODEL ROLLOUTS A PREPRINT Jing-Cheng Pang1,2, Si-Hang Yang 1,2, Kaiyuan Li1,2, Jiaji Zhang1, Xiong-Hui Chen1,2, Nan Tang1,2, Yang Yu1,2,⋄ 1 National Key Laboratory for Novel S",
+    "all_candidates": [
+      "row75_Knowledgeable_Agents_by_Offline_Reinforcement_Learning_from_Large_Language_Model.pdf"
+    ],
+    "abstract": "Reinforcement learning (RL) trains agents to accomplish complex tasks through environmental interaction data, but its capacity is also limited by the scope of the available data. To obtain a knowledgeable agent, a promising approach is to leverage the knowledge from large language models (LLMs). Despite previous studies combining LLMs with RL, seamless integration of the two components remains challenging due to their semantic gap. This paper introduces a novel method, Knowledgeable Agents from Language Model Rollouts (KALM), which extracts knowledge from LLMs in the form of imaginary rollouts that can be easily learned by the agent through offline reinforcement learning methods. The primary challenge of KALM lies in LLM grounding, as LLMs are inherently limited to textual data, whereas environmental data often comprise numerical vectors unseen to LLMs. To address this, KALM fine-tunes the LLM to perform various tasks based on environmental data, including bidirectional translation between natural language descriptions of skills and their corresponding rollout data. This grounding process enhances the LLM's comprehension of environmental dynamics, enabling it to generate diverse and meaningful imaginary rollouts that reflect novel skills. Initial empirical evaluations on the CLEVR-Robot environment demonstrate that KALM enables agents to complete complex rephrasings of task goals and extend their capabilities to novel tasks requiring unprecedented optimal behaviors. KALM achieves a success rate of 46% in executing tasks with unseen goals, substantially surpassing the 26% success rate achieved by baseline methods. Furthermore, KALM effectively enables the LLM to comprehend environmental dynamics, resulting in the generation of meaningful imaginary rollouts that reflect novel skills and demonstrate the seamless integration of large language models and reinforcement learning."
+  },
+  "row76": {
+    "row_id": "row76",
+    "phys": 77,
+    "title": "AgenticGenomics: pharmacogenomics benchmark dataset for \"Trustworthy agentic genomics through versioned skill libraries\"",
+    "doi": "10.5281/zenodo.20567743",
+    "url": "https://openalex.org/W7163738419",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row76_agenticgenomics_pharmacogenomics_benchmark_dataset_for_trust.pdf",
+    "rejected_risk": false,
+    "pages": 23,
+    "pdf_title_head": "Corpas et al., page 1 Trustworthy agentic genomics through versioned skill 2 libraries 3 4 Manuel Corpas (1,2,*), Alfredo Iacoangeli (3,4,5), Mathieu Bourdenx (6,7), Mahmoud 5 Aldraimli (1), Nathan Skene (8), Segun Fatumo (9,10), Heinner Guio (2,11,1",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row76_agenticgenomics_pharmacogenomics_benchmark_dataset_for_trust.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row76_agenticgenomics_pharmacogenomics_benchmark_dataset_for_trust.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row76_agenticgenomics_pharmacogenomics_benchmark_dataset_for_trust.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row76_agenticgenomics_pharmacogenomics_benchmark_dataset_for_trust.pdf"
+    ],
+    "abstract": "AgenticGenomics benchmark dataset. Controlled three-arm comparison of nine frontier large language models on pharmacogenomic interpretation: Claude Opus 4, Claude Sonnet 4, GPT-5.2, GPT-4.1, o3, o4-mini, Gemini 2.5 Flash, DeepSeek V3 and Mistral Large 2, evaluated on 110 CPIC Level A cases across three population contexts (European, admixed Latin American, East African) under three conditions (free-prompted; retrieval-augmented from the CPIC guideline corpus; constrained by a versioned SKILL.md-format specification executed as a contract), three replicates per cell, 26,730 evaluations. The archive contains raw model responses, baseline and clinical-equivalence rescorer outputs, the locked merged three-arm dataset (26,730 rows), the forward and reverse adversarial scrambled-specification experiments, the (gene, drug)-keyed chunking control, the drug-recommendation regression classification, and figure-input tables. Records are scored on phenotype identification (A1), drug recommendation (A2) and lethal-class safety action (A3). All data derive from public CPIC Level A guidelines and PharmGKB annotations; genotypes are synthetic canonical cases; no patient data and no new sequencing data are included. Analysis code: https://github.com/manuelcorpas/24-AGENTIC-PGX-BENCHMARK (commit dc2c849e). Companion to the Perspective \"Agentic Genomics: From Pipeline Automation to Autonomous Validation\" (under review at Cell Genomics)."
+  },
+  "row77": {
+    "row_id": "row77",
+    "phys": 78,
+    "title": "CoEvoSkills: Self-Evolving Agent Skills via Co-Evolutionary Verification",
+    "doi": null,
+    "url": "https://openalex.org/W7149873831",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row77_coevoskills_self-evolving_agent_skills_via_co-evolutionary_v.pdf",
+    "rejected_risk": false,
+    "pages": 22,
+    "pdf_title_head": "Preprint. Under review. CoEvoSkills: Self-Evolving Agent Skills via Co-Evolutionary Verification Hanrong Zhang1∗ Shicheng Fan1∗ Henry Peng Zou1 Yankai Chen2,3† Zhenting Wang2 Jiayu Zhou4 Chengze Li1 Wei-Chieh Huang1 Yifei Yao5 Kening Zheng1 Xue (Stev",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row77_coevoskills_self-evolving_agent_skills_via_co-evolutionary_v.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row77_coevoskills_self-evolving_agent_skills_via_co-evolutionary_v.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row77_coevoskills_self-evolving_agent_skills_via_co-evolutionary_v.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row77_coevoskills_self-evolving_agent_skills_via_co-evolutionary_v.pdf"
+    ],
+    "abstract": "Anthropic proposes the concept of skills for LLM agents to tackle multi-step professional tasks that simple tool invocations cannot address. A tool is a single, self-contained function, whereas a skill is a structured bundle of interdependent multi-file artifacts. Currently, skill generation is not only label-intensive due to manual authoring, but also may suffer from human--machine cognitive misalignment, which can lead to degraded agent performance, as evidenced by evaluations on SkillsBench. Therefore, we aim to enable agents to autonomously generate skills. However, existing self-evolving methods designed for tools cannot be directly applied to skills due to their increased complexity. To address these issues, we propose CoEvoSkills, a self-evolving skills framework that enables agents to autonomously construct complex, multi-file skill packages. Specifically, CoEvoSkills couples a Skill Generator that iteratively refines skills with a Surrogate Verifier that co-evolves to provide informative and actionable feedback without access to ground-truth test content. On SkillsBench, CoEvoSkills achieves the highest pass rate among five baselines on both Claude Code and Codex, and also exhibits strong generalization capabilities to six additional LLMs."
+  },
+  "row78": {
+    "row_id": "row78",
+    "phys": 79,
+    "title": "Behavioral Integrity Verification for AI Agent Skills",
+    "doi": "10.48550/arxiv.2605.11770",
+    "url": "https://openalex.org/W7161066883",
+    "pdf": "row78_Behavioral_Integrity_Verification_for_AI_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 19,
+    "pdf_title_head": "Behavioral Integrity Verification for AI Agent Skills Yuhao Wu∗ Tung-Ling Li∗ Hongliang Liu∗ Palo Alto Networks {yuhwu, tuli, hliu}@paloaltonetworks.com Abstract Agent skills extend LLM agents with privileged third-party capabilities such as filesyst",
+    "all_candidates": [
+      "row78_Behavioral_Integrity_Verification_for_AI_Agent_Skills.pdf"
+    ],
+    "abstract": "Agent skills extend LLM agents with privileged third-party capabilities such as filesystem access, credentials, network calls, and shell execution. Existing safety work catches malicious prompts and risky runtime actions, but the skill artifact itself goes unverified. We formalize this as the behavioral integrity verification (BIV) problem: a typed set comparison between declared and actual capabilities over a shared taxonomy that bridges code, instructions, and metadata. The BIV framework instantiates this comparison by pairing deterministic code analysis with LLM-assisted capability extraction. The resulting structured evidence supports three downstream analyses: deviation taxonomy, root-cause classification, and malicious-skill detection. On 49,943 skills from the OpenClaw registry, the deviation taxonomy reveals a pervasive description-implementation gap: 80.0% of skills deviate from declared behavior, with four novel compound-threat categories surfaced. Root-cause classification finds that deviations are mostly oversight, not malice: 81.1% trace to developer oversight and 18.9% to adversarial intent, with 5.0% of skills carrying predicted multi-stage attack chains. On a 906-skill malicious-skill detection benchmark, BIV reaches an F1 of 0.946, outperforming state-of-the-art rule-based and single-pass LLM baselines. These results demonstrate behavioral integrity auditing for agent skills at scale."
+  },
+  "row79": {
+    "row_id": "row79",
+    "phys": 80,
+    "title": "VideoWeaver: Evaluating and Evolving Skills for Agentic Long Video Generation",
+    "doi": null,
+    "url": "https://openalex.org/W7164235099",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row79_videoweaver_evaluating_and_evolving_skills_for_agentic_long_.pdf",
+    "rejected_risk": false,
+    "pages": 16,
+    "pdf_title_head": "VideoWeaver: Evaluating and Evolving Skills for Agentic Long Video Generation Jianhui Wei1,2,*,§ Jie Tan1* Hengchuan Zhu1* Xiaotian Zhang1 Yan Zhang2‡ Ziyi Chen2 Daoan Zhang2 Wei Xu2‡ Zuozhu Liu1† 1Zhejiang University 2ByteDance {jianhui1.24,zuozhuli",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row79_videoweaver_evaluating_and_evolving_skills_for_agentic_long_.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row79_videoweaver_evaluating_and_evolving_skills_for_agentic_long_.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row79_videoweaver_evaluating_and_evolving_skills_for_agentic_long_.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row79_videoweaver_evaluating_and_evolving_skills_for_agentic_long_.pdf"
+    ],
+    "abstract": "Recent agent frameworks such as Claude Code, Codex, and OpenClaw are strong at tool use and orchestration, but whether they can handle long video generation, a long-horizon multimodal task, remains underexplored. Unlike earlier video agents whose pipeline is handcrafted, these frameworks can build and refine their own workflows. We introduce VideoWeaver, an agent harness and benchmark that evaluates and evolves skills for long video generation, where an agent turns a single instruction into a long video by composing foundation skills into its own workflow rather than following a predefined pipeline. The benchmark has 16 task categories and 285 cases, with references spanning text, image, audio, video, and their combinations. Because errors can arise at any stage and not just in the final video, we propose an agent-as-judge that inspects both the execution trace and the final video, grounding its scores in evidence such as metadata and intermediate files. Using this feedback, we further design a skill evolution algorithm that refines and merges the agent's skills. Across multiple frameworks and models, we find that an explicit composition skill improves the generation process over using foundation skills alone, that skill evolution further improves output quality, and that performance varies notably across harness and model choices. The proposed agent-as-judge also aligns well with human judgments, especially on process metrics. Code and dataset is available at https://github.com/JianhuiWei7/VideoWeaver"
+  },
+  "row80": {
+    "row_id": "row80",
+    "phys": 81,
+    "title": "Skill as Memory, Not Document: A Database-Native Substrate for Agent Skill Catalogs",
+    "doi": "10.5281/zenodo.20128887",
+    "url": "https://openalex.org/W7160862948",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row80_skill_as_memory_not_document_a_database-native_substrate_for.pdf",
+    "rejected_risk": false,
+    "pages": 20,
+    "pdf_title_head": "Skill as Memory, Not Document: A Database‐Native Substrate for Agent Skill Catalogs Pranab Sarkar, Independent Researcher (ORCID 0009‐0009‐8683‐1481) 2026‐05‐11 Contents 1 Skill as Memory, Not Document: A Database‐Native Substrate for Agent Skill Cat",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row80_skill_as_memory_not_document_a_database-native_substrate_for.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row80_skill_as_memory_not_document_a_database-native_substrate_for.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row80_skill_as_memory_not_document_a_database-native_substrate_for.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row80_skill_as_memory_not_document_a_database-native_substrate_for.pdf"
+    ],
+    "abstract": "Current LLM agent skill systems use storage formats optimized for human editorial workflow: Anthropic Agent Skills stores skills as SKILL.md files with YAML frontmatter and Markdown body; Voyager persists agent-authored skills as Python files. These document-first conventions collapse human authoring format, retrieval metadata, and agent-consumed runtime body into a single artifact. As autonomous agent learning becomes a primary use case — skills written by agents at runtime, retrieved by agents at inference, scoring composed over agent-emitted outcome events — document-shape choices become operational baggage. I frame the required shift as \"skill as memory, not document\" and characterize three recurring failure modes when document-first catalogs are used as agent memory substrates: (i) token burn from in-context structural metadata; (ii) slowdown from filesystem organization not optimized for retrieval; (iii) invalid-skill admission from YAML-parseable acceptance. I measure all three on a 5,000-skill corpus. Results: (i) Full-catalog disclosure at 5,000 skills consumes 919,200 tokens, exceeding GPT-4 Turbo 128K and Claude 3.7 200K windows entirely; the substrate's top-K disclosure consumes 369 tokens, constant in catalog size. A controlled ablation attributes the per-query gap against optimized filesystem alternatives to ~36 tokens of YAML frontmatter overhead per retrieved skill. (ii) p50 retrieval latency 87.3 ms, p95 106.3 ms at 5,000-skill scale on single-node deployment. (iii) The substrate rejects 70 of 70 adversarially-malformed skills (0% admission rate) at write time; a document-only YAML-parseable admission policy baseline admits 68 of 70 (97% admission). Contributions: the \"skill as memory, not document\" framing as a unifying lens for autonomous-learning substrate design; the three-failure-mode taxonomy and its empirical measurement at 5,000-skill scale on a public reproducible corpus; and an operational decomposition of substrate-level primitives a competent filesystem alternative would need to assemble. I do not claim YantrikDB is a new database architecture — all individual primitives it ships (typed records, vector index, append-only logs, schema validation, Raft replication) exist independently in prior work. I identify a category mismatch in document-first skill catalogs and demonstrate a database-native design pattern for agent-written skill memory."
+  },
+  "row81": {
+    "row_id": "row81",
+    "phys": 82,
+    "title": "Kimi-Dev: Agentless Training as Skill Prior for SWE-Agents",
+    "doi": "10.48550/arxiv.2509.23045",
+    "url": "https://openalex.org/W4415332089",
+    "pdf": "row81_Kimi-Dev_Agentless_Training_as_Skill_Prior_for_SWE-Agents.pdf",
+    "rejected_risk": false,
+    "pages": 68,
+    "pdf_title_head": "KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS KIMI-DEV: AGENTLESS TRAINING AS SKILL PRIOR FOR SWE-AGENTS Zonghan Yang#∗†, Shengjie Wang#∗, Kelin Fu¶, Wenyang He§, Weimin Xiong¶, Yibo Liu, Yibo Miao, Bofei Gao¶, Yejie Wang♢, Yingwei Ma, Y",
+    "all_candidates": [
+      "row81_Kimi-Dev_Agentless_Training_as_Skill_Prior_for_SWE-Agents.pdf"
+    ],
+    "abstract": "Large Language Models (LLMs) are increasingly applied to software engineering (SWE), with SWE-bench as a key benchmark. Solutions are split into SWE-Agent frameworks with multi-turn interactions and workflow-based Agentless methods with single-turn verifiable steps. We argue these paradigms are not mutually exclusive: reasoning-intensive Agentless training induces skill priors, including localization, code edit, and self-reflection that enable efficient and effective SWE-Agent adaptation. In this work, we first curate the Agentless training recipe and present Kimi-Dev, an open-source SWE LLM achieving 60.4\\% on SWE-bench Verified, the best among workflow approaches. With additional SFT adaptation on 5k publicly-available trajectories, Kimi-Dev powers SWE-Agents to 48.6\\% pass@1, on par with that of Claude 3.5 Sonnet (241022 version). These results show that structured skill priors from Agentless training can bridge workflow and agentic frameworks for transferable coding agents."
+  },
+  "row82": {
+    "row_id": "row82",
+    "phys": 83,
+    "title": "MalSkillBench: A Runtime-Verified Benchmark of Malicious Agent Skills",
+    "doi": "10.48550/arxiv.2606.07131",
+    "url": "https://openalex.org/W7163907095",
+    "pdf": "row82_MalSkillBench_A_Runtime-Verified_Benchmark_of_Malicious_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 15,
+    "pdf_title_head": "MalSkillBench: A Runtime-Verified Benchmark of Malicious Agent Skills Wenbo Guo∗ honywenair@gmail.com Nanyang Technological University Singapore Wei Zeng∗ zengwei@stu.scu.edu.cn Sichuan University China Chengwei Liu† chengwei.liu@nankai.edu.cn Nankai",
+    "all_candidates": [
+      "row82_MalSkillBench_A_Runtime-Verified_Benchmark_of_Malicious_Agent_Skills.pdf"
+    ],
+    "abstract": "AI coding agents such as Claude Code and Gemini CLI increasingly extend themselves with third-party skills: markdown packages bundling natural-language instructions, executable scripts, and tool permissions. Because a skill is at once code and agent-facing instruction, it introduces a supply chain dependency whose risk is neither pure code nor pure prompt. Detection tools have never been measured against verified ground truth spanning this hybrid space, leaving their effectiveness unknown and wild-only evaluations biased. We present MalSkillBench, the first runtime-verified benchmark of malicious agent skills: 3,944 malicious skills labeled along a three-dimensional taxonomy of 108 cells. Of these, 3,214 come from a closed-loop Generate-Verify-Feedback pipeline admitting only samples whose malicious behavior fires inside a Docker sandbox under system-call monitoring and an LLM judge; we add 703 in-the-wild and 4,000 matched benign skills. Our measurements are consistent: code injection reaches 94.5% verification yield but prompt injection only 75.8%, the same fragility that later makes it hard to detect; the wild sample is narrow, dominated by one cryptocurrency-theft campaign (86.6% one behavior, 81% from two accounts) with a small but architecturally new tail attacking the agent control plane; the strongest skill-specific detector reaches 98.4% recall on code injection yet collapses on prompt-injection and agent-control attacks, and wild-only scoring swings the ranking by up to 66 recall points; supply-chain scanners and prompt-injection defenses each see only half of a skill, and no combination recovers the code-instruction relationship. Detecting malicious skills therefore requires reasoning jointly over task intent, code, and instructions. We release the dataset, pipeline, baselines, and results."
+  },
+  "row83": {
+    "row_id": "row83",
+    "phys": 84,
+    "title": "Skill-R1: Agent Skill Evolution via Reinforcement Learning",
+    "doi": "10.48550/arxiv.2605.09359",
+    "url": "https://openalex.org/W7160957554",
+    "pdf": "row83_Skill-R1_Agent_Skill_Evolution_via_Reinforcement_Learning.pdf",
+    "rejected_risk": false,
+    "pages": 15,
+    "pdf_title_head": "Preprint. Under review. Skill-R1: Agent Skill Evolution via Reinforcement Learning Yash Vishe1, Rohan Surana1, Xunyi Jiang1, Zihan Huang1, Xintong Li1, Nikki Lijing Kuang1, Tong Yu2, Ryan A. Rossi2, Jingbo Shang1, Julian McAuley1, Junda Wu1 1UC San D",
+    "all_candidates": [
+      "row83_Skill-R1_Agent_Skill_Evolution_via_Reinforcement_Learning.pdf"
+    ],
+    "abstract": "Agentic large language models often rely on skills, reusable natural language procedures that guide planning, action, and tool use. In practice, skills are typically improved through prompt engineering or by aligning the task LLM itself, which is costly, model-specific, and often infeasible for closed-source models. Skill optimization is not a one-step problem but a recurrent process with two coupled levels of credit assignment: a useful skill must improve rollout quality under current conditioning, while a useful revision must turn observed outcomes into a better skill for the next round. We propose Skill-R1, a reinforcement learning framework for instance-level recurrent skill optimization from verifiable rewards. Rather than updating the task LLM, Skill-R1 trains a lightweight skill generator that conditions on the task context, prior rollouts, and their verified outcomes to produce skills that steer a frozen task LLM. This preserves black-box compatibility with both open- and closed-source models while making adaptation substantially cheaper than model-level updates. Skill-R1 proceeds over multiple generations: at each step, the current skill induces rollouts whose verified outcomes are fed back to produce the next revision. To optimize this recurrent process, we introduce a bi-level group-relative policy optimization objective combining intra-generation and inter-generation advantages. The intra-generation term compares rollouts under shared skill conditioning, while the inter-generation term rewards revisions that improve behavior across successive generations. Together, these provide a principled objective for directional skill evolution rather than one-shot self-refinement. Empirically, Skill-R1 achieves consistent gains over no-skill baselines and standard GRPO across benchmarks with verifiable rewards, with particularly strong improvements on complex, multi-step tasks."
+  },
+  "row84": {
+    "row_id": "row84",
+    "phys": 85,
+    "title": "Context Matters: Repository-Aware Security Analysis of the Agent Skill Ecosystem",
+    "doi": null,
+    "url": "https://openalex.org/W7139147085",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row84_context_matters_repository-aware_security_analysis_of_the_ag.pdf",
+    "rejected_risk": false,
+    "pages": 10,
+    "pdf_title_head": "Context Matters: Repository-Aware Security Analysis of the Agent Skill Ecosystem Florian Holzbauer Interdisciplinary Transformation University (IT:U) Linz, Austria florian.holzbauer@it-u.at David Schmidt University of Vienna, CDL AsTra Faculty of Com",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row84_context_matters_repository-aware_security_analysis_of_the_ag.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row84_context_matters_repository-aware_security_analysis_of_the_ag.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row84_context_matters_repository-aware_security_analysis_of_the_ag.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row84_context_matters_repository-aware_security_analysis_of_the_ag.pdf"
+    ],
+    "abstract": "Agent skills extend local AI agents, such as Claude Code and OpenClaw, with additional functionality. Their growing popularity has led to dedicated marketplaces resembling mobile app stores, as well as automated scanners that assess whether skills are benign or malicious. However, scanner reports from individual marketplaces classify up to 46.8% of skills as malicious, raising concerns about false positives. We present the largest empirical security analysis of the AI agent skill ecosystem to date. We collect 238,180 unique skills from three major distribution platforms and GitHub, and analyze their contents, behavior, and repository context. Unlike existing scanner-based assessments, which evaluate skills largely in isolation, our repository-aware analysis checks whether a flagged skill is consistent with its surrounding GitHub project. This context substantially reduces the number of suspicious skills: only 0.52% remain suspicious after repository-aware analysis. Our results show that existing scanners can substantially overestimate maliciousness when repository context is ignored. At the same time, we identify previously undocumented real-world attack vectors, including the hijacking of skills hosted in abandoned GitHub repositories. Overall, our findings provide a more robust view of the agent-skill ecosystem's current risk surface and highlight the need for context-aware security evaluation."
+  },
+  "row85": {
+    "row_id": "row85",
+    "phys": 86,
+    "title": "Organizing, Orchestrating, and Benchmarking Agent Skills at Ecosystem Scale",
+    "doi": null,
+    "url": "https://openalex.org/W7133365140",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row85_organizing_orchestrating_and_benchmarking_agent_skills_at_ec.pdf",
+    "rejected_risk": false,
+    "pages": 15,
+    "pdf_title_head": "Organizing, Orchestrating, and Benchmarking Agent Skills at Ecosystem Scale Hao Li∗Chunjiang Mu∗Jianhao Chen Siyue Ren Zhiyao Cui Yiqun Zhang Lei Bai Shuyue Hu† Shanghai Artificial Intelligence Laboratory Abstract The rapid proliferation of Claude ag",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row85_organizing_orchestrating_and_benchmarking_agent_skills_at_ec.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row85_organizing_orchestrating_and_benchmarking_agent_skills_at_ec.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row85_organizing_orchestrating_and_benchmarking_agent_skills_at_ec.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row85_organizing_orchestrating_and_benchmarking_agent_skills_at_ec.pdf"
+    ],
+    "abstract": "The rapid proliferation of Claude agent skills has raised the central question of how to effectively leverage, manage, and scale the agent skill ecosystem. In this paper, we propose AgentSkillOS, the first principled framework for skill selection, orchestration, and ecosystem-level management. AgentSkillOS comprises two stages: (i) Manage Skills, which organizes skills into a capability tree via node-level recursive categorization for efficient discovery; and (ii) Solve Tasks, which retrieves, orchestrates, and executes multiple skills through DAG-based pipelines. To evaluate the agent's ability to invoke skills, we construct a benchmark of 30 artifact-rich tasks across five categories: data computation, document creation, motion video, visual design, and web interaction. We assess the quality of task outputs using LLM-based pairwise evaluation, and the results are aggregated via a Bradley-Terry model to produce unified quality scores. Experiments across three skill ecosystem scales (200 to 200K skills) show that tree-based retrieval effectively approximates oracle skill selection, and that DAG-based orchestration substantially outperforms native flat invocation even when given the identical skill set. Our findings confirm that structured composition is the key to unlocking skill potential. Our GitHub repository is available at:https://github.com/ynulihao/AgentSkillOS."
+  },
+  "row86": {
+    "row_id": "row86",
+    "phys": 87,
+    "title": "SkillGuard: A Permission Framework for Agent Skills",
+    "doi": "10.48550/arxiv.2606.03024",
+    "url": "https://openalex.org/W7163319953",
+    "pdf": "row86_SkillGuard_A_Permission_Framework_for_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 12,
+    "pdf_title_head": "SkillGuard: A Permission Framework for Agent Skills Shidong Pan∗ CSIRO Australia Xiaoyu Sun† Australian National University Australia Tianyi Zhang Australian National University Australia Dianshu Liao Australian National University Australia Meixue S",
+    "all_candidates": [
+      "row86_SkillGuard_A_Permission_Framework_for_Agent_Skills.pdf"
+    ],
+    "abstract": "Agent skills extend LLM agents with reusable instructions, scripts, tool bindings, and contextual dependencies. However, current skill ecosystems largely rely on trust-based loading and static inspection, leaving a gap between what a skill can inject into an agent's context and what it can cause the agent to do at runtime. This gap introduces new security and privacy risks, and existing defenses primarily inspect skill files statically or regulate individual tool calls, without systematically connecting a skill's declared intent with its runtime behavior. In this paper, we present SkillGuard, a skill-centric permission framework that treats skills as permission-bearing executable artifacts. SkillGuard introduces a dual-plane governance model that jointly regulates context influence and action side effects through skill manifests, runtime access control, user-mediated authorization, deny-by-default enforcement, capability inference, and behavior monitoring. We evaluate SkillGuard on 315 real-world skills and SkillInject. The permission taxonomy covers 99.76% of observed protected objects, and automated manifest generation reaches 91.0% F1. In adversarial evaluations, SkillGuard reduces attack success from 32.37% to 23.02% for contextual injections and from 25.56% to 16.67% for obvious injections, while maintaining benign task utility. These results suggest that SkillGuard, as a skill-centric permission framework, can provide a practical foundation for improving the privacy and security of agent skill ecosystems."
+  },
+  "row87": {
+    "row_id": "row87",
+    "phys": 88,
+    "title": "Kabab: A Hybrid Rust-TypeScript Architecture for Autonomous AI Agents with Universal Skill Loading and Multi-Provider Model Routing",
+    "doi": "10.5281/zenodo.19647937",
+    "url": "https://openalex.org/W7154909817",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row87_kabab_a_hybrid_rust-typescript_architecture_for_autonomous_a.pdf",
+    "rejected_risk": false,
+    "pages": 7,
+    "pdf_title_head": "Kabab: A Hybrid Rust-TypeScript Architecture for Autonomous AI Agents with Universal Skill Loading and Multi-Provider Model Routing Varun Chawla IEEE Senior Member kabab.ai varun@kabab.ai Abstract—Autonomous AI agent platforms — systems that decompos",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row87_kabab_a_hybrid_rust-typescript_architecture_for_autonomous_a.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row87_kabab_a_hybrid_rust-typescript_architecture_for_autonomous_a.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row87_kabab_a_hybrid_rust-typescript_architecture_for_autonomous_a.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row87_kabab_a_hybrid_rust-typescript_architecture_for_autonomous_a.pdf"
+    ],
+    "abstract": "Autonomous AI agent platforms --- systems that decompose natural-language instructions into executable plans, invoke tools, and verify results without human intervention --- have emerged as a critical frontier in software engineering automation. Existing commercial platforms are cloud-dependent, vendor-locked, and lack extensibility, while open-source alternatives (OpenHands, Suna) offer narrow tool sets without multi-provider model routing or domain-specific skill injection. We present Kabab, an open-source hybrid architecture that combines Rust for performance-critical subsystems (Docker sandbox management, parallel skill indexing, lock-free LLM API proxy, browser WASM compute at 173KB) with TypeScript for a agent pipeline orchestrating 25 models across 11 providers. Kabab introduces two novel contributions: (1) a Universal Skill Protocol that auto-loads domain-specific expertise from SKILL.md files based on task classification across 10 task types, and (2) Connector-Augmented Execution that dynamically registers 185 SaaS API actions across 21 services as LLM-callable tools at runtime, enabling an agent to autonomously clone a repository, fix a bug, push code, and create a pull request from a single instruction. We evaluate Kabab on real software engineering tasks using both local (Qwen 3.5 35B via Ollama) and cloud (Groq Llama 3.3 70B, Claude Opus) models, demonstrating that hybrid local-cloud agent execution is feasible, cost-effective, and produces functional multi-file applications with database schemas, API endpoints, and styled frontends in a single autonomous session. Kabab is open-source under Apache 2.0."
+  },
+  "row88": {
+    "row_id": "row88",
+    "phys": 89,
+    "title": "WebXSkill: Skill Learning for Autonomous Web Agents",
+    "doi": "10.48550/arxiv.2604.13318",
+    "url": "https://openalex.org/W7154615954",
+    "pdf": "row88_WebXSkill_Skill_Learning_for_Autonomous_Web_Agents.pdf",
+    "rejected_risk": false,
+    "pages": 21,
+    "pdf_title_head": "Preprint. Under review. WEBXSKILL: Skill Learning for Autonomous Web Agents Zhaoyang Wang1, Qianhui Wu2∗, Xuchao Zhang2, Chaoyun Zhang2, Wenlin Yao2 Fazle Elahi Faisal2, Baolin Peng2, Si Qin2, Suman Nath2, Qingwei Lin2, Chetan Bansal2 Dongmei Zhang2,",
+    "all_candidates": [
+      "row88_WebXSkill_Skill_Learning_for_Autonomous_Web_Agents.pdf"
+    ],
+    "abstract": "Autonomous web agents powered by large language models (LLMs) have shown promise in completing complex browser tasks, yet they still struggle with long-horizon workflows. A key bottleneck is the grounding gap in existing skill formulations: textual workflow skills provide natural language guidance but cannot be directly executed, while code-based skills are executable but opaque to the agent, offering no step-level understanding for error recovery or adaptation. We introduce WebXSkill, a framework that bridges this gap with executable skills, each pairing a parameterized action program with step-level natural language guidance, enabling both direct execution and agent-driven adaptation. WebXSkill operates in three stages: skill extraction mines reusable action subsequences from readily available synthetic agent trajectories and abstracts them into parameterized skills, skill organization indexes skills into a URL-based graph for context-aware retrieval, and skill deployment exposes two complementary modes, grounded mode for fully automated multi-step execution and guided mode where skills serve as step-by-step instructions that the agent follows with its native planning. On WebArena and WebVoyager, WebXSkill improves task success rate by up to 9.8 and 12.9 points over the baseline, respectively, demonstrating the effectiveness of executable skills for web agents. The code is publicly available at https://github.com/aiming-lab/WebXSkill."
+  },
+  "row89": {
+    "row_id": "row89",
+    "phys": 90,
+    "title": "Defenses & Enablers For Skill Injection Attacks on Terminal Based Agents",
+    "doi": null,
+    "url": "https://openalex.org/W7163595862",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row89_defenses_enablers_for_skill_injection_attacks_on_terminal_ba.pdf",
+    "rejected_risk": false,
+    "pages": 21,
+    "pdf_title_head": "Defenses & Enablers For Skill Injection Attacks on Terminal Based Agents Yoshinari Fujinuma1*, Varun Gangal1*, Traian Rebedea2, Makesh Narsimhan Sreedhar2, Prasoon Varshney2, Rebecca Qian1, Anand Kannappan1 1Patronus AI 2NVIDIA *Equal contribution {y",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row89_defenses_enablers_for_skill_injection_attacks_on_terminal_ba.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row89_defenses_enablers_for_skill_injection_attacks_on_terminal_ba.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row89_defenses_enablers_for_skill_injection_attacks_on_terminal_ba.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row89_defenses_enablers_for_skill_injection_attacks_on_terminal_ba.pdf"
+    ],
+    "abstract": "Large language model (LLM) agents increasingly rely on reusable skills i.e. documents describing task-specific procedures. However, this introduces a new attack surface for agents to manage. We study two complementary directions for this threat. First, we evaluate guardian-based defenses: an intermediary LLM agent that acts as a mediator for skill file access (dynamic guardian) or pre-rewrites these files at build time (static guardian). Across three LLM agent families, our guardians cut attack success rate (ASR) by well over half while preserving task utility. Second, we stress test them through attack reframing using four attacks that preserve the malicious instruction but change the phrasing. For non-guardian setup, the reframing pushes the ASR up to 81.4\\%, but the dynamic guardian brings it down to 18.6\\%, showing that real-time mediation is a robust defense."
+  },
+  "row90": {
+    "row_id": "row90",
+    "phys": 91,
+    "title": "SciVisAgentSkills: Design and Evaluation of Agent Skills for Scientific Data Analysis and Visualization",
+    "doi": "10.48550/arxiv.2606.05525",
+    "url": "https://openalex.org/W7163642110",
+    "pdf": "row90_SciVisAgentSkills_Design_and_Evaluation_of_Agent_Skills_for_Scientific_Data_Ana.pdf",
+    "rejected_risk": false,
+    "pages": 6,
+    "pdf_title_head": "SciVisAgentSkills: Design and Evaluation of Agent Skills for Scientific Data Analysis and Visualization Kuangshi Ai* Univ. Notre Dame Haichao Miao† LLNL Kaiyuan Tang‡ Univ. Notre Dame Shusen Liu§ LLNL Chaoli Wang¶ Univ. Notre Dame ABSTRACT Recent adv",
+    "all_candidates": [
+      "row90_SciVisAgentSkills_Design_and_Evaluation_of_Agent_Skills_for_Scientific_Data_Ana.pdf"
+    ],
+    "abstract": "Recent advances in agentic visualization have enabled the translation of natural language into executable scientific visualization (SciVis) workflows. While general-purpose coding agents show strong capabilities, they often lack the tool-specific expertise required for SciVis tasks. In this work, we present SciVisAgentSkills, a collection of reusable agent skills that augment coding agents for scientific data analysis and visualization by encoding environment assumptions, tool usage patterns, and domain heuristics across scientific tools such as ParaView, napari, VMD, and TTK. We evaluate these skills on Codex and Claude Code using SciVisAgentBench, a benchmark of 108 expert-designed multi-step tasks. Results show that agent skills improve mean task scores across the evaluated suites, with token-efficiency benefits that depend on the agent harness and tool setting. These findings highlight the importance of structured procedural knowledge for enabling reliable, long-horizon SciVis workflows, while also showing that skills should be studied alongside the execution harness that loads and applies them. The skills are available at https://github.com/KuangshiAi/SciVisAgentSkills."
+  },
+  "row91": {
+    "row_id": "row91",
+    "phys": 92,
+    "title": "Reinforcement Learning for Self-Improving Agent with Skill Library",
+    "doi": "10.48550/arxiv.2512.17102",
+    "url": "https://openalex.org/W7116881161",
+    "pdf": "row91_Reinforcement_Learning_for_Self-Improving_Agent_with_Skill_Library.pdf",
+    "rejected_risk": false,
+    "pages": 21,
+    "pdf_title_head": "Reinforcement Learning for Self-Improving Agent with Skill Library Jiongxiao Wang1* Qiaojing Yan2 Yawei Wang2 Yijun Tian2 Soumya Smruti Mishra2 Zhichao Xu2 Megha Gandhi2 Panpan Xu2† Lin Lee Cheong2 1University of Wisconsin–Madison; 2AWS Agentic AI jw",
+    "all_candidates": [
+      "row91_Reinforcement_Learning_for_Self-Improving_Agent_with_Skill_Library.pdf"
+    ],
+    "abstract": "Large Language Model (LLM)-based agents have demonstrated remarkable capabilities in complex reasoning and multi-turn interactions but struggle to continuously improve and adapt when deployed in new environments. One promising approach is implementing skill libraries that allow agents to learn, validate, and apply new skills. However, current skill library approaches rely primarily on LLM prompting, making consistent skill library implementation challenging. To overcome these challenges, we propose a Reinforcement Learning (RL)-based approach to enhance agents' self-improvement capabilities with a skill library. Specifically, we introduce Skill Augmented GRPO for self-Evolution (SAGE), a novel RL framework that systematically incorporates skills into learning. The framework's key component, Sequential Rollout, iteratively deploys agents across a chain of similar tasks for each rollout. As agents navigate through the task chain, skills generated from previous tasks accumulate in the library and become available for subsequent tasks. Additionally, the framework enhances skill generation and utilization through a Skill-integrated Reward that complements the original outcome-based rewards. Experimental results on AppWorld demonstrate that SAGE, when applied to supervised-finetuned model with expert experience, achieves 8.9% higher Scenario Goal Completion while requiring 26% fewer interaction steps and generating 59% fewer tokens, substantially outperforming existing approaches in both accuracy and efficiency."
+  },
+  "row92": {
+    "row_id": "row92",
+    "phys": 93,
+    "title": "SkillGrad: Optimizing Agent Skills Like Gradient Descent",
+    "doi": "10.48550/arxiv.2605.27760",
+    "url": "https://openalex.org/W7162673730",
+    "pdf": "row92_SkillGrad_Optimizing_Agent_Skills_Like_Gradient_Descent.pdf",
+    "rejected_risk": false,
+    "pages": 26,
+    "pdf_title_head": "SkillGrad: Optimizing Agent Skills Like Gradient Descent Hanyu Wang, Yifan Lan, Bochuan Cao, Lu Lin, Jinghui Chen College of Information Sciences and Technology The Pennsylvania State University University Park, PA, USA Correspondence to: hbw5365@psu",
+    "all_candidates": [
+      "row92_SkillGrad_Optimizing_Agent_Skills_Like_Gradient_Descent.pdf"
+    ],
+    "abstract": "Agent skills provide a lightweight way to adapt LLM agents to specialized domains by storing reusable procedural knowledge in structured files. However, whether downloaded from third parties or self-generated, these skills are often unreliable, incomplete, or outdated. Existing skill-evolution methods often address these deficiencies through heuristic reflections without an explicit optimization formulation. In this paper, we propose SkillGrad, a gradient-descent-inspired framework for optimizing agent skills. SkillGrad treats the skill package as a structured parameter to optimize in a gradient descent fashion: task executions provide trajectory-level loss evidence, automatic diagnoses then provide text-based gradients that indicate the correction directions. To stabilize optimization across iterations, a momentum agent accumulates recurring diagnostic patterns into a persistent memory overlay. Finally, an LLM-based patcher executes the parameter update by applying layer-aware edits to the skill package. Evaluated on SpreadsheetBench Verified and WikiTableQuestions, SkillGrad consistently outperforms training-based skill evolution baselines across two backbone LLMs, improving over the strongest training-based baseline by $6.7$ percentage points on average. Ablations further show that momentum and contrastive diagnosis both contribute to the final skill quality."
+  },
+  "row93": {
+    "row_id": "row93",
+    "phys": 94,
+    "title": "Terminal-World: Scaling Terminal-Agent Environments via Agent Skills",
+    "doi": "10.48550/arxiv.2605.20876",
+    "url": "https://openalex.org/W7161983523",
+    "pdf": "row93_Terminal-World_Scaling_Terminal-Agent_Environments_via_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 45,
+    "pdf_title_head": "Terminal-World: Scaling Terminal-Agent Environments via Agent Skills Zihao Cheng1, * Hongru Wang2, * Zeming Liu1, † Xinyi Wang2 Xiangrong Zhu2 Yuhang Guo3 Wei Lin2 Jeff Z. Pan4 Yunhong Wang1 1School of Computer Science and Engineering, Beihang Univer",
+    "all_candidates": [
+      "row93_Terminal-World_Scaling_Terminal-Agent_Environments_via_Agent_Skills.pdf"
+    ],
+    "abstract": "Terminal agents extend Large Language Models with the ability to execute tasks directly in command-line environments, but their progress is bottlenecked by the scarcity of high-quality training data. Existing approaches bootstrap from partial sources such as human-defined seeds or GitHub repositories to instantiate one component and then complete the rest, producing tasks confined to narrow seed distributions, environments misaligned with task semantics, and inefficient trajectories from unguided exploration. To address these limitations, we introduce Terminal-World, a fully automated pipeline that uses agent skills as the central synthesis primitive, which jointly encode what to accomplish, when to apply (preconditions and environment state), and how to execute, enabling task instructions, environments, and teacher trajectories to be co-derived. To further broaden the synthesis space, Terminal-World composes skills into skill teams and skill graphs for multi-role and cross-domain task synthesis. Using this pipeline, we construct 5,723 training environments and train Terminal-World-8B/14B/32B, evaluated across 6 benchmarks where the Terminal-World series consistently outperforms terminal-agent baselines. Notably, using the same teacher model and only 1.2% of the training data, Terminal-World-32B surpasses Nemotron-Terminal-32B on Terminal-Bench 2.0 by +4.5 Pass@1 (31.5) and achieves 43.8 Pass@3."
+  },
+  "row94": {
+    "row_id": "row94",
+    "phys": 95,
+    "title": "FederatedSkill: Federated Learning for Agentic Skill Evolution",
+    "doi": null,
+    "url": "https://openalex.org/W7163596986",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row94_federatedskill_federated_learning_for_agentic_skill_evolutio.pdf",
+    "rejected_risk": false,
+    "pages": 20,
+    "pdf_title_head": "FederatedSkill: Federated Learning for Agentic Skill Evolution Jingbo Yang1* Guanyu Yao1* Yang Zhang2 Ramana Rao Kompella3 Gaowen Liu3 Shiyu Chang1 1UC Santa Barbara 2MIT-IBM Watson AI Lab 3Cisco Research Abstract Modern LLM agents increasingly rely ",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row94_federatedskill_federated_learning_for_agentic_skill_evolutio.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row94_federatedskill_federated_learning_for_agentic_skill_evolutio.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row94_federatedskill_federated_learning_for_agentic_skill_evolutio.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row94_federatedskill_federated_learning_for_agentic_skill_evolutio.pdf"
+    ],
+    "abstract": "Modern LLM agents increasingly rely on skill libraries to handle complex tasks, making skill evolution a primary driver of self-improvement. However, isolated single-user task streams lack the diversity required to build comprehensive skills. While cross-user collaboration can overcome this data bottleneck, current trajectory-sharing approaches compromise user privacy and impose a uniform global library that fails to accommodate client heterogeneity. We introduce FederatedSkill, a privacy-preserving framework for collaborative agent evolution. Moving beyond raw trajectory sharing, FederatedSkill utilizes semantic skill diffs, structured patches over local libraries, as the fundamental unit of communication. On the server side, an evolution agent aggregates these patches to dynamically model client-specific capability boundaries, facilitating strictly personalized skill evolution rather than a suboptimal global average. Evaluated across 20 distinct agent task families, FederatedSkill demonstrates substantial gains over self-evolving baselines, achieving up to a 44.4% increase in success rate and a 37.5% reduction in computational cost."
+  },
+  "row95": {
+    "row_id": "row95",
+    "phys": 96,
+    "title": "Skill Reuse as Compression in Agentic RL",
+    "doi": null,
+    "url": "https://openalex.org/W7163287260",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row95_skill_reuse_as_compression_in_agentic_rl.pdf",
+    "rejected_risk": false,
+    "pages": 18,
+    "pdf_title_head": "Skill Reuse as Compression in Agentic RL Zhikun Xu1, Yu Feng2, Jacob Dineen1, Taiwei Shi3, Jieyu Zhao3, Ben Zhou1 1Arizona State University, 2University of Pennsylvania, 3University of Southern California zhikunxu@asu.edu Abstract Large language mode",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row95_skill_reuse_as_compression_in_agentic_rl.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row95_skill_reuse_as_compression_in_agentic_rl.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row95_skill_reuse_as_compression_in_agentic_rl.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row95_skill_reuse_as_compression_in_agentic_rl.pdf"
+    ],
+    "abstract": "Large language model agents trained with reinforcement learning (RL) often learn brittle, task-specific shortcuts. We hypothesize that agents generalize better when their successful trajectories are structurally compressible, decomposed into a small set of reusable abstract patterns. To formalize this, we introduce ReuseRL, which grounds agentic RL in the Minimum Description Length (MDL) principle. ReuseRL extracts a shared skill dictionary from successful trajectories and augments the RL objective with a segmentation cost, explicitly penalizing idiosyncratic behaviors that encode poorly. We prove a PAC-Bayes generalization bound for this compression penalty. Across ALFWorld, TextWorld-Cooking, and Countdown-Stepwise, ReuseRL improves in- and out-of-distribution success over vanilla GRPO and strong round-length baselines."
+  },
+  "row96": {
+    "row_id": "row96",
+    "phys": 97,
+    "title": "Scaling Coding Agents via Atomic Skills",
+    "doi": "10.48550/arxiv.2604.05013",
+    "url": "https://openalex.org/W7152025511",
+    "pdf": "UNAVAILABLE: arXiv 2604.05013 404; abstract-only",
+    "rejected_risk": false,
+    "pages": null,
+    "pdf_title_head": null,
+    "all_candidates": [],
+    "abstract": "Current LLM coding agents are predominantly trained on composite benchmarks (e.g., bug fixing), which often leads to task-specific overfitting and limited generalization. To address this, we propose a novel scaling paradigm that shifts the focus from task-level optimization to atomic skill mastery. We first formalize five fundamental atomic skills, code localization, code editing, unit-test generation, issue reproduction, and code review, that serve as the basis vectors for complex software engineering tasks. Compared with composite coding tasks, these atomic skills are more generalizable and composable. Then, we scale coding agents by performing joint RL over atomic skills. In this manner, atomic skills are consistently improved without negative interference or trade-offs between them. Notably, we observe that improvements in these atomic skills generalize well to other unseen composite coding tasks, such as bug-fixing, code refactoring, machine learning engineering, and code security. The observation motivates a new scaling paradigm for coding agents by training with atomic skills. Extensive experiments demonstrate the effectiveness of our proposed paradigm. Notably, our joint RL improves average performance by 18.7% on 5 atomic skills and 5 composite tasks.",
+    "source_note": "No PDF available (arXiv 404, no OA pdf); judged from abstract only"
+  },
+  "row97": {
+    "row_id": "row97",
+    "phys": 98,
+    "title": "MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents",
+    "doi": "10.48550/arxiv.2602.02474",
+    "url": "https://openalex.org/W7127393332",
+    "pdf": "row97_MemSkill_Learning_and_Evolving_Memory_Skills_for_Self-Evolving_Agents.pdf",
+    "rejected_risk": false,
+    "pages": 33,
+    "pdf_title_head": "MemSkill: Learning and Evolving Memory Skills for Self-Evolving Agents Haozhen Zhang 1 Quanyu Long 1 Jianzhu Bao 1 Tao Feng 2 Weizhi Zhang 3 Haodong Yue 4 Wenya Wang 1 Abstract Most Large Language Model (LLM) agent mem- ory systems rely on a small se",
+    "all_candidates": [
+      "row97_MemSkill_Learning_and_Evolving_Memory_Skills_for_Self-Evolving_Agents.pdf"
+    ],
+    "abstract": "Most Large Language Model (LLM) agent memory systems rely on a small set of static, hand-designed operations for extracting memory. These fixed procedures hard-code human priors about what to store and how to revise memory, making them rigid under diverse interaction patterns and inefficient on long histories. To this end, we present \\textbf{MemSkill}, which reframes these operations as learnable and evolvable memory skills, structured and reusable routines for extracting, consolidating, and pruning information from interaction traces. Inspired by the design philosophy of agent skills, MemSkill employs a \\emph{controller} that learns to select a small set of relevant skills, paired with an LLM-based \\emph{executor} that produces skill-guided memories. Beyond learning skill selection, MemSkill introduces a \\emph{designer} that periodically reviews hard cases where selected skills yield incorrect or incomplete memories, and evolves the skill set by proposing refinements and new skills. Together, MemSkill forms a closed-loop procedure that improves both the skill-selection policy and the skill set itself. Experiments on LoCoMo, LongMemEval, HotpotQA, and ALFWorld demonstrate that MemSkill improves task performance over strong baselines and generalizes well across settings. Further analyses shed light on how skills evolve, offering insights toward more adaptive, self-evolving memory management for LLM agents."
+  },
+  "row98": {
+    "row_id": "row98",
+    "phys": 99,
+    "title": "HarmfulSkillBench: How Do Harmful Skills Weaponize Your Agents?",
+    "doi": null,
+    "url": "https://openalex.org/W7155246914",
+    "pdf": "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row98_harmfulskillbench_how_do_harmful_skills_weaponize_your_agent.pdf",
+    "rejected_risk": false,
+    "pages": 24,
+    "pdf_title_head": "HARMFULSKILLBENCH: How Do Harmful Skills Weaponize Your Agents? Yukun Jiang Yage Zhang Michael Backes Xinyue Shen Yang Zhang* CISPA Helmholtz Center for Information Security Abstract Large language models (LLMs) have evolved into au- tonomous agents ",
+    "all_candidates": [
+      "remaining_step3_20260620_004325/row98_harmfulskillbench_how_do_harmful_skills_weaponize_your_agent.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_41/row98_harmfulskillbench_how_do_harmful_skills_weaponize_your_agent.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_40/row98_harmfulskillbench_how_do_harmful_skills_weaponize_your_agent.pdf",
+      "remaining_step3_20260620_004325/pdfs_for_google_drive_clean_41/row98_harmfulskillbench_how_do_harmful_skills_weaponize_your_agent.pdf"
+    ],
+    "abstract": "Large language models (LLMs) have evolved into autonomous agents that rely on open skill ecosystems (e.g., ClawHub and Skills.Rest), hosting numerous publicly reusable skills. Existing security research on these ecosystems mainly focuses on vulnerabilities within skills, such as prompt injection. However, there is a critical gap regarding skills that may be misused for harmful actions (e.g., cyber attacks, fraud and scams, privacy violations, and sexual content generation), namely harmful skills. In this paper, we present the first large-scale measurement study of harmful skills in agent ecosystems, covering 98,440 skills across two major registries. Using an LLM-driven scoring system grounded in our harmful skill taxonomy, we find that 4.93% of skills (4,858) are harmful, with ClawHub exhibiting an 8.84% harmful rate compared to 3.49% on Skills.Rest. We then construct HarmfulSkillBench, the first benchmark for evaluating agent safety against harmful skills in realistic agent contexts, comprising 200 harmful skills across 20 categories and four evaluation conditions. By evaluating six LLMs on HarmfulSkillBench, we find that presenting a harmful task through a pre-installed skill substantially lowers refusal rates across all models, with the average harm score rising from 0.27 without the skill to 0.47 with it, and further to 0.76 when the harmful intent is implicit rather than stated as an explicit user request. We responsibly disclose our findings to the affected registries and release our benchmark to support future research (see https://github.com/TrustAIRLab/HarmfulSkillBench)."
+  },
+  "row99": {
+    "row_id": "row99",
+    "phys": 100,
+    "title": "Socratic-SWE: Self-Evolving Coding Agents via Trace-Derived Agent Skills",
+    "doi": "10.48550/arxiv.2606.07412",
+    "url": "https://openalex.org/W7163899414",
+    "pdf": "row99_Socratic-SWE_Self-Evolving_Coding_Agents_via_Trace-Derived_Agent_Skills.pdf",
+    "rejected_risk": false,
+    "pages": 21,
+    "pdf_title_head": "Socratic-SWE: Self-Evolving Coding Agents via Trace-Derived Agent Skills Chuan Xiao2,∗, Zhengbo Jiao1,2,∗, Shaobo Wang2, Wei Wang1, Bing Zhao1, HU WEI1,†, Linfeng Zhang2,†, Lin Qu1 1AI Data, Alibaba Group 2Shanghai Jiao Tong University ∗Equal contrib",
+    "all_candidates": [
+      "row99_Socratic-SWE_Self-Evolving_Coding_Agents_via_Trace-Derived_Agent_Skills.pdf"
+    ],
+    "abstract": "LLM-driven software engineering agents have become a central testbed for real-world language-model capability, yet their training remains limited by the availability of high-quality SWE tasks. Existing synthetic data methods typically create tasks through fixed mutation or bug-injection procedures, making the resulting distributions largely independent of the agent's own weaknesses and training progress. We introduce Socratic-SWE, a closed-loop self-evolution framework that reuses the agent's historical solving traces as a source of training signal. Rather than treating traces only as evidence for reward computation, Socratic-SWE distills them into structured agent skills that summarize recurring failures and effective repair patterns. These skills then guide the generation of targeted repair tasks in real repositories. Candidate tasks are checked through execution-based validation and scored with a solver-gradient alignment reward, so that the retained tasks are both verifiable and useful for improving the Solver. The updated Solver produces new traces, enabling the task curriculum to adapt over successive rounds. Across SWE-bench Verified, SWE-bench Lite, SWE-bench Pro, and Terminal-Bench 2.0, Socratic-SWE consistently improves over self-evolving baselines under the same compute budget, reaching 50.40% on SWE-bench Verified after three iterations. These results suggest that solving traces can serve as a scalable substrate for self-evolving SWE agents."
+  },
+  "row100": {
+    "row_id": "row100",
+    "phys": 101,
+    "title": "CodeClinic: Evaluating Automation of Coding Skills for Clinical Reasoning Agents",
+    "doi": "10.48550/arxiv.2605.09675",
+    "url": "https://openalex.org/W7160940018",
+    "pdf": "row100_CodeClinic_Evaluating_Automation_of_Coding_Skills_for_Clinical_Reasoning_Agents.pdf",
+    "rejected_risk": false,
+    "pages": 23,
+    "pdf_title_head": "CodeClinic: Evaluating Automation of Coding Skills for Clinical Reasoning Agents Timothy Ossowski1 Xinchu Liu1 Danyal Maqbool1 Vaibhav Dhanuka1 Sheng Zhang2 Hoifung Poon2 Majid Afshar1 Tyler Bradshaw1 Junjie Hu1 1University of Wisconsin–Madison 2Micr",
+    "all_candidates": [
+      "row100_CodeClinic_Evaluating_Automation_of_Coding_Skills_for_Clinical_Reasoning_Agents.pdf"
+    ],
+    "abstract": "Clinical reasoning agents based on large language models (LLMs) aim to automate tasks such as intensive care unit (ICU) monitoring and patient state tracking from electronic health records (EHRs). Existing systems typically rely on manually curated clinical tools or skills for concepts such as sepsis detection and organ failure assessment. However, maintaining these tool libraries requires substantial expert effort, while zero-shot querying or code generation often produces inefficient and unreliable reasoning chains, especially under institution-specific clinical policies. We introduce CodeClinic, a benchmark built on MIMIC-IV for evaluating whether LLM agents can synthesize and compose reusable clinical skills instead of relying on fixed toolboxes. The benchmark contains two complementary tasks: longitudinal ICU surveillance and compositional information seeking. The longitudinal setting simulates monitoring patient trajectories with structured decisions every four hours across 25 findings and eight clinical families, while the compositional setting spans 63k instances across 259 tasks in nine domains and is stratified by compositional dependency depth to evaluate increasingly complex multi-step reasoning. We further propose an offline autoformalization pipeline that converts natural-language clinical guidelines into reusable and verified Python skill libraries through iterative LLM refinement. Compared with zero-shot code generation, the resulting libraries improve consistency while reducing per-query token usage by up to 40%."
+  }
+}

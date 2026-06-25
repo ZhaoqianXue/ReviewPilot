@@ -1,0 +1,360 @@
+=== PDF FIRST PAGE (title region) ===
+Accepted to the Machine Learning for Architecture and Systems Workshop (MLArchSys), co-located with ISCA 2026.
+From Human Guidance to Autonomy:
+Agent Skill System for End-to-End LLM
+Deployment on Spatial NPUs
+Jiajie Li
+Erwei Wang∗
+Zhiru Zhang
+Samuel Bayliss∗
+Cornell University
+∗AMD
+{jl4257, zhiruz}@cornell.edu ,{erwei.wang, samuel.bayliss}@amd.com
+Abstract—Spatial neural processing units (NPUs) provide an
+energy-efficient platform for edge LLM inference, but efficiently
+deploying an LLM end-to-end on such hardware remains labor-
+intensive. Although AI coding agents have begun to lower this
+cost, existing studies have largely focused on single-kernel opti-
+mization rather than end-to-end LLM deployment on resource-
+constrained spatial NPUs.
+We present a two-stage methodology, instantiated on the AMD
+XDNA™2 NPU, that progresses from human-guided develop-
+ment to agent autonomy. In the first stage, we develop a refer-
+ence deployment of Llama-3.2-1B through human-guided agent
+assistance. The resulting implementation achieves a speedup of
+2.2× on prefill and 4.0× on decode over the hand-optimized
+baseline, with the optimization trajectory and its lessons recorded
+as structured document
+
+=== FRONT MATTER (abstract/intro/method, first 6 pages) ===
+Accepted to the Machine Learning for Architecture and Systems Workshop (MLArchSys), co-located with ISCA 2026.
+From Human Guidance to Autonomy:
+Agent Skill System for End-to-End LLM
+Deployment on Spatial NPUs
+Jiajie Li
+Erwei Wang∗
+Zhiru Zhang
+Samuel Bayliss∗
+Cornell University
+∗AMD
+{jl4257, zhiruz}@cornell.edu ,{erwei.wang, samuel.bayliss}@amd.com
+Abstract—Spatial neural processing units (NPUs) provide an
+energy-efficient platform for edge LLM inference, but efficiently
+deploying an LLM end-to-end on such hardware remains labor-
+intensive. Although AI coding agents have begun to lower this
+cost, existing studies have largely focused on single-kernel opti-
+mization rather than end-to-end LLM deployment on resource-
+constrained spatial NPUs.
+We present a two-stage methodology, instantiated on the AMD
+XDNA™2 NPU, that progresses from human-guided develop-
+ment to agent autonomy. In the first stage, we develop a refer-
+ence deployment of Llama-3.2-1B through human-guided agent
+assistance. The resulting implementation achieves a speedup of
+2.2× on prefill and 4.0× on decode over the hand-optimized
+baseline, with the optimization trajectory and its lessons recorded
+as structured documentation throughout. In the second stage, we
+distill the documentation into an agent skill system consisting of
+eight phases, orchestrating the optimization and debugging skill
+sets, with numerical correctness strictly enforced at each phase.
+Using our agent skill system, we autonomously deploy eight
+additional decoder-only LLMs (Llama-3.2-3B, SmolLM2-1.7B,
+Qwen2.5-{0.5B, 1.5B, 3B}, Qwen3-{0.6B, 1.7B, 4B}) end-to-
+end on the AMD XDNA 2 NPU using the open-source compiler
+stack. To our knowledge, these models have not previously been
+deployed on AMD NPUs via any open-source software stack.
+Each deployment completes in 0.5–4 hours of agent wall time
+with almost no human guidance, and passes the numerical-
+correctness gates, demonstrating functional generalization to
+previously unencountered LLMs. Three of the eight match or
+exceed the sustained performance of our Llama-3.2-1B reference
+deployment, suggesting that the resulting implementations can be
+competitive without additional model-specific human engineering.
+I. INTRODUCTION
+Large language models are increasingly deployed at the
+edge for lower latency, stronger privacy, and offline operation.
+These settings impose strict power and thermal constraints,
+motivating the use of accelerators with higher energy effi-
+ciency than general-purpose CPUs or GPUs. Spatial neural
+processing units (NPUs) have emerged as a key class of
+accelerator for this regime.
+Spatial NPUs achieve efficiency by exposing explicit hard-
+ware management to the software stack. Unlike processors
+with implicit cache hierarchies, spatial NPUs expose dis-
+tributed on-chip memories, explicit data-movement schedul-
+ing, and tile-level kernel placement directly to the programmer.
+Jiajie Li performed this work at AMD.
+Deploying an LLM end-to-end onto NPUs with competitive
+performance typically takes substantial expert engineering to
+tackle all these challenges.
+Agentic systems for accelerator programming [3], [6], [8],
+[9], [13]–[15] reduce engineering effort by automating kernel
+generation. However, no existing research primarily targets
+end-to-end LLM deployment on a resource-constrained spatial
+NPU. They also do not encode the full deployment workflow
+as composable Agent Skills [2] that can be invoked au-
+tonomously by a coding agent. We address both gaps for end-
+to-end LLM deployment on the AMD XDNA™2 NPU [10].
+Our approach consists of two stages, embodying a transition
+from human guidance to agent autonomy. In the first stage,
+we construct a reference Llama-3.2-1B on NPU with human
+guidance and agent assistance, and document the optimization
+trajectory and its lessons throughout. In the second stage, we
+distill the documentation into a reusable agent skill system that
+supports the autonomous deployment of additional LLMs. The
+paper makes three novel contributions:
+• An end-to-end Llama-3.2-1B deployment on the AMD
+XDNA 2 NPU (§III) that achieves a speedup of 2.2×
+on prefill and 4.0× on decode over the hand-optimized
+baseline. The optimization trajectory and its lessons are
+maintained as documents throughout, forming the foun-
+dation of the skill system.
+• An agent skill system for end-to-end LLM deployment on
+NPUs (§IV), comprising an eight-phase skill chain with
+strict numerical correctness gates, sets of optimization
+and debug skills that auto-trigger on common patterns,
+and an independent evaluator agent that re-runs every gate
+to prevent the generator from bypassing it.
+• First open-source end-to-end deployment of eight addi-
+tional LLMs on the AMD XDNA 2 NPU (§V): Llama-
+3.2-3B, SmolLM2-1.7B, Qwen2.5-{0.5B, 1.5B, 3B}, and
+Qwen3-{0.6B, 1.7B, 4B}. Each deploys autonomously
+in 0.5–4 hours of agent wall time, with three of them
+matching or exceeding the sustained performance of our
+Llama-3.2-1B reference.
+II. BACKGROUND
+Target hardware. We target the AMD XDNA 2 NPU in
+Ryzen™AI 300/400 Series processors. Compute tiles are
+arranged in a 4×8 array, each with a 64 KB L1 scratchpad.
+1
+arXiv:2606.07586v2  [cs.LG]  9 Jun 2026
+
+Each column also includes a 512 KB memory tile (L2) shared
+by its four compute tiles, plus a shim tile bridging to host
+DDR. Compute tiles communicate via configurable streaming
+interconnects and cascade connections to neighbors.
+Programming model. We program the NPU through MLIR-
+AIR [12], a platform-agnostic compiler abstraction for spatial
+accelerators built on MLIR. MLIR-AIR defines the AIR di-
+alect, which exposes the array’s spatial structure as loop nests.
+AIR models spatial partitioning, temporal iteration, and inter-
+tile communication explicitly, exposing the main deployment
+decisions for an AI agent to inspect and modify.
+IRON [7] is another programming abstraction that sits
+one layer closer to the hardware. It exposes compute tiles,
+memory tiles, and shim tiles directly, with data movement
+wired through ObjectFifos and DMA tasks. This gives expert
+programmers fine-grained control over tiling, double buffering,
+data layout, and pipeline placement, well suited for hand-tuned
+kernels.
+Dato [4] raises the programming model to a task-based
+dataflow abstraction. It treats on-chip communication and data
+sharding as first-class program constructs, and expresses an
+application as a task graph. This shifts low-level tile binding
+and data movement to the compiler, improving productivity
+and portability.
+LLMs on AMD XDNA NPU. AMD Ryzen AI Software [1]
+and FastFlowLM [5] deploy multiple LLMs on AMD XDNA
+NPUs, but they keep their NPU kernel implementation closed-
+source and primarily target quantized LLMs. Prior to our work,
+the only end-to-end LLM deployment with open-source NPU
+kernels and compiler stack is the BF16 Llama-3.2-1B example
+shipped with IRON, which we use as our baseline in §III.
+MLIR-AIR has no prior LLM deployment example.
+Agent skills. Agent Skills [2] provide a portable format for
+encoding domain knowledge that a coding agent discovers
+and invokes autonomously. Community skill collections such
+as Superpowers [11] apply this format to general software
+engineering. To our knowledge, no existing skill set targets
+end-to-end LLM deployment on spatial NPUs.
+III. AGENT-ASSISTED MAPPING OF LLAMA-3.2-1B
+This section describes how we mapped a BF16 Llama-3.2-
+1B end-to-end onto the AMD XDNA 2 NPU by working with
+an AI coding agent acting as our copilot. The deployment
+outperforms the human-engineered baseline by 2.2× on prefill
+and 4.0× on decode. We also maintain a set of documents that
+log experiences, caveats, and the performance optimization
+trajectory, which becomes the reusable foundation for the skill
+system in §IV.
+A. Document-Guided Workflow with a Coding Agent
+Modern AI coding agents such as Claude Code can write
+code well, but on a long multi-session project they need a
+human to plan and direct, and a persistent way to remember
+what has been done. Development on the NPU makes this
+acute: tooling documentation is sparse, and opaque error
+messages surface frequently. Without a running record of
+Fig. 1. Prefill optimization trajectory of Llama-3.2-1B (BF16, seq len=2048)
+on the AMD XDNA 2 NPU.
+decisions and debugging, every new session starts blind, easily
+redoing past work or breaking past fixes.
+To avoid this, we pair a structured development plan with
+a set of Markdown documents alongside the code. The plan
+has two parts: first reach end-to-end functional correctness
+for prefill and decode, then optimize each path’s performance
+separately. Across both stages, plan.md captures the over-
+all strategy, progress.md tracks the current phase, and
+issues.md accumulates each non-obvious bug, its root
+cause, and the workaround applied. The performance stage
+adds perf_opt_traj.md, which logs every optimization
+attempt with measured before/after results, alongside per-
+kernel design notes (gemm.md, attention.md, rope.md,
+...) that record each kernel’s design rationale, shape-specific
+tuning, tile configurations, and known pitfalls. The human-
+engineered baseline with IRON serves as the performance
+reference at every iteration, both per-kernel and end-to-end.
+Throughout, the coding agent is Claude Code paired with
+Claude Opus 4.7 (1M context). The human directs and ap-
+proves while the agent does the search, code edits, profiling,
+and tool runs. In each session, the agent reads the relevant
+documents to recover state, proposes the next step against
+the plan, executes it under human supervision, and updates
+the documents as work progresses. This documentation-first
+discipline keeps the workflow durable across sessions.
+B. Challenges and the Optimization Trajectory
+Mapping the model end-to-end on NPU surfaced challenges
+in both correctness and performance. We kept correctness in
+check throughout the trajectory with a CPU FP32 reference,
+gating every kernel and block change against ground truth. Per-
+formance challenges fell into three categories, each addressed
+by specific steps in Figure 1.
+(A) Kernel efficiency at production shapes. Reaching peak
+kernel performance requires several optimization techniques:
+vectorization (Step 1), shape-specific tile tuning (Step 4
+GEMM), fused kernel design (Step 4 FlashAttention), and
+scaling with tile-array parallelism (Step 8). The main chal-
+lenge is scaling kernels from validation shapes to production
+LLM shapes, where implementations must satisfy additional
+2
+
+architectural and runtime constraints such as DMA-channel
+availability, L1/L2 memory capacity, and BufferObject de-
+scriptor limits. Cases that expose missing compiler coverage
+are reported upstream and resolved iteratively.
+(B) Reducing kernel dispatch overhead. NPU kernel dis-
+patch has non-negligible overhead from the application, run-
+time, driver, firmware, and hardware layers. This overhead can
+exceed the kernel’s actual execution time. We merged con-
+secutive kernels into single dispatches. In prefill, we merged
+the eight-kernel post-attention block (Step 5: output projection
++ SwiGLU FFN) into one dispatch and the six-kernel pre-
+attention block (Step 6: RMSNorm + QKV projections +
+RoPE) into another, reducing per-layer dispatches from 15 to
+3. The same merging applies to decode with GEMV variants.
+This merging also saves memory copies of intermediate acti-
+vations between the NPU and the host.
+(C) Host-side optimization. Host-side overheads such as
+context setup, buffer management, host-device data transfers,
+and layout transposes add up across many kernel calls. We
+reused the XRT context across calls (Step 2) and recycled
+per-layer buffer objects via zero-copy mapping (Step 3). We
+skipped redundant host-device transfers for buffers the NPU
+writes for static weights and intermediate activations (Step 7),
+and chose activation layouts that let consecutive kernels hand
+off without host-side transpose (Step 9). Finally, prefill writes
+only the last token’s logits from the LM Head, removing a
+large NPU-to-host transfer of the full-sequence logits tensor
+(Step 10).
+As a result, on a 2048-token sequence, prefill achieves a
+2.2× speedup over IRON (commit 2b62dc7), with a time-to-
+first-token (TTFT) of 1.3 s. Decode achieves a 4.0× speedup,
+reaching 10.8 tokens/s (TPS). The trajectory and its lessons
+are logged and distilled into reusable agent skills in the next
+section.
+IV. SKILL SYSTEM
+Building on the experience of §III, we distill the main-
+tained document set into a self-evolving agent skill sys-
+tem to automate the deployment of unencountered LLMs.
+Figure 2 shows the system and Table I catalogs each
+skill. Each maintained document maps to a skill compo-
+nent: plan.md and progress.md define the orchestrator
+and its phase skills, the per-kernel design notes (gemm.md,
+attention.md, ...) become a kernel registry used for
+Phase 1, perf_opt_traj.md becomes the optimization
+skills applied in Phase 4 and Phase 5, and issues.md turns
+into the auto-invoked debug skills.
+The eight-phase decomposition mirrors the high-level plan
+we followed in §III. Phases 0–3 establish end-to-end functional
+correctness. Phase 0 pulls the HuggingFace (HF) model and
+decomposes it into a kernel-by-kernel CPU FP32 reference
+verified against the HF output. Phase 1 verifies each NPU
+kernel at the model’s required shapes. Phase 2 wires those
+kernels into a single transformer block. Phase 3 cascades to
+the full N-layer model. Phases 4 and 5 invoke optimization
+skills from a shared skill set to address prefill and decode
+TABLE I
+ALL SKILLS IN THE SYSTEM, WITH THEIR TYPE AND PURPOSE.
+Skill
+Type
+Purpose
+Deploy new LLM
+Orchestrator
+Scaffold workspace & dispatch phases
+Build CPU oracle
+Phase 0
+Decompose CPU FP32 oracle from HF
+Kernel validation
+Phase 1
+Per-kernel verification vs oracle
+Single-block validation
+Phase 2
+Single transformer block on NPU
+Full-model validation
+Phase 3
+N-layer cascade & final logits check
+Prefill optimization
+Phase 4
+Apply prefill perf patterns
+Decode optimization
+Phase 5
+Apply decode perf patterns
+Finalize & learn
+Phase 6
+Runner integration & lesson harvest
+Independent evaluator
+Phase 7
+Recheck every gate on a fresh subagent
+Multi-kernel merging
+Optimization
+Merge N kernels into one dispatch
+Buffer object reuse
+Optimization
+Load weights with zero-copy mapping
+Layout alignment
+Optimization
+Align layouts to skip host transposes
+Runtime failure
+Debug
+Diagnose kernel hang at runtime
+Buffer object corruption
+Debug
+Diagnose BO corruption runtime error
+Routing congestion
+Debug
+Diagnose routing congestion hang
+bottlenecks. Phase 6 integrates prefill and decode into a single
+inference runner, profiles the deployment to produce a perfor-
+mance report, and harvests new findings into lessons.md.
+Phase 7 spawns an independent evaluator agent without prior
+context to re-audit the deployment.
+Each of Phases 0–6 closes with a strict numerical gate
+against the CPU FP32 reference, measuring absolute error,
+relative error, and Pearson correlation across the phase’s
+output. The gate passes only if all three meet phase-specific
+thresholds. For Phases 4 and 5, the gate additionally requires
+that each optimization step measurably improves performance
+over the prior baseline. If the gate fails, the agent invokes a
+matching debug skill on a known symptom, or asks the user
+if the failure is a new one. If the gate passes, the agent stops
+at a human-in-the-loop checkpoint where the user reviews
+the phase output and either approves or redirects. Separating
+Phase 7’s evaluator from the deploying agent prevents reward
+hacking [16]. The evaluator re-runs every numerical gate from
+scratch and re-profiles to verify that measured performance
+matches the profiling report submitted by the deploying agent.
+A fail verdict blocks final acceptance.
+Two skill sets complement the phase pipeline: the opti-
+mization skills distilled from §III-B patterns, and the debug
+skills distilled from high-impact bug reports. Each set currently
+co
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+

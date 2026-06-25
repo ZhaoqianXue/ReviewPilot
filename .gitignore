@@ -15,6 +15,7 @@ build/
 output/
 data/
 writing/
+agent_skill/
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
 .benchmark_step3_download/

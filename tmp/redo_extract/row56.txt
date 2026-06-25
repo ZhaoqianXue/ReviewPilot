@@ -1,0 +1,396 @@
+=== PDF FIRST PAGE (title region) ===
+Do Self-Evolving Agents Forget? Capability
+Degradation and Preservation in Lifelong LLM Agent
+Adaptation
+Ye Yu1, Xiaopeng Yuan1, Haibo Jin1, Heming Liu1, Yaoning Yu1, Haohan Wang1∗
+1 University of Illinois Urbana-Champaign, IL, USA
+Abstract
+Recent advances in LLM agents enable systems that autonomously refine work-
+flows, accumulate reusable skills, self-train their underlying models, and maintain
+persistent memory. However, we show that such self-evolution is often non-
+monotonic: adapting to new task distributions can progressively degrade previously
+acquired capabilities across all major evolution channels.
+We identify this phenomenon as capability erosion under self-evolution and show
+that it consistently emerges across workflow, skill, model, and memory evolution.
+To mitigate this issue, we propose Capability-Preserving Evolution (CPE), a general
+stabilization principle that constrains destructive capability drift during continual
+adaptation. Across all four evolution dimensions, CPE consistently improves
+retained capability stability while preserving adaptation performance. For example,
+in workflow evolution, CPE improves retained simple-task performance from 41.8%
+to 52.8% u
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Do Self-Evolving Agents Forget? Capability
+Degradation and Preservation in Lifelong LLM Agent
+Adaptation
+Ye Yu1, Xiaopeng Yuan1, Haibo Jin1, Heming Liu1, Yaoning Yu1, Haohan Wang1∗
+1 University of Illinois Urbana-Champaign, IL, USA
+Abstract
+Recent advances in LLM agents enable systems that autonomously refine work-
+flows, accumulate reusable skills, self-train their underlying models, and maintain
+persistent memory. However, we show that such self-evolution is often non-
+monotonic: adapting to new task distributions can progressively degrade previously
+acquired capabilities across all major evolution channels.
+We identify this phenomenon as capability erosion under self-evolution and show
+that it consistently emerges across workflow, skill, model, and memory evolution.
+To mitigate this issue, we propose Capability-Preserving Evolution (CPE), a general
+stabilization principle that constrains destructive capability drift during continual
+adaptation. Across all four evolution dimensions, CPE consistently improves
+retained capability stability while preserving adaptation performance. For example,
+in workflow evolution, CPE improves retained simple-task performance from 41.8%
+to 52.8% under GPT-5.1 optimization while simultaneously achieving stronger
+complex-task adaptation.
+Our findings suggest that stable long-horizon self-evolving agents require not only
+acquiring new capabilities, but also explicitly preserving previously learned ones
+during continual adaptation.
+1
+Introduction
+LLM agents are rapidly shifting from static, manually engineered systems toward self-evolving
+entities that continuously refine themselves through interaction with their environments [1]. Recent
+frameworks enable agents to autonomously optimize their reasoning workflows [2–6], construct
+reusable skills and tools [7–12], update their underlying model parameters [13–15], and accumulate
+persistent memory [14, 16, 17] without human intervention. Together, these advances suggest a
+compelling long-term vision: agents that can continually expand their competence over their lifetime
+through continual self-directed adaptation.
+Yet this long-term vision rests on an assumption that has received little systematic scrutiny: when an
+agent adapts to new tasks within its task scope, it retains competence on tasks it has already mastered.
+Our empirical study indicates that this assumption does not hold in many cases. Across the major
+channels through which self-evolving agents adapt–workflow, skill and tools, model, memory [1]–
+acquiring new competencies frequently comes at the expense of previously mastered ones. As agents’
+task distribution temporarily shifts from an old task distribution X toward a new task distribution Y,
+repeated self-updates gradually weaken the internal structures that previously supported successful
+behavior on earlier tasks, causing prior capabilities to decay as illustrated in Figure 1. We term this
+phenomenon capability erosion under self-evolution.
+∗Corresponding author: haohanw@illinois.edu
+Preprint.
+arXiv:2605.09315v1  [cs.AI]  10 May 2026
+
+Task X
+Task Y
+Task Distribution Shift
+Vanilla
+Self-Evolve
+Capabilities
+Decay
+Capabilities
+Preserve
+Self-Evolve
+With Drift Control
+Self-Evolving
+Loop
+Self-Evolving
+Loop
+LLM Agent
+LLM Agent
+LLM Agent
+LLM Agent
+Figure 1: Self-evolution under task distribution shift. Under unconstrained self-evolution, repeated
+adaptation toward new tasks progressively erodes capability structures that supported previously
+mastered tasks, causing prior capability loss. Capability-Preserving Evolution instead constrains
+self-updates to acquire new capabilities while preserving previously retained ones.
+Capability erosion cannot be characterized as a single drop in held-out accuracy. It manifests
+structurally across three dimensions:
+1. Retrospective capability decay. Performance on previously mastered tasks degrades after fine-
+tuning on new task distributions.
+2. Behavioral policy drift. Workflows become longer and more complex, introducing unnecessary
+execution steps that introduce noise.
+3. Generalization erosion. Adaptation to the evolved distribution narrows the effective reasoning
+space and interferes with previously acquired capabilities during skill or memory evolution.
+Taken together, these modes reveal that unconstrained self-evolution does not accumulate capabil-
+ity monotonically, but instead introduces continual drift away from previously reliable behavior.
+Adaptation to new tasks often trades off with the retention of prior capabilities.
+A single mechanistic account underlies this phenomenon across all four evolution dimensions. Al-
+though workflow, tool, model, and memory evolution appear to be heterogeneous, all four dimensions
+involve repeatedly rewriting a mutable repository to accommodate new tasks. Each update opti-
+mized solely for a new task distribution introduces destructive interference: modifications to internal
+repository structures that previously supported successful behavior on earlier tasks are degraded or
+overwritten. Capability erosion is therefore not an artifact of any particular adaptation mechanism,
+but a structural consequence of unconstrained continual self-modification [18–24].
+This diagnosis points toward a shared mitigation principle: self-evolution updates should acquire new
+competencies while minimizing destructive disruption to capability structures already encoded in
+the repository. In other words, the objective is not merely to move the agent toward the new task
+distribution Y, but to do so while preserving the capability support required by prior tasks, as depicted
+in the lower pipeline of Figure 1. We term this Capability-Preserving Evolution and propose it as
+a general design principle for stable long-horizon agent adaptation. To this end, we analyze how
+capability erosion manifests across all four evolution dimensions and, from this analysis, derive
+dimension-specific regularization strategies that instantiate capability-preserving evolution in each
+setting. Across workflow, skill and tool, model, and memory evolution, these strategies substantially
+mitigate observed erosion, demonstrating that capability-preserving evolution constitutes a broadly
+applicable stabilization mechanism for self-evolving agents.
+Our contributions are threefold:
+2
+
+• We identify capability erosion as a fundamental failure mode of self-evolving LLM agents, where
+continual adaptation degrades previously acquired capabilities across workflow, skill, model, and
+memory evolution.
+• We provide a unified interference perspective on capability erosion, together with a local analysis
+showing how unconstrained self-evolution overwrites prior capability-supporting structures.
+• We propose Capability-Preserving Evolution (CPE), a general stabilization principle for self-
+evolving agents that constrains destructive capability drift during continual adaptation while
+preserving adaptation performance.
+2
+Capability Erosion under Distributional Self-Evolution
+2.1
+Sequential Self-Evolution
+We model self-evolution as a sequential adaptation process over task distributions.
+Let
+D1, D2, . . . , DT denote the distributions encountered by an agent over its lifetime. At stage t,
+the agent is represented by a capability state Rt ∈R, which may correspond to an executable work-
+flow, a skill repository, trainable model parameters, or a memory store. Self-evolution updates Rt to
+improve performance on newly encountered task distributions while implicitly affecting performance
+on previously learned ones.
+Notation. A sampled task instance is denoted by x ∼Dt. The instantaneous loss on x under
+capability state R is written as ℓ(R; x). The expected stage loss is
+Lt(R) = Ex∼Dt[ℓ(R; x)].
+(1)
+Given a new distribution Dt, naïve self-evolution updates the capability state by optimizing only the
+current-stage objective:
+Rnaive
+t
+∈arg min
+R∈R Lt(R).
+(2)
+This abstraction intentionally hides the concrete representation of Rt. For workflow evolution, Rt is
+an executable policy graph or prompt program. For skill/tool evolution, Rt is a bounded repository of
+reusable procedural entries. For model evolution, Rt is the trainable parameter state. For memory
+evolution, Rt is an external retrieved memory store. Although the underlying representations differ,
+all four settings share the same learning dynamic: optimizing performance on the current distribution
+Dt can interfere with capabilities previously acquired on earlier distributions D<t.
+2.2
+Capability Erosion
+Let D<t = {D1, . . . , Dt−1} denote previously encountered distributions. We define the retained
+old-distribution risk at stage t as
+L<t(R) =
+X
+i<t
+αiLi(R),
+αi ≥0,
+X
+i<t
+αi = 1.
+(3)
+The coefficients αi control the relative importance assigned to prior distributions and may be chosen
+uniformly in the simplest setting.
+We say capability erosion occurs at stage t if adaptation toward the current distribution Dt increases
+retained risk on previously encountered distributions D<t:
+L<t(Rt) > L<t(Rt−1).
+(4)
+The central source of erosion is distributional interference. If the minimizers of the current objective
+Lt are misaligned with those of prior objectives L<t, then optimizing only Lt can move the capability
+state toward regions that increase retained old-distribution risk. When old and new distributions rely
+on overlapping capability support, such interference may be weak or even beneficial. Conversely,
+larger mismatch between the structures required by Dt and D<t induces stronger capability erosion.
+Importantly, this formulation is stated in terms of a general capability state Rt rather than only
+neural parameters. In self-evolving agents, adaptation may occur through workflow rewriting,
+skill replacement, memory updates, or parameter optimization, all of which modify a mutable
+capability repository. Despite these different implementations, the same interference principle applies:
+adaptation toward new distributions can disrupt structures that previously supported successful
+behavior.
+3
+
+2.3
+A Local Mechanism of Capability Erosion
+The discussion above characterizes capability erosion at the level of task distributions and retained
+risk. To study how such erosion emerges during self-evolution updates, we now consider a local
+approximation in which small changes to the capability state induce corresponding local changes in
+the retained and current-task objectives.
+Let ∆= R −Rt−1 denote a local update around the current capability state. Suppose Rt−1 is locally
+well-adapted to the retained old distributions, so that
+∇L<t(Rt−1) = 0,
+and let
+H<t = ∇2L<t(Rt−1) ⪰0,
+gt = ∇Lt(Rt−1).
+Here, H<t captures directions that are locally important for retained capabilities, while gt is the
+update direction preferred by the new distribution.
+Proposition 1 (Curvature mechanism of capability erosion). Let Rt−1 be a local minimizer of L<t,
+and suppose L<t is twice differentiable around Rt−1 with Hessian H<t ⪰0. Consider a naive
+current-task update
+Rnaive
+t
+= Rt−1 −ηgt,
+gt = ∇Lt(Rt−1),
+where η > 0. Then, for sufficiently small η,
+L<t(Rnaive
+t
+) −L<t(Rt−1) = η2
+2 g⊤
+t H<tgt + o(η2).
+Consequently, naive adaptation increases retained old-distribution loss whenever gt has nonzero
+projection onto a positive-curvature direction of H<t.
+Proposition 1 shows that capability erosion is not controlled only by the size of the update. It is
+governed by whether the new-task update direction overlaps with directions that are locally important
+for retained capabilities. Thus, updates that improve the current distribution can be destructive when
+they move the capability state along old-task-sensitive directions. The proof is given in Appendix A.
+3
+Capability-Preserving Evolution
+3.1
+Regularized Self-Evolution Objective
+Capability-Preserving Evolution addresses this interference by adding an explicit retention regularizer.
+At stage t, instead of optimizing only Lt, CPE solves
+RCPE
+t
+∈arg min
+R∈R Lt(R) + λΩt(R, Rt−1),
+(5)
+where Ωt measures deviation from prior capability-supporting structure and λ > 0 controls the
+stability–plasticity tradeoff. Naïve self-evolution corresponds to the special case λ = 0, where
+adaptation is optimized without any explicit retention constraint.
+The role of Ωt is not to prevent evolution. Rather, it biases self-evolution toward low-interference
+solutions: among updates that improve the new distribution, prefer those that minimally disrupt
+structures needed by prior distributions. Different evolution dimensions instantiate Ωt differently:
+Ωt(R, Rt−1) =
+
+
+
+
+
+
+
+Ωwf
+workflow retention regularization,
+Ωsk
+skill retention regularization,
+Ωmd
+parameter retention regularization,
+Ωmem
+memory retention regularization.
+(6)
+3.2
+Local Forgetting Control under CPE
+We now show how capability-preserving evolution controls the local erosion mechanism above. In a
+local quadratic surrogate, CPE chooses an update ∆λ by solving
+∆λ = arg min
+∆
+
+g⊤
+t ∆+ 1
+2∆⊤Ht∆+ λ
+2 ∆⊤Mt∆
+
+,
+where Ht ⪰0 is the local curvature of the current-task loss and Mt ≻0 is a preservation metric. The
+matrix Mt is a local quadratic surrogate for the preservation regularizer Ωt(R, Rt−1).
+4
+
+Assumption 1 (Capability-aligned preservation metric). There exists a constant c > 0 such that,
+locally around Rt−1,
+H<t ⪯cMt.
+Equivalently, for every local update direction ∆,
+∆⊤H<t∆≤c∆⊤Mt∆.
+Assumption 1 does not require the preservation metric to equal the retained-task Hessian. It only
+requires the metric to upper-control directions along which retained-task loss is locally sensitive. In
+model evolution, this corresponds to Fisher-style parameter-importance penalties; in workflow, skill,
+and memory evolution, it corresponds to a capability-aware discrepancy over the mutable repository.
+Proposition 2 (CPE suppresses local old-task forgetting). Suppose Rt−1 is a local minimizer of
+L<t, L<t is twice differentiable around Rt−1 with Hessian H<t ⪰0, and Assumption 1 holds. Let
+Ht ⪰0, Mt ≻0, and λ > 0. Then
+∆λ = −(Ht + λMt)−1gt,
+and the retained old-distribution degradation satisfies
+L<t(Rt−1 + ∆λ) −L<t(Rt−1) ≤
+c
+2λ2 ∥gt∥2
+M −1
+t
++ o(∥∆λ∥2).
+Moreover, ∥∆λ∥= O(λ−1) for large λ, so the remainder is lower order than the leading O(λ−2)
+term.
+Proposition 2 gives a local stability interpretation of CPE. Naive adaptation can increase old-task loss
+by moving along old-task-sensitive curvature directions. A capability-aligned preservation metric
+penalizes precisely these directions, so increasing λ suppresses old-task degradation while also
+limiting the size of the new-task update. This is the local stability–plasticity tradeoff that motivates
+the dimension-specific CPE regularizers below. The proof is given in Appendix A.
+3.3
+Channel-Specific Instantiations
+The theory above gives a shared template. Each empirical setting instantiates the same objective.
+Workflow evolution. Here Rt is an executable workflow. The regularizer Ωwf discourages deviations
+from previously successful execution behavior during adaptation to new task distributions.
+Skill/tool evolution. Here Rt is a bounded skill repository. The regularizer Ωsk discourages
+unnecessary removal of previously useful skills during sequential adaptation.
+Model evolution. Here Rt = θt denotes trainable model parameters or adapter weights. CPE uses
+an importance-weighted quadratic penalty:
+Ωmd(θ, θt−1) = 1
+2
+X
+i
+Fi(θi −θt−1,i)2,
+(7)
+where Fi estimates the importance of parameter i to prior-stage performance. This regularizer dis-
+courages parameter movement along directions that are important for previously learned distributions,
+reducing interference between old and new task adaptation.
+Memory evolution. Here Rt is a persistent memory bank. The regularizer Ωmem discourages
+deletion or suppression of memories useful for previously encountered distributions.
+4
+Empirical Instantiations of Capability-Preserving Evolution
+We now instantiate Capability-Preserving Evolution across four major self-evolution dimensions:
+workflow evolution, skill/tool evolution, model evolution, and memory ev
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+area_union_and_overlap_template_for_complex_regions_v2
+Description: A robust workflow for computing areas defined as unions or intersections
+of multiple overlapping shapes (circles, sectors, polygons), with explicit partitioning and
+inclusion-exclusion reasoning.
+Instruction Template:
+When a problem defines a region as a union or intersection of multiple shapes:
+(a) Partition the plane into disjoint cells where region membership is constant, compute
+each cell area, and sum them. (b) Apply inclusion-exclusion to correct for overlaps where
+necessary. (c) Use symmetry to reduce repetitive work and avoid double counting. (d) Cross-
+check with an alternate decomposition such as shoelace or triangulation when coordinates are
+available. (e) For circle-based regions, explicitly decompose into sectors and segments using
+central angles. (f) Provide the final consolidated area, and if needed, surface a canonical
+fallback workflow with explicit validation constraints.
+problem_type_tagging_and_ranking
+Description: Tag memories with problem-type categories and rank their relevance to the
+current problem in order to retrieve the most helpful strategies.
+Instruction Template:
+(1) Annotate each memory with a set of problem-type tags such as quadratic, geometry, poly-
+nomial, inverse_function, or geometric_progression. (2) For the current problem, compute
+a relevance score using tag overlap, keyword overlap, and historical success weight. (3)
+Retrieve the top-k memories with the highest relevance and present them with a brief one-line
+relevance justification. (4) If a memory is broadly useful but procedurally vague, include an
+applicability note clarifying the problem types it best addresses. (5) Prefer memories that
+provide concrete solving steps or a short actionable plan aligned with the current problem
+type.
+H
+Use of AI Assistants
+AI assistants were used as auxiliary tools for manuscript preparation, including language polishing,
+clarity improvement, organization, and limited experimental workflows. All experimental design,
+methodological decisions, analyses, reported results, and final content were reviewed and verified by
+the authors.
+I
+Limitations
+Although we propose Capability-Preserving Evolution (CPE) as a general principle for stabilizing
+self-evolving agents, the current work only explores relatively straightforward constraint-based instan-
+tiations within each evolution dimension. Our goal is primarily to verify the existence of capability
+erosion under self-evolution and demonstrate that explicitly regularizing destructive capability drift
+can substantially improve retained capability stability.
+Accordingly, the preservation mechanisms used in this paper are intentionally lightweight and
+domain-specific, including anchor-based workflow regularization, repository consolidation, Fisher-
+style parameter constraints, and memory preservation heuristics. More sophisticated preservation
+strategies, adaptive regularization schedules, or jointly optimized multi-component preservation
+frameworks may further improve the stability–plasticity tradeoff in long-horizon self-evolving agents.
+In addition, our experiments focus on controlled sequential task-distribution shifts and representative
+self-evolution frameworks. Real-world autonomous agents may encounter substantially more complex
+and open-ended evolution trajectories, including dynamic environments, multi-agent interaction, and
+continuously expanding capability spaces. Extending CPE to such settings remains an important
+direction for future work.
+24
+
+J
+Broader Impacts
+This work studies capability degradation in self-evolving LLM agents and proposes Capability-
+Preserving Evolution (CPE) as a stabilization principle for continual adaptation. A potential positive
+impact of this work is improving the reliability and robustness of long-horizon autonomous agents by
+reducing destructive capability drift during self-evolution. More stable self-evolving systems may be
+beneficial for applications that require continual adaptation while maintaining previously acquired
+behaviors.
+At the same time, improving the stability of self-evolving agents may also increase the robustness
+and persistence of autonomous systems in settings where misuse, over-automation, or unintended
+behaviors could create societal risks. In particular, more reliable autonomous adaptation mechanisms
+could be incorporated into large-scale agentic systems with limited human oversight. Our work does
+not introduce new deployment pipelines or application-specific autonomous capabilities, but the
+broader risks associated with increasingly capable self-evolving agents should still be considered.
+Overall, we view capability preservation as an important component of safer continual adaptation,
+since uncontrolled capability drift can itself produce unreliable or unstable agent behavior during
+long-horizon self-evolution.
+25
+

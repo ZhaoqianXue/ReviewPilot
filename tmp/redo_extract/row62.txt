@@ -1,0 +1,434 @@
+=== PDF FIRST PAGE (title region) ===
+LEGO: An LLM Skill-Based Front-End Design
+Generation Platform
+Jincheng Lou1, Ruohan Xu2, Jiecheng Ma3, Runzhe Tao1, Xinyu Qu1, and Yibo Lin1,4,5,*
+1School of IC, Peking University, 2School of EECS, Peking University,
+3School of Microelectronics, Xidian University, 4Institute of EDA, Peking University,
+5Beijing Advanced Innovation Center for IC
+Email: jinchenglou@stu.pku.edu.cn *Corresponding author: yibolin@pku.edu.cn
+Abstract—Existing LLM based EDA agents are often isolated
+task-specific systems. This leads to repeated engineering effort
+and limited reuse of successful design and debugging strategies.
+We present LEGO, a unified skill-based platform for front-end
+design generation. It decomposes the digital front-end flow into
+six independent steps and represents every agent capability as
+a standardized composable circuit skill within a plug-and-play
+architecture. To build this skill library, we survey more than 100
+papers, select 11 representative open-source projects, and extract
+42 executable circuit skills within a six-step finite state machine
+formulation. Circuit Skill Builder automates skill extraction
+with linear scalability. Agent Skill RAG achieves submillisec-
+ond retrie
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+LEGO: An LLM Skill-Based Front-End Design
+Generation Platform
+Jincheng Lou1, Ruohan Xu2, Jiecheng Ma3, Runzhe Tao1, Xinyu Qu1, and Yibo Lin1,4,5,*
+1School of IC, Peking University, 2School of EECS, Peking University,
+3School of Microelectronics, Xidian University, 4Institute of EDA, Peking University,
+5Beijing Advanced Innovation Center for IC
+Email: jinchenglou@stu.pku.edu.cn *Corresponding author: yibolin@pku.edu.cn
+Abstract—Existing LLM based EDA agents are often isolated
+task-specific systems. This leads to repeated engineering effort
+and limited reuse of successful design and debugging strategies.
+We present LEGO, a unified skill-based platform for front-end
+design generation. It decomposes the digital front-end flow into
+six independent steps and represents every agent capability as
+a standardized composable circuit skill within a plug-and-play
+architecture. To build this skill library, we survey more than 100
+papers, select 11 representative open-source projects, and extract
+42 executable circuit skills within a six-step finite state machine
+formulation. Circuit Skill Builder automates skill extraction
+with linear scalability. Agent Skill RAG achieves submillisec-
+ond retrieval without relying on embedding models. Empirical
+evaluation on a hard subset of 41 VerilogEval v2 problems that
+gpt-5.2-codex fails to solve under extra-high (xhigh) reasoning
+effort shows that individual circuit skills constructed within
+LEGO raise Pass@1 from 0.000 to 0.805. This is an 80.5%
+gain over the baseline. Cross project skill compositions also
+reach 0.805 Pass@1. They outperform hierarchy-verilog
+by 14.6% and VerilogCoder by 2.5%. They also match MAGE.
+These results show that modular skill composition supports
+both effective and flexible RTL design automation. The LEGO
+platform and all circuit skills are publicly available at GitHub
+(https://github.com/loujc/LEGO-An-LLM-Skill-Based-Front-E
+nd-Design-Generation-Platform).
+Index Terms—LLM Agents, Agent Skills, RTL Generation,
+Front-End Design Flow, VerilogEval
+I. INTRODUCTION
+Automating the digital front-end design flow is a cen-
+tral challenge in AI assisted chip design. The flow covers
+specification refinement, RTL coding, testbench generation,
+simulation, and iterative debugging. Generated RTL code
+must satisfy strict syntax rules, timing constraints, and signal-
+level functional correctness. This breadth and the stringent
+requirements at each step make end-to-end automation dif-
+ficult and expensive. Large language models and code agents
+have shown strong potential in this domain. Prior work has
+made progress in benchmark construction [1]–[5], agent-based
+design workflows [6]–[10], and domain-specific LLM train-
+ing [11]–[16]. Most existing systems are isolated solutions.
+They bind algorithmic ideas to project-specific toolchains. This
+limits cross-project reuse and forces repeated implementation
+of common infrastructure.
+To address this fragmentation, we propose LEGO, a unified
+skill-based front-end design generation platform. Fine-tuning
+approaches and multi-agent systems often reimplement infras-
+Fig. 1. LEGO System Overview
+tructure for partial flows and incur high LLM API cost. LEGO
+instead decomposes the workflow into six-steps and supports
+plug-and-play composition across steps. As shown in Fig. 1,
+LEGO runs on top of code agent tools. It can therefore use
+vendor provided coding plans. These plans are more affordable
+and accessible than raw LLM API calls. Circuit Skill Builder
+converts open-source projects into LEGO compliant circuit
+skills within the open code agent ecosystem. Agent Skill RAG
+accumulates design and debugging experience for efficient
+reuse.
+Our contributions are listed below.
+• LEGO is the first open skill-based platform for digital
+front-end design. It decomposes the workflow into six
+independent steps and supports plug-and-play composi-
+tion. This enables cross-project reuse without rebuilding
+infrastructure. The platform and extracted circuit skills
+are publicly released in a unified GitHub repository.
+• Executable skill library. We curate a library of 42
+executable circuit skills extracted from 11 representative
+open-source projects and organized into 24 functional
+groups. Circuit Skill Builder automates skill extraction.
+Agent Skill RAG supports lightweight experience accu-
+mulation and achieves submillisecond retrieval.
+• Strong empirical gains. We validate the framework on a
+arXiv:2604.23355v2  [cs.AI]  18 May 2026
+
+hard subset of 41 VerilogEval v2 problems from tasks that
+gpt-5.2-codex fails to solve. The results show an 80.5%
+Pass@1 improvement over the baseline. Composed skills
+outperform hierarchy-verilog by 14.6% and VerilogCoder
+by 2.5%. They also match the RTL generation SOTA
+method MAGE.
+II. PRELIMINARY
+A. LLM and Multi-Agent Paradigms in RTL Generation
+Compared with software languages, Verilog and other HDLs
+encode hardware hierarchy, timing behavior, and signal depen-
+dencies in a tightly coupled form. RTL generation therefore re-
+quires coordinated reasoning across specification understand-
+ing, code synthesis, simulation feedback, and iterative correc-
+tion, making the task difficult for a single static prompting
+strategy.
+Current approaches to LLM assisted RTL generation follow
+two main directions. The first direction trains domain-specific
+LLMs on hardware description data [11]–[16]. However, the
+scale of publicly available RTL datasets is orders of magni-
+tude smaller than that of software code. The structural gap
+between HDL and general-purpose programming languages
+further limits transfer. These factors make domain-specific
+models expensive to train and their performance still lags be-
+hind expectations. The second direction leverages multi-agent
+systems [6]–[10]. These systems benefit directly from the
+rapid improvement of general-purpose LLMs and have become
+the mainstream approach. Multi-agent systems decompose
+the workflow into specialized roles with step-specific tools
+and prompts. This decomposition reduces context interference
+across heterogeneous subtasks such as specification analysis,
+RTL coding, testbench generation, and debug. Our framework
+follows this collaborative principle and further standardizes
+each executable capability as a reusable skill unit.
+B. Code Agents and the Abstraction of Skills
+A code agent is an autonomous programming system that
+can invoke external tools and react to execution feedback.
+Representative code agents include Codex CLI [17], Claude
+Code [18], and OpenCode [19]. Beyond token generation,
+these agents execute shell commands, interpret compiler and
+simulator outputs, and perform iterative error correction. The
+digital front-end design flow is predominantly composed of
+command-line invocations, structured text processing, and
+code manipulation, making code agents a natural fit for this
+domain.
+These code agent platforms provide an official abstraction
+called Skill as an atomic capability unit for environment
+interaction and structured reasoning. A skill encapsulates a
+single well-defined capability such as generating RTL code,
+running simulation, or extracting error messages. It acts as
+a self-contained module with clearly defined inputs, outputs,
+and execution logic. This enables composition, reuse, and
+independent updates. Consistent with the seven field skill
+Algorithm 1 Circuit Skill Builder
+1: Input
+Project
+P,
+paper
+R,
+and
+taxonomy
+T
+=
+{w1, . . . , w6}
+2: Output Skill set Snew and skill groups {Gj}
+3:
+4: Step 1. Summarize // Extract capabilities
+5: M ←Summarize innovations and functions from P and
+R using LLM
+6:
+7: Step 2. Extract // Map to workflow steps
+8: Scand ←∅
+9: for each capability m ∈M do
+10:
+Identify target step wi ∈T for m
+11:
+Generate (N, F, C, P, IO) ←Extract fields from m and
+P codebase
+12:
+Scand ←Scand ∪{(N, F, C, P, IO)}
+13: end for
+14:
+15: Step 3. Post process // Standardize and organize
+16: for each s ∈Scand do
+17:
+Complete s with schema Σ and done criteria G
+18: end for
+19: Snew ←Deduplicate(Scand)
+20: Classify Snew into S1, . . . , S6 by workflow step
+21: Compose groups {Gj} based on functional complemen-
+tarity
+22:
+23: return Snew, {Gj}
+specification in Section III-B, the formal representation of a
+skill is
+S = (N, F, C, P, IO, Σ, G)
+(1)
+where N is the skill name, F is the simple function de-
+scription, C is the constraints section, P is the entrypoint
+command, IO is the input and output specification, Σ is the
+schema definition, and G is the done criteria. This abstraction
+provides a consistent interface for composition, execution, and
+experience accumulation.
+III. METHODOLOGY
+A. Workflow Decomposition and Skill Curation
+As shown in Fig. 1, LEGO decomposes the digital front-
+end design flow into six sequential steps. These steps are RTL
+Spec Generation, Testbench Spec Generation, RTL Genera-
+tion, Testbench Generation, EDA Tool, and Others. They cover
+specification refinement, code synthesis, compilation, simula-
+tion with tools such as Icarus Verilog [20] and Verilator [21],
+and auxiliary utilities.
+We model this workflow as a finite state machine. Let W =
+{w1, . . . , w6} denote the workflow steps, and let Si denote the
+skill set at step wi. The state at iteration t is
+Ψ(t) =
+
+wi, s(i)
+j , A(t), D(t)
+(2)
+
+TABLE I
+CIRCUIT SKILL LIST AND GROUP NOTATIONS IN LEGO
+Step Skills
+Group
+#
+Included Circuit Skills
+RTL Spec
+S1
+8
+hier submodule list prompt, hier outline prompt, hier subhier json prompt, hier function check prompt,
+hier header check prompt, hier refine question prompt, hier refine integrate prompt, prompt enricher
+S2
+1
+spec2rtl-understanding-pipeline
+TB Spec
+TS1
+1
+autobench circuit type classify
+TS2
+1
+autobench tb scenarios prompt
+TS3
+1
+autobench tb rules extract
+TS4
+1
+autobench tb spec prompt
+TS5
+1
+iverilog waveform parser
+TS6
+1
+mage sim judge tb fix
+TS7
+1
+verilogcoder case loader
+RTL Gen
+G1
+1
+verilogcoder rtl subtask prompt
+G2
+1
+mage rtl generate
+G3
+1
+autobench rtl prompt
+G4
+2
+hier verilog gen prompt, spec ir codex rtl gen
+TB Gen
+TG1
+1
+autobench directgen prompt
+TG2
+1
+autobench pychecker tb prompt
+TG3
+1
+verilogcoder tb merge
+EDA Tool
+E1
+3
+iverilog compile, iverilog syntax fixer, spec2rtl-closed-loop
+E2
+5
+iverilog compile, iverilog error localizer, iverilog error rag, iverilog code fixer, iverilog compile fix chain
+E3
+3
+spec2rtl-closed-loop waveform feedback, iverilog simulator, verilogcoder waveform trace
+Others
+O1
+2
+iverilog error localizer, iverilog error rag
+O2
+1
+autobench runinfo analyze
+O3
+2
+mage token accounting, mage benchmark reader
+O4
+1
+rtl fault injector
+O5
+1
+hier tree ops
+Total: 6 stages, 24 skill groups, 42 circuit skills
+where wi ∈W is the current step, s(i)
+j
+∈Si is the active
+skill, A(t) are accumulated artifacts, and D(t) tracks design
+decisions. The transition function δ maps Ψ(t) to Ψ(t+1) and
+governs step progression based on EDA tool feedback.
+To construct the skill sets Si, we survey over 100 papers
+on LLM assisted front-end design and select 11 representative
+open-source projects [8]–[10], [22]–[29]. From these projects,
+42 standardized circuit skills are extracted and organized into
+S1 through S6 across all six-steps as shown in Table I. This
+systematic formulation, combined with skill construction from
+proven sources, enables up to 70.7% Pass@1 improvement
+over the baseline in Experiments 1 and 2.
+B. Skill Specification and Construction
+To ensure cross-project compatibility, each circuit skill
+follows
+the
+seven
+field
+specification
+in
+Eq.
+(1).
+The
+fields are name N, function description F, constraints
+C,
+entrypoint
+P,
+input
+and
+output
+specification
+IO,
+schema
+Σ,
+and
+done
+criteria
+G.
+The
+naming
+pat-
+tern <project_abbr>_<function_abbr> guarantees
+uniqueness, while the function description enables the agent
+to select the appropriate skill at runtime. The entrypoint
+P specifies the command-line invocation, IO and Σ define
+data structures and formats, and G determines completion
+conditions.
+Circuit Skill Builder in Algorithm 1 automates skill con-
+struction from open-source projects. Applying this pipeline to
+11 projects yields 42 circuit skills organized into 24 groups
+in Table I. Skills are grouped by functional complementarity
+within each workflow step, ensuring similar input/output in-
+terfaces for interchangeable composition. For instance, RTL
+Gen groups G1 to G4 represent distinct methodologies such
+as subtask decomposition, direct generation, specification-
+driven generation, and hierarchical generation. They come
+from different source projects. Beyond these circuit skills,
+LEGO provides Agent Skill RAG to accumulate debugging and
+design experience for each workflow step. Unlike traditional
+vector-based RAG, Agent Skill RAG employs a lightweight
+two-stage retrieval mechanism. First, the agent loads only
+the concise descriptions of all available RAG entries in each
+skill, maintaining minimal context overhead. When a relevant
+entry is identified through semantic matching, the agent then
+loads the complete knowledge unit with detailed fields such
+as symptom pattern, root cause, fix strategy, and applicable
+conditions. This lazy loading approach eliminates the need for
+embedding models or reranking while enabling submillisecond
+initial retrieval and real-time knowledge updates via simple
+text appends. Retrieved fixes are injected as explicit prompts
+to guide subsequent iterations.
+
+Fig. 2. Step level view of the LEGO methodology.
+C. Hierarchical Skill Architecture
+As shown in Fig. 2, the skill system of LEGO comprises two
+components. They are Template and Step Skill. A Template
+encapsulates a preset combination of circuit skills, enabling
+users to initiate design tasks directly without manual configu-
+ration. Within a Template, users can also specify which circuit
+skills to activate for each step, thereby adapting the system to
+specific requirements.
+The Step Skill component forms a three-layer hierarchy to-
+gether with the top level LEGO Skill. The top layer defines the
+overall workflow decomposition, execution order, and iteration
+logic. The middle layer consists of six-step skills, each listing
+available circuit skills and specifying active configurations
+dynamically adjusted via the config template. The bottom layer
+contains the circuit skills and Agent Skill RAG entries with
+their complete definitions, forming the atomic execution units
+of LEGO.
+The entire system is lightweight and highly extensible
+because it consists primarily of markdown files and requires
+no complex environment setup. As illustrated in the right panel
+of Fig. 2, the execution workflow is straightforward. The user
+provides a config template and question list. The code agent
+invokes the LEGO Skill and loads the configuration to select
+active circuit skills for each step. It then proceeds through the
+six-steps in order while preserving intermediate results. Finally
+it generates a summary report upon completion.
+IV. EXPERIMENTS
+This section presents three complementary analyses. Sub-
+section IV-A describes the experimental setup, including the
+model, evaluation metric, and benchmark construction. Sub-
+section IV-B evaluates the effectiveness of step decomposition
+and individual circuit skills. Subsection IV-C studies composed
+skill pipelines and compares different combinations to validate
+the flexibility and effectiveness of LEGO.
+A. Experimental Setup
+To ensure that the behavior of each constructed circuit skill
+remains as close as possible to its source project, we use the
+official repositories reported in the corresponding papers for
+all open-source projects except VerilogAssistant. For Verilo-
+gAssistant we use an open-source reproduction repository on
+GitHub [30]. To evaluate the generality and effectiveness of
+the constructed skills, we do not install LEGO skills into the
+Codex directory, which allows us to test whether the model
+can autonomously use the constructed skills. All experiments
+use Codex CLI version 0.98.0 as the code agent platform with
+gpt-5.2-codex and extra-high (xhigh) reasoning effort. Every
+interaction with the 
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+

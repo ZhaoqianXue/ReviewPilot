@@ -1,0 +1,23 @@
+{
+  "project_name": "HCI-AI-3D-Design",
+  "search_terms": "('interactive AI-assisted 3D design' OR 'spatial authoring tools' OR '3D design in VR' OR '3D design in AR' OR '3D design in mixed reality') AND ('user study' OR 'user evaluation' OR 'user experience')",
+  "primary_topic": "HCI and interactive design",
+  "domain": "Human-Computer Interaction",
+  "description": "Find HCI papers about interactive AI-assisted 3D design or spatial authoring tools in VR, AR, or mixed reality, preferably with user studies.",
+  "search_queries": [
+    {
+      "name": "query1",
+      "query": "('interactive AI-assisted 3D design' OR 'spatial authoring tools' OR '3D design in VR' OR '3D design in AR' OR '3D design in mixed reality') AND ('user study' OR 'user evaluation' OR 'user experience')"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 100,
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  }
+}

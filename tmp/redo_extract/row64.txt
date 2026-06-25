@@ -1,0 +1,453 @@
+=== PDF FIRST PAGE (title region) ===
+AutoRefine: From Trajectories to Reusable Expertise for
+Continual LLM Agent Refinement
+Libin Qiu * 1 Zhirong Gao * 1 Junfu Chen 1 Yuhang Ye 1 Weizhi Huang 1 Xiaobo Xue 1 Wenkai Qiu 1
+Shuo Tang 1
+Abstract
+Large language model agents often fail to accu-
+mulate knowledge from experience, treating each
+task as an independent challenge. Recent methods
+extract experience as flattened textual knowledge,
+which cannot capture procedural logic of com-
+plex subtasks. They also lack maintenance mech-
+anisms, causing repository degradation as expe-
+rience accumulates. We introduce AutoRefine, a
+framework that extracts and maintains dual-form
+Experience Patterns from agent execution histo-
+ries. For procedural subtasks, we extract special-
+ized subagents with independent reasoning and
+memory. For static knowledge, we extract skill
+patterns as guidelines or code snippets. A con-
+tinuous maintenance mechanism scores, prunes,
+and merges patterns to prevent repository degra-
+dation. Evaluated on ALFWorld, ScienceWorld,
+and TravelPlanner, AutoRefine achieves 98.4%,
+70.4%, and 27.1% respectively, with 20-73% step
+reductions. On TravelPlanner, automatic extrac-
+tion exceeds manually designed systems (2
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+AutoRefine: From Trajectories to Reusable Expertise for
+Continual LLM Agent Refinement
+Libin Qiu * 1 Zhirong Gao * 1 Junfu Chen 1 Yuhang Ye 1 Weizhi Huang 1 Xiaobo Xue 1 Wenkai Qiu 1
+Shuo Tang 1
+Abstract
+Large language model agents often fail to accu-
+mulate knowledge from experience, treating each
+task as an independent challenge. Recent methods
+extract experience as flattened textual knowledge,
+which cannot capture procedural logic of com-
+plex subtasks. They also lack maintenance mech-
+anisms, causing repository degradation as expe-
+rience accumulates. We introduce AutoRefine, a
+framework that extracts and maintains dual-form
+Experience Patterns from agent execution histo-
+ries. For procedural subtasks, we extract special-
+ized subagents with independent reasoning and
+memory. For static knowledge, we extract skill
+patterns as guidelines or code snippets. A con-
+tinuous maintenance mechanism scores, prunes,
+and merges patterns to prevent repository degra-
+dation. Evaluated on ALFWorld, ScienceWorld,
+and TravelPlanner, AutoRefine achieves 98.4%,
+70.4%, and 27.1% respectively, with 20-73% step
+reductions. On TravelPlanner, automatic extrac-
+tion exceeds manually designed systems (27.1%
+vs 12.1%), demonstrating its ability to capture
+procedural coordination.
+1. Introduction
+Autonomous agents based on Large Language Models
+(LLMs) have demonstrated capabilities in completing tasks
+across various domains such as web navigation, robotics,
+and household assistance (Sarukkai et al., 2025; Fu et al.,
+2024; Chen et al., 2024). However, unlike humans who
+autonomously build and update their understanding through
+interaction, current agents often treat each new task as an
+independent challenge. Each successfully completed task
+has the potential to enrich the agent’s knowledge, enabling
+more reliable performance on future similar tasks.
+*Equal contribution
+1Alibaba Group.
+Correspondence to:
+Yuhang Ye <yeyu.yyh@alibaba-inc.com>.
+Preprint. February 2, 2026.
+Recent research has explored enabling agents to learn from
+experience by extracting knowledge from historical exe-
+cution traces (Fu et al., 2024; Chen et al., 2024). These
+methods face two primary challenges.
+(1) Flattened textual knowledge is insufficient for pro-
+cedural logic. Current approaches represent experience
+as text, which cannot capture the procedural logic of com-
+plex subtasks. For example, a subtask like “hotel booking”
+involves sequential steps, conditional branching, and state
+tracking—dynamic aspects that static text descriptions strug-
+gle to represent.
+(2) Lack of experience maintenance mechanism. These
+methods typically incorporate all accumulated experience
+directly into the prompt, relying on the LLM to select rele-
+vant knowledge. As experience grows, the prompt becomes
+excessively long, burdening the context window and de-
+grading retrieval quality by failing to filter out obsolete or
+redundant patterns.
+To address these issues, we propose AutoRefine, a frame-
+work that automatically extracts, maintains, and reuses Ex-
+perience Patterns. To address the first challenge, we in-
+troduce Subagent Pattern extraction. Instead of using
+flattened text, the framework identifies subtasks with clear
+procedural logic (e.g., booking or reservation) and encap-
+sulates them as specialized subagents. These subagents
+maintain their own memory and state management, enabling
+them to handle sequential reasoning and error recovery au-
+tonomously. For general strategic knowledge that does not
+require complex logic, we extract Skill Patterns as natural
+language guidelines or code snippets. To address the second
+challenge, we implement a continuous maintenance mech-
+anism. Patterns are scored based on their empirical util-
+ity; low-quality entries are pruned and redundant ones are
+merged. This dual-pattern design with active maintenance
+ensures that the experience repository remains compact,
+high-quality, and scalable.
+We evaluate AutoRefine on three benchmarks: ALFWorld,
+ScienceWorld, and TravelPlanner. Experiments demon-
+strate three key findings. (1) Dual-pattern automatic ex-
+traction is effective across diverse tasks: 98.4% on ALF-
+1
+arXiv:2601.22758v1  [cs.AI]  30 Jan 2026
+
+AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement
+World, 70.4% on ScienceWorld, and 27.1% on TravelPlan-
+ner, with 20-73% step reductions. On TravelPlanner test
+set, our method achieves 27.1%, substantially exceeding
+AutoManual (not reported) and ATLAS (12.1%). (2) Au-
+tomatic extraction matches manually designed multi-agent
+systems without manual effort. On TravelPlanner test set,
+our method (27.1%) more than doubles manually designed
+ATLAS (12.1%). The advantage is most pronounced on
+commonsense constraints requiring universal procedural
+patterns (37.90% vs 15.59%). (3) All three components are
+necessary. Ablation on TravelPlanner validation set shows
+removing subagents causes the largest drop (22.3%). With-
+out maintenance, repository size grows 4.5× and utilization
+degrades 8.9×. Without batch extraction, performance drops
+17.3%.
+Our contributions are summarized as follows:
+• We propose AutoRefine, a framework that automat-
+ically extracts and maintains dual-form Experience
+Patterns (skills and subagents) with continuous mainte-
+nance.
+• We introduce automatic subagent extraction that encap-
+sulates procedural subtasks with independent reasoning
+and state management.
+• Experiments demonstrate strong performance across
+three benchmarks, with automatic extraction exceeding
+manual design on TravelPlanner (27.1% vs 12.1%).
+2. Related Work
+2.1. Learning Paradigms for Agent Improvement
+Existing approaches to agent improvement can be catego-
+rized by their learning paradigm.
+Training-Based Methods.
+Reinforcement learning meth-
+ods (Bai et al., 2022; Rafailov et al., 2023; Jaech et al.,
+2024; Guo et al., 2025) optimize agent behavior through re-
+ward signals and gradient updates. Fine-tuning approaches
+optimize model weights on domain-specific data. These
+methods require substantial computational resources for
+training and access to large-scale demonstration data or
+human feedback, limiting their applicability when such re-
+sources are unavailable or when deploying agents across
+diverse domains without retraining.
+In-Context Learning with External Data.
+In-context
+learning offers an alternative by augmenting prompts with
+relevant experiences without modifying model weights.
+However, most in-context methods rely on external sources
+of experience. Trajectory bootstrapping (Sarukkai et al.,
+2025) accumulates trajectories from human demonstrations
+or oracle policies. DSPy (Khattab et al., 2023) optimizes
+prompts using annotated task examples. Prompt optimiza-
+tion methods (Zhou et al., 2022; Yang et al., 2023; Wang
+et al., b) require collections of successful examples to de-
+rive effective instructions. These approaches depend on
+the availability and quality of external data, limiting their
+applicability when such data is scarce or expensive to obtain.
+In-Context Learning with Self-Generated Experience.
+Some methods explore self-generated experience. Genera-
+tive Agents (Park et al., 2023) maintains episodic memories
+from agent interactions but focuses on social simulation
+rather than task completion. CLIN (Majumder et al., 2024)
+updates memory through causal abstractions from agent tri-
+als. RAP (Kagaya et al.) retrieves past experiences from the
+agent’s own history. MemGPT (Packer et al., 2023) man-
+ages memory through selective retention across episodes.
+These methods accumulate experience from the agent’s own
+executions, yet they store raw trajectories or episodic mem-
+ories without distilling reusable procedural knowledge or
+maintaining experience quality over time. Our approach
+builds upon self-generated experience by introducing sub-
+agent patterns and maintenance mechanisms.
+2.2. Knowledge Extraction from Agent Experience
+LLM-based agents have demonstrated capabilities in se-
+quential decision-making across web navigation (Yao et al.,
+2022; Zhou et al.), embodied environments (Shridhar et al.,
+2020; Zitkovich et al., 2023), and game playing (Wang et al.,
+a; Park et al., 2023; Zhu et al., 2023). These agents em-
+ploy various reasoning strategies including chain-of-thought
+prompting (Wei et al., 2022), tool manipulation (Qin et al.;
+Patil et al., 2024; Schick et al., 2023), and code generation
+(Liang et al.; Singh et al., 2022). A key challenge is enabling
+agents to accumulate transferable knowledge across tasks.
+Self-Reflection and Feedback.
+Reflexion (Shinn et al.,
+2023) reflects on failures and revises plans within a sin-
+gle task. Self-Refine (Madaan et al., 2023) and RCI (Kim
+et al., 2023) incorporate feedback iteratively to improve
+predictions. Tree-of-Thoughts (Yao et al., 2023) and re-
+lated methods (Zhang et al.; Zhou et al., 2024) employ tree
+search with reflection to explore solution spaces. While
+effective for single-episode adaptation, these methods do
+not accumulate cross-task knowledge.
+Experience as Textual Knowledge.
+Several approaches
+extract reusable knowledge from execution histories. Ex-
+peL (Zhao et al., 2024) derives task-level insights from
+successful trajectories. AutoGuide (Fu et al., 2024) gener-
+ates context-aware guidelines through contrastive analysis
+of success-failure pairs, then retrieves relevant guidelines
+via semantic similarity at test time. Voyager (Wang et al., a)
+and AdaPlanner (Sun et al., 2023) store successful programs
+as skills for future tasks. AutoManual (Chen et al., 2024)
+2
+
+AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement
+continually updates rules through interactive learning, cate-
+gorizing environmental knowledge into structured rule types.
+These methods represent experience as textual descriptions.
+Such representations struggle to capture procedural logic of
+complex multi-step subtasks requiring sequential coordina-
+tion, conditional branching, and state management.
+3. Methodology
+3.1. Problem Formulation
+We formalize the agent learning problem in a domain
+D as follows.
+The agent receives a sequence of
+tasks {t1, t2, . . . , tN} from domain D, where each task
+ti is specified by a natural language description and
+can be solved via a sequence of actions A.
+Upon
+completing task ti, the agent receives feedback fi
+∈
+{success, failure}. The agent’s execution produces a trajec-
+tory τi = ⟨s0, a1, o1, s1, . . . , aT , oT , sT ⟩, where st denotes
+states, at denotes actions, and ot denotes observations.
+Pattern Repository.
+We denote the pattern repository as
+P = {p1, p2, . . . , pM}, where each pattern pj can take one
+of two forms:
+• Skill Pattern: Procedural knowledge expressed as nat-
+ural language guidelines or executable code snippets
+that encapsulate successful strategies for handling spe-
+cific task scenarios.
+• Subagent Pattern: Specialized agents that encapsu-
+late specific intermediate steps or subtask solutions.
+Subagents maintain their own memory and reasoning
+capabilities, enabling them to handle complex proce-
+dural steps independently while reducing the cognitive
+load on the main agent.
+Pattern Metadata.
+Each pattern pj is associated with
+metadata mj = (dj, cj, rj, uj, sj, ej), where dj is a brief
+description of the pattern, cj specifies the applicable context,
+rj is the number of times the pattern was retrieved, uj is the
+number of times it was actually used, sj is the number of
+successful uses, and ej is the dense embedding vector for
+similarity-based retrieval.
+3.2. Framework Overview
+We present an overview of our framework in Figure 1. The
+framework consists of three stages: (1) Task Execution
+(§3.3): the agent retrieves relevant patterns via semantic
+similarity and uses them as contextual guidance during ex-
+ecution; (2) Pattern Extraction (§3.4): after every K tasks,
+a specialized agent performs contrastive analysis between
+successful and failed trajectories to extract new patterns; (3)
+Pattern Maintenance (§3.5): at exponentially spaced inter-
+vals, the framework scores, prunes, and merges patterns to
+maintain repository quality.
+3.3. Task Execution with Patterns
+For each incoming task ti, the agent performs pattern-
+augmented execution through three coordinated steps: pat-
+tern retrieval, pattern integration, and metadata tracking.
+Pattern Retrieval.
+Given task ti with description dtask,
+we retrieve patterns whose contexts are semantically sim-
+ilar to the task requirements. For comprehensive pattern
+discovery, we first instruct the LLM to generate multiple re-
+trieval queries {q1, q2, . . . , qm} that reformulate dtask from
+different perspectives. We subsequently compute seman-
+tic similarity between each query and pattern context us-
+ing cosine similarity over embedding vectors generated by
+Qwen3-Embedding-4B (Zhang et al., 2025). The final simi-
+larity score for pattern pj is the maximum across all queries:
+sim(ti, pj) = maxi sim(qi, pj). We rank all patterns by
+their similarity scores and retrieve the top-k patterns above
+threshold θ:
+Pretrieved = TopK ({pj ∈P : sim(ti, pj) ≥θ}, k)
+To prevent retrieving multiple similar patterns, we optionally
+apply maximal marginal relevance (MMR), which balances
+relevance and diversity through score.
+MMR(pj) = λ·sim(ti, pj)−(1−λ)·
+max
+pk∈Pselected sim(pj, pk)
+Pattern Integration.
+During execution, the agent incor-
+porates retrieved patterns as contextual guidance.
+We
+accommodate two pattern types: skills and subagents.
+Skill patterns encoded as natural language guidelines are
+incorporated by augmenting the agent’s system prompt
+with pattern descriptions and procedural steps. For exe-
+cutable code snippets, we register them as callable tools in
+the agent’s action space, allowing direct invocation (e.g.,
+validate data(input)). Subagent patterns encapsu-
+late complex multi-step procedures with internal state. We
+adopt hierarchical delegation: the main agent identifies sub-
+tasks matching a subagent’s specialization via semantic sim-
+ilarity, transfers relevant context, and delegates execution.
+The subagent operates independently with its own mem-
+ory, returning results upon completion. This decomposition
+reduces the main agent’s reasoning complexity by abstract-
+ing complex procedures into atomic operations. Concrete
+examples of skill and subagent patterns are provided in
+Appendix D.
+Metadata Tracking.
+During execution, we maintain pat-
+tern metadata mj = (dj, cj, rj, uj, sj, ej) to track pattern
+quality and usage statistics. For each pattern pj ∈Pretrieved,
+we increment retrieval count rj. Given that not all retrieved
+patterns are necessarily adopted, we use a dedicated agent
+3
+
+AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement
+Question: Testing that agent refuses to … 
+Answer: You want to cancel …
+Having obtained the Agent's 
+historical conversation 
+information.
+Main Agent
+Skill Pattern
+Prompt
+Code
+1、Pattern Description.
+2、Procedural Steps For
+Simple Task.
+3、Executable Code.
+SubAgent Pattern
+### 1. TASK UNDERSTANDING
+- do something ...
+### 2. EFFICIENT EXECUTION STRATEGY
+- do something ...
+**For HEAT tasks:**
+- Phase 1: FIND and TAKE object → Phase 2: GO to microwave →
+HEAT with microwave → Phase 3: GO to destination → PLACE
+object. …
+Sub Agent
+1、Agent Description.
+2、Pattern Description.
+3、Procedural Steps For
+Complex Task.
+4、Task Reasoning.
+SubAgent1
+SubAgent2
+SubAgent3
+<role>
+You are a Transportation Planner specialized in planning round-trip 
+transportation.</role>
+<task_context>
+<query>{goal.original_query}</query>… </task_context>
+<workflow>
+<step id="1" name="DETERMINE_ROUTE">
+</step>
+<step id="2" name="GATHER_ALL_OPTIONS">
+</step>
+<step id="3" name="EVALUATE_VALID_COMBINATIONS">
+</step>
+<step id="4" name="SELECT_CHEAPEST_VALID">
+</step>
+</workflow>
+<fallback_strategies description="Handling NO VALID RETURN 
+situations">
+<strategy id="1" name="Switch_to_All_Self_Driving">
+</strategy>
+</fallback_strategies>
+<output_format>… </output_format>
+<validation_checklis
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement
+Unified Pattern Utilization Analysis Prompt
+You are a pattern utilization analyst. Analyze the execution trajectory to determine how effectively the agent utilized the injected
+patterns, whether they are skill patterns or subagent patterns.
+Given:
+• Injected Patterns (Pinject): Set of N patterns (typically N=20) injected in system prompt:
+– Type: Skill pattern or Subagent pattern
+– Content: Pattern description, applicability context, pattern body
+– Metadata: Pattern ID, retrieval count, success rate
+• Execution Trajectory (τ): Agent’s action sequence with observations: τ = {(a1, o1), (a2, o2), . . . , (an, on)}
+• Task Outcome: Success/failure status, final score, completion time
+Pattern Type Identification:
+Skill Pattern: Concrete action sequences or code snippets
+• Match by: Direct action sequence, function calls, command patterns
+• Example: “go to workshop →look around →pick up thermometer”
+Subagent Pattern: High-level procedural strategies involving subagent invocation
+• Match by: Subagent calls, delegation patterns, multi-step reasoning traces
+• Example: “Invoke research subagent →Aggregate findings →Report to main agent”
+Analysis Metrics:
+1. Pattern Matching Score (α(i)
+match): For each pattern pi ∈Pinject:
+For Skill Patterns:
+α(i)
+match = |{aj ∈τ : aj matches step in pi}|
+|steps in pi|
+For Subagent Patterns:
+α(i)
+match = |{subagent calls in τ matching pi}|
+|subagent phases in pi|
+2. Overall Utilization Rate (βutil):
+βutil = |{pi ∈Pinject : α(i)
+match > θ}|
+N
+where θ is matching threshold (default: 0.3 for partial match).
+3. Pattern Effectiveness (γeff): Correlation between pattern usage and success:
+• High-value patterns: Used in successful executions (α > 0.5, success = True)
+• Low-value patterns: Not used or used in failures
+• Misleading patterns: Used but led to failures
+4. Utilization Summary: Structured output for N=20 patterns:
+{
+"total_patterns_injected": 20,
+"pattern_type": "skill" | "subagent",
+"patterns_utilized": [<pattern_ids with alpha > 0.3>],
+"utilization_rate": <float 0-1>,
+"per_pattern_scores": {
+"pattern_1": {"alpha": 0.8, "type": "direct"},
+"pattern_2": {"alpha": 0.5, "type": "adapted"},
+...
+},
+"high_value_patterns": [<pattern_ids>],
+"unused_patterns": [<pattern_ids>],
+"success_correlation": <analysis>
+}
+Example Analysis (Skill Pattern):
+Injected: 20 skill patterns, Pattern #3: “Temperature measurement workflow”
+Trajectory: Actions 1-5: go to workshop →pick up thermometer →focus on substance →. . .
+Match: α(3)
+match = 4/5 = 0.80 ✓(High match)
+Example Analysis (Subagent Pattern):
+Injected: 20 subagent patterns, Pattern #7: “Research-Aggregate-Report workflow”
+39
+
+AutoRefine: From Trajectories to Reusable Expertise for Continual LLM Agent Refinement
+Trajectory: Subagent calls: research agent(query) →aggregate findings() →report to main()
+Match: α(7)
+match = 3/3 = 1.0 ✓(Perfect match)
+Overall: βutil = 12/20 = 0.60 (12 patterns utilized above threshold from 20 injected)
+40
+

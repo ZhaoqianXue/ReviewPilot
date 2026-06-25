@@ -1,0 +1,513 @@
+=== PDF FIRST PAGE (title region) ===
+Kabab: A Hybrid Rust-TypeScript Architecture for
+Autonomous AI Agents with Universal Skill Loading
+and Multi-Provider Model Routing
+Varun Chawla
+IEEE Senior Member
+kabab.ai
+varun@kabab.ai
+Abstract—Autonomous AI agent platforms — systems that
+decompose natural-language instructions into executable plans,
+invoke tools, and verify results without human intervention
+— have emerged as a critical frontier in software engineering
+automation. Existing commercial platforms (e.g., Devin [2])
+are cloud-dependent, vendor-locked, and lack extensibility,
+while open-source alternatives (OpenHands, Suna) offer narrow
+tool sets without multi-provider model routing or domain-
+specific skill injection. We present Kabab, an open-source
+hybrid architecture that combines Rust for performance-critical
+subsystems (Docker sandbox management, parallel skill in-
+dexing of 10,414 files in 757ms, lock-free LLM API proxy,
+browser WASM compute at 173KB) with TypeScript for a
+Plan→Execute→Verify agent pipeline orchestrating 25 models
+across 11 providers. Kabab introduces two novel contributions:
+(1) a Universal Skill Protocol that auto-loads domain-specific
+expertise from 6,182 indexed SKILL.md files based on tas
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Kabab: A Hybrid Rust-TypeScript Architecture for
+Autonomous AI Agents with Universal Skill Loading
+and Multi-Provider Model Routing
+Varun Chawla
+IEEE Senior Member
+kabab.ai
+varun@kabab.ai
+Abstract—Autonomous AI agent platforms — systems that
+decompose natural-language instructions into executable plans,
+invoke tools, and verify results without human intervention
+— have emerged as a critical frontier in software engineering
+automation. Existing commercial platforms (e.g., Devin [2])
+are cloud-dependent, vendor-locked, and lack extensibility,
+while open-source alternatives (OpenHands, Suna) offer narrow
+tool sets without multi-provider model routing or domain-
+specific skill injection. We present Kabab, an open-source
+hybrid architecture that combines Rust for performance-critical
+subsystems (Docker sandbox management, parallel skill in-
+dexing of 10,414 files in 757ms, lock-free LLM API proxy,
+browser WASM compute at 173KB) with TypeScript for a
+Plan→Execute→Verify agent pipeline orchestrating 25 models
+across 11 providers. Kabab introduces two novel contributions:
+(1) a Universal Skill Protocol that auto-loads domain-specific
+expertise from 6,182 indexed SKILL.md files based on task clas-
+sification across 10 task types, and (2) Connector-Augmented
+Execution that dynamically registers 185 SaaS API actions
+across 21 services as LLM-callable tools at runtime, enabling
+an agent to autonomously clone a repository, fix a bug, push
+code, and create a pull request from a single instruction. We
+evaluate Kabab on real software engineering tasks using both
+local (Qwen 3.5 35B via Ollama) and cloud (Groq Llama 3.3
+70B, Claude Opus) models, demonstrating that hybrid local-
+cloud agent execution is feasible, cost-effective, and produces
+functional multi-file applications with database schemas, API
+endpoints, and styled frontends in a single autonomous session.
+Kabab is open-source under Apache 2.0.
+Index Terms—autonomous agents, AI software engineering,
+multi-model routing, skill protocol, LLM tool use, hybrid
+architecture, Rust WASM
+I. Introduction
+The emergence of autonomous AI agent platforms rep-
+resents a paradigm shift in software engineering. Rather
+than serving as code-completion assistants, these systems
+accept high-level natural-language instructions and au-
+tonomously decompose them into plans, execute multi-
+step tool sequences, and verify results — performing in
+minutes what would take a human developer hours.
+Commercial platforms have demonstrated market vali-
+dation: Devin [2] provides a cloud IDE with a reported
+13.86% success rate on complex SWE-bench tasks; Claude
+Code [3] operates as a terminal-based coding agent; and
+several closed-source agent startups have raised significant
+venture capital [1]. However, these systems share funda-
+mental limitations:
+1) Cloud dependency. All inference and execution occurs
+on vendor infrastructure, creating single points of
+failure and data sovereignty concerns for regulated
+industries (HIPAA, SOX, classified environments).
+2) Vendor lock-in. Each platform is bound to one or two
+model providers, preventing users from selecting the
+optimal model for each task phase.
+3) Limited extensibility. Tool sets are hardcoded; users
+cannot add domain-specific capabilities without mod-
+ifying the platform source.
+4) Opaque cost. Users cannot predict or control per-
+task spending, leading to surprise bills on complex
+generations.
+Open-source alternatives have partially addressed these
+issues. OpenHands/OpenDevin [4] focuses on SWE-bench
+evaluation; LangGraph [5], CrewAI [6], and AutoGen [7]
+provide agent frameworks but not complete platforms;
+Suna/Kortix [8] offers a reference implementation but
+lacks multi-provider routing and skill extensibility.
+We present Kabab1, an open-source autonomous AI
+agent platform that addresses all four limitations through
+a hybrid Rust-TypeScript architecture. Our contributions
+are:
+1) A hybrid Rust-TypeScript architecture where Rust
+handles
+performance-critical
+subsystems
+(sandbox
+management, parallel skill indexing, rate-limited API
+proxy, browser WASM compute) while TypeScript
+orchestrates the agent pipeline — achieving sub-second
+skill loading and 173KB browser-side compute without
+sacrificing developer ergonomics.
+2) A
+Universal
+Skill
+Protocol
+that
+indexes
+6,182
+SKILL.md files from 13 repositories and auto-loads
+domain-specific expertise into the agent’s context based
+on task classification across 10 task types — the first
+system to implement model-agnostic, context-aware
+skill injection at this scale.
+3) A Multi-Provider Model Gateway with a unified inter-
+face routing to 25 models across 11 providers (including
+1https://kabab.ai
+
+local Ollama inference) with per-phase model selection,
+cost tracking, and a text-format tool call fallback
+parser enabling non-OpenAI models (Qwen, Llama) to
+perform structured tool use.
+4) Connector-Augmented
+Execution
+that
+dynamically
+registers 185 SaaS API actions across 21 services
+(GitHub, Jira, Slack, Vercel, Stripe) as LLM-callable
+tools at runtime with OAuth SSO for 17 providers —
+enabling agents to autonomously interact with external
+services without custom integrations.
+II. Related Work
+A. Commercial Agent Platforms
+Several commercial agent platforms have emerged in
+2024–2026. Devin [2] provides a cloud-based software
+engineering agent with a browser-accessible IDE, reporting
+13.86% autonomous resolution on SWE-bench verified
+tasks. Devin is closed-source and single-provider. Claude
+Code [3] operates as a terminal agent with direct filesystem
+access, supporting Anthropic models exclusively. Other
+closed-source platforms [1] use E2B Firecracker micro-
+VMs with multi-model orchestration but do not support
+user-extensible skill libraries or self-hosting.
+B. Open-Source Agent Frameworks
+OpenHands
+[4]
+(formerly
+OpenDevin)
+provides
+a
+Docker-sandboxed coding agent primarily evaluated on
+SWE-bench, without multi-provider routing or skill exten-
+sibility. LangGraph [5] offers a graph-based orchestration
+framework but is a library, not a complete platform. Cre-
+wAI [6] enables multi-agent role-based collaboration but
+does not implement sandboxed execution or connector-
+augmented tool use. AutoGen [7] from Microsoft Research
+provides conversational agent patterns but targets re-
+search workloads rather than production software engi-
+neering. Suna [8] (by Kortix) is the closest open-source
+reference, implementing browser automation and Docker
+sandboxing, but lacks multi-provider model routing, skill
+protocols, and SaaS connector orchestration.
+C. Skill and Tool Protocols
+The SKILL.md format [9] provides a standardized
+specification for agent skill files using YAML frontmatter
+and markdown instructions. Kabab builds on this format
+by implementing the first large-scale indexer (10,414
+files parsed in 757ms) and context-aware auto-loading
+system. The Model Context Protocol (MCP) [10] by An-
+thropic standardizes tool and resource exposure for LLMs.
+Kabab’s connector system implements a complementary
+approach where SaaS API actions are dynamically regis-
+tered as LLM-callable tools.
+D. Gap Analysis
+Table I summarizes the landscape. No existing system
+combines local inference, universal skill loading, multi-
+provider routing, sandboxed execution, and SaaS connec-
+tor orchestration in a single self-hostable platform. Kabab
+addresses this gap.
+TABLE I
+Feature Comparison of Agent Platforms
+Feature
+Kabab
+Commercial†
+Devin
+OpenHands
+Suna
+Open source
+✓
+×
+×
+✓
+✓
+Self-hostable
+✓
+×
+×
+✓
+✓
+Local inference
+✓
+×
+×
+×
+×
+Multi-provider
+✓
+partial
+×
+partial
+×
+Skill protocol
+✓
+×
+×
+×
+×
+SaaS connectors
+✓
+×
+×
+×
+partial
+Sandbox execution
+✓
+✓
+✓
+✓
+✓
+Cost tracking
+✓
+×
+×
+partial
+×
+OAuth SSO
+✓
+×
+×
+×
+×
+†Represents closed-source commercial agent platforms.
+III. Architecture
+Kabab employs a polyglot architecture that assigns each
+subsystem to the language best suited for its workload:
+Rust for compute-intensive, latency-sensitive operations;
+TypeScript for orchestration logic and developer-facing
+APIs; and Rust WASM for browser-side compute (Fig. 1).
+Kabab Architecture Overview
+SolidJS Frontend (7.6KB runtime)
+8 pages · WASM Bridge (173KB)
+↓REST + SSE
+Hono API Server
+Chat · Tasks · Connectors · Models
+↓
+Agent Core
+Model Gateway
+Plan→Exec→Verify
+25 models / 11 providers
+↓
+Tools
+Connectors
+Skills
+25 built-in
+21 providers
+6,182 indexed
+185 actions
+10 task types
+↓
+Rust Binaries
+Sandbox
+Indexer
+Proxy
+Docker mgmt
+757ms/10K files
+Rate limit
+Fig. 1. Kabab system architecture. Rust handles performance-critical
+subsystems; TypeScript orchestrates the agent pipeline; WASM
+provides browser-side compute.
+A. Rust Performance Layer
+Three Rust binaries and one WASM module handle
+compute-intensive operations:
+kabab-sandbox (container manager). Uses the bollard
+crate for Docker Engine API communication and dashmap
+for lock-free concurrent sandbox state management. Con-
+tainers are pre-warmed in a pool, with configurable time-
+outs (default 30 minutes) and automatic cleanup. Each
+
+sandbox provides an isolated Ubuntu 22.04 environment
+with Node.js 20, Python 3, and the GitHub CLI pre-
+installed. All binaries are compiled with opt-level=3, LTO,
+and symbol stripping for minimal deployment size.
+kabab-indexer (skill indexer). Leverages rayon for data-
+parallel iteration and memmap2 for zero-copy memory-
+mapped file I/O. The indexer parsed 10,414 SKILL.md
+files across 13 repositories in 757ms on an Apple M3 Max,
+producing a deduplicated index of 6,182 unique skills with
+YAML frontmatter metadata (name, description, domain,
+tags).
+kabab-proxy (API proxy). Implements lock-free rate
+limiting using dashmap with per-provider token bucket
+algorithms, enabling multiple concurrent LLM API calls
+without mutex contention. Built on hyper for zero-copy
+HTTP proxying.
+kabab-wasm (browser compute). Compiled to wasm32-
+unknown-unknown with wasm-bindgen for JavaScript in-
+terop, optimized with wasm-opt at level z (size). Provides
+in-browser token counting and skill search at 173KB —
+eliminating server round-trips for lightweight operations.
+B. TypeScript Orchestration Layer
+The orchestration layer is a pnpm monorepo with
+Turborepo for parallel builds, comprising:
+Agent Core (@kabab/agent-core). Implements a state
+machine with five states: pending →planning →executing
+→verifying →completed, with transitions for retry
+(verifying →executing) and failure (any →failed). Three
+specialized agents operate in sequence:
+• Planner: Decomposes the user’s instruction into steps
+with tool requirements, inter-step dependencies, and
+complexity estimates (low: $0.001, medium: $0.005,
+high: $0.02). Outputs structured JSON with a fallback
+single-step plan if parsing fails.
+• Executor: Executes each plan step by invoking LLM
+with available tools. Supports up to 25 tool calls
+per step with 3 retries. Tool results are truncated to
+10,000 characters for context window management. The
+executor enforces directory isolation rules: all files must
+be written to a single project/ directory using relative
+paths.
+• Verifier: Evaluates execution results for correctness,
+completeness, quality, and errors. Returns a confidence
+score (0.0–1.0) with identified issues and suggestions.
+Can trigger re-execution if confidence is below threshold.
+Model Gateway (@kabab/model-gateway). Provides a
+unified chat() interface across all providers (Section V).
+Tool Registry (@kabab/tools). Registers 25 built-in
+tools across three categories: file operations (8 tools:
+read, write, edit, delete, list, search, grep, move), shell
+operations (3 tools: command execution, script running,
+package installation), and web operations (fetch, parse,
+extract, search). Tools are defined with Zod schemas and
+exported in both Anthropic and OpenAI function-calling
+formats.
+API Server (apps/api). Hono-based HTTP server expos-
+ing REST endpoints for tasks, chat, connectors, models,
+and skills, plus Server-Sent Events (SSE) for real-time
+execution streaming.
+Frontend (apps/web). SolidJS application with 8 pages
+(home, tasks, task detail with live preview, integrations,
+model marketplace, skills library, settings, landing page).
+SolidJS was selected for its 7.6KB runtime size and fine-
+grained reactivity without virtual DOM diﬀing [11].
+C. Database Layer
+Kabab uses SQLite with WAL (Write-Ahead Logging)
+mode for zero-configuration deployment. The schema com-
+prises five tables: users, tasks (with token/cost tracking
+per phase), steps (execution trace with 7 step types: plan,
+execute, verify, tool_call, browser, code, error), credits,
+and usage_logs. Indexed on user ID, task status, and
+task-step relationships. This design eliminates the Post-
+greSQL/Redis dependency common in agent platforms,
+enabling single-binary deployment.
+IV. Universal Skill Protocol
+A key limitation of existing agent platforms is that
+their capabilities are fixed at deployment time. Adding
+new domain expertise requires modifying the platform’s
+source code. Kabab addresses this through a Universal
+Skill Protocol based on the SKILL.md specification [9].
+A. Skill Format
+Each skill is a markdown file with YAML frontmatter:
+Listing 1. SKILL.md format
+1
+- - -
+2
+name:
+frontend - design
+3
+description : Modern web design
+patterns
+4
+domain : web
+5
+tags :
+[ css ,
+design ,
+responsive ]
+6
+- - -
+7
+8
+## Rules
+9
+- Use CSS custom properties
+for theming
+10
+- Prefer Syne ,
+Cabinet Grotesk ,
+Clash Display
+11
+- Implement scroll - triggered
+animations
+12
+. . .
+Skills encode domain expertise as natural-language
+instructions that are injected into the executor’s system
+prompt, providing model-agnostic capability extension —
+any LLM that can follow instructions gains the encoded
+expertise.
+B. Indexing Pipeline
+The Rust-based indexer (kabab-indexer) processes skill
+repositories in three phases:
+1) Discovery: Recursive directory walk using walkdir with
+glob matching for **/SKILL.md files.
+2) Parsing: Parallel YAML frontmatter extraction via
+rayon, with automatic domain classification for files
+lacking explicit domain fields. Metadata is normalized:
+
+names to 64 characters, descriptions to 500 characters,
+tags capped at 20.
+3) Deduplication: Name-collision resolution retaining the
+skill with the longest description. The pipeline indexed
+10,414 raw files from 13 repositories into 6,182 unique
+skills in 757ms.
+C. Context-Aware Auto-Loading
+At task execution time, a curated SKILL_MAP routes
+task types to relevant skills:
+Listing 2. Curated skill mapping (10 task types)
+1
+web:
+[ frontend - design ,
+frontend - patterns ,
+2
+tailwind - patterns ]
+3
+backend :
+[ backend - patterns ,
+senior - backend ,
+4
+fastapi - pro ]
+5
+ful l st a ck :
+[ frontend - design ,
+frontend - patterns ,
+6
+backend - patterns ]
+7
+database :
+[ backend - patterns ,
+senior - backend ]
+8
+security :
+[ backend - patterns ,
+senior - backend ]
+9
+. . .
+The task classifier analyzes the user’s instruction for
+domain keywords (e.g., “build a website” →web; “create
+an API” →api). Up to 3 skills are loaded per task, each
+capped at 4,000 characters, and injected as systemContext
+into the orchestrator. A curated “mega-skill” containing
+cross-cutting design rules (typography, color systems,
+animation patterns, database preferences) is always loaded
+for web-related tasks.
+This approach uses curated expert mappings rather
+than semantic search, which we found more reliable in
+practice: semantic similarity between task descriptions
+and skill names produced false positives (e.g., “build an
+ecommerce website” matching “Azure deployment” skills
+due to shared deployment vocabulary).
+V. Multi-Provider Model Gateway
+A. Unified Interface
+The
+Model
+Gateway
+provides
+a
+single
+chat(req:
+GatewayRequest): GatewayResponse method that routes
+to
+any
+supported
+provider.
+Models
+are
+addressed
+as
+provider/model-id
+(e.g.,
+anthropic/claude-sonnet-4,
+local/qwen-3.5-35b). The gateway:
+1) Resolves the provider adapter from a registry of 11
+providers.
+2) Looks up the model definition for the canonical mod-
+elId and pricing.
+3) Transforms the request to the provider’s native format
+(An
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+

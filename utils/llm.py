@@ -6,6 +6,7 @@ This module provides unified interfaces for querying various LLM providers
 """
 
 import json
+import os
 import re
 import ast
 import base64
@@ -13,9 +14,17 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Union
 from openai import OpenAI
 from pydantic import BaseModel
-import google.generativeai as genai
-import anthropic
 import config
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 # Try to import PDF processing libraries
 try:
@@ -48,6 +57,7 @@ MODEL_COSTS = {
     "o4-mini": (4.0, 16.0),
     "gpt-5.2": (1.75, 14.0),
     "gpt-5.1": (1.25, 10.0),
+    "gpt-5.4-nano": (0.05, 0.4),
     "gpt-5-mini": (0.25, 2.0),
     "gpt-5-nano": (0.05, 0.4),
     "gpt-4.1": (2.0, 8.0),
@@ -258,53 +268,8 @@ def query_openai(
     api_key = load_api_key(provider='openai')
     client = OpenAI(api_key=api_key)
 
-    # GPT-5 and higher models use the new beta.chat.completions.parse() API with structured output
-    gpt5_models = ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "gpt-5"]
-    if any(model.startswith(m) for m in gpt5_models):
-        try:
-            # Use the new Structured Outputs API with Pydantic schema
-            response = client.beta.chat.completions.parse(
-                model=model,
-                messages=messages_payload,
-                response_format=ReviewSchema
-            )
-
-            # Extract the parsed JSON object
-            if response.choices and response.choices[0].message.parsed:
-                output_text = response.choices[0].message.parsed.model_dump_json()
-            else:
-                # Fallback to regular content
-                output_text = response.choices[0].message.content or ""
-                print(f"Warning: GPT-5 structured output not available, using regular content")
-
-            # Extract usage info
-            usage_info = {
-                'input_tokens': response.usage.prompt_tokens if response.usage else 0,
-                'output_tokens': response.usage.completion_tokens if response.usage else 0,
-                'total_tokens': response.usage.total_tokens if response.usage else 0
-            }
-
-            return output_text, usage_info
-
-        except Exception as e:
-            print(f"Error using GPT-5 structured output API: {e}")
-            print("Falling back to standard JSON mode...")
-            # Fallback to json_object mode if structured output fails
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages_payload,
-                response_format={"type": "json_object"}
-            )
-
-            usage_info = {
-                'input_tokens': response.usage.prompt_tokens if response.usage else 0,
-                'output_tokens': response.usage.completion_tokens if response.usage else 0,
-                'total_tokens': response.usage.total_tokens if response.usage else 0
-            }
-
-            return response.choices[0].message.content, usage_info
-
-    # Traditional models use Chat Completions API
+    # Generic JSON mode. Callers that need a strict Pydantic schema should use
+    # the OpenAI client directly with their own response_format.
     response_format_param = {"type": "json_object"}
 
     # o3 models don't support temperature parameter
@@ -349,6 +314,8 @@ def query_claude(
         Tuple of (response_text, usage_info_dict)
     """
     api_key = load_api_key(provider='anthropic')
+    if anthropic is None:
+        raise ImportError("anthropic is not installed. Install it with: pip install anthropic")
     client = anthropic.Anthropic(api_key=api_key)
     anthropic_messages = [{"role": "user", "content": user_content_blocks}]
 
@@ -425,6 +392,8 @@ def query_gemini(
     Returns:
         Tuple of (response_text, usage_info_dict)
     """
+    if genai is None:
+        raise ImportError("google-generativeai is not installed. Install it with: pip install google-generativeai")
     api_key = load_api_key(provider='gemini')
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
@@ -563,7 +532,7 @@ def query_llm(
 
 def query_llm_with_web_search(
     prompt: str,
-    model: str = "gpt-5-mini",
+    model: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Query OpenAI LLM with web search capability enabled.
@@ -578,6 +547,7 @@ def query_llm_with_web_search(
     Returns:
         Tuple of (response_text, usage_info_dict)
     """
+    model = model or os.getenv("REVIEWPILOT_LLM_MODEL", config.MODEL)
     api_key = load_api_key(provider='openai')
     client = OpenAI(api_key=api_key)
 
@@ -643,7 +613,7 @@ def find_pdf_url_with_search(
     title: str,
     doi: Optional[str] = None,
     journal: Optional[str] = None,
-    model: str = "gpt-5-mini"
+    model: Optional[str] = None
 ) -> Optional[str]:
     """
     Use LLM with web search to find the PDF download URL for a paper.

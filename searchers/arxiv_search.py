@@ -18,7 +18,7 @@ class ArxivSearcher:
 
     def __init__(self):
         """Initialize arXiv searcher."""
-        pass
+        self._last_status_code = None
 
     def search(self, query: str, max_results: int = 100,
                categories: Optional[List[str]] = None,
@@ -39,8 +39,28 @@ class ArxivSearcher:
         parsed_groups = self._parse_query(query)
 
         if parsed_groups and len(parsed_groups) >= 2:
-            # Complex query - split into smaller queries
-            return self._search_split(parsed_groups, max_results, categories, output_file)
+            # Try arXiv's native boolean syntax first. Expanding broad OR groups into
+            # every AND combination can create hundreds of API calls and trigger 429s.
+            native_results = self._search_simple(
+                query,
+                max_results,
+                categories,
+                output_file=output_file,
+            )
+            if len(native_results) >= max_results:
+                return native_results[:max_results]
+            if self._last_status_code == 429:
+                print("  arXiv native query rate limited; skipping split fallback")
+                return native_results[:max_results]
+
+            split_results = self._search_split(parsed_groups, max_results, categories, output_file)
+            merged = {}
+            for article in native_results + split_results:
+                article_id = article.get("id") or article.get("url") or article.get("title")
+                if article_id and article_id not in merged:
+                    merged[article_id] = article
+
+            return list(merged.values())[:max_results]
 
         # Simple query - use standard approach
         return self._search_simple(query, max_results, categories, output_file=output_file)
@@ -54,6 +74,7 @@ class ArxivSearcher:
         start = 0
         max_per_request = 100
         seen_ids = set()
+        self._last_status_code = None
 
         # If output file exists, load existing IDs to avoid duplicates
         if output_file and os.path.exists(output_file):
@@ -91,16 +112,19 @@ class ArxivSearcher:
 
             try:
                 response = requests.get(self.BASE_URL, params=params, timeout=30)
+                self._last_status_code = response.status_code
 
                 # Handle rate limiting (429) with retry
                 if response.status_code == 429:
                     print(f"  Rate limited, waiting 5s before retry...")
                     time.sleep(5)
                     response = requests.get(self.BASE_URL, params=params, timeout=30)
+                    self._last_status_code = response.status_code
                     if response.status_code == 429:
                         print(f"  Still rate limited, waiting 10s...")
                         time.sleep(10)
                         response = requests.get(self.BASE_URL, params=params, timeout=30)
+                        self._last_status_code = response.status_code
 
                 response.raise_for_status()
 
@@ -135,6 +159,9 @@ class ArxivSearcher:
                 time.sleep(10)
                 continue
             except requests.exceptions.HTTPError as e:
+                response = getattr(e, "response", None)
+                if response is not None:
+                    self._last_status_code = response.status_code
                 print(f"  arXiv API error: {e}")
                 break
             except requests.exceptions.ConnectionError as e:
@@ -172,6 +199,8 @@ class ArxivSearcher:
         Saves incrementally if output_file is provided.
         """
         all_articles = {}  # Deduplicate by ID
+        max_split_queries = self._max_split_queries()
+        attempted_queries = 0
 
         # Load existing articles if output file exists
         if output_file and os.path.exists(output_file):
@@ -204,10 +233,11 @@ class ArxivSearcher:
 
             for term1 in group1:
                 for term2 in group2:
-                    if len(all_articles) >= max_results:
+                    if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
                         break
 
                     search_query = f'{format_term(term1)} AND {format_term(term2)}'
+                    attempted_queries += 1
                     batch_articles = self._search_simple(search_query, max_results, categories, is_boolean_query=True)
 
                     for article in batch_articles:
@@ -216,7 +246,7 @@ class ArxivSearcher:
                             all_articles[article_id] = article
                             save_article(article)
 
-                if len(all_articles) >= max_results:
+                if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
                     break
 
         elif len(groups) >= 3:
@@ -229,10 +259,11 @@ class ArxivSearcher:
             for term1 in group1:
                 for term2 in group2:
                     for term3 in group3:
-                        if len(all_articles) >= max_results:
+                        if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
                             break
 
                         search_query = f'{format_term(term1)} AND {format_term(term2)} AND {format_term(term3)}'
+                        attempted_queries += 1
                         batch_articles = self._search_simple(search_query, max_results, categories, is_boolean_query=True)
 
                         for article in batch_articles:
@@ -241,13 +272,22 @@ class ArxivSearcher:
                                 all_articles[article_id] = article
                                 save_article(article)
 
-                    if len(all_articles) >= max_results:
+                    if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
                         break
-                if len(all_articles) >= max_results:
+                if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
                     break
 
+        if attempted_queries >= max_split_queries and len(all_articles) < max_results:
+            print(f"  arXiv split fallback stopped after {attempted_queries} queries")
         print(f"  Total unique articles: {len(all_articles)}")
         return list(all_articles.values())[:max_results]
+
+    def _max_split_queries(self) -> int:
+        """Maximum arXiv combination fallback requests after native boolean search."""
+        try:
+            return max(0, int(os.getenv("REVIEWPILOT_ARXIV_MAX_SPLIT_QUERIES", "6")))
+        except ValueError:
+            return 6
 
     def _format_query(self, query: str) -> str:
         """

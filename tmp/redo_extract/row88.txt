@@ -1,0 +1,329 @@
+=== PDF FIRST PAGE (title region) ===
+Preprint. Under review.
+WEBXSKILL: Skill Learning for Autonomous Web Agents
+Zhaoyang Wang1, Qianhui Wu2∗, Xuchao Zhang2, Chaoyun Zhang2, Wenlin Yao2
+Fazle Elahi Faisal2, Baolin Peng2, Si Qin2, Suman Nath2, Qingwei Lin2, Chetan Bansal2
+Dongmei Zhang2, Saravan Rajmohan2, Jianfeng Gao2, Huaxiu Yao1∗
+1University of North Carolina at Chapel Hill
+2Microsoft
+{zhaoyang,huaxiu}@cs.unc.edu
+{qianhuiwu,xuchaozhang}@microsoft.com
+Abstract
+Autonomous web agents powered by large language models (LLMs) have
+shown promise in completing complex browser tasks, yet they still struggle
+with long-horizon workflows. A key bottleneck is the grounding gap in
+existing skill formulations: textual workflow skills provide natural lan-
+guage guidance but cannot be directly executed, while code-based skills are
+executable but opaque to the agent, offering no step-level understanding
+for error recovery or adaptation. We introduce WEBXSKILL, a framework
+that bridges this gap with executable skills, each pairing a parameterized
+action program with step-level natural language guidance, enabling both di-
+rect execution and agent-driven adaptation. WEBXSKILL operates in three
+stages: skill extraction mines reusable ac
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Preprint. Under review.
+WEBXSKILL: Skill Learning for Autonomous Web Agents
+Zhaoyang Wang1, Qianhui Wu2∗, Xuchao Zhang2, Chaoyun Zhang2, Wenlin Yao2
+Fazle Elahi Faisal2, Baolin Peng2, Si Qin2, Suman Nath2, Qingwei Lin2, Chetan Bansal2
+Dongmei Zhang2, Saravan Rajmohan2, Jianfeng Gao2, Huaxiu Yao1∗
+1University of North Carolina at Chapel Hill
+2Microsoft
+{zhaoyang,huaxiu}@cs.unc.edu
+{qianhuiwu,xuchaozhang}@microsoft.com
+Abstract
+Autonomous web agents powered by large language models (LLMs) have
+shown promise in completing complex browser tasks, yet they still struggle
+with long-horizon workflows. A key bottleneck is the grounding gap in
+existing skill formulations: textual workflow skills provide natural lan-
+guage guidance but cannot be directly executed, while code-based skills are
+executable but opaque to the agent, offering no step-level understanding
+for error recovery or adaptation. We introduce WEBXSKILL, a framework
+that bridges this gap with executable skills, each pairing a parameterized
+action program with step-level natural language guidance, enabling both di-
+rect execution and agent-driven adaptation. WEBXSKILL operates in three
+stages: skill extraction mines reusable action subsequences from readily
+available synthetic agent trajectories and abstracts them into parameterized
+skills, skill organization indexes skills into a URL-based graph for context-
+aware retrieval, and skill deployment exposes two complementary modes,
+grounded mode for fully automated multi-step execution and guided mode
+where skills serve as step-by-step instructions that the agent follows with
+its native planning. On WebArena and WebVoyager, WEBXSKILL improves
+task success rate by up to 9.8 and 12.9 points over the baseline, respectively,
+demonstrating the effectiveness of executable skills for web agents. The
+code is publicly available at https://github.com/aiming-lab/WebXSkill.
+1
+Introduction
+Large language models (LLMs) have enabled autonomous web agents that interact with real
+websites through browser actions such as clicking, typing, and navigating (Agashe et al.,
+2025; Murty et al., 2024; Ning et al., 2025; Zhou et al., 2024; He et al., 2024b). These agents
+promise to automate complex web workflows that previously required human intervention.
+However, their behavior remains brittle on complex multi-page workflows because they
+rarely retain and reuse procedural interaction knowledge, forcing them to re-plan long
+action sequences from scratch even for recurring routines (Xue et al., 2025; Li et al., 2025).
+Textual 
+Workflow
+Executable
+Workflow
+Figure 1: WEBXSKILL equips web
+agents with executable skills.
+This lack of knowledge reuse becomes especially
+costly in long-horizon settings. When a web agent
+successfully completes a checkout flow or navigates a
+complex admin panel, the procedural knowledge em-
+bedded in that trajectory is often discarded. The next
+time the agent encounters a similar workflow, it must
+re-derive the entire action sequence, wasting steps
+and increasing the risk of errors or hallucinations. Re-
+cent work has begun to address this gap through the
+concept of skills, reusable knowledge units that en-
+code common web interaction patterns (Sodhi et al.,
+2023; Wang et al., 2024; Prabhu et al., 2026; Zheng
+et al., 2025; Wang et al., 2025b). However, existing skill formulations suffer from a fun-
+damental limitation that we term the grounding gap. Workflow-based approaches such as
+∗Corresponding authors.
+1
+arXiv:2604.13318v1  [cs.AI]  14 Apr 2026
+
+Preprint. Under review.
+AWM (Wang et al., 2024) represent skills as natural language instructions (e.g., “search
+for the product, then add it to cart”) that guide planning but cannot be directly executed,
+requiring the agent to translate each instruction into concrete browser actions and reintro-
+ducing grounding errors. Code-based approaches like SkillWeaver (Zheng et al., 2025) and
+WALT (Prabhu et al., 2026) ground skills in executable code or action scripts, but they deploy
+skills as opaque black-box calls without step-level guidance, making the agent unable to
+understand, adapt, or recover when execution fails mid-way.
+In this paper, as shown in Figure 1, we propose WEBXSKILL, a framework that bridges the
+grounding gap by introducing executable skills that pair action programs with step-level
+natural language guidance. Each skill carries both a concrete sequence of browser operations
+(e.g., click, type) and semantic annotations (name, description, typed parameters, and per-
+step guidance), making it simultaneously executable by the runtime and interpretable by
+the agent. This dual nature enables two complementary deployment modes: a grounded
+mode in which the agent invokes a skill as an atomic tool call and the runtime automatically
+executes the underlying action sequence, and a guided mode in which skills are surfaced as
+step-by-step instructions that the agent follows using its native browser actions, preserving
+autonomy for adaptation when page states differ from what the skill expects. To obtain
+such skills, WEBXSKILL employs a three-stage pipeline. First, skill extraction mines reusable
+action subsequences from abundant synthetic agent trajectories and abstracts them into
+parameterized skills via LLM-based generalization. Second, skill organization indexes skills
+into a URL-based skill graph that maps web pages to their applicable skills, enabling context-
+aware retrieval. Third, skill deployment selects between grounded and guided execution
+depending on the task and model capabilities. In summary, our contributions are as follows:
+• We introduce executable skills for web agents that pair parameterized action pro-
+grams with step-level natural language guidance, bridging the grounding gap
+between textual workflows and opaque code-based skills.
+• We propose WEBXSKILL, a three-stage framework that extracts skills from readily
+available low-cost synthetic trajectories, organizes them in a skill graph for context-
+aware retrieval, and deploys them in two complementary modes (grounded and
+guided) to balance execution efficiency and agent autonomy.
+• We evaluate WEBXSKILL on WebArena and WebVoyager, achieving up to 9.8 and
+12.9 point improvements over the baseline, respectively. We further show that the
+deployment mode can be adaptively selected based on model strength.
+2
+Related Work
+Web Agents.
+Web agents have rapidly evolved with LLMs and vision-language mod-
+els that autonomously interact with browsers to complete complex tasks (Nakano et al.,
+2021; Ning et al., 2025; He et al., 2024b; Li et al., 2025). Early work established the Re-
+Act paradigm (Yao et al., 2023), where agents interleave chain-of-thought reasoning with
+browser actions. Subsequent benchmarks such as Mind2Web (Deng et al., 2023), Web-
+Voyager (He et al., 2024a), and WebArena (Zhou et al., 2024) evaluate agents on live or
+self-hosted websites with diverse tasks. Other directions include planning, agent collabora-
+tion, and memory (Gao et al., 2023; Hong et al., 2024; Wu et al., 2024; Chhikara et al., 2025;
+Yang et al., 2026a), data synthesis (Sun et al., 2025; Pahuja et al., 2025; Wang et al., 2025a),
+and reinforcement learning (Wei et al., 2025; Lu et al., 2025; Yang et al., 2026b). However,
+these approaches typically operate over low-level browser actions (e.g., click and type),
+which makes long-horizon tasks fragile and error-prone. Tool-use and skill learning have
+emerged as a promising direction to provide reusable abstraction and knowledge.
+Tool-use in Web Agents.
+Hybrid computer-use agents improve complex-task efficiency
+through multi-action prediction and coding-oriented skills (Yang et al., 2025; Song et al.,
+2025). Building on this trend, a growing body of work equips web agents with reusable
+higher-level knowledge to abstract away repetitive low-level interactions (Wang et al.,
+2024; Zhou et al., 2025; Zheng et al., 2025; Wang et al., 2025b; Prabhu et al., 2026; Sodhi
+et al., 2023; Sarch et al., 2024). As summarized in Table 1, these approaches differ along
+2
+
+Preprint. Under review.
+four design axes: executability (Exec.), step-level guidance (Guid.), acquisition strategy
+(Acq.), and context-aware skill retrieval (Ctx.). Textual workflow methods such as Agent
+Workflow Memory (Wang et al., 2024), StepP (Sodhi et al., 2023), and ICAL (Sarch et al.,
+2024) represent skills as natural language instructions that guide planning but cannot be
+directly executed, leaving a gap between “what to do” and “how to execute it”. Executable-
+skill methods close one side of this gap by making skills directly invocable, yet sacrifice
+step-level agent guidance. SkillWeaver (Zheng et al., 2025) discovers interaction patterns
+through autonomous website exploration (Expl.) and compiles them into Python APIs,
+but the resulting skills are opaque code whose internal logic is invisible to the agent.
+Method
+Exec. Guid. Acq. Ctx.
+AWM (Wang et al., 2024)
+✗
+✓
+Test
+✗
+SkillWeaver (Zheng et al., 2025)
+✓
+✗
+Expl.
+✗
+ASI (Wang et al., 2025b)
+✓
+✗
+Test
+✗
+WALT (Prabhu et al., 2026)
+✓
+✗
+Expl.
+✗
+WEBXSKILL
+✓
+✓
+Traj.
+✓
+Table 1: Design axes of skill-based web agent methods.
+Prior work exhibits a grounding gap: textual skills
+guide but cannot execute; code-based skills execute but
+lack step-level guidance.
+ASI (Wang et al., 2025b) induces
+programmatic skills by abstracting
+successful episodes into callable
+functions, but acquires skills from
+test-time task trajectories (Test),
+introducing the risk of informa-
+tion leakage. WALT (Prabhu et al.,
+2026) reverse-engineers built-in
+website functionality into deter-
+ministic tools with validated input
+schemas.
+Like SkillWeaver and
+ASI, WALT deploys skills as black-
+box tool calls without step-level
+guidance, limiting agent autonomy when execution fails or misaligns with the agent’s
+intention. WEBXSKILL bridges this grounding gap along all four axes (Table 1). Every skill
+couples an executable action program with step-level natural language guidance, enabling
+both grounded execution for efficiency and guided step-by-step use for agent autonomy.
+Skills are extracted from synthetic agent trajectories (Traj.), avoiding costly autonomous
+exploration and the risk of test data leakage. Skills are organized into a URL-based skill
+graph for context-aware retrieval, in contrast to flat skill libraries that surface all candidates
+regardless of the agent’s current page state and execution context.
+3
+Method
+Problem Setup.
+Given the user task q, the goal of a web agent π is to repeatedly generate
+specific browser actions based on varied webpage observations. At each step t, the agent
+receives an observation ot that includes both a textual description of the webpage (e.g.,
+accessibility tree) and a screenshot, and generates an action at from a primitive action space
+Aprim = {click, input, scroll, navigate, . . .}. The interaction continues until the agent
+signals task completion or a step budget is reached. In this standard web agent setting,
+the agent often reasons from scratch at every step, with no mechanism to reuse procedural
+knowledge from prior interactions, even when facing recurring patterns such as searching
+for a product, navigating menus, or filling forms.
+Overview.
+To mitigate this limitation, we propose WEBXSKILL, which augments the agent
+with a library of executable skills that encode frequently recurring interaction patterns as
+reusable, parameterized action programs. We now describe the three stages of our method:
+skill extraction, skill organization, and skill deployment, as shown in Figure 2.
+3.1
+Skill Extraction
+The goal of skill extraction is to distill a set of agent interaction trajectories into a compact,
+non-redundant library of parameterized skills. We use agent trajectories as the data source,
+avoiding the need for autonomous website exploration and the risk of test-data leakage
+associated with alternative acquisition strategies (see Table 1).
+Trajectory Abstraction.
+Given a corpus of agent trajectories T = {τ1, . . . , τN}, where each
+trajectory τi records the step-by-step actions an agent took to complete (or attempt) a task, we
+3
+
+Preprint. Under review.
+Skill: search_product
+Args: product: str
+Steps: First, find & focus the search bar, 
+Next, Type {{args: product}} into the ….
+Skill Extraction
+Find the lowest price milk that has at least 10 reviews 
+and 5 stars, and place an order
+Abstraction
+Curation
+Skill Set
+Skill Organization
+Search_procuct
+2. Checkout_cart
+3. Clear_cart
+Apply_filter
+2. Buy_product
+3. Product_detail
+Buy_product
+2. Product_detail
+3. Add_to_cart
+…
+…
+…
+Skill Graph: Load Skills by Page State
+Grounded Mode
+Guided Mode
+Skill Deployment
+Skill: search_product
+Args: product: str
+Programs: 1. click search bar 2. type {{args: product}}
+in the focused search bar 3. press enter key …….
+Automatic 
+Execution
+Skill: search_product
+Steps: First, find & focus the search bar. Next, Type product 
+name into the search bar. Press enter until the page
+refreshes into new page. The new page will show the ……..
+Step-by-step
+Guidance
+Figure 2: Overview of WEBXSKILL consisting of three modules: (1) Skill Extraction, which
+abstracts low-level browser interaction trajectories into reusable skills, followed by skill
+curation to improve their quality. (2) Skill Organization, which structures skills into a graph
+and retrieves state-relevant candidates. (3) Skill Deployment, which supports two modes:
+grounded mode, invoking a selected skill with automatic sequence execution for efficiency,
+and guided mode, presenting it as step-by-step instructions for agent autonomy.
+use an LLM to identify reusable action subsequences and abstract them into parameterized
+skills. Specifically, for each trajectory τi, we construct a structured representation that
+includes the task description, page URL at each step, the action taken (action type, optional
+target element and parameters), and the agent’s reasoning. The LLM is prompted to: (1)
+identify action subsequences that represent a coherent, reusable operation (e.g., “search
+for a product by keyword”), (2) abstract concrete action values into typed parameters (e.g.,
+replacing a specific search query with a query: str parameter), and (3) annotate each action
+step with natural language guidance describing its purpose and reasoning.
+Skill Set Curation.
+To keep the skill library compact without sacrificing coverage, we first
+use an online deduplication strategy to compare each candidate skill against the existing
+library before insertion, combining rule-based similarity and embedding-based semantic
+similarity approaches. In addition, we prompt the LLM to decide for each candidate
+whether to add it as a new skill, update an existing one with a more robust version, or skip
+it as redundant, offering opportunities for skill refinement. We further enhance the skill
+executability by validating each skill’s action sequence on a test environment to ensure it
+can be executed without browser errors, filtering out any skills that fail validation.
+3.2
+Skill Organization
+Extracted skills should be efficiently retrievable at inference time. Unlike existing approaches
+that often treat skills as a flat library or API set to be selected or ranked at every step, we
+propose a structured organization that leverages the page-level structure nature of web
+browsing. We observe that web interaction skills are often inherently page-specific: a “search
+product” skill is only applicable on a page with a search bar, not on a checkout page. This
+motivates a structured organization based on page URL patterns.
+Skill Graph.
+We organize skills into a skill graph G = {(uj, Sj)}M
+j=1, where each node uj
+is a generalized URL pattern (e.g., shopping/catalogsearch/*) and Sj is the set of skills
+applicable at pages matching that pattern. We choose to use generalized URL patterns rather
+than page content or HTML DOM structure for organization because URLs are more stable
+and less noisy indicators of page functionality, and can be efficiently matched at inference
+time. Ski
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Preprint. Under review.
+Figure 5: Grounded mode case study: the agent completes a Reddit forum posting task in 3
+steps by invoking a skill that auto-executes the multi-step post submission workflow.
+20
+
+Preprint. Under review.
+Figure 6: Guided mode case study: the agent modifies an order’s shipping address by
+activating the skill for step-by-step guidance, while independently adapting when the skill
+does not cover all required fields.
+21
+

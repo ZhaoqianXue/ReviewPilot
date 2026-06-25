@@ -1,0 +1,348 @@
+=== PDF FIRST PAGE (title region) ===
+Lessons Learned: A Multi-Agent Framework for Code
+LLMs to Learn and Improve
+Yuanzhe Liu1∗
+Ryan Deng2†
+Tim Kaler2
+Xuhao Chen2,3
+Charles E. Leiserson2
+Yao Ma1
+Jie Chen4
+1Rensselaer Polytechnic Institute
+2Massachusetts Institute of Technology
+3Michigan State University
+4MIT-IBM Watson AI Lab, IBM Research
+{liuy72,may13}@rpi.edu
+{ryandeng,tfk,cxh,cel}@mit.edu
+chenjie@us.ibm.com
+Abstract
+Recent studies show that LLMs possess different skills and specialize in different
+tasks. In fact, we observe that their varied performance occur in several levels
+of granularity. For example, in the code optimization task, code LLMs excel at
+different optimization categories and no one dominates others. This observation
+prompts the question of how one leverages multiple LLM agents to solve a coding
+problem without knowing their complementary strengths a priori. We argue that a
+team of agents can learn from each other’s successes and failures so as to improve
+their own performance. Thus, a lesson is the knowledge produced by an agent and
+passed on to other agents in the collective solution process. We propose a lesson-
+based collaboration framework, design the lesson solicitation–banking–selection
+mecha
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Lessons Learned: A Multi-Agent Framework for Code
+LLMs to Learn and Improve
+Yuanzhe Liu1∗
+Ryan Deng2†
+Tim Kaler2
+Xuhao Chen2,3
+Charles E. Leiserson2
+Yao Ma1
+Jie Chen4
+1Rensselaer Polytechnic Institute
+2Massachusetts Institute of Technology
+3Michigan State University
+4MIT-IBM Watson AI Lab, IBM Research
+{liuy72,may13}@rpi.edu
+{ryandeng,tfk,cxh,cel}@mit.edu
+chenjie@us.ibm.com
+Abstract
+Recent studies show that LLMs possess different skills and specialize in different
+tasks. In fact, we observe that their varied performance occur in several levels
+of granularity. For example, in the code optimization task, code LLMs excel at
+different optimization categories and no one dominates others. This observation
+prompts the question of how one leverages multiple LLM agents to solve a coding
+problem without knowing their complementary strengths a priori. We argue that a
+team of agents can learn from each other’s successes and failures so as to improve
+their own performance. Thus, a lesson is the knowledge produced by an agent and
+passed on to other agents in the collective solution process. We propose a lesson-
+based collaboration framework, design the lesson solicitation–banking–selection
+mechanism, and demonstrate that a team of small LLMs with lessons learned can
+outperform a much larger LLM and other multi-LLM collaboration methods.
+1
+Introduction
+Code optimization refers to rewriting the code such that it performs the same task more efficiently [32].
+The efficiency is predominantly measured by the runtime, but it could also refer to storage, energy, or
+other resource consumptions. Code optimization is a less explored coding task in the context of AI
+compared with the popularly studied code generation task [62], but it is a natural, and sometimes
+key, step in the software development cycle. Code performance can be improved in many ways, such
+as using a lower-complexity algorithm, caching and memorization, data alignment, vectorization,
+and parallelization [50, 5]. Many of these approaches require low-level system knowledge that code
+LLMs are not explicitly trained with.
+We are interested in exploring the use of multiple LLM-powered agents for code optimization. We
+use multiple LLMs because no one LLM performs the best on all problems, even if they are trained
+with extensive code data. The common practice of benchmarking uses aggregated performance to
+rank models [6], but the best-ranked model may not be the best performer for every problem. We
+take the ParEval benchmark [39], which consists of programming problems in scientific computing,
+for example. When three open-source, small models and two GPT models are evaluated on this
+benchmark (see Appendix A for details), GPT-4o [43] is the overall winner. However, on the
+“geometry” category of problems, Qwen7B [25] outperforms GPT-4o by 2.5× in terms of speedup;
+and on the “histogram” category, Deepseek7B [20] and Qwen14B [25] outperform GPT-4o by 1.6×
+(Figure 5). Additionally, among the three open-source models, Qwen7B excels at “search,” while
+∗Part of the work was done while YL visited MIT-IBM Watson AI Lab, IBM Research.
+†Part of the work was done while RD interned at MIT-IBM Watson AI Lab, IBM Research.
+Code implementation is available at https://github.com/MITIBM-FastCoder/LessonL.
+39th Conference on Neural Information Processing Systems (NeurIPS 2025).
+arXiv:2505.23946v2  [cs.AI]  23 Oct 2025
+
+Original code
+for (int i = 0; i < n; ++i)
+for (int j = 0; j < n; ++j)
+for (int k = 0; k < n; ++k)
+C[i][j] += A[i][k] * B[k][j];
+Naive implementation of matrix multiplication C =
+AB.
+Improved code, round 1
+for (int i = 0; i < n; ++i)
+for (int k = 0; k < n; ++k)
+for (int j = 0; j < n; ++j)
+C[i][j] += A[i][k] * B[k][j];
+Lesson: Reordering loops improves cache locality and
+increases performance. The order of (i,k,j) out of 6
+different permutations often performs the best, because
+of how caches work.
+Improved code, round 2
+#pragma omp parallel for
+for (int i = 0; i < n; ++i)
+for (int k = 0; k < n; ++k)
+for (int j = 0; j < n; ++j)
+C[i][j] += A[i][k] * B[k][j];
+Lesson: Using OpenMP to parallelize the for-loop
+further improves performance. Parallelizing only the
+outermost loop performs the best, due to sufficient par-
+allelism and less parallel scheduling overhead.
+Figure 1: Successively improving matrix-matrix multiplication in C with lessons.
+Deepseek7B excels at “scan” and “dense_la” and Qwen14B excels at “sparse_la,” “reduce,” “fft,” and
+“sort” (Table 5). Such varied performance suggests the opportunity of exploiting the complementary
+strengths of different LLMs to deliver the best solution.
+How does one make use of multiple agents to solve a coding problem? In this work, we advocate the
+concept of lessons inspired by classroom experience. A student’s problem-solving skills are not only
+taught by a teacher at class but also developed through peer learning. For example, after receiving
+the graded homework, Student A, who cannot complete the solution to a problem may consult with
+Student B, who earns a perfect score, on tips of the correct steps toward the solution. Meanwhile,
+Student A can also benefit from learning from Student C, who comes up with a wrong solution, to
+avoid making similar mistakes. Each student learns from the success and failure lessons of others to
+improve their own problem-solving skills. LLM agents behave similarly. Pre-training is analogous to
+classroom teaching, while a pre-trained LLM can improve its skills through prompted with lessons.
+A lesson means any information that helps an LLM better solve the problem at hand. For code
+optimization, such lessons may be optimization strategies applicable to the current code, common
+pitfalls that programmers are trapped in, or performance feedback from profilers. Note that a code’s
+performance can be improved by a combined use of multiple strategies, step by step. Figure 1 shows
+the initial steps of a classic example of engineering the performance of matrix-matrix multiplications,
+which can be improved by 3000x in speedup under extensive optimization [50]. The applied strategies
+shown are loop reordering and parallelization of for-loops. In a multi-LLM setting, such strategies,
+or lessons, can be iteratively summarized by one or a few LLMs and learned by others, so that they
+collectively improve the code performance.
+In this work, we propose the framework LessonL (pronouced as “lesson-nell”) for multiple LLM
+agents to collaboratively solve problems. Central to the framework is the lesson mechanism for
+agents to improve their collective intelligence through learning from each other. The main technical
+innovation is a solicitation–banking–selection framework that generates, deposits, and filters lessons
+incurred during the collective problem-solving process. Although code optimization is the focal
+application of LessonL, we demonstrate its use for other tasks (code generation) as well.
+LessonL is a novel multi-agent framework that resembles how humans learn to solve problems.
+Compared with other collaboration frameworks, such as where agents play different roles in the
+solution process [49, 12, 23, 27, 46], or where agents independently propose solutions that are
+subsequently communicated and aggregated [52, 14, 28, 37, 60] (see Section 2 for literature review),
+our framework has a few advantages. First, agents do not need to be distinguished by pre-specified
+roles, as their complementary strengths for a particular problem may be unknown a priori. Second,
+communication and prompt contents are economic since lessons are more concise than codes. Third,
+2
+
+Round t = 1                                                              ...
+Round t = 0
+good
+fail
+passing
+excellent
+passing
+good
+deposit lessons
+select lessons
+Solution
+Grading
+Lesson
+Problem
+Lesson bank
+Agent
+Based on:
+solution quality;
+semantic relevance;
+lesson effectiveness
+Figure 2: The LessonL framework (which may repeat multiple rounds).
+more importantly, lessons are interpretable and reusable, allowing the explication of coding knowledge
+and the creation of educational materials.
+Our work contributes the following:
+1. a finding that LLMs have complementary strengths even on a fine level of tasks (Appendix A);
+2. a novel lesson-based framework for multiple agents to collectively solve problems (Section 3);
+3. state-of-the-art performance on code optimization and code generation benchmarks (Section 4.2);
+4. empirical evidence that a team of small LLMs can significantly outperform a much larger LLM
+under similar resource consumptions (Section 4.4);
+5. representative code examples and lessons (Appendices K–M).
+2
+Related Work
+Multi-agent collaboration. Recent advances in prompting techniques have enhanced LLMs’ rea-
+soning and planning capabilities for complex tasks like mathematics and coding. CoT [54], Self-
+Consistency [53], ReAct [58], and ToT [57] demonstrate improved problem-solving skills with
+reasoning while Reflexion [49] leverages self-generated feedback stored in episodic memory to en-
+hance decision-making. As such, LLMs can be used as autonomous agents and recent research efforts
+propose ways for multiple agents to collaboratively solve problems. Popular multi-agent frameworks
+either place agents in different roles (such as planner, coder, debugger, reviewer, and tester in a
+software project) or have agents independently propose solutions, which are collectively refined and
+consolidated. For role-based methods, see AgentVerse [12], MetaGPT [23], MapCoder [27], Chat-
+Dev [46], Self-collaboration [13], SoA [26], AgentCoder [24], Agent Hospital [34], and DEI [61]. For
+individual solution proposals, see MoA [52], LLM-Debate [14, 15], LLM-Blender [28], DyLAN [37],
+and AgentPrune [60]. Our work LessonL belongs to the latter category. A unique contribution of
+LessonL is the lesson mechanism for agents to learn from each other and the explication of coding
+knowledge as a result of the collaborative learning.
+Code optimization. It is an important, but under-explored, use case of LLM for code. Prior
+work focuses on specialized models such as HPC-Coder [40, 41] and HPC-Coder-V2 [9] for high-
+performance computing, all requiring curating and/or generating code data and fine-tuning. Besides
+the usual fine-tuning approaches, PIE [51] proposes additional adaptation techniques, including
+retrieval-based prompting, performance-conditioning, and self-play. Among the few agentic ap-
+proaches, SBLLM [17] retrieves optimization examples from an external dataset and Self-Refine [38]
+iteratively refines the code based on self-generated feedback. In contrast, our multi-agent framework
+allows the use of more than one agent and it does not rely on an external code dataset.
+For extended discussions and more related work, see Appendix B.
+3
+
+3
+The LessonL Framework
+Our multi-agent collaboration framework is centered around lessons, which can be any knowledge or
+information that helps an agent better solve the problem at hand. When a team of agents participates
+in the collective problem-solving process, such knowledge is solicited through inspecting each agent’s
+solution and is deposited into a bank for other agents to access. Hence, the solution process becomes
+iterative, looping between using the existing lessons to update the solutions and using the updated
+solutions to generate new lessons. For code optimization, such an iterative process can progressively
+improve the code performance. This process is pictorially illustrated in Figure 2 and sketched in
+Algorithm 1:
+Algorithm 1 The LessonL Framework (Sketched)
+1: Each agent generates an initial solution and the lesson for it. Deposit lessons to the bank.
+2: for round t = 1, . . . , T do
+3:
+Select k lessons from the bank.
+4:
+Based on the selected lessons, each agent generates an updated solution.
+5:
+Each agent generates a new lesson for the updated solution. Deposit lessons to the bank.
+6:
+Adjust the effectiveness of the k selected lessons.
+7: end for
+8: Return the best solution.
+In what follows, we elaborate on a few key components of this framework. The full algorithm is
+given in Appendix C. We also discuss its extension to other coding tasks, such as code generation.
+3.1
+Lesson Solicitation
+Every solution comes with a lesson, either positive or negative. Such lessons explain why the solution
+is correct or what makes it wrong. For code optimization, multiple tools can be used to grade
+the output code, such as the compiler, the clock, test cases, and profilers. Consider four resulting
+scenarios:
+(a) speed up,
+(b) slow down,
+(c) functional incorrectness,
+(d) syntax error.
+We solicit lessons by referring the original code and the modified code, A and B, respectively, and
+prompting the agent with the resulting scenario and asking for explanations. For (a) and (b), we
+supplement the scenario description with the measured speedup and for (d), we include the error
+message reported by the compiler. Such information helps the agent reason with the code pair and
+articulate precise lessons. For (c), we do not include the test cases because LLMs tend to reason
+specifically about the test cases, resulting in insufficiently general lessons.
+The detailed prompt templates are given in Appendix D.
+3.2
+Lesson Banking and Selection
+In each round, n lessons are generated and deposited to the bank, one from each agent. Then, after
+several rounds, there accumulate many lessons. It is unwise to feed all of them to the prompt when
+asking the agent to improve the code, because they may exceed the prompt capacity and also the
+token consumption can become too costly. Hence, the framework is run with at most k lessons in
+each round. In practice, it suffices to set k to be, or slightly larger than, n.
+A set of lesson selection criteria is in place. First, naturally we want to use lessons about high
+speedups, because they point to the right directions of optimization. However, positive lessons alone
+cannot address certain limitations of LLMs, such as the lack of guarantee on code correctness. Hence,
+negative lessons are still valuable, because they can help the agents avoid similar mistakes. It is,
+however, challenging to decide which negative lessons are more important than others. Finally, we
+also consider relevance, in case an agent hallucinates irrelevant lessons. For this, we treat the original
+code as the query and retrieve semantically relevant lessons from the bank, in a manner similar to
+retrieval augmented generation [33].
+Algorithmically, the selection mechanism goes as follows. If the bank has no more than k lessons,
+pick them all. Otherwise, sort the lessons according to speedup (more on this in the next subsection)
+4
+
+and pick the top ⌈k/2⌉. Then, sort the remaining lessons according to their cosine similarity with
+the original code and pick the top ⌊k/2⌋. Any powerful embedding models for code can be used to
+compute the cosine similarity; for example, CodeBERT [16].
+3.3
+Effectiveness Adjustment
+The effectiveness of a lesson z is naturally measured by the speedup s — the higher the speedup, the
+more useful the lesson. Note that s was calculated when z was created together with code y. In other
+words, s is the speedup of code y over the original code. One’s view on the effectiveness of z may
+change when this lesson is selected to apply later. For example, if the lesson later yields code y′ with
+a worse speedup s′ < s, should we keep selecting it only because the original s is great?
+To more effectively select high-speedup lessons, we need some adjustment to the speedup dynamically.
+Rather than sorting them according to s, we introduce an adjustment factor f and sort the lessons
+according to s × f instead, where f accounts for the performance of the lesson z when actually
+applied. Specifically, when z is applied in some round t, it incurs speedups s(t)
+j
+for each agent j. We
+initialize a correction variable c with zero and add 1 + ϵ to it whenever s(t)
+j
+> s, or add 1 −ϵ when
+s(t)
+j
+< s, for some ϵ ∈(0, 1). After looping over a
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Lesson from Deepseek7B
+Code B cannot be compiled because it lacks the necessary header files and does not include
+them in its code. The function ‘std::inclusive_scan’ and ‘std::accumulate’ are part of the
+‘<numeric>’ header, which is not included in Code B. Similarly, the ‘std::vector’ class is
+defined in the ‘<vector>’ header, which is also missing from Code B.
+Lesson from Qwen7B
+Code B cannot be compiled because it lacks the necessary header files and namespace
+declaration for the standard library functions it uses. The ‘std::vector’ and ‘std::accumulate’
+functions are part of the ‘<vector>’ and ‘<numeric>’ headers, respectively, but these are not
+included in Code B. Additionally, Code B needs to be within a function or class to compile
+successfully .
+Lesson from Qwen14B
+Code B cannot be compiled because the ‘#pragma once’ directive is incorrectly placed. It
+should be at the beginning of the file, before any other code or comments. Additionally,
+the compiler output would indicate syntax errors or warnings related to the placement of
+‘#pragma once’.
+Subsequently, all agents try to fix syntax errors but other errors occur. Another common error is that
+the output code computes the sum rather than the sum of the prefix sum, such as the following:
+double sumOfPrefixSum(std::vector <double > const& x) {
+double prefixSum = 0.0;
+for(double num : x) {
+prefixSum += num;
+}
+return prefixSum;
+}
+Occasionally, an agent hallucinates some code that resembles the formula n×(n+1)/2 for computing
+the sum of consecutive integers from 1 to n, but this formula is inapplicable to the current problem
+and thus the code is incorrect.
+double sumOfPrefixSum(std::vector <double > const& x) {
+double sum = 0.0;
+for (double num : x) {
+sum += num;
+}
+return sum * (x.size() + 1) / 2;
+}
+Sometimes the agents do write correct codes, but yield no speedup:
+double sumOfPrefixSum(const std::vector <double >& x) {
+double prefixSum = 0.0;
+double totalSum = 0.0;
+for (double value : x) {
+prefixSum += value;
+totalSum += prefixSum;
+49
+
+}
+return totalSum;
+}
+This example involves various failures an LLM could produce: syntax errors, semantic errors, and
+lack of speedup. One mitigation is to integrate retrieval-based methods from external data sources
+to provide relevant code examples and optimization strategies, helping reduce syntatic errors and
+brainstorm optimization methods. This will require building comprehensive knowledge bases and
+high-quality code libraries.
+N
+Supporting Code
+Code implementation is available at https://github.com/MITIBM-FastCoder/LessonL.
+50
+

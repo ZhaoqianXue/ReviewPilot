@@ -1,0 +1,473 @@
+=== PDF FIRST PAGE (title region) ===
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO
+for LLM Agents
+Qirui Mi 1 Zhijian Ma 2 3 Mengyue Yang 4 Haoxuan Li 5 Yisen Wang 5 Haifeng Zhang 2 Jun Wang 6
+Abstract
+LLM-driven agents excel at sequential decision-
+making but often rely on on-the-fly reasoning,
+re-deriving solutions even in recurring scenarios.
+This insufficient experience reuse leads to compu-
+tational redundancy and instability. To bridge this
+gap, we propose Skill-Pro, a framework enabling
+agents to autonomously learn reusable procedural
+skills from interaction experiences without pa-
+rameter updates. By formalizing a Skill-MDP,
+Skill-Pro transforms passive episodic narratives
+into executable Skills defined by activation, exe-
+cution, and termination conditions to ensure exe-
+cutability. To achieve reliable reusability with-
+out capability degradation, we introduce Non-
+Parametric PPO, which leverages semantic gra-
+dients for high-quality candidate generation and a
+PPO Gate for robust Skill verification. Through
+score-based maintenance, Skill-Pro sustains com-
+pact, high-quality procedural memory. Experi-
+mental results across in-domain, cross-task, and
+cross-agent scenarios demonstrate
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO
+for LLM Agents
+Qirui Mi 1 Zhijian Ma 2 3 Mengyue Yang 4 Haoxuan Li 5 Yisen Wang 5 Haifeng Zhang 2 Jun Wang 6
+Abstract
+LLM-driven agents excel at sequential decision-
+making but often rely on on-the-fly reasoning,
+re-deriving solutions even in recurring scenarios.
+This insufficient experience reuse leads to compu-
+tational redundancy and instability. To bridge this
+gap, we propose Skill-Pro, a framework enabling
+agents to autonomously learn reusable procedural
+skills from interaction experiences without pa-
+rameter updates. By formalizing a Skill-MDP,
+Skill-Pro transforms passive episodic narratives
+into executable Skills defined by activation, exe-
+cution, and termination conditions to ensure exe-
+cutability. To achieve reliable reusability with-
+out capability degradation, we introduce Non-
+Parametric PPO, which leverages semantic gra-
+dients for high-quality candidate generation and a
+PPO Gate for robust Skill verification. Through
+score-based maintenance, Skill-Pro sustains com-
+pact, high-quality procedural memory. Experi-
+mental results across in-domain, cross-task, and
+cross-agent scenarios demonstrate that Skill-Pro
+achieves superior reuse rates and significant gains
+with extreme memory compression. Visualized
+evolutionary trajectories and Skill distributions
+further reveal how Skill-Pro transparently accu-
+mulates, refines, and reuses procedural knowledge
+to facilitate long-term autonomy.
+1. Introduction
+Large Language Model (LLM)-driven agents have shown
+strong performance in complex sequential decision-
+1Key Laboratory of Interdisciplinary Research of Computation
+and Economics, Shanghai University of Finance and Economics
+2Institute of Automation, Chinese Academy of Sciences 3School of
+Artificial Intelligence, Chinese Academy of Sciences 4University
+of Bristol 5Peking University 6University College London. Corre-
+spondence to: Jun Wang <jun.wang@ucl.ac.uk>, Haifeng Zhang
+<haifeng.zhang@ia.ac.cn>.
+Proceedings of the 43 rd International Conference on Machine
+Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026
+by the author(s).
+Figure 1. Episodic memory versus procedural memory in LLM-
+driven agents. Episodic memory retrieves past interactions for ref-
+erence, requiring inference-heavy reasoning at decision time. Pro-
+cedural memory encodes reusable procedural Skills that directly
+map situations to actions, enabling efficient experience reuse.
+making (Park et al., 2023; Shinn et al., 2023). However,
+this performance is often driven by on-the-fly reasoning,
+where agents interpret prompts, observations, and feedback
+in real-time to generate solutions (Wei et al., 2022; Yao et al.,
+2022; 2023). Even in recurring situations, they typically
+redo the full reasoning process from scratch, treating each
+interaction as an unseen problem. This insufficient experi-
+ence reuse results in substantial computational redundancy
+and increases the risk of error accumulation in long-horizon
+scenarios, eventually leading to lower reliability in execu-
+tion (Liu et al., 2024; Press et al., 2023).
+To incorporate interaction experience, existing work broadly
+falls into two paradigms. Parametric methods, such as Re-
+inforcement Learning (RL), attempt to encode experience
+into model parameters (Sutton et al., 1998; Ouyang et al.,
+2022). While effective in specific domains, these approaches
+face high training costs, risks of catastrophic forgetting, and
+a narrowing of general-purpose capabilities (Kirkpatrick
+et al., 2017). Alternatively, non-parametric methods im-
+prove behavior at inference time without updating the base
+LLM, most commonly via external memory (Hu et al.,
+2025). These agents store diverse forms of experience in
+external memory, including past trajectories (Lewis et al.,
+2020; Rajesh et al., 2025), distilled reflections (Xu et al.,
+2025; Zhao et al., 2024), and structured graphs (Zhang et al.,
+2025a; Xia et al., 2025) or workflows (Wang et al., 2024). At
+decision time, they retrieve stored experiences to condition
+the LLM’s reasoning and improve performance, typically
+1
+arXiv:2602.01869v3  [cs.AI]  28 May 2026
+
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents
+without updating the base LLM. However, despite their ef-
+fectiveness, these methods predominantly operate as forms
+of episodic memory (Cohen & Squire, 1980), storing and
+retrieving past experiences as “history books” to be con-
+sulted (Fig. 1). Even with large memory, the agent still has
+to spend its limited context window interpreting retrieved
+cases and re-deriving solutions, effectively returning to the
+inference-heavy loop. Inspired by procedural memory in
+human cognition, an implicit system that directly maps sit-
+uations to action patterns (Squire, 2004); once acquired, it
+enables the automatic execution of Skills without conscious
+re-derivation (Anderson, 1982). While frameworks like
+Claude Agent Skills (Anthropic, 2025) reuse manually en-
+coded procedures, this work investigates how LLM agents
+can autonomously learn reusable procedural Skills from
+interaction experience for future decision-making.
+However, establishing reusable procedural memory faces
+three fundamental obstacles: C1: Executability. Interac-
+tion experience is often stored as passive episodic narratives
+describing past events rather than active decision procedures
+that can be directly instantiated at runtime. C2: Reusability.
+The challenge lies in ensuring that stored procedures can
+be reliably invoked and reused in future tasks while provid-
+ing a consistent performance gain. C3: Non-Parametric
+Optimization. The difficulty lies in Learning Reusable
+Skills through non-parametric methods while preserving the
+agent’s general-purpose capabilities.
+To address these challenges, we propose Skill-Pro, a frame-
+work designed to learn reusable procedural Skills from
+interaction experience without parameter updates. First,
+Skill-Pro formalizes procedural units as Skills consisting of
+Activation Conditions, Execution Procedures, and Termina-
+tion Conditions. By constructing a Skill-MDP, the agent
+selects and reuses these executable procedures (Skills) for
+decision-making to ensure executability (C1). To achieve re-
+liable reusability (C2) through non-parametric optimization
+(C3), we introduce Non-Parametric PPO. This mechanism
+leverages semantic gradients extracted from batch trajecto-
+ries to propose refined Skill candidates, while a PPO-style
+Trust-Region Verification (PPO Gate) ensures the selec-
+tion of high-quality Skills for inclusion in the procedural
+memory. Furthermore, an online scoring mechanism filters
+out redundant or low-quality procedures. Experimental re-
+sults demonstrate that Skill-Pro achieves superior reuse
+rates, significant performance gains, and extreme mem-
+ory compression compared to baselines across in-domain,
+cross-task, and cross-agent scenarios (Table 1, 2). Ablation
+studies confirm that Semantic Gradients and the PPO Gate
+are indispensable for generating and verifying high-quality
+skills, while online scoring preserves long-term evolution-
+ary gains (Table 3, Fig. 3). Finally, visualized evolutionary
+trajectories (Fig. 4) and Skill distribution (Fig. 5) reveal
+how Skill-Pro’s procedural memory is transparently con-
+structed and reused to facilitate long-term autonomy. Our
+core contributions are three-fold:
+• Procedural Skill Formalization: We introduce the Skill-
+MDP, transitioning LLM agents from episodic narratives
+to reusable procedural Skills.
+• Non-Parametric PPO: We propose a parameter-free op-
+timization mechanism leveraging Semantic Gradients, a
+PPO Gate, and score-based maintenance to evolve high-
+quality skills without weight updates.
+• Superior reuse rates and performance gain across di-
+verse scenarios with extreme memory compression.1
+2. Related Work
+(A comprehensive literature review is shown in Appendix A.)
+Learning from Interaction. LLM agents improve decision-
+making via parametric fine-tuning, such as reinforcement
+learning (Ouyang et al., 2022; Rafailov et al., 2023; Guo
+et al., 2025), or non-parametric adaptation. While paramet-
+ric updates yield strong performance, they often incur high
+computational costs and risk catastrophic forgetting or over-
+specialization (Ziegler et al., 2020; Shi et al., 2025a; Luo
+et al., 2025), driving the shift toward memory-augmented
+agents as a more efficient, non-parametric alternative.
+Memory-Augmented LLM Agents. Existing frameworks
+primarily differ in experience representation: (i) Episodic
+Trajectories: Storing raw trajectories for case-based rea-
+soning (Park et al., 2023); (ii) Abstracted Knowledge: Dis-
+tilling experience into summaries (Yang et al., 2025), high-
+level principles (Wu et al., 2025; Agrawal et al., 2025; Cai
+et al., 2025), or failure-derived insights (Zhao et al., 2024);
+(iii) Structured & Compressed Memory: Organizing ex-
+perience into graphs (Zhang et al., 2025a; Jimenez Gutierrez
+et al., 2024; Rezazadeh et al., 2024; Xia et al., 2025), dense
+vectors (Das et al., 2024; Zhang et al., 2025b), or dynamic
+knowledge snippets (Asai et al., 2024; Shi et al., 2025b;
+Zhou et al., 2025b); (iv) Workflow: Maintaining explicit
+task-completion paths (Wang et al., 2024). Skill-centric and
+procedural frameworks (Wang et al., 2023; Tan et al., 2024;
+Zhu et al., 2023; Sumers et al., 2023; Han et al., 2025; Fang
+et al., 2025) leverage executable logic, yet robust reusabil-
+ity remains non-trivial. To bridge the gap between storage
+and reusability, we propose Skill-Pro to learn procedural
+memory for efficient, autonomous long-term execution.
+3. Reusable Procedural Units: Skills
+In this section, we introduce Skills as reusable procedural
+units integrated into the decision-making process of LLM
+agents. We define a Skill as a temporally extended proce-
+dural units specifying: (1) when it should be activated, (2)
+how the agent should execute a sequence of actions, and (3)
+1Code is available at:
+https://github.com/Miracle1207/Skill-Pro
+2
+
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents
+Skill-augmented Markov Decision Process
+State
+Frozen LLM
+𝜋!"#
+Environment
+Next state
+Reward
+Action
+𝑎$, … , 𝑎$%∆$
+Trajectories 𝒯
+Buffer
+Non-Parametric PPO
+①Semantic Gradient
+②PPO Trust-Region Verification
+New Skill 𝜔’
+(Re-run)
+Old Skill 𝜔
+Trajectories
+𝒯!
+Advantage $𝐴
+clipped
+Trajectories
+𝒯!
+Hindsight attribution:
+𝑔" = (𝑔"
+# , 𝑔"
+$ , 𝑔"
+% )
+Semantic Optimization:
+𝜔’ = 𝜔⨁𝑔&
+Batch-level aggregation:
+𝑔& = 𝐴𝑔𝑔({𝑔"}"'(
+! )
+Per-Trajectory Gradient
+{𝒈𝟏, 𝒈𝟐, … , 𝒈𝑩}
+Stable Gradient 𝒈𝝎
+Skill candidate 𝝎’
+Select
+Sample
+Trajectories
+State
+Skill 𝜔
+Selected Skill 𝝎for ∆𝒕
+Activation 𝜤𝝎: When …
+Procedure 𝝅𝝎:
+Step 1: do action A;
+Step 2: do action B…
+Termination 𝜷𝝎: When … stop
+Procedural Skills
+Skill evolutionary Map
+Skill
+𝜔
+Online
+score
+Skill 𝜔(
+Skill 𝜔-
+Pruning
+Skill 𝜑
+Skill 𝜔.
+③Online Score Maintenance
+Update
+𝑆𝑐𝑜𝑟𝑒(𝜔) = 1
+!
+𝑔𝑎𝑖𝑛(𝜔;𝜏)/1
+!
+𝑓𝑟𝑒𝑞(𝜔;𝜏)
+New
+Refinement
+Lowest
+Duplicate
+Learn
+𝜋𝑎𝑠, 𝜔
+𝐿/012 𝜔’
+Better?
+Verification
+Best of N
+Selection
+PPO
+Gate
+𝜋𝑎𝑠, 𝜔’
+𝑠$, … , 𝑠$%∆$
+Figure 2. Overview of the Skill-Pro framework. (Left) Skill-MDP: The agent selects a Skill ω based on state st and activation
+conditions. A frozen LLM executes ω into primitive actions at over multiple steps until termination. Post-episode trajectories T are
+stored in a buffer. (Middle) Procedural Skills: Skills are dynamically managed via refinement, generation, and score-based pruning to
+maintain pool quality. (Right) Non-Parametric PPO: Evolution proceeds in two stages: 1⃝Semantic Gradient: Derives and aggregates
+per-trajectory gradients through hindsight attribution to generate candidates ω′.
+2⃝PPO Gate: Filters candidates via trust-region
+verification, admitting only the best-performing valid candidate into the Skill pool.
+when control should return.
+Unlike human procedural memory (Cohen & Squire, 1980;
+Squire, 2004), which is largely implicit, our Skills are cur-
+rently represented in an explicit, readable form, similar to
+systems such as Claude Agent Skills (Anthropic, 2025).
+While explicit in representation, Skills can be hidden at the
+system level during execution; directions toward implicit
+procedural representations are discussed in Appendix F.1.
+3.1. Problem Formulation
+We formulate the LLM agent’s decision-making process as a
+Skill-augmented Markov Decision Process (Skill-MDP).
+The Skill-MDP extends the classical Markov Decision Pro-
+cess (MDP) by introducing a dynamic Skill pool Ω, which
+explicitly represents the agent’s procedural memory and or-
+ganizes decision making around the selection and execution
+of reusable procedural Skills. Formally, a Skill-MDP is
+defined as a tuple
+MΩ= (S, A, Ω, P, R, γ),
+where S denotes the semantic state space and A denotes the
+primitive action space, both represented in natural language;
+Ω= {ω(1), . . . , ω(K)} denotes the pool of available Skills,
+which serves as the agent’s procedural memory, with K
+Skills stored; P and R are the state transition and reward
+functions, respectively, and γ ∈(0, 1] is the discount factor.
+In a Skill-MDP, at each time step t, the agent first selects
+a Skill via a Skill-selection policy µ, conditioned on the
+current state st and the current Skill pool Ω:
+ωt ∼µ(ω | st, Ω).
+Conditioned on the active Skill ωt, the agent then generates
+a primitive action using an LLM-driven action policy:
+at ∼πLLM(a | st, ωt).
+(1)
+Accordingly, the hierarchical policy over Skills and primi-
+tive actions factorizes as
+πΩ(ωt, at | st) = µ(ωt | st, Ω) πLLM(at | st, ωt),
+(2)
+After executing at, the agent receives reward rt and tran-
+sitions to next state st+1 until the horizon T is reached.
+While Eq. (2) shares a similar factorization with memory-
+augmented agents (e.g., Memento (Zhou et al., 2025a)),
+which typically optimize the retrieval policy µ, our work
+focuses on autonomously evolving the Skill pool Ω.
+Optimization Objective. We aim to optimize the agent’s
+decision-making performance under the hierarchical policy
+πΩ, measured by the expected cumulative discounted return:
+max
+πΩ
+E
+" T
+X
+t=0
+γtrt
+#
+.
+(3)
+In this paper, we focus on learning the Skill pool Ω, while
+keeping the LLM policy and the Skill-selection mechanism
+fixed. We next specify the internal structure of a Skill, the
+basic reusable procedural unit in the Skill-MDP.
+3.2. Skill Structure
+We define a Skill ω ∈Ωas a reusable, natural-language
+procedural unit that specifies when to activate, how to act
+while active, and when to return control. This enables Skills
+to be reused across similar states. Formally, a Skill is defined
+as the tuple
+ω = ⟨Iω, πω, βω⟩,
+representing its activation condition, execution procedure,
+and termination condition.
+(1) Activation Condition Iω. The activation condition spec-
+ifies when a Skill is invoked. Rather than a learned classifier
+in latent space, Iω is a natural-language description of ob-
+servable context patterns where the Skill applies. During
+3
+
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents
+decision making, the Skill-selection policy µ uses Iω to
+select Skills based on the current state or interaction history.
+(2) Execution Procedure πω. The execution procedure
+πω specifies an ordered sequence of actions to be executed
+while the Skill ω is active, expressed as in natural language.
+At each time step t, the LLM generates a primitive action
+conditioned on the current state st and πω (Eq. (1)), enabling
+the agent to reuse procedural steps without re-deriving de-
+liberative reasoning from scratch.
+(3) Termination Condition βω. The termination condition
+specifies when the execution of a Skill should end. Like
+the activation condition, βω is expressed in natural language
+and evaluated on the current state:
+βω(st) = 1 iff st satisfies βω.
+If βω(st) = 1, the Skill ω terminates and µ selects the next
+Skill; otherwise, it remains active.
+Example. We illustrate with an example Skill. A detailed
+case showing how thi
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents
+Response Requirements (JSON Format):
+{
+"skill_name": "Concise_Name",
+"initiation": "IF... AND...",
+"policy": ["Step 1...", "Step 2...", "Step 3..."],
+"termination": "Stop IF..."
+}
+Prompt Template for Trajectory Summarization (Ablation Study)
+You are a trajectory compression assistant. Your goal is to provide a factual, neutral summary of an agent’s execution trace
+without adding any diagnostic or prescriptive insights.
+Inputs:
+• Trajectory: {trajectory} (The raw sequence of states and actions)
+• Reward: {reward} (The final outcome of the execution)
+Task Instructions: Write a concise, factual summary of observable events based on the provided trajectory and reward.
+Operational Rules:
+1. Facts Only: Describe only what was observed in the execution.
+2. No Diagnosis: Do not provide reasoning or explanations for failures or successes.
+3. No Advice: Do not offer any suggestions, prescriptions, or improvements for the skill.
+Response Requirements (JSON Format): Return ONLY one JSON object wrapped in triple backticks:
+‘‘‘json
+{
+"summary": "..."
+}
+Prompt Template for Skill Evolution without Semantic Gradient (Ablation Study)
+You are an Evolution Operator. Your goal is to refine a skill based on a collection of neutral trajectory summaries, without the aid
+of causal diagnosis or semantic gradients.
+Inputs:
+• Parent Skill (ω): {old_skill_definition}
+• Trajectory Summaries: A list of neutral, factual summaries of past execution traces and their corresponding rewards.
+Task Instructions: Refine the parent skill based on the provided evidence. Focus on improving the success rate while preserving
+the core intent of the original skill.
+Operational Rules:
+1. Evidence-based: Use only observable facts from the summaries to justify changes.
+2. Strict Constraints: Use only state-checkable terms in the conditions; avoid vague language like ”successfully submitted”
+unless explicit feedback is present.
+Response Requirements (JSON Format): Output EXACTLY ONE skill in strict JSON format. No explanations or extra text
+allowed.
+{
+"skill_name": "Concise_Name",
+"initiation": "IF ... AND ... (fully checkable conditions)",
+"policy": [
+"S1: ...",
+"S2: ...",
+"S3: ..."
+],
+"termination": "Stop IF ... (fully checkable conditions)"
+}
+21
+
+Skill-Pro: Learning Reusable Skills from Experience via Non-Parametric PPO for LLM Agents
+F. Discussion and Limitations
+F.1. From Explicit Skills to Implicit Procedural Memory
+Our current instantiation of Skills differs from human procedural memory (Cohen & Squire, 1980; Squire, 2004) in that
+the latter is largely implicit and not directly observable, whereas our Skills are represented in an explicit, readable form.
+This explicitness is shared by existing agent skill systems, such as Claude Agent Skills (Anthropic, 2025), and facilitates
+learning, inspection, and system-level control. Importantly, explicit representation does not imply exposure to end users: in
+our framework, Skills can be concealed at the system level during execution and operate as internal procedural abstractions.
+A natural direction for future work is to move beyond explicit representations toward genuinely implicit or directly executable
+Skills. One possible approach is to progressively compress frequently reused Skills into more compact forms, such as
+executable code modules, parameterized procedures, or latent control policies that can be invoked without natural-language
+mediation. Another direction is to decouple Skill execution from language generation entirely, allowing mature Skills to be
+executed directly while retaining explicit representations for learning, evaluation, and debugging. Through such mechanisms,
+explicit Skills may serve as an intermediate stage in skill acquisition, with long-term evolution yielding more implicit
+procedural representations that more closely resemble human procedural memory.
+F.2. API Compatibility of the PPO Gate
+The PPO Gate in Section 4.2 requires only output-token log-probabilities. Open-weight models are fully compatible, and
+several closed-source API providers already expose this capability, including OpenAI (logprobs / top logprobs),
+Gemini (responseLogprobs / logprobs), and Cohere (logprobs). The remaining compatibility constraint
+therefore stems from API exposure choices of specific providers, not from NP-PPO itself.
+For providers that do not surface log-probabilities, a promising direction is to replace the importance ratio with purely prompt-
+based verification mechanisms, such as LLM-as-judge scoring or self-consistency filtering, to achieve full compatibility
+with completely opaque APIs.
+22
+

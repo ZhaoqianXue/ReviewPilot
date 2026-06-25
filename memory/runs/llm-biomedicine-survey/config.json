@@ -1,13 +1,13 @@
 {
   "project_name": "llm-biomedicine-survey",
-  "search_terms": "(biomedicine OR biomedical OR health sciences OR \"electronic health record\") AND (LLM OR \"large language model\" OR GPT OR ChatGPT OR Claude OR gemini OR qwen OR deepseek)",
-  "primary_topic": "LLM applications in biomedicine",
-  "domain": "biomedical research",
+  "search_terms": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "primary_topic": "Survey of large language models (LLMs) for biomedicine",
+  "domain": "Biomedical informatics and health AI",
   "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
   "search_queries": [
     {
       "name": "query1",
-      "query": "(biomedicine OR biomedical OR health sciences OR \"electronic health record\") AND (LLM OR \"large language model\" OR GPT OR ChatGPT OR Claude OR gemini OR qwen OR deepseek)"
+      "query": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)"
     }
   ],
   "platforms": [
@@ -15,9 +15,10 @@
     "arxiv",
     "openalex"
   ],
-  "max_results": 10,
+  "max_results": 50,
   "date_range": {
     "start": "2023-01-01",
     "end": ""
-  }
+  },
+  "api_email": "zx136@georgetown.edu"
 }

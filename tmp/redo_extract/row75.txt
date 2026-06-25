@@ -1,0 +1,296 @@
+=== PDF FIRST PAGE (title region) ===
+KNOWLEDGEABLE AGENTS BY OFFLINE REINFORCEMENT
+LEARNING FROM LARGE LANGUAGE MODEL ROLLOUTS
+A PREPRINT
+Jing-Cheng Pang1,2, Si-Hang Yang 1,2, Kaiyuan Li1,2, Jiaji Zhang1, Xiong-Hui Chen1,2,
+Nan Tang1,2, Yang Yu1,2,⋄
+1 National Key Laboratory for Novel Software Technology, Nanjing University, China
+& School of Artificial Intelligence, Nanjing University, China
+2Polixir.ai
+⋄Corresponding: yuy@nju.edu.cn
+ABSTRACT
+Reinforcement learning (RL) trains agents to accomplish complex tasks through environ-
+mental interaction data, but its capacity is also limited by the scope of the available data.
+To obtain a knowledgeable agent, a promising approach is to leverage the knowledge from
+large language models (LLMs). Despite previous studies combining LLMs with RL, seam-
+less integration of the two components remains challenging due to their semantic gap. This
+paper introduces a novel method, Knowledgeable Agents from Language Model Rollouts
+(KALM), which extracts knowledge from LLMs in the form of imaginary rollouts that can
+be easily learned by the agent through offline reinforcement learning methods. The primary
+challenge of KALM lies in LLM grounding, as LLMs are inherently limited to textual d
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+KNOWLEDGEABLE AGENTS BY OFFLINE REINFORCEMENT
+LEARNING FROM LARGE LANGUAGE MODEL ROLLOUTS
+A PREPRINT
+Jing-Cheng Pang1,2, Si-Hang Yang 1,2, Kaiyuan Li1,2, Jiaji Zhang1, Xiong-Hui Chen1,2,
+Nan Tang1,2, Yang Yu1,2,⋄
+1 National Key Laboratory for Novel Software Technology, Nanjing University, China
+& School of Artificial Intelligence, Nanjing University, China
+2Polixir.ai
+⋄Corresponding: yuy@nju.edu.cn
+ABSTRACT
+Reinforcement learning (RL) trains agents to accomplish complex tasks through environ-
+mental interaction data, but its capacity is also limited by the scope of the available data.
+To obtain a knowledgeable agent, a promising approach is to leverage the knowledge from
+large language models (LLMs). Despite previous studies combining LLMs with RL, seam-
+less integration of the two components remains challenging due to their semantic gap. This
+paper introduces a novel method, Knowledgeable Agents from Language Model Rollouts
+(KALM), which extracts knowledge from LLMs in the form of imaginary rollouts that can
+be easily learned by the agent through offline reinforcement learning methods. The primary
+challenge of KALM lies in LLM grounding, as LLMs are inherently limited to textual data,
+whereas environmental data often comprise numerical vectors unseen to LLMs. To address
+this, KALM fine-tunes the LLM to perform various tasks based on environmental data,
+including bidirectional translation between natural language descriptions of skills and their
+corresponding rollout data. This grounding process enhances the LLM’s comprehension of
+environmental dynamics, enabling it to generate diverse and meaningful imaginary rollouts
+that reflect novel skills. Initial empirical evaluations on the CLEVR-Robot environment
+demonstrate that KALM enables agents to complete complex rephrasings of task goals
+and extend their capabilities to novel tasks requiring unprecedented optimal behaviors.
+KALM achieves a success rate of 46% in executing tasks with unseen goals, substantially
+surpassing the 26% success rate achieved by baseline methods. Furthermore, KALM effec-
+tively enables the LLM to comprehend environmental dynamics, resulting in the generation
+of meaningful imaginary rollouts that reflect novel skills and demonstrate the seamless
+integration of large language models and reinforcement learning.
+1
+Introduction
+Acquiring new skills autonomously is a hallmark of the intelligence. Reinforcement learning (RL) has
+emerged as a powerful mechanism for training intelligent agents to perform complex tasks in interactive
+environments [1, 2, 3]. This approach enables an agent to learn by collecting interacting data from the
+environments, or a static dataset of environmental interactions without real-time interactions. While RL has
+shown promise in many challenging tasks, its efficacy is often questioned due to the limitations of the learned
+policy, which is inherently constrained by the scope of the skills presented within the data. Consequently,
+policies may not generalize well to new situations, leading to bad performance in unencountered scenarios.
+For instance, a policy trained to move an object to the left may fail when required to move it to the right, despite
+the they are highly similar tasks.
+arXiv:2404.09248v1  [cs.LG]  14 Apr 2024
+
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+Large language model
+(1) Grounding LLM in the environment
+Large language model
+(2) Rollout generation for novel skills
+...
+Supervised fitting
+𝑠! 𝑎! 𝑠" 𝑎" ...
+Generate a trajectory for the 
+following goal. Goal: open 
+the door. Rollout: 
+[𝑠!, 𝑎!, 𝑠", 𝑎" … ]
+Explain the following rollout 
+for me. Rollout: 
+[𝑠!, 𝑎!, 𝑠", 𝑎" … ] . Explanation: 
+turn off the light...
+Generate a rollout 
+corresponding to the 
+following goal. Goal: close 
+the door. Rollout:
+Figure 1: Illustration of KALM utilizing LLM to generate environmental rollouts. (1) Grounding phase that fine-tunes
+LLM with supervised fitting on the environmental data. (2) Generation phase that prompts LLM to generate data for
+novel skills. KALM modifies the input/output layer of LLM, enabling it to process and interpret non-textual data.
+On the other hand, recent advancements in large language models (LLMs) have opened up new opportunities
+for intelligent agents to acquire knowledge and solve general textual problems, including dialogue, reasoning,
+and mathematical problem-solving [4, 5, 6, 7, 8]. LLMs, trained on extensive text corpora, encapsulate a broad
+spectrum of world knowledge. To leverage such knowledge, researchers have employed pre-trained LLMs
+to construct knowledge bases [9], decompose intricate tasks [10], and augment programming efforts [11].
+Furthermore, evidence suggests that LLMs can extend beyond text-based tasks, aiding in decision-making
+within interactive, embodied environments [12, 13, 14]. This suggests that LLMs may offer a form of general
+knowledge that could enhance offline RL by addressing the constraints of dataset-dependent policies.
+This study investigates the development of a knowledgeable policy capable of adapting to novel situations
+through the integration of LLMs. We introduce Knowledgeable Agent from Language Model rollouts
+(KALM) method, which employs a pre-trained LLM to create synthetic rollouts that simulate the performance
+of new skills. Figure 1 depicts the process by which KALM utilizes an LLM to generate these environmental
+rollouts. The motivation behind KALM is that LLMs, with their extensive repository of knowledge, are
+ideally suited for generating rollouts that encompass a variety of skills. However, a key challenge is that
+LLMs are inherently designed to process textual data. To address this, KALM applies two techniques to
+ground LLM in the environment: adapting the LLM’s architecture to interpret environmental observations
+and actions, and fine-tuning the LLM with environmental data to predict execution rollouts and translate
+between natural language goals and their corresponding rollouts. KALM then uses the LLM to generate
+imaginary rollouts for a range of skills, including those not present in the original dataset, and integrates
+these with offline RL to enhance skill acquisition. This novel combination of LLM-generated imaginary
+rollouts with offline RL marks potentially yields more versatile and informed agents.
+Our contributions are summarized as follow: We emonstrate the seamless integration of large language
+models and reinforcement learning, enriching the RL training with a broader skill set. We introduce the
+KALM method, which implements this concept by grounding LLMs within the environment to generate
+rollouts of various skills, thereby facilitating skill acquisition via offline RL. We also develop an effective
+technique for aligning the LLM with multimodal data inputs, such as text and vectors. Finally, we provide
+empirical evidence of KALM’s efficacy. Our experiments with the CLEVR-Robot task indicate that KALM can
+fine-tune the LLM to generate effective rollouts and acquire new skills, achieving a 46% success rate on tasks
+described in novel natural language goals, significantly outperforming the baseline offline RL method’s 26%
+success rate.
+2
+Related Work
+2.1
+Offline Reinforcement Learning
+Offline RL [15, 16] enables agents to learn from a static dataset of pre-collected experiences, rather than
+requiring real-time interaction with the environment. The core challenge in offline RL is to derive effective
+2
+
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+policies from a dataset that may be biased or has limited data due to the behavior policies that generate it.
+Advancements in this domain have introduced novel techniques such as importance sampling, conservative
+policy evaluation, and representation learning to address these challenges [17, 18, 19, 20]. Despite its
+successes, offline RL is inherently limited by the quality and diversity of the dataset. If the dataset lacks
+certain experiences or skills, the agent may fail to perform adequately in those scenarios. Approaches like
+MAPLE [21] and ReDM [22] attempt to overcome this by training diverse world models to simulate a range
+of data, thereby enhancing policy robustness in unfamiliar scenarios. These models, however, are typically
+learned from scratch and prioritize extensive data coverage, which may not align with real-world data
+distributions. In contrast, our paper leverages a pre-trained LLM to facilitate the generation of higher-quality
+imaginary rollouts, potentially addressing the limitations of previous methods.
+2.2
+Large Language Models
+Large language models (LLMs) exhibit remarkable proficiency in processing and comprehending natural
+language [23, 24, 25]. More exciting, their capabilities extend to tasks beyond basic language understanding
+problems, including dialogue [4, 26, 5], multimodal vision-language tasks [6], logical reasoning [7, 8], and
+mathematical problem-solving [27]. These models are characterized by their deep neural networks, which
+consist of hundreds of layers and billions of parameters, enabling them to capture the nuances of natural
+language with unprecedented depth [28, 29]. The pre-training process involves exposing the models to vast
+corpora of text, allowing them to learn a wide range of linguistic patterns and commonalities before being
+fine-tuned for specific tasks. Recent advancements, such as GPT-4 [23], have pushed the boundaries further,
+not only in terms of scale but also through more sophisticated training techniques and broader contextual
+understanding [30]. While their primary utility has been within the realm of text, there is an emerging trend
+to explore the capabilities of LLMs in interactive environments [31, 13, 32], capitalizing on their vast world
+knowledge. Besides, this work investigates the utility of LLMs to generate environmental data.
+2.3
+Integrating LLMs and RL
+How to effectively leverage LLMs for decision-making in interactive tasks is an important area of study. The
+central strategy is to capitalize on the extensive prior knowledge embedded within LLMs. Research in this
+domain has taken several approaches. One approach involves decomposing the complex tasks, and utilize
+LLMs to generate high-level plans, which are then executed by a low-level controller [10, 33, 32]. Another
+approach uses LLMs to design the reward function [34, 35, 36], which streamlines the otherwise laborious
+process of reward function formulation. Additionally, there is a trend towards the direct application of
+LLMs as decision-making agents, integrating them with RL to facilitate direct interaction with various
+environments. Examples include GALM [31] and TWOSOME [37], which ground LLMs in text-based games,
+and LLaRP [13], which adapts a conventional LLM for physical tasks and develops an RL-trained policy
+that enables direct action output from LLMs. Different from these studies, in this work, we propose a novel
+solution that utilizes LLM to generate imaginary rollouts for novel skill learning.
+3
+Preliminary
+Reinforcement learning.
+In this paper, we consider a RL task that agent needs to complete tasks assigned
+by natural language. We model the environment as a goal-augmented Markov Decision Process (MDP)
+[38, 39], represented by the tuple M = (S, A, P, R, γ, G). In this tuple, S denotes the state space, A the
+action space, P the transition function of the environment, R the reward function that evaluates the quality
+of the agent’s action, γ the discount factor which balances the immediate and future rewards, and G the set of
+natural language goals. A policy π : S × G →∆(A) defines the strategy the agent employs, mapping states
+and goals to a distribution over possible actions. The interaction between the RL agent and the environment
+proceeds as follows: at each timestep t, the agent observes a state st and an goal G from the environment.
+It then selects an action at based on the policy π(·|st, G). Upon executing this action, the agent receives a
+reward r(st, at, G) and the environment transitions to a new state st+1 according to the transition function
+P(·|st, at). The objective of RL is to find a policy that maximizes the expected sum of rewards over time. In
+this study, we call the state, action data of the environment as the environmental data.
+Large language model.
+We employ a large language model M, an autoregressive text generation model
+that predicts future tokens in a sequence. An LLM predicts the next token lt+1 = M(ET(l0), · · · , ET(lt))
+conditioned on all prior sequence of tokens, where ET is the token embedding layer that converts token into
+3
+
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+LLM
+Ground
+Generate
+Offline RL
+Derive
+Policy 𝜋(𝑠, 𝐺)
+LLM Grounding
+(A)
+Rollout Generation
+(B)
+Skill Acquisition
+(C)
+Offline data
+𝑠!
+",𝑎!
+",… ,𝐺"
+"
+Generated data
+!
+𝑠!
+", !
+𝑎!
+", … , G"
+"
+Figure 2: Overall procedure of KALM, consisting of three key modules: (A) LLM grounding module that grounds LLM
+in the environment and aligns LLM with inputs of environmental data, (B) Rollout generation module that prompts the
+LLM to generate data for novel skills and (C) Skill Acquisition module that trains the policy with offline RL. Finally,
+KALM derives a policy that trained on both offline data and imaginary data.
+a D-dimensional embedding, lt ∈Σ and Σ denotes the vocabulary of the LLM. In this study, the LLM needs
+to understand not only textual data, but the state and action data of an environment; these data formats
+differs from language tokens. Specifically, the LLM’s input layer converts text tokens into vector embeddings
+ek = ET(lk) ∈RD, and its output layer classifies tokens. To facilitate the processing of state and action data,
+we have modified the LLM’s architecture by replacing its original input and output layers with multi-layer
+perceptrons (MLPs), thereby enabling the integration of non-textual environmental data.
+4
+Method
+This section presents the proposed Skill Acquisition with Language Model (KALM) method for intelligent
+agents to acquire novel skills. Figure 2 shows the overall running procedure of KALM, which comprises
+three important components: (1) LLM grounding module that enables LLM to understand the elements
+of the environment, (2) rollout generation module that generates imaginary rollouts for novel skills, and
+(3) Skill acquisition module that trains the policy with offline RL. We first give a formal definition of the
+problem.
+4.1
+Problem Formulation
+Consider we have an offline dataset D composed of paired goals and rollouts, symbolized as
+{Gk, (sk
+0, ak
+0, sk
+1, ak
+1, · · · )}K
+k=1. In this context, (sk
+0, ak
+0, sk
+1, ak
+1, · · · ) is a rollout for executing certain task in the
+environment, detailing the sequence of states and actions (sk
+i , ak
+i ) required to complete the goal Gk. Typically,
+Gk can reflect different skills for intelligent agent. The primary objective here is to obtain a policy that achieve
+high rewards on unseen goal distributions, represented as G′, thus ensuring its ability beyond the constraints
+of the offline dataset.
+4.2
+LLM Grounding with Instruction-following Fine-tuning
+The first step of KALM is to ground LLM in the environment. This process is designed to equip the LLM
+with the capability to interpret the meaning of states, actions, dynamics and rollout data within the given
+environments. To implement this idea, we fine-tune the LLM using the offline dataset D to perform four
+different tasks in supervised manner:
+• Dynamics prediction: The LLM predicts environmental dynamics changes. Given the current state st,
+and action at, the LLM forecasts the subsequent state.
+• Rollout explanation: The LLM explains a given rollout sequence s0, a0, s1, · · · using natural language.
+• Rollout generation: The LLM generates a rollout sequence that aligns with a specified goal G.
+4
+
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+Large Lan
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+(a) Failure: Pull the cyan ball back.
+(b) Failure: Please shift the blue ball leftwards.
+(c) Failure: Kindly relocate the blue-hued 
+sphere forward.
+(d) Failure: Please adjust the position of the 
+red ball to the right.
+Figure 14: Extra failure examples of the generated rollouts for unseen (easy) tasks.
+• Unseen (Hard)
+(a) Success: Push the red ball to the right of the blue ball and push the green ball to the right of the purple ball.
+(b) Success: Use the green ball as the nucleus of the circle, arranging the rest around it.
+Figure 15: Extra success examples of the generated rollouts for unseen (hard) tasks.
+24
+
+Knowledgeable Agents by Offline Reinforcement Learning from Large Language Model Rollouts
+(a) Failure: Line up the balls horizontally, sequencing them left to right as follows, red, blue, green, purple, and cyan.
+(b) Failure: Push the red ball behind the green ball and push the blue ball behind the purple ball 
+and push the cyan ball behind the blue ball.
+Figure 16: Extra failure examples of the generated rollouts for unseen (hard) tasks.
+C
+Prompts for Instruction-following Fine-tuning
+• Dynamics prediction: You are an expert in identifying dynamics change in the environment. Current state is
+[st], after executing action [at], we get next state: [ANSWER].
+• Rollout to goal translation: Explain the following rollout for me. Rollout: [ROLLOUT]. Explanation:
+[ANSWER]
+• Goal to rollout translation: Please output the RL rollout corresponding to the following goal. Goal: [G].
+Rollout: [ANSWER]
+• Consequence prediction: Initial state is [s0], after completing the goal [G], we get terminal state [ANSWER].
+Here, [ANSWER] is the content that LLM should generate.
+25
+

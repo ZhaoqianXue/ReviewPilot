@@ -1,0 +1,386 @@
+=== PDF FIRST PAGE (title region) ===
+SciVisAgentSkills: Design and Evaluation of Agent Skills for
+Scientific Data Analysis and Visualization
+Kuangshi Ai*
+Univ. Notre Dame
+Haichao Miao†
+LLNL
+Kaiyuan Tang‡
+Univ. Notre Dame
+Shusen Liu§
+LLNL
+Chaoli Wang¶
+Univ. Notre Dame
+ABSTRACT
+Recent advances in agentic visualization have enabled the trans-
+lation of natural language into executable scientific visualization
+(SciVis) workflows. While general-purpose coding agents show
+strong capabilities, they often lack the tool-specific expertise re-
+quired for SciVis tasks. In this work, we present SciVisAgentSkills,
+a collection of reusable agent skills that augment coding agents
+for scientific data analysis and visualization by encoding envi-
+ronment assumptions, tool usage patterns, and domain heuristics
+across scientific tools such as ParaView, napari, VMD, and TTK.
+We evaluate these skills on Codex and Claude Code using SciVis-
+AgentBench, a benchmark of 108 expert-designed multi-step tasks.
+Results show that agent skills improve mean task scores across
+the evaluated suites, with token-efficiency benefits that depend on
+the agent harness and tool setting. These findings highlight the
+importance of structured procedural knowledge
+
+=== FRONT MATTER (abstract/intro/method, first 6 pages) ===
+SciVisAgentSkills: Design and Evaluation of Agent Skills for
+Scientific Data Analysis and Visualization
+Kuangshi Ai*
+Univ. Notre Dame
+Haichao Miao†
+LLNL
+Kaiyuan Tang‡
+Univ. Notre Dame
+Shusen Liu§
+LLNL
+Chaoli Wang¶
+Univ. Notre Dame
+ABSTRACT
+Recent advances in agentic visualization have enabled the trans-
+lation of natural language into executable scientific visualization
+(SciVis) workflows. While general-purpose coding agents show
+strong capabilities, they often lack the tool-specific expertise re-
+quired for SciVis tasks. In this work, we present SciVisAgentSkills,
+a collection of reusable agent skills that augment coding agents
+for scientific data analysis and visualization by encoding envi-
+ronment assumptions, tool usage patterns, and domain heuristics
+across scientific tools such as ParaView, napari, VMD, and TTK.
+We evaluate these skills on Codex and Claude Code using SciVis-
+AgentBench, a benchmark of 108 expert-designed multi-step tasks.
+Results show that agent skills improve mean task scores across
+the evaluated suites, with token-efficiency benefits that depend on
+the agent harness and tool setting. These findings highlight the
+importance of structured procedural knowledge for enabling reli-
+able, long-horizon SciVis workflows, while also showing that skills
+should be studied alongside the execution harness that loads and
+applies them. The skills are available at https://github.com/
+KuangshiAi/SciVisAgentSkills.
+Index Terms:
+Scientific data analysis and visualization, agent
+skills, long-horizon workflows, benchmark evaluation
+1
+INTRODUCTION
+Multimodal large language models (MLLMs) are increasingly be-
+ing used to power agentic visualization systems, where (semi-
+)autonomous agents convert natural-language requests into con-
+crete visualization actions [13, 26, 33, 35]. Scientific visualiza-
+tion (SciVis) transforms complex scientific data, such as volumes,
+meshes, flow fields, and molecular structures, into interpretable
+visual representations for analysis and discovery. As simulations
+and instruments generate increasingly complex data, SciVis has be-
+come essential for exploring, validating, and communicating find-
+ings across disciplines such as physics, biology, climate science,
+and materials science. In SciVis, tasks often require long, multi-
+step workflows combining domain knowledge and tool interac-
+tion. At the same time, the emergence of the model context pro-
+tocol (MCP) [5] has made complex visualization tools more ac-
+cessible by enabling agents to interact with software via structured
+interfaces. Recent MCP agents [25, 31, 16, 19] and agentic sys-
+tems [4, 10, 36] have demonstrated the feasibility of long-horizon
+SciVis workflows.
+Alongside these domain-specific systems, general-purpose cod-
+ing agents are becoming increasingly capable. These agents can
+already execute commands, inspect files, write code, and iteratively
+*e-mail: kai@nd.edu
+†e-mail: miao1@llnl.gov
+‡e-mail: ktang2@nd.edu
+§e-mail: liu42@llnl.gov
+¶e-mail: chaoli.wang@nd.edu
+refine outputs. Rather than building a custom agent for every tool or
+task, one can start from a strong general-purpose harness and adapt
+it to SciVis workflows through procedural guidance. This motivates
+our central question: how can general-purpose agents be equipped
+with the domain knowledge needed for effective and efficient sci-
+entific data analysis and visualization?
+One promising answer is the use of agent skills.
+An agent
+skill is a structured package of instructions, code templates, ref-
+erences, and verification logic that augments agent behavior at in-
+ference time without changing model parameters [8]. Agent skills
+capture procedural knowledge such as recommended workflows,
+environment-specific conventions, software usage patterns, and do-
+main heuristics. In this sense, agent skills serve as a reusable layer
+between a base model and a specialized application domain: foun-
+dation models provide general capabilities, agent harnesses manage
+context and tool execution, and agent skills inject task- and domain-
+specific expertise.
+The broader agent skill ecosystem has expanded rapidly, with
+community repositories now hosting thousands of user-contributed
+agent skills for software engineering, analysis, and enterprise work-
+flows.
+Prior work suggests that general-purpose coding agents
+such as Claude Code [6], Codex [32], and Gemini CLI [18] are
+already competitive on long-horizon visualization tasks, and that
+agent skills can further improve both success rate and efficiency [3].
+Recent work also compares interaction paradigms for SciVis agents
+and shows tradeoffs among structured tool use, CLI- or GUI-based
+general interaction, and persistent memory [39]. Despite this mo-
+mentum, SciVis remains underexplored from the perspective of
+reusable agent skills. There are still a few published skills tailored
+to core SciVis workflows, and limited evidence on how portable
+skills behave across different tools, harnesses, and task types.
+To address this gap, we present SciVisAgentSkills, a collection
+of agent skills designed specifically for scientific data analysis and
+visualization. Our agent skills target core operations across sev-
+eral representative SciVis environments, including basic operations
+such as volume rendering, isosurface extraction, flow visualization,
+and scientific plotting in ParaView [1], molecular visualization in
+VMD [20], bioimage visualization in napari [34], and topology vi-
+sualization in TTK [38]. We build on SciVisAgentBench, which
+introduced a napari skill case study and baseline measurements
+for coding agents [3]. We release a broader multi-tool skill col-
+lection, document the common design protocol used to produce
+it, and evaluate its behavior across agents, task suites, and token
+budgets. Finally, we evaluate Claude Code and Codex on SciVis-
+AgentBench [3] with and without these agent skills. Our results
+show higher mean benchmark scores with skills across the eval-
+uated suites, while token usage varies by agent harness and tool.
+More broadly, we position this paper as both an empirical study of
+SciVis skills in current coding-agent harnesses and a call for col-
+laboration on building a reusable skill ecosystem for scientific data
+analysis and visualization.
+2
+RELATED WORK
+Agent evaluation and agent skills.
+General-agent benchmarks
+such as AgentBench [27], GAIA [29], and τ-bench [42] evalu-
+ate multi-turn reasoning and tool use, but treat visualization as a
+arXiv:2606.05525v1  [cs.AI]  4 Jun 2026
+
+ParaView Visualization
+argon-bubble
+foot_dvr
+two-swirls_streamribbon
+tornado_glyph-streamline
+can_temporal-animation
+climate
+wavelet_histogram
+Molecular Visualization
+Bioimage Visualization
+Topology Visualization
+curved-membrane
+ras-raf-membrane
+cortical-neurons_figure-
+recreation
+tooth_isosurface
+bcell-receptor_multi-channel
+dragon
+ocean
+QMCPACK
+rti-velocity_slices
+Figure 1: Representative scientific data analysis and visualization tasks from SciVisAgentBench.
+generic task and do not capture multi-step SciVis workflows or
+domain-specific interpretation. Recent work on agent skills [22, 41]
+instead models agent behavior as reusable procedural modules
+loaded at inference time. SkillsBench [23] shows that curated skills
+improve performance, while self-generated skills are often unreli-
+able; prior analysis [24] further shows that existing skill ecosystems
+remain concentrated in software engineering.
+Agentic workflows for visualization. Dhanoa et al. [13] frame
+this space as agentic visualization, balancing automation and an-
+alyst control.
+Existing systems include conversational and col-
+laborative analysis tools (VOICE [21], IntuiTF [40], CoDA [12]),
+tool-centered SciVis assistants (AVA [26], ChatVis [33], ParaView-
+MCP [25]), and more autonomous or multi-agent workflows (Viz-
+Genie [10], NLI4VolVis [4], TexGS-VolVis [37], InferA [36],
+SASAV [35], VIS co-scientist [30]). Vonderhorst et al. [39] further
+compare interaction paradigms for SciVis agents, including struc-
+tured tool use, CLI/GUI interaction, and persistent memory. While
+these systems demonstrate the promise of agentic SciVis, most are
+tailored to specific tools, interfaces, or applications. We instead fo-
+cus on portable agent skills that improve general-purpose coding
+agents across multiple SciVis tools.
+Agentic visualization evaluation. Existing evaluations focus
+on charts, plotting code, or human literacy rather than long-horizon
+SciVis agents. VisEval [11] and Drawing Pandas [17] study chart
+understanding and code generation, while LIDA [14] introduces
+visualization-specific metrics and SVLAT [15] measures human
+SciVis literacy.
+Ai et al. [2] call for systematic evaluation of
+agentic SciVis. In response, NL2SciVis [28] introduces a bench-
+mark for evaluating natural-language-driven SciVis in ParaView
+through atomic operations with deterministic validation. SciVis-
+AgentBench [3] further extends this direction to multi-step tasks
+spanning data analysis, tool use, and end-to-end SciVis workflows,
+and serves as the testbed for our study of agent skills.
+3
+SCIVISAGENTSKILLS: DESIGN AND EVALUATION
+Agent skills for SciVis tools. To enable general-purpose coding
+agents to operate effectively in SciVis environments, we design a
+set of domain-specific agent skills tailored to four representative
+tools: ParaView [1], napari [34], VMD [20], and TTK [38]. These
+tools collectively cover core SciVis workflows, bioimage analysis,
+molecular visualization, and topology visualization.
+Our design is motivated by several recurring failure modes ob-
+served when general-purpose coding agents interact with these
+tools. Even in well-configured environments, agents often spend
+multiple turns probing libraries and execution settings, leading
+to unnecessary overhead. Due to incomplete grounding in tool-
+specific documentation, agents may misuse APIs or follow incor-
+rect usage patterns. We also observe errors in output generation,
+such as capturing the entire napari GUI rather than the visualization
+viewport. These issues highlight the need for structured, domain-
+aware guidance beyond generic coding ability.
+To address these challenges, we construct agent skills that en-
+code environment assumptions, usage conventions, and best prac-
+tices for each tool.
+We fix software versions and specify the
+execution environment, including dependencies and runtime con-
+straints. This reduces ambiguity and redundant exploration. We
+then distill official documentation into structured usage patterns that
+guide agent behavior. To further ground execution, we incorpo-
+rate representative code snippets and function usage patterns from
+existing SciVis agents, including ParaView-MCP [25], BioImage-
+Agent [31], GMX-VMD-MCP [16], and TopoPilot [19]. These ex-
+amples provide references for common workflows and reduce trial-
+and-error during task execution. We also incorporate constraints
+from empirical observations, such as enforcing headless rendering
+and capturing outputs from the visualization viewport.
+We therefore define an agent skill operationally as a self-
+contained, version-pinned procedural module for one SciVis tool,
+constructed through a unified process that combines environment
+specification, documentation alignment, executable exemplars, and
+failure-aware refinements. Following this process, we develop four
+agent skills corresponding to ParaView, napari, VMD, and TTK.
+Each skill encapsulates procedural knowledge for interacting with
+the target tool, providing a reusable layer that enables general-
+purpose coding agents to execute SciVis tasks more reliably and
+efficiently.
+Skill format and construction. All four skills follow the agent
+skill format [8]: YAML frontmatter for discovery, followed by
+Markdown guidance that includes usage rules, script templates, API
+summaries, and troubleshooting notes. The ParaView skill addi-
+tionally includes separate reference files because its API surface is
+larger. In the context of coding agents, this structure supports pro-
+gressive disclosure, where the skill metadata is checked first, and
+the body and references are loaded only when relevant.
+The skills were manually authored by visualization researchers
+and refined through several rounds of observing agents on repre-
+sentative SciVis workflows. Refinements targeted recurring tool-
+use failures, such as incorrect headless rendering and API misuse.
+To avoid benchmark leakage, the skills contain only tool-general
+procedural knowledge, including environment assumptions, docu-
+mented API patterns, and reusable examples. They do not include
+benchmark-specific solutions, expected outputs, hidden labels, or
+evaluation rubrics. Exemplars are adapted from official documen-
+tation and public SciVis agent code [25, 31, 16, 19]. Before evalua-
+tion, the authors reviewed and tested each skill for correctness and
+safe headless execution in sandboxes.
+Evaluating agent skills on SciVisAgentBench. We evaluate the
+effectiveness of our agent skills by comparing Codex and Claude
+Code with and without skills on SciVisAgentBench [3], a bench-
+
+k=1
+k=2
+k=3
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Pass Rate
+ParaView
+Visualization
+k=1
+k=2
+k=3
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Molecular
+Visualization
+k=1
+k=2
+k=3
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Bioimage
+Visualization
+k=1
+k=2
+k=3
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Topology
+Visualization
+k=1
+k=2
+k=3
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Object
+Identification
+w/o skills
+w/ skills
+pass@k
+pass k
+Claude-Code + Sonnet-4.5
+Codex + GPT-5.2
+Figure 2: pass@{1,2,3} (i.e., success in at least one of the first k trials) and passˆ{1,2,3} (i.e., success in all k trials) results of coding agents
+with and without SciVisAgentSkills across five SciVisAgentBench task suites.
+mark designed for realistic, multi-step SciVis workflows. Unlike
+prior benchmarks that focus on short-horizon or 2D visualization
+tasks, SciVisAgentBench comprises 108 expert-crafted cases span-
+ning diverse domains, data types, and visualization operations, with
+an emphasis on outcome-centric evaluation.
+The benchmark includes five task suites. The ParaView visu-
+alization suite focuses on core operations, including volume ren-
+dering, isosurface extraction, flow visualization, and data analysis.
+Additional suites target molecular visualization (VMD), bioimage
+visualization (napari), and topology visualization (TTK). An ob-
+ject identification suite further evaluates whether agents can con-
+struct visualizations from anonymized volumetric data and infer the
+underlying object category from visual evidence, using the bench-
+mark’s hidden labels and case-specific rubrics for outcome evalua-
+tion. Representative examples are shown in Figure 1.
+SciVisAgentBench provides a suitable testbed for agent skills
+because its tasks are grounded in real tools and require coordinated,
+multi-step workflows, making performance sensitive to procedural
+knowledge. Its outcome-centric evaluation framework, combining
+multimodal LLM judges and deterministic metrics, enables reliable
+comparison of execution quality and efficiency without relying on
+unstable trajectory-level analysis.
+Each task suite aligns naturally with one of our SciVis-
+AgentSkills: the ParaView skill supports ParaView visualization
+and object identification; the napari skill targets bioimage visualiza-
+tion; the VMD skill supports molecular visualization; and the TTK
+skill addresses topology visualization. This alignment enables a di-
+rect with-versus-without comparison of domain-specific guidance
+under the same benchmark protocol.
+4
+EXPERIMENTS
+Prior work shows that general-purpose coding agents, specifically
+Codex and Claude Code, can outperform many domain-specific
+SciVis agents [3]. We evaluate SciVisAgentSkills by comparing both
+agents with and without skills across all five task suites of SciVis-
+AgentBench.
+Each configuration is executed over three independent trials
+using the standardized evaluation pipeline of SciVisAgentBench,
+which combines multimodal LLM judges, image-based metrics,
+code validators, rule-based checks,
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+

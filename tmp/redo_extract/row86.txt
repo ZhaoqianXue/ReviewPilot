@@ -1,0 +1,433 @@
+=== PDF FIRST PAGE (title region) ===
+SkillGuard: A Permission Framework for Agent Skills
+Shidong Pan∗
+CSIRO
+Australia
+Xiaoyu Sun†
+Australian National University
+Australia
+Tianyi Zhang
+Australian National University
+Australia
+Dianshu Liao
+Australian National University
+Australia
+Meixue Si
+UNSW Sydney
+Australia
+Zhenchang Xing
+CSIRO & ANU
+Australia
+Abstract
+Agent skills extend LLM agents with reusable instructions, scripts,
+tool bindings, and contextual dependencies. However, current skill
+ecosystems largely rely on trust-based loading and static inspection,
+leaving a gap between what a skill can inject into an agent’s context
+and what it can cause the agent to do at runtime. This gap introduces
+new security and privacy risks, and existing defenses primarily in-
+spect skill files statically or regulate individual tool calls, without
+systematically connecting a skill’s declared intent with its run-
+time behavior. In this paper, we present SkillGuard, a skill-centric
+permission framework that treats skills as permission-bearing ex-
+ecutable artifacts. SkillGuard introduces a dual-plane governance
+model that jointly regulates context influence and action side ef-
+fects through skill manifests, runtime access control, user-m
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SkillGuard: A Permission Framework for Agent Skills
+Shidong Pan∗
+CSIRO
+Australia
+Xiaoyu Sun†
+Australian National University
+Australia
+Tianyi Zhang
+Australian National University
+Australia
+Dianshu Liao
+Australian National University
+Australia
+Meixue Si
+UNSW Sydney
+Australia
+Zhenchang Xing
+CSIRO & ANU
+Australia
+Abstract
+Agent skills extend LLM agents with reusable instructions, scripts,
+tool bindings, and contextual dependencies. However, current skill
+ecosystems largely rely on trust-based loading and static inspection,
+leaving a gap between what a skill can inject into an agent’s context
+and what it can cause the agent to do at runtime. This gap introduces
+new security and privacy risks, and existing defenses primarily in-
+spect skill files statically or regulate individual tool calls, without
+systematically connecting a skill’s declared intent with its run-
+time behavior. In this paper, we present SkillGuard, a skill-centric
+permission framework that treats skills as permission-bearing ex-
+ecutable artifacts. SkillGuard introduces a dual-plane governance
+model that jointly regulates context influence and action side ef-
+fects through skill manifests, runtime access control, user-mediated
+authorization, deny-by-default enforcement, capability inference,
+and behavior monitoring. We evaluate SkillGuard on 315 real-world
+skills and SkillInject. The permission taxonomy covers 99.76% of
+observed protected objects, and automated manifest generation
+reaches 91.0% F1. In adversarial evaluations, SkillGuard reduces
+attack success from 32.37% to 23.02% for contextual injections and
+from 25.56% to 16.67% for obvious injections, while maintaining
+benign task utility. These results suggest that SkillGuard, as a skill-
+centric permission framework, can provide a practical foundation
+for improving the privacy and security of agent skill ecosystems.
+Keywords
+LLM agents, agent skills, permission framework, runtime enforce-
+ment, access control, skill security, AI agent security
+1
+Introduction
+The rapid evolution of large language model (LLM) agents has
+led to a new programming paradigm centered around agent skills:
+modular, reusable packages that encapsulate natural language in-
+structions, code specification, tool bindings, scripts, and contextual
+dependencies [15, 18]. These skills are increasingly used to extend
+agent capabilities in real-world systems, enabling complex work-
+flows such as software engineering [12], data analysis [3], and
+enterprise automation [17]. However, this shift also introduces a
+fundamentally new security and privacy challenge: skills are not
+merely passive resources but active behavioral units that can shape
+both what an agent knows and what it does.
+Recent studies have demonstrated that LLM agents are vulner-
+able to a wide range of attacks, including prompt injection [14],
+∗Shidong Pan completed most of this work while he was a visiting research scientist
+at CSIRO’s Data61
+†Co-first author
+memory poisoning [32], and malicious tool usage [20], which can
+lead to unauthorized actions such as data exfiltration or financial
+transactions. These risks are further amplified in the skill-based
+ecosystem, where third-party or dynamically loaded skills may
+introduce hidden instructions, implicit contextual dependencies,
+or transitive interactions across tools, agents, and external ser-
+vices. Unlike traditional software components written in formal
+programming languages, skills are often loosely composed of natu-
+ral language, code, and data. While such customized components
+provide flexibility and convenience for skill developers, their hetero-
+geneous and semi-structured nature poses significant challenges for
+program analysis, thereby limiting the ability to inspect, constrain,
+and verify their behavior across diverse attack surfaces.
+Recent work on agent security has begun to address related prob-
+lems, but existing approaches remain fragmented and incomplete
+for the skill setting. One line of work focuses on action-level privi-
+lege control. For example, Progent [29] introduces a programmable
+policy framework that intercepts tool calls at runtime and enforces
+fine-grained allow/forbid decisions over tool invocations, argu-
+ments, fallback actions, and dynamic policy updates. Similarly,
+AgentBound [8] provides a declarative access-control framework
+for MCP servers, combining manifest-style permission declarations
+with sandbox-based enforcement to restrict filesystem, network,
+secret, and process access. These systems are effective for mitigat-
+ing over-privileged tool use and execution-boundary violations,
+but they primarily govern downstream actions. However, they do
+not regulate how a skill is loaded, what instructions it injects into
+the agent’s context, what auxiliary dependencies it introduces, or
+how it shapes the agent’s reasoning before any tool call occurs.
+Conversely, context-oriented defenses such as A2AS [21] introduce
+mechanisms such as authenticated prompts, security boundaries, in-
+context defenses, and codified policies to protect context-window
+integrity, but they do not provide a systematic skill-centric permis-
+sion model that connects context admission, runtime grants, tool
+use, delegation, and enforcement.
+This gap is fundamental because agent skills operate across
+two coupled planes. On the context plane, a skill can introduce
+instructions, examples, retrieved documents, memory fragments, or
+hidden assumptions that reshape the agent’s reasoning trajectory.
+On the action plane, a skill can trigger tool calls, access files or
+secrets, execute code, communicate over the network, or delegate
+work to other agents, skills, and MCP servers. Existing approaches
+typically secure one plane but not the other. A tool-level policy may
+block an unsafe action, but it may miss malicious context that steers
+future reasoning. A context-level defense may mark untrusted input,
+but it may not constrain the concrete side effects caused by a skill
+arXiv:2606.03024v1  [cs.CR]  2 Jun 2026
+
+after it is accepted. Securing skills therefore requires a proactive
+runtime governance mechanism that treats skill loading, context
+construction, permission granting, and action execution as jointly
+enforceable security decisions.
+In this paper, we propose SkillGuard, a permission framework
+for agent skills. The key insight of SkillGuard is that skills should
+be treated as permission-bearing executable artifacts rather than
+implicitly trusted prompt snippets or simple tool wrappers. Skill-
+Guard consists of five core components. First, it requires each skill
+to declare its capability surface through a Skill Manifest, instantiates
+declared permissions into runtime policy state, and mediates sensi-
+tive behavior throughout execution. Second, it provides runtime
+permission access control that maps host-specific tool invocations
+to canonical capabilities and checks each action against the live
+session policy. Third, it incorporates a user interaction mechanism
+for sensitive permissions, allowing users to approve an action once,
+approve it for the current session under the same constraints, or
+deny it. Fourth, it enforces policies through a deny-by-default run-
+time pipeline that composes workspace defaults, skill manifests,
+persistent grants, and session approvals. For shell-style execution,
+SkillGuard further invokes a permission-generation mini-agent
+to infer lower-level capabilities required by commands and refer-
+enced scripts before allowing execution. Fifth, it maintains runtime
+behavior monitoring and audit logs, recording mediated actions,
+capability mappings, policy sources, decisions, and reasons for de-
+bugging and accountability.
+We evaluate SkillGuard across five research questions covering
+permission expressiveness, manifest completeness, defense effec-
+tiveness, utility preservation, and efficiency. Using a corpus of 315
+real-world skills collected from SkillsMP, we show that our taxon-
+omy achieves 99.76% predefined-object coverage and 100% group-
+level coverage over observed protected objects. On the SkillInject
+benchmark, our automated manifest generation achieves 91.0% F1
+at the capability level, with high recall over required permissions.
+In adversarial evaluations, SkillGuard reduces attack success rate
+from 32.37% to 23.02% under contextual injections and from 25.56%
+to 16.67% under obvious injections.
+In summary, this paper makes the following contributions:
+• We formalize the security gap in skill ecosystems through a dual-
+plane view of context influence and action side effects.
+• We design SkillGuard, a skill-centric permission framework with
+a manifest-driven model for context, action, delegation, and pol-
+icy behaviors.
+• We evaluate SkillGuard on real-world skills and SkillInject, show-
+ing broad coverage, accurate manifests, lower attack success, and
+preserved utility.
+2
+Background
+Modern LLM agents increasingly rely on skills as reusable task pack-
+ages that bundle natural-language instructions, optional scripts,
+contextual specifications, context-loading rules, and sometimes
+delegation logic to other skills, agents, or MCP servers [5, 7]. In
+practice, a skill is not merely a thin wrapper over a tool, but can
+instructively shape what the agent reads, how the agent reasons, and
+what the agent is allowed to do. Recent discussions on skill systems
+and natural-language harnesses further suggest that much of an
+Agent Skills Market
+LobeHub Skills
+GPT Skills
+Claude Skills
+Gemini Skills
+AI Agent
+Planning
+Reasoning
+Decision
+Making
+Developers
+Host Operation System
+Network 
+Interface
+Memory/
+Storage
+Toolkits
+File System
+SkillGuard Framework
+1. Permission Manifest
+2. Permission Access Control
+3. User Consent
+4. Policy Enforcement
+5. Runtime Monitoring
+Users
+Figure 1: Position of the proposed SkillGuard framework
+within the current agentic AI paradigm.
+agent’s effective control logic is now externalized into portable
+text artifacts rather than being buried solely in controller code [36].
+This shift improves modularity and reuse, but also turns skills into
+policy-bearing executable artifacts whose security and privacy im-
+pact extends beyond tool invocation alone.
+Today, however, the dominant skill management mechanism re-
+mains lightweight and trust-based. A host system typically exposes
+a catalog of available skills, injects their names, descriptions, and
+paths into the agent context, and lets the model decide whether to
+load and use them [7, 15, 18]. This is often prompt-driven rather
+than enforced by a dedicated runtime loader. They often focus
+on static inspection or quasi program analysis of SKILL.md or
+rule-based scanning of scripts, but do not provide a runtime mech-
+anism that jointly governs semantic influence and concrete side
+effects [13, 20]. As a result, the security boundary is weak: once
+selected, a skill may introduce new instructions or load additional
+context to downstream components with little unified governance.
+2.1
+Problem Definition
+Current agent ecosystems treat skills as useful productivity mod-
+ules, but not as first-class security principals. This is problematic
+because a skill can influence the agent along two distinct planes.
+First, on the context plane, a skill can inject instructions, examples,
+hidden assumptions, retrieved documents, or memory fragments
+that reshape the agent’s reasoning trajectory before any external
+action is taken. Second, on the action plane, a skill can trigger
+tool calls, access files or secrets, communicate over the network, or
+delegate to other components, thereby producing externally visible
+side effects. A skill management framework must therefore govern
+both what a skill can bring into the agent context and what it can
+cause the agent to do.
+Threat Model. We consider an adversary who aims to compro-
+mise the confidentiality, integrity, or availability of an agent system
+by exploiting the skill ecosystem. The attacker may publish a mali-
+cious skill, poison a dependent skill, compromise a context source
+consumed by a skill, or introduce malicious updates after a benign
+initial release. We assume the base host runtime and the user are
+benign, but the agent may faithfully follow harmful instructions
+if those instructions are delivered through skill metadata, skill-
+loaded context, tool outputs, memory, or delegated components.
+This threat model extends prior MCP and tool-centric formula-
+tions [8, 24], by moving the enforcement point from individual
+2
+
+tools or MCP servers to the broader skill lifecycle, where instruc-
+tions, context, actions, and delegation are all in scope.
+Attack Surfaces. Based on existing literature and our empirical
+observations on skill-specific risks [8, 14, 20, 26, 29, 32], we sum-
+marize and focus on the following six representative attack classes:
+1) Malicious instruction injection in SKILL.md. The most
+direct attack is to embed misleading instructions into a skill package,
+such as adding an apparently harmless note that instructs the agent
+to forward task outputs to an attacker-controlled endpoint.
+2) Context or permission overreach. The user task requires
+only a narrow scope, but the skill elicits broader permissions or
+reads more context than necessary. Even without overtly malicious
+behavior, this violates least privilege and expands the attack surface.
+3) Dependency or transitive skill poisoning. A benign skill
+invokes another skill or dependency that carries malicious instruc-
+tions, scripts, or context-loading logic, thereby bypassing local
+checks through indirection.
+4) Dependency or transitive information leakage. One skill
+legitimately reads sensitive content, while another downstream
+skill or component exfiltrates that content through external com-
+munication or publication.
+5) Context injection or prompt infection. The user task is
+benign, but a skill reads documents, tool responses, memory items,
+or retrieved content that contain adversarial instructions, which
+are then propagated back into the main agent context.
+6) Update or rug-pull attacks. A skill is initially benign and
+gains trust, but a later update changes its manifest (the concept
+will be introduced in Section 4.1), instructions, dependencies, or
+effective behavior in a way that introduces new risks.
+2.2
+Related Work
+Attacks on LLM Agents. Prompt injection is the most widely
+studied attack vector against LLM-based systems [28, 34]. In a
+direct prompt injection, the adversary crafts a user-facing input
+that overrides the model’s system instructions, causing it to ignore
+safety guidelines or execute unwanted actions. Indirect prompt
+injection poses a subtle threat which attacker embeds malicious
+instructions in external content (i.e., web pages, emails, or tool
+outputs) that the agent processes during normal operation [10, 11].
+Because LLM agents store all information in a shared context win-
+dow, they cannot reliably distinguish between trusted instructions
+and untrusted data, making indirect injection particularly difficult
+to eliminate [33]. When agents operate relying more and more on
+the skill ecosystem, with more than 1.4 million skills available at the
+time of writing [1], the attack surface widens. For instance, skill in-
+jection embeds adversarial instructions directly in skill files that the
+agent loads as part of its normal workflow. Schmotz et al. [27] con-
+struct the Skill-Inject benchmark to evaluate agent susceptibility to
+such attacks, showing that both contextually blended and explicitly
+visible injections can cause agents to perform unauthorized actions.
+Safeguard Methods. To prevent AI Agent from the attacks to
+perform unwanted actions, researchers have introduced many safe-
+guard methods. To begin with, Progent [29] addresses over-privileged
+tool use by placing a programmable policy layer between agents
+and tools. Its domain-specific language expresses fine-grained con-
+ditions on tool-call arguments with deterministic allow/forbid deci-
+sions, fallback actions, and dynamic policy updates as agent state
+changes. A
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Third, SkillGuard’s manifest and DSL design could inform emerg-
+ing standards for skill governance. Just as Android’s manifest con-
+vention became an industry-wide expectation for mobile applica-
+tions, a standardized skill manifest could establish baseline security
+expectations across AI agent ecosystems. Our evaluation shows
+that manifests can be auto-generated with 91.0% F1, suggesting that
+such governance need not impose a heavy authoring burden on
+skill developers and can scale with marketplace growth.
+11.2
+Threats to Validity
+The main internal validity threat in this study is that the manual
+annotation involved in evaluating taxonomy expressiveness may
+introduce human bias. To mitigate this, two authors independently
+annotated the data and resolved disagreements through discussion,
+yielding a Cohen’s Kappa of 0.656, indicating substantial agree-
+ment. Another potential threat is that we follow prior work in
+using an LLM-as-Judge approach to score ASR and TSR, which
+may introduce bias if the judge misclassifies borderline cases or
+hallucinates task outcomes. To mitigate this, we use Anthropic’s
+Claude Sonnet 4.6 [4] as the judge, consistent with prior work [27].
+Additionally, since our experiments involve API calls to remote
+LLM endpoints, results may be affected by network fluctuations
+and non-deterministic model outputs. To improve reproducibility,
+all experiments are executed in isolated Docker containers with
+fixed random seeds where applicable, and we make our datasets,
+manifests, and evaluation scripts publicly available [2].
+For external validity, due to the high cost of LLM API calls, we
+evaluate with a single representative model (MiMo-V2.5-Pro [35])
+and a single agent scaffold (Claude Code [6]). While we did not run
+cross-model or cross-framework ablations, SkillGuard’s permission
+enforcement is model-agnostic, and we expect the qualitative trends
+observed in our experiments to hold across other foundation models
+and agent frameworks. Regarding dataset scope, our taxonomy
+expressiveness evaluation is conducted on 315 real-world skills from
+SkillsMP. To ensure diversity, these skills are randomly sampled
+from 63 categories with 5 skills per category, covering a broad range
+of domains.
+12
+Conclusion
+In this paper, we presented SkillGuard, a permission framework
+for agent skills. SkillGuard treats skills as permission-bearing ex-
+ecutable artifacts and governs both their context influence and
+action side effects through manifest declarations, runtime access
+control, user authorization, deny-by-default enforcement, capa-
+bility inference, and behavior monitoring. Our evaluation on 315
+real-world skills and SkillInject shows that SkillGuard provides
+broad permission coverage, accurate manifest generation, reduced
+attack success, and limited utility loss. These results suggest that
+skill-centric runtime permissions offer a practical path toward safer
+and more accountable agent ecosystems.
+References
+[1] 2026. Agent Skills Marketplace. https://skillsmp.com/.
+[2] 2026. The Artifacts of SkillGuard. https://github.com/Dianshu-Liao/SkilLGuard.
+[3] Amirhossein Abaskohi, Amrutha Varshini Ramesh, Shailesh Nanisetty, Chirag
+Goel, David Vazquez, Christopher Pal, Spandana Gella, Giuseppe Carenini, and
+Issam H Laradji. 2025. AgentAda: Skill-Adaptive Data Analytics for Tailored
+Insight Discovery. arXiv preprint arXiv:2504.07421 (2025).
+[4] Anthropic. 2025. Claude Sonnet 4.6. https://www.anthropic.com/claude/sonnet.
+[5] Anthropic. 2025.
+What is the Model Context Protocol (MCP)?
+https://
+modelcontextprotocol.io/docs/getting-started/intro.
+[6] Anthropic. 2026. Claude Code Docs. https://code.claude.com/docs/en/overview.
+[7] Bhavyansh. 2026.
+MCP vs Agent Skills: Which AI Architecture Pattern
+to Use .
+https://bhavyansh001.medium.com/mcp-vs-agent-skills-which-ai-
+architecture-pattern-to-use-mcp-deepdive-03-6a42185d9e7b.
+[8] Christoph Bühler, Matteo Biagiola, Luca Di Grazia, and Guido Salvaneschi. 2026.
+AgentBound: Securing Execution Boundaries of AI Agents. In Proceedings of
+the 34th ACM Joint European Software Engineering Conference and Symposium
+on the Foundations of Software Engineering (FSE) (Montreal, Canada, 2026-07)
+(2026, Vol. 3). ACM, New York, NY, USA, Article FSE096, 24 pages. Issue FSE.
+doi:10.1145/3808103
+[9] Edoardo Debenedetti, Jie Zhang, Mislav Balunovi’c, Luca Beurer-Kellner, Marc
+Fischer, and Florian Tramèr. 2024. AgentDojo: A Dynamic Environment to
+Evaluate Attacks and Defenses for LLM Agents. ArXiv abs/2406.13352 (2024).
+[10] Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten
+Holz, and Mario Fritz. 2023. More than you’ve asked for: A Comprehensive
+Analysis of Novel Prompt Injection Threats to Application-Integrated Large
+Language Models. ArXiv abs/2302.12173 (2023). https://api.semanticscholar.org/
+CorpusID:257102404
+[11] Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten
+Holz, and Mario Fritz. 2023. Not What You’ve Signed Up For: Compromising Real-
+World LLM-Integrated Applications with Indirect Prompt Injection. Proceedings
+of the 16th ACM Workshop on Artificial Intelligence and Security (2023). https:
+//api.semanticscholar.org/CorpusID:258546941
+[12] Tingxu Han, Yi Zhang, Wei Song, Chunrong Fang, Zhenyu Chen, Youcheng
+Sun, and Lijie Hu. 2026. SWE-Skills-Bench: Do Agent Skills Actually Help in
+Real-World Software Engineering? arXiv preprint arXiv:2603.15401 (2026).
+[13] Yinghan Hou and Zongyou Yang. 2026. Skillsieve: A hierarchical triage framework
+for detecting malicious ai agent skills. arXiv preprint arXiv:2604.06550 (2026).
+[14] Xiaojun Jia, Jie Liao, Simeng Qin, Jindong Gu, Wenqi Ren, Xiaochun Cao, Yang
+Liu, and Philip Torr. 2026. Skillject: Automating stealthy skill-based prompt
+injection for coding agents with trace-driven closed-loop refinement. In The
+6th Workshop of Adversarial Machine Learning on Computer Vision: Safety of
+Vision-Language Agents.
+[15] Yanna Jiang, Delong Li, Haiyu Deng, Baihe Ma, Xu Wang, Qin Wang, and

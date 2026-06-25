@@ -18,6 +18,7 @@ import re
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -46,6 +47,9 @@ ARTICLE_PRINT_PAYWALL_MARKERS = (
     "view all available purchase options",
     "go to purchase options",
     "purchase options",
+    "purchase details",
+    "payment options",
+    "view purchased documents",
     "get access",
     "access through your institution",
     "sign in to access",
@@ -53,32 +57,47 @@ ARTICLE_PRINT_PAYWALL_MARKERS = (
     "rent this article",
 )
 
+PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES = {
+    "pdf_endpoint_cloudflare",
+    "pdf_endpoint_tdm_blocked",
+    "pdf_endpoint_waf",
+}
+
+NON_BROWSER_PDF_ENDPOINT_FAILURE_CLASSES = {
+    "pdf_endpoint_tdm_blocked",
+    "pdf_endpoint_waf",
+}
+
+PRIMARY_FAILURE_CLASS_PRIORITY = {
+    "pdf_title_mismatch": 100,
+    "article_print_incomplete": 95,
+    "article_print_paywalled": 94,
+    "pmc_recaptcha": 90,
+    "pmc_not_open_access": 89,
+    "publisher_paywalled": 88,
+    "pdf_endpoint_tdm_blocked": 85,
+    "pdf_endpoint_waf": 84,
+    "pdf_endpoint_cloudflare": 83,
+    "domain_cooldown_skip": 80,
+    "article_print_failed": 75,
+    "wrong_publisher_detection": 70,
+    "non_pdf_html": 60,
+    "access_blocked": 55,
+    "metadata_api_429": 30,
+    "metadata_api_error": 25,
+    "network_error": 20,
+}
+
 PDF_TITLE_STOPWORDS = {
     "about",
     "after",
     "among",
-    "analysis",
     "and",
-    "application",
     "are",
-    "article",
-    "based",
     "between",
-    "case",
-    "clinical",
-    "data",
     "for",
     "from",
     "into",
-    "large",
-    "language",
-    "model",
-    "models",
-    "paper",
-    "report",
-    "research",
-    "review",
-    "study",
     "the",
     "using",
     "via",
@@ -119,6 +138,46 @@ def _dedupe_keep_order(urls: List[str]) -> List[str]:
             seen.add(url)
             deduped.append(url)
     return deduped
+
+
+def _extract_http_urls_from_text(text: str) -> List[str]:
+    urls = []
+    for match in re.finditer(r"https?://[^\s<>()\"']+", text or ""):
+        urls.append(match.group(0).rstrip(".,;:)]}'\""))
+    return _dedupe_keep_order(urls)
+
+
+def shared_semantic_scholar_cache_path() -> Path:
+    return Path(os.getenv("SEMANTIC_SCHOLAR_CACHE") or ".cache/semantic_scholar_open_access.json")
+
+
+def _primary_failure_class(failure_classes: List[str]) -> Optional[str]:
+    if not failure_classes:
+        return None
+    return max(
+        failure_classes,
+        key=lambda failure_class: PRIMARY_FAILURE_CLASS_PRIORITY.get(failure_class, 10),
+    )
+
+
+def _is_techrxiv_pdf_endpoint(url: str) -> bool:
+    parsed = urlparse(url or "")
+    domain = parsed.netloc.lower()
+    domain = domain[4:] if domain.startswith("www.") else domain
+    return domain == "techrxiv.org" and parsed.path.lower().startswith("/doi/pdf/")
+
+
+def _techrxiv_pdf_endpoint_from_article_url(url: str) -> Optional[str]:
+    parsed = urlparse(url or "")
+    domain = parsed.netloc.lower()
+    domain = domain[4:] if domain.startswith("www.") else domain
+    if domain != "techrxiv.org":
+        return None
+    match = re.search(r"/doi/full/(10\.36227/.+)$", parsed.path, flags=re.IGNORECASE)
+    if not match:
+        return None
+    doi_without_version = re.sub(r"/v\d+$", "", match.group(1), flags=re.IGNORECASE)
+    return f"{parsed.scheme or 'https'}://www.techrxiv.org/doi/pdf/{doi_without_version}"
 
 
 def _title_match_tokens(value: str) -> List[str]:
@@ -226,18 +285,80 @@ def _article_print_rejection_reason(text: str) -> Optional[str]:
     return None
 
 
+def _article_print_incomplete_reason(text: str) -> Optional[str]:
+    normalized = re.sub(r"\s+", " ", stdlib_html.unescape(text or "").lower())
+    if "document sections" in normalized and any(
+        marker in normalized
+        for marker in (
+            "cite this",
+            "fulltext views",
+            "more like this",
+            "citations keywords metrics",
+        )
+    ):
+        return "publisher overview/abstract page marker"
+    return None
+
+
+def _strip_reference_sections_for_preprint_search(html_text: str) -> str:
+    """Remove reference-list markup before looking for article-version preprints."""
+    if not html_text:
+        return ""
+
+    try:
+        doc = lxml_html.fromstring(html_text)
+    except Exception:
+        stripped = html_text
+    else:
+        reference_markers = re.compile(
+            r"(^|[-_\s])("
+            r"references?|bibliography|ref-list|reference-list|article-references|c-article-references"
+            r")($|[-_\s])",
+            re.IGNORECASE,
+        )
+        attr_names = ("id", "class", "role", "aria-label", "data-track", "data-track-action")
+        for node in list(doc.xpath("//*")):
+            attr_text = " ".join(node.get(name) or "" for name in attr_names)
+            if reference_markers.search(attr_text) or "click_references" in attr_text.lower():
+                try:
+                    node.drop_tree()
+                except Exception:
+                    pass
+
+        for meta in list(doc.xpath(
+            "//meta[contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'citation_reference') "
+            "or contains(translate(@content, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'citation_reference')]"
+        )):
+            try:
+                meta.drop_tree()
+            except Exception:
+                pass
+
+        stripped = lxml_html.tostring(doc, encoding="unicode")
+
+    stripped = re.sub(
+        r"<meta\b[^>]*(?:citation_reference|click_references)[^>]*>",
+        " ",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    return stripped
+
+
 def _extract_preprint_dois_from_article_html(html_text: str) -> List[str]:
     """Extract bioRxiv/medRxiv DOI links declared on publisher article pages."""
     if not html_text:
         return []
 
-    normalized = stdlib_html.unescape(html_text)
+    normalized = stdlib_html.unescape(_strip_reference_sections_for_preprint_search(html_text))
     dois: List[str] = []
     doi_pattern = re.compile(r"10\.(?:1101|64898)/[A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9]", re.IGNORECASE)
     for match in doi_pattern.finditer(normalized):
         candidate = match.group(0).rstrip(".,;:)]}'\"")
         context = normalized[max(0, match.start() - 500):match.end() + 500].lower()
         if not any(marker in context for marker in ("preprint", "medrxiv", "biorxiv")):
+            continue
+        if any(marker in context for marker in ("google scholar", "article reference", "click_references")):
             continue
         dois.append(candidate)
     return _dedupe_keep_order(dois)
@@ -300,7 +421,7 @@ class DomainConcurrencyPolicy:
             self._browser_semaphore.release()
 
     def register_failure(self, url: str, failure_class: Optional[str]) -> None:
-        if failure_class not in {"pdf_endpoint_cloudflare", "pmc_recaptcha", "metadata_api_429"}:
+        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | {"pmc_recaptcha", "metadata_api_429"}:
             return
         domain = self.domain_for_url(url)
         if not domain:
@@ -361,7 +482,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self.time_func = time_func
         self.browser_user_data_dir = Path(browser_user_data_dir) if browser_user_data_dir else self._new_browser_profile_dir()
         self.enable_curl_cffi = enable_curl_cffi
-        self.curl_cffi_impersonates = curl_cffi_impersonates or ("chrome124", "safari184")
+        self.curl_cffi_impersonates = curl_cffi_impersonates or ("safari17_0", "chrome124", "safari184")
         self.min_request_interval = 0.2
         self.session.headers["Accept-Encoding"] = "gzip, deflate"
         self.last_method_timings: List[Dict] = []
@@ -381,8 +502,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self.semantic_cache_lock = semantic_cache_lock
         cache_path = (
             semantic_scholar_cache_path
-            or os.getenv("SEMANTIC_SCHOLAR_CACHE")
-            or ".cache/semantic_scholar_open_access.json"
+            or shared_semantic_scholar_cache_path()
         )
         self.semantic_scholar_cache_path = Path(cache_path)
         self.semantic_scholar_cache = self._load_semantic_scholar_cache()
@@ -405,6 +525,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     def download(self, paper: Dict) -> Tuple[bool, str, Optional[str]]:
         """Download with HTTP-first ordering and method-level telemetry."""
         self.last_method_timings = []
+        self.last_failure_detail = None
 
         title = paper.get("title", "unknown")
         doi = paper.get("doi")
@@ -413,14 +534,21 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         paper_id = paper.get("paper_id")
         journal = paper.get("journal", "")
         source = (paper.get("source") or "").lower()
+        pmid = paper.get("pmid")
+        if not pmid and source == "pubmed":
+            pubmed_id = str(paper.get("id") or "").strip()
+            if pubmed_id.isdigit():
+                pmid = pubmed_id
         self.last_publisher_detection = self._resolve_publisher(doi, journal)
         detected_publisher = self.last_publisher_detection["selected_publisher"]
 
         methods: List[Tuple[str, Callable[[], Optional[str]]]] = []
         semantic_added_early = False
+        pmc_added_early = False
 
         # Layer 1: HTTP/direct/static discovery.
         methods.append(("direct_pdf", lambda: self._try_direct_pdf_url(direct_url)))
+        methods.append(("abstract_static_html", lambda: self._try_abstract_link_pdf(paper)))
         if self._has_semantic_scholar_cache(doi, title) or self.semantic_scholar_api_key:
             methods.append(("semantic_scholar", lambda: self._try_semantic_scholar(doi, title)))
             semantic_added_early = True
@@ -436,6 +564,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         methods.append(("static_html", lambda: self._try_static_html_pdf(direct_url, title)))
         methods.append(("doi_static_html", lambda: self._try_static_html_pdf(f"https://doi.org/{doi}", title) if doi else None))
         methods.append(("publisher_url", lambda: self._try_publisher_pattern(direct_url, doi)))
+        if source == "pubmed" and pmid and not doi:
+            methods.append(("pmc", lambda: self._try_pmc(pmid, doi)))
+            methods.append(("europepmc", lambda: self._try_europe_pmc(pmid, doi)))
+            pmc_added_early = True
 
         # Layer 2: API/direct sources. Keep slower aggregators after cheap/direct checks.
         methods.append(("unpaywall", lambda: self._try_unpaywall(doi)))
@@ -444,8 +576,9 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         methods.append(("arxiv", lambda: self._try_arxiv(arxiv_id, title)))
         methods.append(("biorxiv", lambda: self._try_biorxiv_medrxiv(doi, title)))
         methods.append(("preprint_lookup", lambda: self._try_find_preprint(doi, title)))
-        methods.append(("pmc", lambda: self._try_pmc(paper.get("pmid"), doi)))
-        methods.append(("europepmc", lambda: self._try_europe_pmc(paper.get("pmid"), doi)))
+        if not pmc_added_early:
+            methods.append(("pmc", lambda: self._try_pmc(pmid, doi)))
+            methods.append(("europepmc", lambda: self._try_europe_pmc(pmid, doi)))
         methods.append(("article_preprint_pdf", lambda: self._try_article_preprint_pdf(paper)))
         methods.append(("doi_redirect", lambda: self._try_doi_redirect(doi)))
         methods.append(("core", lambda: self._try_core(doi, title)))
@@ -486,15 +619,32 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     "failure_detail": None if success else self._last_failure_detail,
                     "error": error,
                 })
-                self.last_failure_classes = [
-                    row["failure_class"]
+                failure_rows = [
+                    row
                     for row in self.last_method_timings
                     if row.get("failure_class")
                 ]
-                self.last_failure_class = self.last_failure_classes[-1] if self.last_failure_classes else None
+                self.last_failure_classes = [
+                    row["failure_class"]
+                    for row in failure_rows
+                ]
+                self.last_failure_class = _primary_failure_class(self.last_failure_classes)
+                primary_detail = next(
+                    (
+                        row.get("failure_detail")
+                        for row in failure_rows
+                        if row.get("failure_class") == self.last_failure_class and row.get("failure_detail")
+                    ),
+                    None,
+                )
+                if primary_detail:
+                    self.last_failure_detail = primary_detail
+                elif self._last_failure_detail:
+                    self.last_failure_detail = self._last_failure_detail
 
             if self.domain_policy and self._last_failure_class == "article_print_failed":
                 self.last_failure_class = "article_print_failed"
+                self.last_failure_detail = self._last_failure_detail
                 return False, "none", "Article print deferred for isolated batch retry"
 
         return False, "none", "All download methods failed"
@@ -510,7 +660,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             "failed_papers": [],
         }
 
-        already_downloaded = self._load_batch_progress(progress_file, results)
+        already_downloaded = set()
         pending: List[Tuple[int, Dict]] = []
         for index, paper in enumerate(papers):
             paper_key = paper.get("id") or paper.get("doi") or paper.get("title")
@@ -565,6 +715,12 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     "domain": domain,
                     "duration_seconds": round(time.perf_counter() - started, 3),
                     "failure_class": getattr(downloader, "last_failure_class", None),
+                    "failure_detail": getattr(downloader, "last_failure_detail", None),
+                    "failure_classes": _dedupe_keep_order([
+                        timing.get("failure_class")
+                        for timing in getattr(downloader, "last_method_timings", [])
+                        if timing.get("failure_class")
+                    ]),
                     "success_class": getattr(downloader, "last_success_class", None),
                 }
 
@@ -589,6 +745,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                             "domain": None,
                             "duration_seconds": None,
                             "failure_class": "method_exception",
+                            "failure_detail": f"{type(exc).__name__}: {exc}",
+                            "failure_classes": ["method_exception"],
                             "success_class": None,
                         }
 
@@ -600,6 +758,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         self._append_batch_progress(progress_file, papers[index])
             self._close_spawned_downloaders(spawned_downloaders)
             spawned_downloaders = []
+            self._retry_failed_open_access_pdfs(papers, results, progress_file)
             self._retry_batch_article_print_failures(papers, results, progress_file)
         finally:
             self._close_spawned_downloaders(spawned_downloaders)
@@ -649,6 +808,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             paper["pdf_downloaded"] = True
             paper["pdf_path"] = row["result"]
             paper["pdf_method"] = row["method"]
+            paper.pop("pdf_failure_class", None)
+            paper.pop("pdf_failure_detail", None)
+            paper.pop("pdf_failure_classes", None)
+            paper.pop("pdf_error", None)
             return
 
         results["failed"] += 1
@@ -657,8 +820,18 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             "doi": paper.get("doi"),
             "error": row["result"],
             "failure_class": row.get("failure_class"),
+            "failure_detail": row.get("failure_detail"),
+            "failure_classes": row.get("failure_classes") or (
+                [row.get("failure_class")] if row.get("failure_class") else []
+            ),
         })
         paper["pdf_downloaded"] = False
+        paper["pdf_failure_class"] = row.get("failure_class")
+        paper["pdf_failure_detail"] = row.get("failure_detail")
+        paper["pdf_failure_classes"] = row.get("failure_classes") or (
+            [row.get("failure_class")] if row.get("failure_class") else []
+        )
+        paper["pdf_error"] = row["result"]
 
     def _retry_batch_article_print_failures(
         self,
@@ -671,6 +844,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         try:
             for paper in papers:
                 if paper.get("pdf_downloaded"):
+                    continue
+                if (
+                    paper.get("pdf_failure_class") == "publisher_paywalled"
+                    or "publisher_paywalled" in (paper.get("pdf_failure_classes") or [])
+                ):
                     continue
                 retry_target = self._article_print_retry_target_for_paper(paper)
                 if not retry_target:
@@ -702,24 +880,93 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         paper.get("paper_id"),
                     )
                 if not file_path:
+                    final_retry_downloader = self._create_fresh_article_print_retry_downloader(domain)
+                    try:
+                        file_path = self._download_article_page_with_dedicated_browser_retry(
+                            final_retry_downloader,
+                            url,
+                            paper.get("title", "unknown"),
+                            method,
+                            paper.get("paper_id"),
+                        )
+                    finally:
+                        self._close_spawned_downloaders([final_retry_downloader])
+                if not file_path:
                     continue
 
-                paper["pdf_downloaded"] = True
-                paper["pdf_path"] = str(file_path)
-                paper["pdf_method"] = method
-                results["success"] += 1
-                results["failed"] = max(0, results["failed"] - 1)
-                results["by_method"][method] = results["by_method"].get(method, 0) + 1
-                results["downloaded"].append({
-                    "title": paper.get("title"),
-                    "method": method,
-                    "path": str(file_path),
-                })
-                self._remove_failed_batch_result(results, paper)
+                self._record_batch_retry_success(paper, results, method, file_path)
                 if progress_file:
                     self._append_batch_progress(progress_file, paper)
         finally:
             self._close_spawned_downloaders(list(retry_downloaders.values()))
+
+    def _retry_failed_open_access_pdfs(
+        self,
+        papers: List[Dict],
+        results: Dict,
+        progress_file: Optional[str],
+    ) -> None:
+        """Sequentially rescue failed papers with trusted OA PDF URLs."""
+        for paper in papers:
+            if paper.get("pdf_downloaded"):
+                continue
+
+            title = paper.get("title", "unknown")
+            paper_id = paper.get("paper_id")
+            for _attempt in range(2):
+                rescued = False
+                for candidate in self._open_access_rescue_candidates(paper):
+                    file_path = self._download_pdf(candidate, title, "open_access_rescue", paper_id)
+                    if not file_path:
+                        continue
+
+                    self._record_batch_retry_success(paper, results, "open_access_rescue", file_path)
+                    if progress_file:
+                        self._append_batch_progress(progress_file, paper)
+                    rescued = True
+                    break
+                if rescued:
+                    break
+
+    def _open_access_rescue_candidates(self, paper: Dict) -> List[str]:
+        title = paper.get("title", "unknown")
+        doi = paper.get("doi")
+        candidates: List[str] = []
+
+        direct_url = paper.get("pdf_url") or ""
+        if _looks_like_pdf_url(direct_url):
+            candidates.append(direct_url)
+
+        europe_pmc_url = self._try_europe_pmc(paper.get("pmid"), doi)
+        if europe_pmc_url:
+            candidates.append(europe_pmc_url)
+
+        doi_lower = (doi or "").lower()
+        if doi_lower.startswith(("10.1101/", "10.64898/")):
+            preprint_pdf = self._try_biorxiv_medrxiv(doi, title)
+            if preprint_pdf:
+                candidates.append(preprint_pdf)
+
+        unpaywall_candidates = self._try_unpaywall_pdf_candidates(doi)
+        candidates.extend(
+            candidate
+            for candidate in (self._europe_pmc_render_url_from_url(url) for url in unpaywall_candidates)
+            if candidate
+        )
+        candidates.extend(unpaywall_candidates)
+
+        if self._has_semantic_scholar_cache(doi, title) or self.semantic_scholar_api_key:
+            semantic_url = self._try_semantic_scholar(doi, title)
+            if semantic_url and _looks_like_pdf_url(semantic_url):
+                candidates.append(semantic_url)
+
+        return _dedupe_keep_order(candidates)
+
+    def _europe_pmc_render_url_from_url(self, url: str) -> Optional[str]:
+        match = re.search(r"/articles/(PMC\d+)(?:/|$)", url or "", flags=re.IGNORECASE)
+        if not match:
+            return None
+        return f"https://europepmc.org/articles/{match.group(1).upper()}?pdf=render"
 
     def _download_article_page_with_dedicated_browser_retry(
         self,
@@ -797,19 +1044,53 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         suffix = f"{safe_domain[:60]}-{os.getpid()}-{int(self.time_func() * 1000)}"
         return self.browser_user_data_dir / "article-print-fresh" / suffix
 
+    def _article_print_url_for_publisher(
+        self,
+        publisher: Optional[str],
+        doi: Optional[str],
+        direct_url: Optional[str],
+    ) -> Optional[str]:
+        if direct_url and not _looks_like_pdf_url(direct_url) and not self._is_metadata_article_source_url(direct_url):
+            return direct_url
+        if not doi:
+            return None
+
+        doi_lower = doi.lower()
+        if publisher == "asco":
+            return f"https://ascopubs.org/doi/{doi}"
+        if publisher == "wiley":
+            return f"https://onlinelibrary.wiley.com/doi/{doi}"
+        if publisher == "nature":
+            return f"https://www.nature.com/articles/{doi.split('/')[-1]}"
+        if publisher == "acs":
+            return f"https://pubs.acs.org/doi/{doi}"
+        if publisher == "jove":
+            article_id = doi.split("/", 1)[-1]
+            return f"https://app.jove.com/t/{article_id}"
+        if doi_lower.startswith("10.36227/"):
+            return f"https://www.techrxiv.org/doi/full/{doi}"
+        if publisher == "rsna":
+            return f"https://pubs.rsna.org/doi/{doi}"
+        return f"https://doi.org/{doi}"
+
     def _article_print_retry_target_for_paper(self, paper: Dict) -> Optional[Tuple[str, str]]:
         doi = paper.get("doi")
         publisher = self._resolve_publisher(doi, paper.get("journal", "")).get("selected_publisher")
-        if not publisher:
+        if not publisher and not doi:
             return None
         method = f"publisher_{publisher}"
-        publisher_method = self._get_publisher_method(publisher, doi, paper.get("pdf_url") or paper.get("url"))
-        if not publisher_method:
-            return None
         try:
-            url = publisher_method()
+            verified_url = self._try_verified_article_print_pdf(paper)
         except Exception:
-            return None
+            verified_url = None
+        if verified_url and self._is_article_print_retry_candidate(verified_url, method):
+            return method, verified_url
+
+        url = self._article_print_url_for_publisher(
+            publisher,
+            doi,
+            paper.get("pdf_url") or paper.get("url"),
+        )
         if url and self._is_article_print_retry_candidate(url, method):
             return method, url
         return None
@@ -822,6 +1103,24 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 results["failed_papers"].pop(index)
                 return
 
+    def _record_batch_retry_success(self, paper: Dict, results: Dict, method: str, file_path: Path) -> None:
+        paper["pdf_downloaded"] = True
+        paper["pdf_path"] = str(file_path)
+        paper["pdf_method"] = method
+        paper.pop("pdf_failure_class", None)
+        paper.pop("pdf_failure_detail", None)
+        paper.pop("pdf_failure_classes", None)
+        paper.pop("pdf_error", None)
+        results["success"] += 1
+        results["failed"] = max(0, results["failed"] - 1)
+        results["by_method"][method] = results["by_method"].get(method, 0) + 1
+        results["downloaded"].append({
+            "title": paper.get("title"),
+            "method": method,
+            "path": str(file_path),
+        })
+        self._remove_failed_batch_result(results, paper)
+
     def _append_batch_progress(self, progress_file: str, paper: Dict) -> None:
         try:
             with open(progress_file, "a", encoding="utf-8") as f:
@@ -832,6 +1131,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     "pdf_downloaded": paper.get("pdf_downloaded", False),
                     "pdf_path": paper.get("pdf_path"),
                     "pdf_method": paper.get("pdf_method"),
+                    "pdf_failure_class": paper.get("pdf_failure_class"),
+                    "pdf_failure_detail": paper.get("pdf_failure_detail"),
+                    "pdf_failure_classes": paper.get("pdf_failure_classes"),
+                    "pdf_error": paper.get("pdf_error"),
                 }
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as exc:
@@ -887,24 +1190,45 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
     def _publisher_primary_domain(self, publisher: Optional[str]) -> Optional[str]:
         return {
+            "acs": "pubs.acs.org",
             "asco": "ascopubs.org",
             "biorxiv": "biorxiv.org",
             "bmc": "link.springer.com",
             "cell": "cell.com",
             "cureus": "cureus.com",
+            "elsevier": "sciencedirect.com",
             "frontiers": "frontiersin.org",
+            "ieee": "ieeexplore.ieee.org",
+            "ios": "ebooks.iospress.nl",
+            "jove": "app.jove.com",
             "mdpi": "mdpi.com",
             "nature": "nature.com",
             "oxford": "academic.oup.com",
             "plos": "journals.plos.org",
+            "rsna": "pubs.rsna.org",
             "science": "science.org",
             "springer": "link.springer.com",
+            "techrxiv": "techrxiv.org",
             "wiley": "onlinelibrary.wiley.com",
         }.get(publisher or "")
 
     def _try_direct_pdf_url(self, url: Optional[str]) -> Optional[str]:
         if url and _looks_like_pdf_url(url):
             return url
+        return None
+
+    def _try_abstract_link_pdf(self, paper: Dict) -> Optional[str]:
+        title = paper.get("title", "")
+        metadata_domains = {"doi.org", "pubmed.ncbi.nlm.nih.gov", "openalex.org", "semanticscholar.org"}
+        for url in _extract_http_urls_from_text(paper.get("abstract", ""))[:5]:
+            domain = self._domain_for_url(url)
+            if domain in metadata_domains or self._is_metadata_article_source_url(url):
+                continue
+            if _looks_like_pdf_url(url):
+                return url
+            pdf_url = self._try_static_html_pdf(url, title)
+            if pdf_url:
+                return pdf_url
         return None
 
     def _resolve_publisher(self, doi: Optional[str], journal: str) -> Dict:
@@ -928,10 +1252,18 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         doi_prefix_map = [
             ("10.7759/", "cureus"),
             ("10.1200/", "asco"),
+            ("10.1016/", "elsevier"),
+            ("10.3233/", "ios"),
+            ("10.3791/", "jove"),
+            ("10.1109/", "ieee"),
+            ("10.1145/", "acm"),
+            ("10.1021/", "acs"),
             ("10.1111/", "wiley"),
             ("10.1002/", "wiley"),
             ("10.1101/", "biorxiv"),
             ("10.64898/", "biorxiv"),
+            ("10.36227/", "techrxiv"),
+            ("10.1148/", "rsna"),
             ("10.3389/", "frontiers"),
             ("10.1186/", "bmc"),
             ("10.1093/", "oxford"),
@@ -956,10 +1288,215 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if publisher == "asco" and doi:
             return lambda: f"https://ascopubs.org/doi/{doi}"
         if publisher == "wiley" and doi:
-            return lambda: f"https://onlinelibrary.wiley.com/doi/pdf/{doi}"
+            return lambda: f"https://onlinelibrary.wiley.com/doi/pdfdirect/{doi}"
         if publisher == "oxford" and doi:
             return lambda: self._try_oxford(doi)
+        if publisher == "ios" and doi:
+            return lambda: self._try_ios_press(doi)
+        if publisher == "jove" and doi:
+            return lambda: self._try_jove(doi)
+        if publisher == "techrxiv" and doi:
+            return lambda: self._try_techrxiv(doi)
+        if publisher == "rsna" and doi:
+            return lambda: f"https://pubs.rsna.org/doi/pdf/{doi}"
         return super()._get_publisher_method(publisher, doi, url)
+
+    def _try_ios_press(self, doi: Optional[str]) -> Optional[str]:
+        if not doi or not doi.lower().startswith("10.3233/"):
+            return None
+        return f"https://ebooks.iospress.nl/doi/{doi}"
+
+    def _try_jove(self, doi: Optional[str]) -> Optional[str]:
+        if not doi or not doi.lower().startswith("10.3791/"):
+            return None
+        article_id = doi.split("/", 1)[-1]
+        return f"https://app.jove.com/pdf/{article_id}"
+
+    def _try_techrxiv(self, doi: Optional[str]) -> Optional[str]:
+        doi_clean = (doi or "").strip()
+        if not doi_clean.lower().startswith("10.36227/"):
+            return None
+        doi_without_version = re.sub(r"/v\d+$", "", doi_clean, flags=re.IGNORECASE)
+        return f"https://www.techrxiv.org/doi/pdf/{doi_without_version}"
+
+    def _try_ieee(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
+        csdl_pdf_url = self._try_ieee_computer_society_pdf(doi)
+        if csdl_pdf_url or self._last_failure_class == "publisher_paywalled":
+            return csdl_pdf_url
+
+        arnumber = None
+
+        if url and "ieeexplore.ieee.org" in url:
+            match = re.search(r"/document/(\d+)", url)
+            if match:
+                arnumber = match.group(1)
+
+        if not arnumber and doi:
+            self._rate_limit()
+            try:
+                response = self.session.get(
+                    f"https://doi.org/{doi}",
+                    timeout=self.request_timeout,
+                    allow_redirects=True,
+                )
+            except Exception:
+                response = None
+
+            if response and "ieeexplore.ieee.org" in (response.url or ""):
+                match = re.search(r"/document/(\d+)", response.url)
+                if match:
+                    arnumber = match.group(1)
+            if response and not arnumber:
+                match = re.search(r"/document/(\d+)", response.text[:20000])
+                if match:
+                    arnumber = match.group(1)
+
+        if not arnumber:
+            return None
+        return f"https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber={arnumber}"
+
+    def _try_ieee_computer_society_pdf(self, doi: Optional[str]) -> Optional[str]:
+        doi_clean = (doi or "").strip()
+        if not doi_clean.lower().startswith("10.1109/"):
+            return None
+
+        query = """
+        query ($doi: String!) {
+            article: articleByDoi(doi: $doi) {
+            id
+            fno
+            pubType
+            idPrefix
+            issueNum
+            year
+            hasPdf
+            isOpenAccess
+            showBuyMe
+          }
+        }
+        """
+        graphql_url = "https://www.computer.org/csdl/api/v1/graphql"
+
+        self._rate_limit()
+        try:
+            response = self.session.post(
+                graphql_url,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Origin": "https://www.computer.org",
+                    "Referer": "https://www.computer.org/csdl/",
+                },
+                json={"query": query, "variables": {"doi": doi_clean}},
+                timeout=self.request_timeout,
+            )
+        except Exception:
+            return None
+
+        if response.status_code != 200:
+            return None
+
+        try:
+            data = response.json()
+        except Exception:
+            return None
+
+        article = data.get("data", {}).get("article") if isinstance(data, dict) else None
+        if not isinstance(article, dict):
+            return None
+        if (
+            article.get("hasPdf") is True
+            and article.get("isOpenAccess") is False
+            and article.get("showBuyMe") is True
+        ):
+            self._last_failure_class = "publisher_paywalled"
+            self._last_failure_detail = "IEEE Computer Society article requires purchase or subscription"
+            return None
+        return self._ieee_computer_society_pdf_url_from_article(article)
+
+    def _ieee_computer_society_pdf_url_from_article(self, article: Dict) -> Optional[str]:
+        article_id = str(article.get("id") or "").strip()
+        fno = str(article.get("fno") or "").strip()
+        pub_type = str(article.get("pubType") or "").strip().lower()
+        id_prefix = str(article.get("idPrefix") or "").strip()
+        issue_num = str(article.get("issueNum") or "").strip()
+        year = str(article.get("year") or "").strip()
+        if not all([article_id, fno, pub_type, id_prefix, issue_num, year]):
+            return None
+
+        if pub_type == "mags":
+            collection = "mags"
+        elif pub_type in {"trans", "letters", "digest"}:
+            collection = "trans"
+        else:
+            return None
+
+        path_parts = [
+            collection,
+            id_prefix,
+            year,
+            issue_num,
+            fno,
+            article_id,
+        ]
+        escaped_parts = [quote(part, safe="") for part in path_parts]
+        return (
+            "https://www.computer.org/csdl/api/v1/periodical/"
+            f"{'/'.join(escaped_parts)}/download-article/pdf"
+        )
+
+    def _try_elsevier(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
+        if url and "sciencedirect.com" in url:
+            return super()._try_elsevier(doi, url)
+        if not doi:
+            return None
+
+        self._rate_limit()
+        try:
+            response = self.session.get(
+                f"https://doi.org/{doi}",
+                timeout=self.request_timeout,
+                allow_redirects=True,
+            )
+        except Exception:
+            return None
+
+        pii_match = re.search(r"/pii/([A-Z0-9]+)", response.url, re.IGNORECASE)
+        if not pii_match:
+            pii_match = re.search(r"pii[=/]([A-Z0-9]+)", response.text[:20000], re.IGNORECASE)
+        if not pii_match:
+            return None
+
+        pii = pii_match.group(1)
+        return f"https://www.sciencedirect.com/science/article/pii/{pii}/pdfft"
+
+    def _try_mdpi(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
+        mdpi_res_url = self._mdpi_res_pdf_url(doi)
+        if mdpi_res_url:
+            return mdpi_res_url
+        return super()._try_mdpi(doi, url)
+
+    def _mdpi_res_pdf_url(self, doi: Optional[str]) -> Optional[str]:
+        doi_lower = (doi or "").lower().strip()
+        match = re.match(r"10\.3390/([a-z]+)(\d+)$", doi_lower)
+        if not match:
+            return None
+        journal_code, numeric_suffix = match.groups()
+        if len(numeric_suffix) >= 8:
+            volume_text = numeric_suffix[:2]
+            article_text = numeric_suffix[4:]
+        elif len(numeric_suffix) == 7:
+            volume_text = numeric_suffix[:1]
+            article_text = numeric_suffix[3:]
+        else:
+            return None
+        journal_slug = {
+            "info": "information",
+        }.get(journal_code, journal_code)
+        volume = int(volume_text)
+        article_number = int(article_text)
+        stem = f"{journal_slug}-{volume:02d}-{article_number:05d}"
+        return f"https://mdpi-res.com/d_attachment/{journal_slug}/{stem}/article_deploy/{stem}.pdf"
 
     def _try_oxford(self, doi: Optional[str]) -> Optional[str]:
         if not doi:
@@ -1012,6 +1549,60 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         cache_key = self._semantic_scholar_cache_key(doi, title)
         return bool(cache_key and self.semantic_scholar_cache.get(cache_key))
 
+    def _try_unpaywall(self, doi: Optional[str]) -> Optional[str]:
+        candidates = self._try_unpaywall_pdf_candidates(doi)
+        europe_pmc_candidates = [
+            candidate
+            for candidate in (self._europe_pmc_render_url_from_url(url) for url in candidates)
+            if candidate
+        ]
+        ordered = _dedupe_keep_order(europe_pmc_candidates + candidates)
+        return ordered[0] if ordered else None
+
+    def _try_unpaywall_pdf_candidates(self, doi: Optional[str]) -> List[str]:
+        """Return only Unpaywall locations that are direct PDF-looking URLs."""
+        if not doi:
+            return []
+
+        self._rate_limit()
+        url = f"https://api.unpaywall.org/v2/{quote(doi, safe='')}?email={self.email}"
+
+        try:
+            response = self.session.get(url, timeout=15)
+        except Exception:
+            return []
+        if response.status_code != 200:
+            return []
+
+        try:
+            data = response.json()
+        except Exception:
+            return []
+
+        if data.get("is_oa") is False:
+            self._last_failure_class = "publisher_paywalled"
+            self._last_failure_detail = "Unpaywall reports DOI is not open access"
+            return []
+
+        candidates: List[str] = []
+
+        def add_location(location: Optional[Dict]) -> None:
+            if not location:
+                return
+            pdf_url = location.get("url_for_pdf")
+            if pdf_url:
+                candidates.append(pdf_url)
+                return
+            landing_url = location.get("url")
+            if landing_url and _looks_like_pdf_url(landing_url):
+                candidates.append(landing_url)
+
+        add_location(data.get("best_oa_location"))
+        for location in data.get("oa_locations", []):
+            add_location(location)
+
+        return _dedupe_keep_order(candidates)
+
     def _domain_for_url(self, url: str) -> str:
         parsed = urlparse(url or "")
         domain = parsed.netloc.lower()
@@ -1021,12 +1612,12 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return (self._domain_for_url(url), failure_class)
 
     def _register_domain_failure(self, url: str, failure_class: Optional[str]) -> None:
-        if failure_class == "pdf_endpoint_cloudflare" and not self._is_pdf_endpoint_cooldown_candidate(url):
+        if failure_class in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES and not self._is_pdf_endpoint_cooldown_candidate(url):
             return
         if self.domain_policy:
             self.domain_policy.register_failure(url, failure_class)
             return
-        if failure_class not in {"pdf_endpoint_cloudflare", "pmc_recaptcha", "metadata_api_429"}:
+        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | {"pmc_recaptcha", "metadata_api_429"}:
             return
         key = self._cooldown_key(url, failure_class)
         self.domain_failure_cooldowns[key] = self.time_func() + self.domain_cooldown_seconds
@@ -1051,10 +1642,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return None
 
     def _download_with_domain_policy(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
-        cooldown_failure = self._domain_cooldown_failure(
-            url,
-            ["pdf_endpoint_cloudflare", "pmc_recaptcha"],
-        )
+        cooldown_classes = ["pmc_recaptcha"]
+        if self._is_pdf_endpoint_cooldown_candidate(url):
+            cooldown_classes.extend(sorted(PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES))
+        cooldown_failure = self._domain_cooldown_failure(url, cooldown_classes)
         if cooldown_failure:
             self._last_failure_class = "domain_cooldown_skip"
             self._last_failure_detail = f"{self._domain_for_url(url)} cooled down after {cooldown_failure}"
@@ -1145,42 +1736,44 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return None
 
     def _semantic_scholar_get_json(self, url: str, headers: Dict[str, str]) -> Optional[Dict]:
-        cooldown_failure = self._domain_cooldown_failure(url, ["metadata_api_429"])
-        if cooldown_failure:
-            self._last_failure_class = "domain_cooldown_skip"
-            self._last_failure_detail = f"{self._domain_for_url(url)} cooled down after {cooldown_failure}"
-            return None
-
-        for attempt in range(self.semantic_scholar_max_retries + 1):
-            self._rate_limit()
-            try:
-                response = self.session.get(url, headers=headers, timeout=self.request_timeout)
-            except Exception as exc:
-                self._last_failure_class = "metadata_api_error"
-                self._last_failure_detail = f"{type(exc).__name__}: {exc}"
+        api_slot = self.domain_policy.domain_slot(self._domain_for_url(url)) if self.domain_policy else nullcontext()
+        with api_slot:
+            cooldown_failure = self._domain_cooldown_failure(url, ["metadata_api_429"])
+            if cooldown_failure:
+                self._last_failure_class = "domain_cooldown_skip"
+                self._last_failure_detail = f"{self._domain_for_url(url)} cooled down after {cooldown_failure}"
                 return None
 
-            if response.status_code == 200:
+            for attempt in range(self.semantic_scholar_max_retries + 1):
+                self._rate_limit()
                 try:
-                    return response.json()
+                    response = self.session.get(url, headers=headers, timeout=self.request_timeout)
                 except Exception as exc:
                     self._last_failure_class = "metadata_api_error"
-                    self._last_failure_detail = f"invalid_json: {exc}"
+                    self._last_failure_detail = f"{type(exc).__name__}: {exc}"
                     return None
 
-            failure_class = self._classify_response_failure("semantic_scholar", url, response)
-            self._last_failure_class = failure_class or "metadata_api_error"
-            self._last_failure_detail = f"HTTP {response.status_code}"
-            self._register_domain_failure(url, self._last_failure_class)
-            if response.status_code == 429 and attempt < self.semantic_scholar_max_retries:
-                retry_after = response.headers.get("retry-after")
-                try:
-                    delay = float(retry_after) if retry_after else self.semantic_scholar_backoff_seconds * (attempt + 1)
-                except ValueError:
-                    delay = self.semantic_scholar_backoff_seconds * (attempt + 1)
-                self.sleep_func(delay)
-                continue
-            return None
+                if response.status_code == 200:
+                    try:
+                        return response.json()
+                    except Exception as exc:
+                        self._last_failure_class = "metadata_api_error"
+                        self._last_failure_detail = f"invalid_json: {exc}"
+                        return None
+
+                failure_class = self._classify_response_failure("semantic_scholar", url, response)
+                self._last_failure_class = failure_class or "metadata_api_error"
+                self._last_failure_detail = f"HTTP {response.status_code}"
+                self._register_domain_failure(url, self._last_failure_class)
+                if response.status_code == 429 and attempt < self.semantic_scholar_max_retries:
+                    retry_after = response.headers.get("retry-after")
+                    try:
+                        delay = float(retry_after) if retry_after else self.semantic_scholar_backoff_seconds * (attempt + 1)
+                    except ValueError:
+                        delay = self.semantic_scholar_backoff_seconds * (attempt + 1)
+                    self.sleep_func(delay)
+                    continue
+                return None
 
         return None
 
@@ -1210,6 +1803,48 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             records = data.get("records", [])
             if records and records[0].get("pmcid"):
                 return records[0]["pmcid"]
+        if pmid:
+            return self._resolve_pmcid_from_pubmed_efetch(pmid)
+        return None
+
+    def _resolve_pmcid_from_pubmed_efetch(self, pmid: str) -> Optional[str]:
+        pmid = str(pmid or "").strip()
+        if not pmid.isdigit():
+            return None
+
+        params = {
+            "db": "pubmed",
+            "id": pmid,
+            "retmode": "xml",
+            "tool": "academic_search",
+            "email": self.email,
+        }
+        api_key = os.getenv("PUBMED_API_KEY") or os.getenv("NCBI_API_KEY")
+        if api_key:
+            params["api_key"] = api_key
+
+        self._rate_limit()
+        try:
+            response = self.session.get(
+                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+                params=params,
+                timeout=self.request_timeout,
+            )
+        except Exception:
+            return None
+        if response.status_code != 200:
+            return None
+
+        try:
+            root = ET.fromstring(response.content)
+        except Exception:
+            return None
+
+        for article_id in root.findall(".//ArticleId"):
+            id_type = (article_id.attrib.get("IdType") or "").lower()
+            value = (article_id.text or "").strip()
+            if id_type in {"pmc", "pmcid"} and value.upper().startswith("PMC"):
+                return value
         return None
 
     def _try_pmc(self, pmid: Optional[str], doi: Optional[str]) -> Optional[str]:
@@ -1217,11 +1852,123 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if not pmcid:
             return None
 
+        oa_pdf = self._try_ncbi_oa_pdf(pmcid)
+        if oa_pdf:
+            return oa_pdf
+        if self._last_failure_class == "pmc_not_open_access":
+            return None
+
         named_pdf = self._try_pmc_named_article_pdf(pmcid)
         if named_pdf:
             return named_pdf
 
         return f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/"
+
+    def _try_ncbi_oa_pdf(self, pmcid: str) -> Optional[str]:
+        self._rate_limit()
+        url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={quote(pmcid, safe='')}"
+        try:
+            response = self.session.get(url, timeout=self.request_timeout)
+        except Exception:
+            return None
+        if response.status_code != 200:
+            return None
+
+        try:
+            root = ET.fromstring(response.content)
+        except Exception:
+            return None
+
+        for element in root.iter():
+            tag = str(element.tag).rsplit("}", 1)[-1].lower()
+            if tag != "error":
+                continue
+            code = (element.attrib.get("code") or "").strip()
+            message = (element.text or "").strip()
+            if code == "idIsNotOpenAccess":
+                self._last_failure_class = "pmc_not_open_access"
+                self._last_failure_detail = message or f"{pmcid} is not open access in NCBI OA"
+                return None
+
+        for element in root.iter():
+            tag = str(element.tag).rsplit("}", 1)[-1].lower()
+            if tag != "link":
+                continue
+            link_format = (element.attrib.get("format") or "").lower()
+            href = (element.attrib.get("href") or "").strip()
+            if not href:
+                continue
+            if link_format == "pdf" or href.lower().endswith(".pdf"):
+                return self._normalize_ncbi_oa_pdf_url(href)
+
+        return None
+
+    def _normalize_ncbi_oa_pdf_url(self, url: str) -> str:
+        if url.startswith("ftp://ftp.ncbi.nlm.nih.gov/"):
+            return "https://ftp.ncbi.nlm.nih.gov/" + url[len("ftp://ftp.ncbi.nlm.nih.gov/") :]
+        return url
+
+    def _try_europe_pmc(self, pmid: Optional[str], doi: Optional[str]) -> Optional[str]:
+        """Try Europe PMC's stable PDF render endpoint for PMC-backed OA articles."""
+        id_queries = []
+        if pmid:
+            id_queries.append(f"EXT_ID:{pmid}")
+        if doi:
+            id_queries.append(f"DOI:{quote(doi, safe='')}")
+
+        for query in id_queries:
+            self._rate_limit()
+            url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={query}&format=json"
+            try:
+                response = self.session.get(url, timeout=self.request_timeout)
+            except Exception:
+                continue
+            if response.status_code != 200:
+                continue
+            try:
+                data = response.json()
+            except Exception:
+                continue
+            for result in data.get("resultList", {}).get("result", []):
+                pmcid = result.get("pmcid")
+                if pmcid:
+                    return f"https://europepmc.org/articles/{pmcid}?pdf=render"
+
+        return None
+
+    def _try_core(self, doi: Optional[str], title: str) -> Optional[str]:
+        """Try CORE only when an API key is configured; otherwise it is tail-heavy."""
+        if not self.core_api_key:
+            return None
+
+        headers = {
+            "Authorization": f"Bearer {self.core_api_key}",
+            "Accept": "application/json",
+        }
+        queries = []
+        if doi:
+            queries.append(f"doi:{doi}")
+        if title:
+            queries.append(title)
+
+        for query in queries:
+            self._rate_limit()
+            url = f"https://api.core.ac.uk/v3/search/works?q={quote(query)}&limit=1"
+            try:
+                response = self.session.get(url, headers=headers, timeout=self.request_timeout)
+            except Exception:
+                continue
+            if response.status_code != 200:
+                continue
+            try:
+                data = response.json()
+            except Exception:
+                continue
+            for result in data.get("results", []):
+                download_url = result.get("downloadUrl")
+                if download_url:
+                    return download_url
+        return None
 
     def _try_pmc_named_article_pdf(self, pmcid: str) -> Optional[str]:
         article_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/"
@@ -1303,6 +2050,75 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if self._verify_pdf_candidate(candidate):
                 return candidate
 
+        return None
+
+    def _preprint_candidate_title_matches(self, expected_title: str, candidate_title: str) -> bool:
+        expected_compact = re.sub(r"[^a-z0-9]+", "", (expected_title or "").lower())
+        candidate_compact = re.sub(r"[^a-z0-9]+", "", (candidate_title or "").lower())
+        if len(expected_compact) >= 32 and (
+            expected_compact in candidate_compact or candidate_compact in expected_compact
+        ):
+            return True
+
+        expected_tokens = _title_match_tokens(expected_title)
+        if len(expected_tokens) < 4:
+            return False
+        candidate_tokens = set(_title_match_tokens(candidate_title))
+        if not candidate_tokens:
+            return False
+
+        hits = [token for token in expected_tokens if token in candidate_tokens]
+        coverage = len(hits) / len(expected_tokens)
+        return coverage >= 0.72 and len(hits) >= min(5, len(expected_tokens))
+
+    def _preprint_pdf_url_from_result(self, result: Dict) -> Optional[str]:
+        preprint_doi = result.get("doi")
+        if not preprint_doi:
+            return None
+
+        preprint_doi = str(preprint_doi).strip()
+        publisher = (result.get("bookOrReportDetails", {}) or {}).get("publisher", "").lower()
+        source_text = f"{publisher} {result.get('source', '')}".lower()
+        if preprint_doi.lower().startswith("10.1101/"):
+            server = "medrxiv" if "medrxiv" in source_text else "biorxiv"
+            return f"https://www.{server}.org/content/{preprint_doi}.full.pdf"
+        if preprint_doi.lower().startswith("10.64898/"):
+            medrxiv_id = preprint_doi.split("/", 1)[-1]
+            return f"https://www.medrxiv.org/content/10.1101/{medrxiv_id}.full.pdf"
+        return None
+
+    def _try_biorxiv_medrxiv(self, doi: Optional[str], title: str) -> Optional[str]:
+        doi_lower = (doi or "").lower()
+        if doi_lower.startswith(("10.1101/", "10.64898/")):
+            return super()._try_biorxiv_medrxiv(doi, title)
+        if not title:
+            return None
+
+        normalized_title = re.sub(r"\s+", " ", title).strip()[:220]
+        query = f'TITLE:"{normalized_title}" AND (SRC:PPR)'
+        url = (
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+            f"?query={quote(query, safe='')}&format=json&pageSize=5"
+        )
+        self._rate_limit()
+        try:
+            response = self.session.get(url, timeout=self.request_timeout)
+        except Exception:
+            return None
+        if response.status_code != 200:
+            return None
+        try:
+            data = response.json()
+        except Exception:
+            return None
+
+        for result in data.get("resultList", {}).get("result", []):
+            candidate_title = result.get("title") or ""
+            if not self._preprint_candidate_title_matches(title, candidate_title):
+                continue
+            pdf_url = self._preprint_pdf_url_from_result(result)
+            if pdf_url:
+                return pdf_url
         return None
 
     def _try_article_preprint_pdf(self, paper: Dict) -> Optional[str]:
@@ -1475,7 +2291,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
     def _pdf_title_match_result(self, content: bytes, title: str) -> Tuple[bool, Optional[str]]:
         title_tokens = _title_match_tokens(title)
-        if len(title_tokens) < 4:
+        if len(title_tokens) < 2:
             return True, None
 
         pdf_text = self._extract_pdf_text_sample(content)
@@ -1489,13 +2305,17 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         hits = [token for token in title_tokens if token in pdf_tokens]
         coverage = len(hits) / len(title_tokens)
         required_hits = min(6, len(title_tokens))
-        front_text = pdf_text[:2500]
+        front_text = pdf_text[:1200]
+        compact_title = re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+        compact_front = re.sub(r"[^a-z0-9]+", "", front_text.lower())
+        if len(compact_title) >= 24 and compact_title in compact_front:
+            return True, None
         front_tokens = set(_title_match_tokens(front_text))
-        if len(title_tokens) >= 6 and front_tokens:
+        if len(title_tokens) >= 3 and front_tokens:
             front_hits = [token for token in title_tokens if token in front_tokens]
             front_coverage = len(front_hits) / len(title_tokens)
             front_required_hits = min(5, len(title_tokens))
-            if front_coverage < 0.35 and len(front_hits) < front_required_hits:
+            if front_coverage < 0.55 and len(front_hits) < front_required_hits:
                 detail = (
                     f"front matter title token coverage {front_coverage:.2f} "
                     f"({len(front_hits)}/{len(title_tokens)})"
@@ -1533,6 +2353,59 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return False
         return True
 
+    def build_quality_audit(self, papers: List[Dict]) -> Dict:
+        records = []
+        for paper in papers:
+            if not paper.get("pdf_downloaded"):
+                continue
+
+            file_path = Path(paper.get("pdf_path") or "")
+            record = {
+                "paper_id": paper.get("paper_id"),
+                "title": paper.get("title"),
+                "doi": paper.get("doi"),
+                "method": paper.get("pdf_method"),
+                "pdf_path": str(file_path),
+                "exists": file_path.exists(),
+            }
+            if not file_path.exists():
+                record.update({
+                    "status": "missing_file",
+                    "suspect": True,
+                    "detail": "PDF path does not exist",
+                })
+                records.append(record)
+                continue
+
+            try:
+                content = file_path.read_bytes()
+            except Exception as exc:
+                record.update({
+                    "status": "read_error",
+                    "suspect": True,
+                    "detail": f"{type(exc).__name__}: {exc}",
+                })
+                records.append(record)
+                continue
+
+            matches, detail = self._pdf_title_match_result(content, paper.get("title", ""))
+            record.update({
+                "status": "ok" if matches else "suspect_title_mismatch",
+                "suspect": not matches,
+                "detail": detail,
+                "file_size": file_path.stat().st_size,
+            })
+            records.append(record)
+
+        return {
+            "summary": {
+                "total_downloaded": len(records),
+                "suspect_count": sum(1 for record in records if record["suspect"]),
+                "missing_count": sum(1 for record in records if record["status"] == "missing_file"),
+            },
+            "records": records,
+        }
+
     def _article_print_pdf_is_acceptable(self, content: bytes, title: str) -> bool:
         matches, detail = self._pdf_title_match_result(content, title)
         if not matches:
@@ -1541,6 +2414,12 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return False
 
         text = self._extract_pdf_text_sample(content, max_pages=4, max_chars=40000)
+        incomplete_reason = _article_print_incomplete_reason(text)
+        if incomplete_reason:
+            self._last_failure_class = "article_print_incomplete"
+            self._last_failure_detail = incomplete_reason
+            return False
+
         reason = _article_print_rejection_reason(text)
         if reason:
             self._last_failure_class = "article_print_paywalled"
@@ -1548,12 +2427,76 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return False
         return True
 
+    def _download_ios_press_pdf_from_html(
+        self,
+        base_url: str,
+        html_text: str,
+        title: str,
+        method: str,
+        paper_id: str = None,
+    ) -> Optional[Path]:
+        if "ebooks.iospress.nl" not in (urlparse(base_url).netloc or "").lower():
+            return None
+
+        try:
+            doc = lxml_html.fromstring(html_text)
+        except Exception:
+            return None
+
+        for form in doc.xpath("//form[@action]"):
+            action = form.get("action") or ""
+            if "/download/pdf" not in action.lower():
+                continue
+            data = {}
+            for field in form.xpath(".//input[@name]"):
+                name = field.get("name")
+                if not name:
+                    continue
+                data[name] = field.get("value") or ""
+            if not data.get("id"):
+                continue
+
+            post_url = urljoin(base_url, action)
+            try:
+                response = self.session.post(
+                    post_url,
+                    data=data,
+                    timeout=self.download_timeout,
+                    allow_redirects=True,
+                    headers={"Referer": base_url},
+                )
+            except Exception:
+                continue
+
+            content_type = response.headers.get("content-type", "")
+            if response.status_code == 200 and (
+                response.content.startswith(b"%PDF") or "pdf" in content_type.lower()
+            ):
+                file_path = self._save_pdf_bytes_if_title_matches(
+                    response.content,
+                    title,
+                    method,
+                    paper_id,
+                )
+                if file_path:
+                    self._last_success_class = "ios_press_form_pdf"
+                    return file_path
+
+        return None
+
     def _download_pdf(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
         """Download without Selenium fallback; parse returned HTML once for a PDF link."""
         self._rate_limit()
 
         try:
-            response = self.session.get(url, timeout=self.download_timeout, allow_redirects=True)
+            request_kwargs = {
+                "timeout": self.download_timeout,
+                "allow_redirects": True,
+            }
+            headers = self._pdf_request_headers(url)
+            if headers:
+                request_kwargs["headers"] = headers
+            response = self.session.get(url, **request_kwargs)
         except Exception:
             self._last_failure_class = "network_error"
             curl_path = self._download_pdf_with_curl_cffi(url, title, method, paper_id)
@@ -1572,6 +2515,16 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         is_html_response = "html" in content_type.lower() or b"<html" in response.content[:1000].lower()
         if response.status_code == 200 and is_html_response:
+            ios_press_path = self._download_ios_press_pdf_from_html(
+                response.url,
+                response.text[:300000],
+                title,
+                method,
+                paper_id,
+            )
+            if ios_press_path:
+                return ios_press_path
+
             for candidate in extract_static_pdf_urls(response.text[:200000], response.url):
                 try:
                     retry = self.session.get(candidate, timeout=self.download_timeout, allow_redirects=True)
@@ -1600,6 +2553,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         should_try_browser = self._should_try_browser_fallback(method, url, response)
         if is_html_response and self.enable_browser_fallback and should_try_browser:
             self.browser_fallback_attempts += 1
+            if method == "verified_article_print_pdf":
+                warm_path = self._warm_techrxiv_pdf_challenge(url, title, paper_id)
+                if warm_path:
+                    self.browser_fallback_successes += 1
+                    return warm_path
             browser_path = self._download_pdf_with_browser(url, title, method, paper_id)
             if browser_path:
                 self.browser_fallback_successes += 1
@@ -1625,10 +2583,37 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         return None
 
+    def _warm_techrxiv_pdf_challenge(self, article_url: str, title: str, paper_id: str = None) -> Optional[Path]:
+        pdf_url = _techrxiv_pdf_endpoint_from_article_url(article_url)
+        if not pdf_url:
+            return None
+
+        previous_timeout = self.browser_timeout
+        previous_failure_class = self._last_failure_class
+        previous_failure_detail = self._last_failure_detail
+        previous_success_class = self._last_success_class
+        try:
+            self.browser_timeout = min(self.browser_timeout, 4)
+            warm_path = self._download_pdf_with_browser(pdf_url, title, "publisher_techrxiv", paper_id)
+            if warm_path:
+                return warm_path
+        finally:
+            self.browser_timeout = previous_timeout
+            self._last_failure_class = previous_failure_class
+            self._last_failure_detail = previous_failure_detail
+            self._last_success_class = previous_success_class
+
+        return None
+
     def _should_try_browser_fallback(self, method: str, url: str, response) -> bool:
         if method == "verified_article_print_pdf":
             return True
-        if self._classify_response_failure(method, url, response) == "pmc_recaptcha":
+        failure_class = self._classify_response_failure(method, url, response)
+        if failure_class == "pmc_recaptcha":
+            return False
+        if failure_class in NON_BROWSER_PDF_ENDPOINT_FAILURE_CLASSES:
+            return False
+        if failure_class == "pdf_endpoint_cloudflare" and _is_techrxiv_pdf_endpoint(url):
             return False
         if not self._is_browser_worthy_html(response):
             return False
@@ -1672,6 +2657,12 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     def _classify_response_failure(self, method: str, url: str, response) -> Optional[str]:
         url_lower = (url or "").lower()
         content_lower = response.content[:8000].lower()
+        is_pdf_endpoint = (
+            _looks_like_pdf_url(url_lower)
+            or "/doi/pdf" in url_lower
+            or "/doi/epdf" in url_lower
+            or method.startswith("publisher_")
+        )
 
         if response.status_code == 429 and (
             method == "semantic_scholar" or "api.semanticscholar.org" in url_lower
@@ -1688,8 +2679,16 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             b"cf-chl",
             b"checking your browser",
         )
+        if is_pdf_endpoint and "sciencedirect.com" in url_lower and (
+            b"tdm-reservation" in content_lower or b"tdmrep-policy" in content_lower
+        ):
+            return "pdf_endpoint_tdm_blocked"
+        if is_pdf_endpoint and (
+            b"awswafcookiedomainlist" in content_lower or b"gokuprops" in content_lower
+        ):
+            return "pdf_endpoint_waf"
         if response.status_code in (401, 403, 429) or any(marker in content_lower for marker in cloudflare_markers):
-            if _looks_like_pdf_url(url_lower) or "/doi/pdf" in url_lower or "/doi/epdf" in url_lower or method.startswith("publisher_"):
+            if is_pdf_endpoint:
                 return "pdf_endpoint_cloudflare"
             return "access_blocked"
 
@@ -1699,6 +2698,39 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if response.status_code >= 400:
             return f"http_{response.status_code}"
         return None
+
+    def _pdf_request_headers(self, url: str) -> Optional[Dict[str, str]]:
+        referer = self._ieee_computer_society_referer_for_pdf_url(url)
+        if not referer:
+            return None
+        session_headers = getattr(self.session, "headers", {}) or {}
+        return {
+            "Accept": "application/pdf,*/*",
+            "Referer": referer,
+            "User-Agent": session_headers.get("User-Agent", "Mozilla/5.0"),
+        }
+
+    def _ieee_computer_society_referer_for_pdf_url(self, url: str) -> Optional[str]:
+        parsed = urlparse(url or "")
+        domain = parsed.netloc.lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        if domain != "computer.org":
+            return None
+
+        match = re.match(
+            r"^/csdl/api/v1/periodical/(mags|trans)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/([^/]+)/download-article/pdf$",
+            parsed.path,
+        )
+        if not match:
+            return None
+
+        collection, id_prefix, year, issue_num, fno, article_id = match.groups()
+        route_type = "magazine" if collection == "mags" else "journal"
+        return (
+            "https://www.computer.org/csdl/"
+            f"{route_type}/{id_prefix}/{year}/{issue_num}/{fno}/{article_id}"
+        )
 
     def _is_curl_cffi_candidate(self, url: str) -> bool:
         url_lower = (url or "").lower()

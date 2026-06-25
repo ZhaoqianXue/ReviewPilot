@@ -1,0 +1,492 @@
+=== PDF FIRST PAGE (title region) ===
+Preprint. Under review.
+Skill-R1: Agent Skill Evolution via Reinforcement Learning
+Yash Vishe1, Rohan Surana1, Xunyi Jiang1, Zihan Huang1, Xintong Li1, Nikki Lijing Kuang1,
+Tong Yu2, Ryan A. Rossi2, Jingbo Shang1, Julian McAuley1, Junda Wu1
+1UC San Diego
+2Adobe Research
+{yvishe,rsurana,xuj003,zih043,xil240,jshang,jmcauley,juw069}@ucsd.edu
+{tyu,ryan.rossi}@adobe.com
+Abstract
+Agentic large language models often rely on skills, reusable natural-
+language procedures that guide planning, action, and tool use. In practice,
+however, skills are typically improved through prompt engineering or by
+aligning the task LLM itself to revised skills, which is costly, model-specific,
+and often infeasible for closed-source models. Meanwhile, skill optimiza-
+tion is not a one-step prompt engineering problem, but a recurrent process
+with two coupled levels of credit assignment. A useful skill must improve
+rollout quality under the current conditioning, while a useful revision
+must turn observed successes and failures into a better skill for the next
+round. We therefore formulate skill evolution as a bi-level optimization
+problem over rollout selection within each generation and skill improve-
+ment acr
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Preprint. Under review.
+Skill-R1: Agent Skill Evolution via Reinforcement Learning
+Yash Vishe1, Rohan Surana1, Xunyi Jiang1, Zihan Huang1, Xintong Li1, Nikki Lijing Kuang1,
+Tong Yu2, Ryan A. Rossi2, Jingbo Shang1, Julian McAuley1, Junda Wu1
+1UC San Diego
+2Adobe Research
+{yvishe,rsurana,xuj003,zih043,xil240,jshang,jmcauley,juw069}@ucsd.edu
+{tyu,ryan.rossi}@adobe.com
+Abstract
+Agentic large language models often rely on skills, reusable natural-
+language procedures that guide planning, action, and tool use. In practice,
+however, skills are typically improved through prompt engineering or by
+aligning the task LLM itself to revised skills, which is costly, model-specific,
+and often infeasible for closed-source models. Meanwhile, skill optimiza-
+tion is not a one-step prompt engineering problem, but a recurrent process
+with two coupled levels of credit assignment. A useful skill must improve
+rollout quality under the current conditioning, while a useful revision
+must turn observed successes and failures into a better skill for the next
+round. We therefore formulate skill evolution as a bi-level optimization
+problem over rollout selection within each generation and skill improve-
+ment across generations. We propose Skill-R1, a reinforcement learning
+framework for instance-level recurrent skill optimization from verifiable
+rewards. Rather than updating the task LLM, Skill-R1 trains a lightweight
+skill generator that conditions on the task context, prior rollouts, and their
+verified outcomes to produce skills that steer a frozen task LLM. This de-
+sign preserves black-box compatibility with both open- and closed-source
+models while making adaptation substantially cheaper than model-level
+updates. Skill-R1 proceeds over multiple generations. At each genera-
+tion, the current skill induces rollouts from the task LLM, whose verified
+outcomes are fed back to produce the next revision. To optimize the skill
+generator over this recurrent process, we introduce a bi-level group-relative
+policy optimization objective with intra-generation and inter-generation ad-
+vantages. The intra-generation term compares rollouts under shared skill
+conditioning, while the inter-generation term rewards revisions that im-
+prove the induced behavior over successive generations. Together, these
+terms provide a principled objective for directional skill evolution rather
+than one-shot or heuristic self-refinement. Empirical evaluations suggest
+that Skill-R1 achieves consistent improvements over both no-skill baselines
+and standard GRPO across benchmarks with verifiable rewards. The gains
+are particularly strong on complex, multi-step tasks, where single-pass
+refinement methods struggle.
+1
+Introduction
+Agentic large language models increasingly rely on external skills (Xu & Yan, 2026; Jiang
+et al., 2026c; Chen et al., 2026b; Nguyen et al., 2025; Huang et al., 2025b), which are reusable
+natural-language procedures that specify how an agent should decompose a task, invoke
+tools, and verify intermediate results. Since skills are designed as complementary modules
+of the task language model, they provide a practical interface for shaping LLM behavior
+without updating the task language model. This separation is practical in realistic deploy-
+ments, where the task model may be proprietary (Gao et al., 2025; Huang et al., 2025a),
+expensive to adapt (Zhou et al., 2025; Wu et al., 2024a; 2025d; Wang et al., 2025c; Zhang
+et al., 2024), or shared across many downstream tasks (Li et al., 2026; Chen et al., 2026a;
+Jiang et al., 2026a).
+1
+arXiv:2605.09359v1  [cs.LG]  10 May 2026
+
+Preprint. Under review.
+However, many skill-based systems rely on well-engineered skills as predefined and fixed
+artifacts, or revise them only through prompting and single-round self-refinement (Jiang
+et al., 2026c; Xu & Yan, 2026; Chen et al., 2026b; Jiang et al., 2026a; Chen et al., 2026a; Xia
+et al., 2026; Zhang et al., 2026). These strategies can be misaligned and inefficient, since they
+rely on repeated prompt edits and are not directly aligned with downstream rewards (Wu
+et al.; Kveton et al., 2025; Xia et al., 2025a). On the other hand, some recent works adapt the
+task language model to the skill by fine-tuning the task language model on the skill (Wang
+et al., 2025a; Li et al., 2025b; Wang et al., 2024), but this approach can be computationally
+costly and limited in adaptivity to many downstream tasks (Zhou et al., 2025; Xia et al., 2026;
+Jiang et al., 2026b; Wu et al., 2025d; Yao et al., 2024). Moreover, skill optimization should
+not be a single prompt-editing step, but a recurrent decision problem: a useful skill should
+improve rollout quality under the current context, and a useful revision should transform
+observed successes and failures into a better skill for the next round. This naturally leads to
+a bi-level optimization objective that couples execution quality within each generation with
+skill improvement across generations.
+To address this problem, we propose Skill-R1, a reinforcement learning framework for
+recurrent agent skill evolution from verifiable rewards. Skill-R1 separates task execution
+from skill improvement. A frozen task LLM produces rollouts conditioned on the current skill,
+while a lightweight skill generator is trained to revise that skill based on the task context,
+prior rollouts, and their verified outcomes (Xia et al., 2025c; Wang et al., 2025b; Van Nguyen
+et al., 2025). By updating only the skill generator, the framework remains compatible with
+both open- and closed-source task models and can be more efficient than updating the task
+model itself (Van Nguyen et al., 2025; Xia et al., 2025a).
+The core interaction loop of Skill-R1 is multi-generation. For a given instance, the current
+skill induces a group of rollouts from the frozen task model, a verifier scores these rollouts,
+and the resulting trials and errors (Wu et al., 2025b; 2024b), and reward signals are appended
+to an instance-specific history that conditions the next skill revision. Recurring execution of
+this process yields an evolutionary view of skill improvement, in which each generation
+proposes a new skill, tests it through a rollout population, and passes forward evidence for
+subsequent refinement. This recurrent structure makes it possible to optimize directional
+improvement (Xia et al., 2026; Sun et al., 2025; Zhou et al., 2025) on the same instance rather
+than selecting among isolated one-shot attempts.
+The policy optimization of the skill generator requires both intra-generation and inter-
+generation credit assignment to optimize the skill generator. To enable optimization of the
+recurrent skill generator, we introduce a bi-level group-relative policy optimization (Zhong
+et al., 2026; Shao et al., 2024; Mundada et al., 2026) objective that mirrors the recurrent
+structure above. The intra-generation term compares rollouts sampled under the same
+skill and captures relative execution quality within a generation. The inter-generation term
+measures whether a revised skill improves the average verified performance relative to the
+previous generation. Together, these signals provide a principled objective for rewarding
+both strong rollouts and beneficial skill revisions (Wu et al.; Surana et al., 2026; Li et al., 2025a;
+Huang et al., 2025c). Our experiments demonstrate that Skill-R1 consistently improves
+agent performance across diverse reasoning and tool-use benchmarks, outperforming both
+no-skill baselines and standard GRPO. We also show a clear performance gap between
+skill generations, which demonstrates the effectiveness of the recurrent skill evolution. We
+summarize the contributions of this work as follows:
+• We formulate recurrent instance-level skill evolution as a bi-level group-relative
+policy optimization problem.
+• We propose Skill-R1, a model-agnostic framework that trains a lightweight skill
+generator while keeping the task LLM frozen.
+• We introduce a recurrent multi-generation rollout process together with a bi-level
+GRPO objective that combines intra- and inter-generation advantages.
+• We evaluate Skill-R1 on agent tasks with verifiable rewards, comparing with agent
+skill and GRPO baselines and achieving superior performance.
+2
+
+Preprint. Under review.
+2
+Preliminaries
+2.1
+Agent Skills
+Recent LLM-agent systems commonly treat skills as reusable units of external procedural
+knowledge that can be retrieved, executed, and updated without modifying the underlying
+task model. Following this practice, let πtask denote a frozen task LLM, and let S be a space
+of explicit skill artifacts.
+Definition 2.1 (Agent Skill). An agent skill is a reusable procedural artifact s ∈S that
+conditions the execution of the task model on an input instance. A skill may encode
+natural-language instructions, structured workflows, tool-use guidance, or other procedural
+constraints, while remaining external to the parameters of πtask.
+Given an instance x and a skill s, the frozen task model induces a rollout distribution
+πtask(τ | x, s),
+(1)
+where τ denotes the resulting trajectory. In our setting, skills evolve recurrently on the same
+instance. We write sg ∈S for the skill used at generation g, and Hg for the instance-specific
+history available up to generation g, such as prior rollouts and their verified outcomes.
+These variables will be used to formalize skill evolution in later sections.
+2.2
+Group-Relative Policy Optimization
+We briefly review Group-Relative Policy Optimization (GRPO) in the language-generation
+setting, where a policy πθ(· | x) defines a distribution over response rollouts y conditioned
+on a prompt or context x ∼D. GRPO samples a group
+G(x) = {y(i)}K
+i=1,
+y(i) i.i.d.
+∼πθ(· | x),
+(2)
+assigns each rollout a verifier score r(y(i)), and defines the group-relative advantage
+A
+
+y(i); G(x)
+
+= r
+
+y(i)
+−1
+K
+K
+∑
+j=1
+r
+
+y(j)
+.
+(3)
+The GRPO objective is
+LGRPO(θ) = Ex∼D, G(x)
+"
+K
+∑
+i=1
+A
+
+y(i); G(x)
+
+log πθ
+
+y(i) | x
+#
+.
+(4)
+This group-centered objective promotes rollouts that outperform their peers under the same
+input context.
+3
+Skill-R1: Agent Skill Evolution via Reinforcement Learning
+We propose Skill-R1 (illustrated in Figure 1), a reinforcement learning framework that
+improves a frozen task model by recurrently refining external skills without updating the
+task model itself. Skill-R1 decouples task execution from skill improvement: a frozen task
+LLM generates rollout trajectories conditioned on a selected skill, while a separate editor
+policy updates skills based on verified execution outcomes.
+3.1
+Problem Setup
+Let x ∈X denote a task instance, and let Bx ⊆S denote the skill bank for instance x. Fol-
+lowing Section 2.1, for a selected skill s0 ∈Bx, the frozen task model πtask induces a rollout
+distribution Equation (1) over trajectories y(i) ∈G(x, s0) group sampled (in Equation (2))
+under skill conditioning, while a verifier fX : G(x, s0) →R assigns each rollout a scalar
+reward r(i). We also maintain the generation-wise history
+H0 = {(x, s0, y(i), r(i))}K
+i=1,
+y(i) ∼πtask(· | x, s0),
+i = 1, . . . , K.
+(5)
+3
+
+Preprint. Under review.
+Figure 1: Overview of Skill-R1. Recurrent Skill Evolution iteratively generates skills, rolls
+out a frozen task LLM, and stores verifier-scored outcomes in an evolutionary history. Bi-
+level GRPO Optimization computes GRPO advantages from both intra-generation relative
+performance and inter-generation progress, and uses it to update the skill generator while
+keeping the task LLM frozen.
+Thus, the instance-level performance induced by s0 is determined by the rollout policy and
+verifier jointly, and our goal is to improve performance on the given instance by revising
+skills so that later rollout populations achieve higher verifier reward.
+For each generation g ≥1, a learnable skill generator πθ produces the next skill conditioned
+on the current instance and the accumulated history:
+τ = {(sg, Gg(x, sg), {r(i)
+g }K
+i=1)}G
+g=1,
+sg ∼πθ(· | x, Hg−1),
+g = 1, . . . , G.
+(6)
+This defines a recurrent skill-evolution process in which each generated skill is evaluated
+through the rollout population it induces under the frozen task model Equation (1), and the
+resulting verifier outcomes are appended to the history to guide subsequent revisions. Then
+the recurrent skill evolution problem can be defined as optimizing πθ to maximize verifier
+reward across the entire recurrent process:
+J(θ) = Ex∼p(x)Esg∼πθ(·|x,Hg−1), y(i)
+g ∼πtask(·|x,sg)
+"
+G
+∑
+g=1
+γg−1 1
+K
+K
+∑
+i=1
+r(i)
+g
+#
+.
+(7)
+Directly optimizing the objective in (7) is challenging because the reward signal is evaluated
+on the task model’s rollouts rather than directly on the generated skill. To address this
+structural decoupling between skill generation and task execution, we extend the standard
+GRPO framework to a bi-level setting. In the following section, we formulate a bi-level
+GRPO objective and derive bi-level advantages. This formulation allows us to properly assign
+credit to the skill generator πθ based on the relative, aggregate performance of the rollout
+populations that each skill induces.
+3.2
+Bi-Level Group-relative Advantages
+The reward signal in Equation (7) is evaluated on rollouts from the frozen task model, yet
+the trainable parameters reside in the skill generator πθ. To route rollout-level feedback
+to the skill that induced it, we decompose credit assignment into two complementary
+advantage signals. Within generation g, all K rollouts share the same skill sg, so we apply
+4
+
+Preprint. Under review.
+Algorithm 1 Skill-R1: Agent Skill Evolution via Reinforcement Learning
+Require: Task distribution p(x), frozen task LLM πtask, skill generator πθ, initial skill bank
+B, verifier f, generations G, group size K, mixing coefficient λ
+1: for each task instance x ∼p(x) and its skill bank Bx do
+2:
+Select initial skill s0 ∈Bx
+3:
+Sample rollouts G0(x, s0) = {y(i)
+0 }K
+i=1 from πtask(· | x, s0)
+4:
+Score r(i)
+0
+= f (y(i)
+0 ) for each i; initialize H0 = {(x, s0, y(i)
+0 , r(i)
+0 )}K
+i=1
+5:
+for g = 1, . . . , G do
+6:
+Generate skill sg ∼πθ(· | x, Hg−1)
+▷Equation (6)
+7:
+Sample rollouts Gg(x, sg) = {y(i)
+g }K
+i=1 from πtask(· | x, sg)
+8:
+Verify r(i)
+g = f (y(i)
+g ) for each i
+9:
+Compute Aintra(y(i)
+g ), Ainter(g), and A(y(i)
+g )
+▷Equations (8) to (10)
+10:
+Update Hg = Hg−1 ∪{(sg, Gg, {r(i)
+g }K
+i=1)}
+11:
+end for
+12: end for
+13: Update θ by maximizing LSkill-R1(θ) over accumulated rollouts
+▷Equation (11)
+the group-relative comparison from Equation (3) directly:
+Aintra(y(i)
+g ) = r(i)
+g −1
+K
+K
+∑
+j=1
+r(j)
+g .
+(8)
+Centering by the group mean makes this signal invariant to absolute reward scale and
+isolates rollout quality from skill quality. However, Aintra is blind to whether a skill revision
+improved on its predecessor. To capture cross-generation progress, we define the population
+mean reward and the inter-generation advantage
+Ainter(g) = ¯rg −¯rg−1,
+¯rg = 1
+K
+K
+∑
+i=1
+r(i)
+g
+(9)
+with Ainter(1) = 0. A positive value indicates that the revised skill shifted the rollout
+distribution toward higher reward; a negative value penalizes regressions. We combine the
+two signals into a single bi-level advantage:
+A(y(i)
+g ) = Aintra(y(i)
+g ) + λ Ainter(g),
+(10)
+where λ ≥0 interpolates between pure within-generation GRPO (λ=0) and a regime that
+additionally rewards cross-generation improvement.
+3.3
+GRPO Objective for Skill Evolution
+We optimize πθ with a clipped GRPO surrogate that aggregates the bi-level advantage
+across all generations. Let ρg = πθ(sg | x, Hg−1)/πθold(sg | x, Hg−1) be the importance ratio
+between the current and data-collection policies. The Skill-R1 objective is
+LSkill-R1(θ) = Ex∼p(x)
+"
+G
+∑
+g=1
+K
+∑
+i=1
+min
+
+ρg A(y(i)
+g ), clip(ρg, 1−ϵ, 1+ϵ) A(y(i)
+g )
+
+−β KL
+ πθ(· | x, Hg−1) ∥πref(· | x, Hg−1)
+
+#
+,
+(11)
+where A(y(i)
+g ) is the bi-level advantage from Equation (10), ϵ > 0 is the clipping radius, and
+β ≥0 weights a KL penalty anchoring the policy near a reference πref. Summing over g
+5
+
+Preprint. Under review.
+generations couples the objective across the entire recurrent process in Equation (6), 
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Preprint. Under review.
+and converting between molecular file formats. If the user mentions a .pdb
+file or asks about protein/molecular structure data, use this skill.
+# PDB (Protein Data Bank) File Processing Guide
+## Quick Start
+```python
+from Bio.PDB import PDBParser
+parser = PDBParser(QUIET=True)
+structure = parser.get_structure("protein", "structure.pdb")
+# Iterate through the hierarchy: Structure -> Model -> Chain -> Residue -> Atom
+for model in structure:
+for chain in model:
+print(f"Chain {chain.id}: {len(list(chain.get_residues()))} residues")
+```
+## PDB File Format Basics
+PDB files are fixed-width text files. Key record types:
+| ATOM
+| Standard residue atom coordinates
+|
+| HETATM | Non-standard residue (ligands, water) |
+| SEQRES | Full sequence of residues
+|
+| REMARK | Comments and metadata
+|
+[... BioPython parsing examples, distance computation, ligand extraction,
+sequence extraction, manual ATOM-record parsing, and quick-reference
+table omitted for brevity -- all preserved in the original file ...]
+A.1.2
+GRPO-Trained Editor: Edited pdb Skill
+name: pdb
+description: [unchanged from original]
+# PDB (Protein Data Bank) File Processing Guide
+## Quick Start
+```python
+from Bio.PDB import PDBParser
+import numpy as np
+# Parse a local PDB file path -- ensure the file exists at the specified path
+parser = PDBParser(QUIET=True)
+try:
+structure = parser.get_structure("structure", "5wb7.pdb")
+except FileNotFoundError:
+print("Error: The PDB file was not found. Please verify the file name.")
+raise
+except ImportError:
+print("Error: BioPython is not installed. pip install biopython")
+raise
+# Access the first model and chain
+models = list(structure)
+if not models:
+raise ValueError("No models found in the PDB structure.")
+model = models[0]
+chains = list(model.get_chains())
+if not chains:
+14
+
+Preprint. Under review.
+raise ValueError("No chains found in the model.")
+chain = chains[0]
+residues = list(chain.get_residues())
+if not residues:
+raise ValueError("No residues found in the chain.")
+```
+## Common Misuse and Error Prevention
+Note: This skill is for PDB files only. If the user provides an audio
+recording (e.g., .mp3), it cannot be processed here.
+A.1.3
+Base Inference Editor: Edited pdb Skill
+The untrained base Qwen3-4B model replaces the entire skill with the following. No
+executable code remains. The “Key Requirements” section mistakenly names the GAIA
+task UUID 7dd30055-0198-452e-8c25-f73dbe27dcb8 as an invalid PDB identifier, and the
+“Common Misuse” section is wholly devoted to handling a calculus homework audio
+recording (Homework.mp3) that is unrelated to PDB processing.
+name: pdb
+description: [unchanged from original]
+# PDB (Protein Data Bank) File Processing Guide
+## Key Requirements and Best Practices
+- Always ensure the PDB ID is valid and accessible via the RCSB PDB database.
+- Use the correct PDB ID (e.g., "5wb7", not
+"7dd30055-0198-452e-8c25-f73dbe27dcb8") -- the latter is a UUID or
+invalid identifier.
+- This skill does NOT handle audio files. If a user provides an audio file
+(e.g., Homework.mp3) and asks for page numbers, this skill is NOT applicable.
+## Common Misuse and Clarifications
+- Do not use this skill to extract page numbers from audio recordings.
+- Do not attempt to parse audio files as if they were PDB files.
+- If a user asks about study materials from a lecture, state that the skill
+cannot process audio content.
+- Always verify the nature of the input: if it is .mp3 or .wav, respond with:
+"I cannot extract page numbers from audio files."
+## Example of Incorrect Use
+User: "I have a file called Homework.mp3 with my professor reading the
+recommended pages. Can you tell me the page numbers?"
+Correct response: "I cannot extract page numbers from audio files. This skill
+is designed for processing PDB files, not audio recordings."
+[--- No code examples remain in the edited skill ---]
+The contrast is stark. The GRPO-trained editor adds code that handles real failure modes—a
+missing file, a missing library—while preserving the entire original reference. The base
+inference editor removes all code and fills the skill with content copied from two specific
+benchmark questions, leaving it useless for any unseen PDB task.
+15
+

@@ -1,0 +1,484 @@
+=== PDF FIRST PAGE (title region) ===
+SCALAR: Learning and Composing Skills
+through LLM Guided Symbolic Planning and Deep RL Grounding
+Renos Zabounidis 1 Yue Wu 1 Simon Stepputtis 2 Woojun Kim 1 Yuanzhi Li 1 Tom Mitchell 1 Katia Sycara 1
+Abstract
+LLM-based agents excel when given high-level
+action APIs but struggle to ground language into
+low-level control. Prior work has LLMs generate
+skills or reward functions for RL, but these one-
+shot approaches lack feedback to correct specifi-
+cation errors. We introduce SCALAR, a bidirec-
+tional framework coupling LLM planning with
+RL through a learned skill library. The LLM pro-
+poses skills with preconditions and effects; RL
+trains policies for each skill and feeds back execu-
+tion results to iteratively refine specifications, im-
+proving robustness to initial errors. Pivotal Trajec-
+tory Analysis corrects LLM priors by analyzing
+RL trajectories; Frontier Checkpointing option-
+ally saves environment states at skill boundaries to
+improve sample efficiency. On Craftax, SCALAR
+achieves 88.2% diamond collection, a 1.9× im-
+provement over the best baseline, and reaches the
+Gnomish Mines 9.1% of the time where prior
+methods fail entirely.
+1. Introduction
+An open challenge in creati
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SCALAR: Learning and Composing Skills
+through LLM Guided Symbolic Planning and Deep RL Grounding
+Renos Zabounidis 1 Yue Wu 1 Simon Stepputtis 2 Woojun Kim 1 Yuanzhi Li 1 Tom Mitchell 1 Katia Sycara 1
+Abstract
+LLM-based agents excel when given high-level
+action APIs but struggle to ground language into
+low-level control. Prior work has LLMs generate
+skills or reward functions for RL, but these one-
+shot approaches lack feedback to correct specifi-
+cation errors. We introduce SCALAR, a bidirec-
+tional framework coupling LLM planning with
+RL through a learned skill library. The LLM pro-
+poses skills with preconditions and effects; RL
+trains policies for each skill and feeds back execu-
+tion results to iteratively refine specifications, im-
+proving robustness to initial errors. Pivotal Trajec-
+tory Analysis corrects LLM priors by analyzing
+RL trajectories; Frontier Checkpointing option-
+ally saves environment states at skill boundaries to
+improve sample efficiency. On Craftax, SCALAR
+achieves 88.2% diamond collection, a 1.9× im-
+provement over the best baseline, and reaches the
+Gnomish Mines 9.1% of the time where prior
+methods fail entirely.
+1. Introduction
+An open challenge in creating LLM-based agents is ground-
+ing their actions in the world they interact with. Despite
+remarkable success in complex domains (Chowdhery et al.,
+2022; OpenAI, 2023; Touvron et al., 2023; OpenAI, 2024;
+Guo et al., 2025), even sophisticated agents interact with
+environments by writing code rather than direct control.
+Voyager (Wang et al., 2023) learns to craft items and ex-
+plore Minecraft by generating code for the Mineflayer (Pris-
+marineJS, 2026) API. The Factorio Learning Environment
+has LLMs write factory automation scripts, with low-level
+execution handled by the underlying system (Hopkins et al.,
+2025). These systems demonstrate sophisticated reasoning,
+but abstract away the low-level control problem entirely.
+1School of Computer Science, Carnegie Mellon University
+2Department of Mechanical Engineering, Virginia Tech. Corre-
+spondence to: Renos Zabounidis <renosz@andrew.cmu.edu>.
+Preprint. March 11, 2026.
+Frontier Skill Discover
+Infeasible 
+Skill
+New Frontier F
+Current 
+Reachable 
+States (     )
+Feasible 
+Skill Ã
+Loop 2-4 Until
+Target Skill
+Trained
+ promote ·  revise
+Skill Ã
+Trajectory Analysi
+Update 
+Frontier
+Initial 
+Candidate 
+Skills
+Train Feasible 
+Skill Ã
+Policy Learnin
+Skill Composition
+Active Policy
+Environment
+State
+Action
+Active 
+Skill
+Episode / Skill
+Termination
+Analyze  
+Trajectories
+Ä
+Skill Library
+Ã3: Accuracy: ?,À3=      
+Ã4: Accuracy: ?,À4=     
+Proposed Skills  
+Ã1: Accuracy: 99%, À1     
+Ã2: Accuracy: 78%, À2      
+Verified Skills  
+LL
+M Skill Proposa
+Symbolic Space
+Game Manual
+Knowledge Base
+LLM Proposes initial 
+Skill Hypothesis
+Candidate Skills
+Skill 1
+Target
+Skill 3
+Reward 
+Fn
+Action 
+Spec
+Skill 1
+Pre:(
+Eff:
+[] Pre Correct?
+[] Eff Correct?
+[] R Correct?
+ Verify Ã,À 
+ Revise Ã 
+Symbolic Trajectories
+Skill Spec
+Action
+Reward 
+Fn
+S1
+S2
+A1
+...
+A2
+S1
+S2
+A1
+...
+...
+A2
+Pre:(
+Eff:
+Figure 1. Overview of SCALAR’s LLM-RL loop. The LLM reads
+the game manual and proposes candidate skills as symbolic opera-
+tors with preconditions and effects (1). Skills whose preconditions
+are reachable from the current frontier are marked feasible and
+added to the skill graph; infeasible skills are deferred (2). Given
+a target skill, a planner sequences existing skills to reach a state
+satisfying its preconditions; an RL agent trains a policy for the
+target skill by executing these prerequisite skills and then learning
+from its own exploration (3). After training, trajectory analysis
+examines successful executions to verify or correct the LLM’s
+initial specification of preconditions and resource requirements
+(4). Revised specifications update the skill graph and inform sub-
+sequent LLM proposals. This loop repeats until the target skill
+achieves sufficient success rate.
+This abstraction enables impressive high-level behavior, yet
+prevents these agents from acquiring motor skills that re-
+quire direct interaction (Dai et al., 2026).
+Li et al. (2024a) quantify this limitation: when LLMs can
+write code for high-level APIs, they craft complex items
+over half the time, but when restricted to low-level motor
+control, the same approach achieves only 70% success on
+basic items and fails entirely at complex tasks. The issue is
+1
+arXiv:2603.09036v1  [cs.LG]  10 Mar 2026
+
+Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding
+not task difficulty but control granularity: code generation
+lets LLMs leverage common-sense planning, while low-
+level motor control requires skills beyond their capabilities.
+Conversely, RL can learn motor control through trial and
+error, but faces intractable exploration when rewards are
+sparse across long action sequences. The challenge is to
+define tasks at the right granularity: structured enough that
+LLMs can specify them from prior knowledge, yet short-
+horizon enough that RL can learn them with reasonable
+exploration. We call such tasks skills.
+Skills are short-horizon behaviors with clear success criteria
+that provide RL with focused objectives and intermediate
+feedback, while giving LLMs a vocabulary for hierarchical
+reasoning (Dayan & Hinton, 1992; Sutton et al., 1999;
+Bacon et al., 2016; Vezhnevets et al., 2017). The challenge
+is to generate, verify, and refine such skills while minimizing
+human engineering. LLMs can propose skill specifications
+including preconditions, effects, and reward functions, but
+these proposals are hypotheses that may be incorrect.
+Prior work has LLMs generate reward functions or subgoal
+sequences that guide RL training (Wu et al., 2024a; Xie
+et al., 2023; Ma et al., 2023; Sun et al., 2024; Liu et al.,
+2024a), but these approaches typically operate in a one-shot
+manner: the LLM proposes, and the RL agent executes, with
+no channel for execution feedback to correct the planner’s
+assumptions. If the LLM overestimates resource needs or
+misses a hidden prerequisite, training fails and the error is
+never diagnosed. Effective LLM-RL integration requires a
+closed loop in which predictions are tested against execution
+and revised based on actual environment interaction.
+We introduce Self-Supervised Composition and Learning
+of Skills with LLM Planning and Reinforcement Learn-
+ing (SCALAR), a framework that couples symbolic LLM
+planning with low-level RL through a learned skill library
+(Figure 1). The LLM proposes skills with preconditions,
+effects, and reward functions; RL trains each skill and feeds
+back execution results to refine the LLM’s specifications.
+Section 3 formalizes skills as symbolic operators and neu-
+ral options, Section 4 details the LLM-RL loop, and Sec-
+tion 5 evaluates on Craftax (Matthews et al., 2024), where
+SCALAR achieves 1.9× higher diamond collection than
+the best baseline on Craftax-Classic and 9% success reach-
+ing the Gnomish Mines versus 0% for prior methods. Our
+contributions are:
+• A bidirectional LLM-RL framework where trajectory
+feedback refines skill specifications
+• Pivotal Trajectory Analysis for correcting preconditions
+and effects from successful executions
+• Frontier Checkpointing to improve sample efficiency by
+reducing re-execution of trained skills
+• Substantial improvements over prior methods on deep
+prerequisite tasks: 1.9× better diamond collection on
+Craftax-Classic and first reported success reaching the
+Gnomish Mines in full Craftax
+2. Related Work
+Unsupervised Skill Discovery. Long-horizon tasks benefit
+from learning collections of skills rather than monolithic
+policies. Traditional methods discover behavioral primi-
+tives through exploration and graph-based representations
+(Bagaria et al., 2021; Ecoffet et al., 2019; Evans & S¸ims¸ek,
+2023). Substantial research frames skill emergence as maxi-
+mizing mutual information between states and skill labels
+(Gregor et al., 2016; Eysenbach et al., 2018; Sharma et al.,
+2019; Hansen et al., 2019; Liu & Abbeel, 2021; Laskin
+et al., 2022), though discriminator-based objectives can sat-
+urate, yielding behaviors that differ only in subtle ways
+(Eysenbach et al., 2018). Recent methods replace MI with
+Wasserstein dependency measures (Ozair et al., 2019; He
+et al., 2022; Park et al., 2021; 2023a;b), pairing them with
+task-relevant state-space metrics. These methods discover
+skills without external guidance; SCALAR instead lever-
+ages LLM priors to propose task-relevant skill structures
+directly.
+LLM-Generated Reward Functions. A natural starting
+point for LLM-RL integration is using LLMs to construct
+reward functions from task descriptions. Early work gen-
+erates reward functions for complete tasks without direct
+agent involvement (Wu et al., 2024a; Xie et al., 2023; Ma
+et al., 2023). Extensions enable dynamic reward adjustments
+based on agent interactions (Deng et al., 2025) or integrate
+LLM-generated subgoal hints into model rollouts (Liu et al.,
+2024b). These methods use LLMs for reward specifica-
+tion; SCALAR goes further by having LLMs specify full
+skill structures including preconditions, postconditions, and
+compositional dependencies.
+LLM-Guided Skill Specification. Beyond reward func-
+tions, LLMs can specify complete skill structures. Methods
+in this space transform high-level goals into skill definitions
+with dense rewards and termination conditions (Cheng &
+Xu, 2023; Mao et al., 2025), or generate subgoal sequences
+before training (Shek & Tokekar, 2025). MaestroMotif
+(Klissarov et al., 2025) combines human-authored skill de-
+scriptions with learned reward models for hierarchical skill
+learning. These approaches follow one-shot specification:
+the LLM proposes skill structures before training, with no
+mechanism to refine them based on execution outcomes.
+Symbolic Planning and RL. The skill structures we gen-
+erate connect to classical AI planning. Symbolic operators
+with preconditions and effects enable STRIPS-style plan-
+ning toward goals (Fikes & Nilsson, 1971). Prior work
+integrates planning with hierarchical RL: SDRL (Lyu et al.,
+2
+
+Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding
+2019) uses symbolic knowledge to guide subtask schedul-
+ing, PEORL (Yang et al., 2018) uses hand-authored action
+models to guide option execution, and taskable RL (Illanes
+et al., 2020) uses symbolic plans as instructional scaffolding.
+These methods assume fixed, high-fidelity symbolic models.
+More recently, SayCan (Ahn et al., 2022) uses LLMs to pro-
+pose high-level plans grounded through learned affordance
+models, and League++ (Li et al., 2024b) has an LLM pro-
+pose plans verified by an A* planner. SCALAR combines
+these threads: we use LLMs to specify STRIPS-like opera-
+tors that classical planners sequence, but unlike prior work,
+we refine these specifications through trajectory analysis
+during training rather than assuming they are correct from
+the start.
+Refining LLM Priors through Interaction. When LLM
+priors prove insufficient, interaction can refine them. Prior
+work focuses on either reward functions (Deng et al., 2025)
+or agentic settings where LLMs execute code directly (Wang
+et al., 2023; Wu et al., 2024b). Voyager refines skills, but
+those skills are code-as-policy, not deep RL. SCALAR ad-
+dresses a different gap: refining symbolic skill specifications
+(preconditions, effects, resource counts) that guide deep RL
+training, combining LLM knowledge with the grounding
+provided by policy execution.
+3. Preliminaries
+3.1. Reinforcement Learning and Abstraction
+Consider a Markov Decision Process with state space S,
+action space A, transition dynamics p(s′ | s, a), and reward
+function r : S × A →R. An agent follows a policy
+π : S →A to maximize cumulative discounted reward
+E[P∞
+t=0 γtr(st, at)].
+For many complex tasks, reward functions are often defined
+over high-level task properties rather than raw observations.
+Achievement criteria such as “craft an iron pickaxe” are
+naturally expressed in terms of inventory contents and object
+placements. This implicitly assumes an abstraction function
+ϕ : S →Z mapping environment states to abstract states
+z ∈Z:
+z = {has(wood, 5), placed(table), . . .}
+Predicates like has and placed capture task-relevant prop-
+erties. The same abstraction that enables symbolic reward
+definition can also support symbolic skill specification:
+skills are defined by preconditions and effects expressed
+as predicates over Z.
+3.2. Skills as Operators and Options
+We formalize skills at two levels: operators define what a
+skill achieves in terms of abstract state transitions, while
+options implement the actual control policy.
+Operators. An operator o specifies how executing a skill
+transforms the agent’s abstract state:
+o = ⟨PRE(o), EFF+(o), EFF−(o)⟩
+Preconditions PRE(o) ⊆Z are predicates required before
+execution. Positive effects EFF+(o) hold upon success; neg-
+ative effects EFF−(o) are cleared. For example, crafting an
+iron pickaxe:
+Make Iron Pickaxe
+Pre:
+placed(table) ∧placed(furnace)
+∧has(stone pickaxe) ∧has(wood, kw) ∧has(iron, ki)
+∧has(coal, kc) ∧kw ≥2 ∧ki ≥1 ∧kc ≥1
+Eff−:
+has(wood, 1), has(iron, 1), has(coal, 1)
+Eff+:
+has(iron pickaxe)
+This operator requires a crafting table, furnace, stone pick-
+axe, and sufficient raw materials. Upon success, it consumes
+wood, iron, and coal while producing an iron pickaxe.
+Options. Operators specify abstract transitions, but exe-
+cuting them requires taking actions in the MDP. An option
+(Sutton et al., 1999) provides this mapping through a learned
+policy πo and a termination function βo : Z →[0, 1]. Given
+state s where PRE(o) ⊆ϕ(s), the option executes πo un-
+til βo signals termination at s′ where EFF+(o) ⊆ϕ(s′).
+Training requires a reward function ro : Z × A →R that
+provides feedback toward achieving EFF+(o).
+Planning with Operators The effects of one operator may
+satisfy the preconditions of another, inducing a dependency
+graph. Given a goal, STRIPS-style planning (Fikes & Nils-
+son, 1971) computes a sequence of operators; executing the
+corresponding options in order transforms the environment
+to satisfy preconditions for subsequent skills. Option termi-
+nation verifies that EFF+ holds, but EFF−is only assumed
+correct since rewards do not constrain resource consump-
+tion.
+Training Options. Options may be trained in isolation
+or compositionally. Isolated training optimizes each pol-
+icy toward its own termination reward, which only verifies
+EFF+; adverse EFF−such as over-consuming resources or
+leaving the environment in a poor state is not directly penal-
+ized. Compositional training executes options sequentially,
+computing advantages across the full trajectory:
+ˆAt =
+∞
+X
+k=t
+(γλ)k−tδk
+These advantages extend beyond πi’s termination. If πi
+over-consumes or damages the environment, downstream
+options suffer and returns propagate back, penalizing the ad-
+verse behavior. Isolated advantages truncate at termination,
+optimizing only for local success.
+3
+
+Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding
+4. SCALAR: Self-Supervised Composition and
+Learning of Skills
+SCALAR learns a library of composable skills by leveraging
+an LLM to propose operators and reinforcement learning to
+train the corresponding options. Algorithm 1 summarizes
+the approach: given a task description, we propose candidate
+operators, validate them, then iteratively train options for
+each skill needed to achieve the goal.
+4.1. Operator Proposal
+Given a task description or game tutorial, an LLM proposes
+a set of candidate skills. This proceeds in stages: first
+proposing what each skill achieves, then grounding those
+specifications in executable code.
+Effects. The LLM first proposes a set of skill names with
+their effects: what becomes true (EFF+) and what is con-
+sumed (EFF−) upon success. For a crafting game, this
+might yield skills like COLLECTWOOD, PLACETABLE,
+MINESTONE, and MAKESTONEPICKAXE. Each effect
+references predicates over the abstract state, such as
+
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding
+- Each value in requirements/consumption should be written as a
+Python lambda function string: "lambda n: a*n + b", where:
+- a = amount of resource consumed PER unit of gain (scales with n)
+- b = amount of resource required but NOT consumed (fixed amount)
+- Ask yourself: "Does this requirement scale with the number of
+times I apply the skill?"
+- If YES (scales with n): use "lambda n: a*n + 0" format
+- If NO (fixed amount): use "lambda n: 0*n + b" format
+- Requirements do not support ’or’
+- Each key in requirements/consumption must be a key in the gain of
+an existing skill.
+# Formatting
+‘‘‘json
+{
+"skill_name": "",
+"updated_requirements": {},
+"updated_consumption": {},
+"updated_gain": {}
+}
+‘‘‘
+Failure Analysis.
+When a skill fails to achieve sufficient success rate below 2%, the LLM analyzes failure trajectories to
+identify missing prerequisites.
+Analyze why this skill failed (success rate < 2%) and identify
+missing prerequisites.
+Current Skill:
+‘‘‘
+{skill_with_consumption}
+‘‘‘
+Existing Skills:
+‘‘‘
+{skills_without_code}
+‘‘‘
+Knowledgebase (available skills):
+‘‘‘
+{knowledge_base}
+‘‘‘
+Failure Trajectory:
+‘‘‘
+{failure_trajectory}
+‘‘‘
+## Task
+Identify what ADDITIONAL prerequisites would address the failure.
+Keep existing requirements - only add what’s missing.
+**Requirements must be GAINS from knowledgebase skills.** Look at
+the "gain" field of skills to find valid requirements.
+**Intrinsic failures (health/food/drink/energy depletion):** Do NOT
+add achievement prerequisites for survival behaviors (COLLECT_DRINK,
+EAT_COW, WAKE_UP, etc.) - these only run once but survival requires
+repeating them throughout the episode. Instead, add ITEM
+prerequisites (wood_sword, stone, etc.) that help the agent survive
+while learning these behaviors within the skill.
+# Output (always return valid JSON)
+‘‘‘json
+{
+"skill_name": "",
+"failure_analysis": "brief description of failure cause",
+"suggested_prerequisites": [],
+"updated_requirements": {},
+"updated_consumption": {},
+"updated_gain": {}
+}
+‘‘‘
+The failure analysis prompt emphasizes that new requirements must come from gains of existing skills in the knowledge
+base, ensuring the dependency graph remains well-formed. The distinction between intrinsic failures from survival depletion
+and capability failures from missing tools or resources guides the LLM toward adding actionable prerequisites rather than
+42
+
+Learning and Composing Skills through LLM Guided Symbolic Planning and Deep RL Grounding
+one-time achievements that cannot sustain the agent through extended skill execution.
+43
+

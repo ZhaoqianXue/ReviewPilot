@@ -1,0 +1,528 @@
+=== PDF FIRST PAGE (title region) ===
+SkillGrad: Optimizing Agent Skills Like Gradient Descent
+Hanyu Wang, Yifan Lan, Bochuan Cao,
+Lu Lin, Jinghui Chen
+College of Information Sciences and Technology
+The Pennsylvania State University
+University Park, PA, USA
+Correspondence to: hbw5365@psu.edu; jzc5917@psu.edu
+Abstract
+Agent skills provide a lightweight way to adapt
+LLM agents to specialized domains by storing
+reusable procedural knowledge in structured
+files. However, whether downloaded from third
+parties or self-generated, these skills are of-
+ten unreliable, incomplete, or outdated. Exist-
+ing skill-evolution methods often address these
+deficiencies through heuristic reflections with-
+out an explicit optimization formulation. In
+this paper, we propose SkillGrad, a gradient-
+descent-inspired framework for optimizing
+agent skills. SkillGrad treats the skill package
+as a structured parameter to optimize in a gra-
+dient descent fashion: task executions provide
+trajectory-level loss evidence, automatic diag-
+noses then provide text-based gradients that
+indicate the correction directions. To stabilize
+optimization across iterations, a momentum
+agent accumulates recurring diagnostic patterns
+into a persistent memory overlay.
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SkillGrad: Optimizing Agent Skills Like Gradient Descent
+Hanyu Wang, Yifan Lan, Bochuan Cao,
+Lu Lin, Jinghui Chen
+College of Information Sciences and Technology
+The Pennsylvania State University
+University Park, PA, USA
+Correspondence to: hbw5365@psu.edu; jzc5917@psu.edu
+Abstract
+Agent skills provide a lightweight way to adapt
+LLM agents to specialized domains by storing
+reusable procedural knowledge in structured
+files. However, whether downloaded from third
+parties or self-generated, these skills are of-
+ten unreliable, incomplete, or outdated. Exist-
+ing skill-evolution methods often address these
+deficiencies through heuristic reflections with-
+out an explicit optimization formulation. In
+this paper, we propose SkillGrad, a gradient-
+descent-inspired framework for optimizing
+agent skills. SkillGrad treats the skill package
+as a structured parameter to optimize in a gra-
+dient descent fashion: task executions provide
+trajectory-level loss evidence, automatic diag-
+noses then provide text-based gradients that
+indicate the correction directions. To stabilize
+optimization across iterations, a momentum
+agent accumulates recurring diagnostic patterns
+into a persistent memory overlay. Finally, an
+LLM-based patcher executes the parameter up-
+date by applying layer-aware edits to the skill
+package. Evaluated on SpreadsheetBench Veri-
+fied and WikiTableQuestions, SkillGrad consis-
+tently outperforms training-based skill evolu-
+tion baselines across two backbone LLMs, im-
+proving over the strongest training-based base-
+line by 6.7 percentage points on average. Ab-
+lations further show that momentum and con-
+trastive diagnosis both contribute to the final
+skill quality. Code will be updated at https:
+//github.com/wwwhy725/SkillGrad
+1
+Introduction
+Large Language Model agents (Yao et al., 2022;
+Wang et al., 2023) have evolved rapidly, achieving
+impressive proficiency in long-horizon decision-
+making tasks such as reasoning (Chang et al.,
+2026b; Xi et al., 2025; Lan et al., 2026), planning
+(Erdogan et al., 2025; Wang et al., 2026b), and
+web navigation (He et al., 2024; Deng et al., 2023;
+Wu et al., 2026). However, many practical agent
+applications require more than general problem-
+solving ability. In specialized, procedure-heavy
+domains, such as spreadsheet manipulation (Chen
+et al., 2024), document editing (Li et al., 2025),
+and codebase maintenance (Li et al., 2026a), agents
+must repeatedly follow domain-specific workflows,
+use specialized tools correctly, and handle recurring
+edge cases. Adapting agents to various domains
+through fine-tuning (Liu et al., 2024; Chang et al.,
+2026a), retrieval pipelines (Zhao et al., 2025), or
+repeated web searches (Shao et al., 2024) can be
+costly or cumbersome, especially when the needed
+knowledge is procedural rather than purely factual.
+To bridge this gap, Agent Skills offer a lightweight
+alternative. They are persistent file packages that
+an agent can load progressively when solving tasks.
+Unlike a flat prompt, a skill is a structured artifact.
+Its metadata determines when it is activated, its
+SKILL.md body is always loaded after activation,
+and additional resources are consulted only when
+relevant.
+However, the usefulness of this adaptation de-
+pends critically on skill quality. SkillsBench (Li
+et al., 2026b) shows that automatically generated
+skills can remain well below expert-written ones,
+and in some cases even degrade agent performance
+relative to using no skill. This problem is broader
+than automatic skill generation, because any fixed
+skill package can omit task-specific edge cases, be-
+come misaligned with the target task distribution,
+or encode brittle assumptions about tools and work-
+flows. Such problems motivate a natural question:
+can we treat a skill as an optimizable artifact and
+systematically improve it after initialization?
+To answer this question, we introduce Skill-
+Grad, a gradient-descent-inspired framework for
+optimizing agent skills. The correspondence is
+conceptual rather than numeric. Agent skills are
+discrete text artifacts, so there is no literal deriva-
+tive. Instead, the analogy provides a principled
+design lens, summarized in Table 1. The parameter
+1
+arXiv:2605.27760v1  [cs.AI]  26 May 2026
+
+is the structured skill package St. At each itera-
+tion, the current skill is executed on a mini-batch
+of tasks, producing outcomes rt,i and trajectories
+τt,i as loss evidence. A diagnoser converts this ev-
+idence into textual update signals dt,i, analogous
+to per-example gradients. Failed trajectories ex-
+pose corrective changes, while contrastive success-
+ful trajectories, where the initial skill failed but the
+current skill succeeds, identify behaviors worth pre-
+serving. A momentum agent accumulates recurring
+patterns into a persistent memory Mt and a current
+overlay Ot, and a patcher applies a layer-aware edit
+to obtain the next skill package St+1.
+We evaluate SkillGrad on SpreadsheetBench Ver-
+ified (Ma et al., 2024) and WikiTableQuestions (Pa-
+supat and Liang, 2015) using two backbone LLMs
+and two sources of initial xlsx skills, one gener-
+ated by an LLM and one downloaded from a third
+party. Both cases share the same goal of optimizing
+the given skill package under a fixed configuration.
+SkillGrad outperforms training-free settings and
+training-based skill improvement baselines, show-
+ing that the framework is effective and not tied to
+a particular skill source. Ablations show that re-
+moving momentum or contrastive diagnosis lowers
+held-out accuracy, and analysis of batch size, itera-
+tion budget, and token cost clarify the behavior and
+budget of the framework.
+In summary, our contributions are three-fold:
+• We formulate agent skill improvement as opti-
+mization over a structured skill artifact, with
+explicit analogues of parameter, loss evidence,
+gradient, momentum, and update.
+• Based on the formulation, we propose Skill-
+Grad, a multi-agent framework that diagnoses
+executions, accumulates recurring patterns,
+and applies layer-aware skill patches.
+• Empirical experiments demonstrate that Skill-
+Grad improves agents on spreadsheet tasks
+from both LLM-generated and third-party ini-
+tial skills, with gains under in-domain and
+out-of-domain evaluations.
+2
+Related Work
+Recent work has explored agent skills as reusable
+artifacts that can be generated, updated, and reused
+by LLM agents. The training-based baselines in
+our experiments are EvoSkill and Trace2Skill be-
+cause both consume task executions and produce
+Gradient descent
+SkillGrad optimization
+Parameter
+Structured skill package St
+Loss evidence
+Task outcome and trajectory
+evidence Et(Ti)
+Gradient signal
+Task diagnosis dt,i
+Momentum
+Pattern memory Mt and over-
+lay Ot
+Parameter Update
+Layer-aware patch St+1
+=
+Patch(St, {dt,i}B
+i=1, Mt, Ot)
+Table 1: Conceptual correspondence between gradient
+descent and SkillGrad.
+standalone skill artifacts, which allows all meth-
+ods to be evaluated under the same initialization,
+training tasks, backbone model, and held-out split.
+EvoSkill (Alzubi et al., 2026) follows an iterative
+skill evolution formulation. It analyzes failed exe-
+cutions, turns the resulting diagnoses into new or
+revised skills, and selects candidates using held-
+out validation performance. This corresponds to
+a failure-driven update strategy with validation-
+based selection, while SkillGrad optimizes one cur-
+rent skill artifact using both failed executions and
+contrastive successful executions as loss evidence.
+Trace2Skill (Ni et al., 2026) follows a trajectory-to-
+skill distillation formulation. It analyzes a pool of
+execution trajectories, extracts local lessons, and
+hierarchically consolidates them into a unified skill
+directory. This gives an offline trace-distillation
+strategy, while in comparison, SkillGrad repeat-
+edly executes the current skill so that each update
+changes the evidence observed in later iterations.
+Other skill-oriented systems study broader forms
+of skill acquisition, memory, and reuse. SkillX
+(Wang et al., 2026a) constructs a plug-and-play
+skill knowledge base by organizing experience into
+multi-level skills, refining them with execution
+feedback, and expanding the library with newly
+generated skills. SkillClaw (Ma et al., 2026) studies
+collective skill evolution in multi-user agent ecosys-
+tems, where trajectories accumulated across users
+are aggregated to refine existing skills or extend
+a shared skill repository. Memento-Skills (Zhou
+et al., 2026) treats structured markdown skills as
+persistent memory, enabling agents to retrieve, up-
+date, and expand task-specific skills through a read–
+write learning loop. CoEvoSkills (Zhang et al.,
+2026) constructs complex multi-file skill packages
+through a skill generator and a separate verifier that
+critiques executions and provides feedback for later
+revisions. AutoSkill (Yang et al., 2026) focuses on
+2
+
+lifelong personalized agents by deriving, maintain-
+ing, and reusing skills from user dialogue and inter-
+action traces. Together, these works broaden agent
+skill learning toward skill libraries, shared repos-
+itories, verifier-guided construction, and lifelong
+personalization.
+3
+Methodology
+This section describes how SkillGrad instantiates
+the optimization analogy introduced in Section 1.
+We first provide the overview of the framework in
+Section 3.1. We then define the skill as the optimiz-
+able parameter (Section 3.2), describe execution
+outcomes and trajectory evidence (Section 3.3),
+construct diagnoses as gradient-like signals (Sec-
+tion 3.4), introduce cross-iteration momentum (Sec-
+tion 3.5), and close with the layer-aware skill up-
+date (Section 3.6).
+3.1
+Overview
+SkillGrad optimizes a structured skill through the
+iterative loop shown in Figure 1. At each iteration,
+the executor applies the current skill to a mini-batch
+of training tasks. The resulting outcomes and tra-
+jectories provide loss evidence. Failed executions
+reveal missing or incorrect guidance, while con-
+trastive successful executions reveal behaviors that
+the current skill has learned to perform and should
+preserve. A diagnoser converts these observations
+into task-level diagnoses and aggregates them into
+a batch diagnosis. The momentum agent then up-
+dates a persistent record of recurring patterns and
+writes a compact overlay for the current batch. Fi-
+nally, the patcher edits the structured skill package,
+producing the skill used in the next iteration. This
+loop mirrors the operational structure of gradient
+descent, which evaluates the current parameter, de-
+rives updated evidence from observed outcomes,
+accumulates recurring directions, and applies an
+update to obtain the next parameter. The corre-
+spondence is conceptual, but it gives each module
+a clear role in the skill optimization process.
+3.2
+Parameter
+The trainable parameter in gradient descent is typi-
+cally the weight vector θ of a model fθ. In skill opti-
+mization, the parameter is instead the skill package
+S. A skill is not a flat prompt, but a progressively
+disclosed artifact with three layers:
+• L1: Metadata. YAML skill description.
+• L2: SKILL.md file.
+The full body of the
+SKILL.md file, which contains principles, pro-
+cedural workflows, operations, code examples,
+and common pitfalls.
+• L3: Resources. Additional files form the
+third layer of the skill, serving as conditional
+resources for longer procedures, edge cases,
+and worked examples.
+We write this as
+S = (H, B, Q),
+where H denotes the metadata header, B denotes
+the always-loaded SKILL.md body, and Q denotes
+the set of conditionally loaded resources.
+This structure makes skill optimization different
+from ordinary prompt optimization (Agrawal et al.,
+2025; Ren et al., 2026). Since B is always loaded
+after the skill activates, it should contain compact
+and broadly useful guidance. Since Q is loaded
+only when referenced, it can contain longer proce-
+dures, edge cases, and worked examples without
+burdening unrelated executions. A useful update
+must therefore decide not only what knowledge
+to add, but also where that knowledge should live.
+Placing narrow task detail in B can distract the
+executor on future tasks, while placing core work-
+flow guidance only in Q can prevent the executor
+from loading it when needed. SkillGrad treats this
+routing decision as part of the parameter update.
+Appendix E shows representative initial and opti-
+mized skill excerpts, and Appendix B summarizes
+runtime retrieval of learned L3 resources.
+3.3
+Loss Evidence
+For skill optimization in an agentic setting, the
+most immediate analogue of a loss is the evaluated
+task outcome. Given a task T and a skill S, the ex-
+ecutor produces an output that is evaluated against
+the reference answer. We denote the task success
+indicator as
+R(S; T ) =
+(
+1,
+if the agent output passes,
+0,
+otherwise.
+This gives the terminal binary loss
+Lbin(S; T ) = 1 −R(S; T ).
+The binary loss is the scalar signal used to evalu-
+ate task success, but it is too sparse to be the only
+signal used to update a structured skill. If updates
+were based only on Lbin, failed executions would
+3
+
+Structured Skill
+L1: Metadata
+L2: SKILL.md
+L3: Resources
+Batch
+Per-task
+Diagnosis
+Momentum
+Recurring
+Patterns
+Patch
+Layer-aware
+Update
+Next Iteration
+Failure
+Current Failed
+Execution
+vs.
+Contrastive
+Current Success
+Initial Failure
+Loss Evidence
+SkillGrad
+Execution
+Task!
+Mini-Batch
+Task"
+……
+Figure 1: Overview of SkillGrad. Given a structured skill and a mini-batch of training tasks, the executor produces
+trajectories and outcomes. SkillGrad turns failed executions and contrastive successful executions into loss evidence,
+diagnoses reusable update signals, accumulates recurring patterns through textual momentum, and applies a layer-
+aware patch to obtain the next skill.
+be retained as repair evidence, while every suc-
+cessful execution would collapse to zero and be
+discarded. This mirrors the limitation of a hard 0-1
+loss in supervised learning. A classifier can pre-
+dict the correct label while still receiving a nonzero
+cross-entropy loss, because the predictive distribu-
+tion may not yet be robust. Therefore, gradient
+descent does not discard a training instance simply
+because its discrete prediction is correct. Although
+agent trajectories are not differentiable probability
+vectors, final correctness likewise does not imply
+that an execution contains no useful learning signal.
+SkillGrad therefore uses the binary loss as the
+terminal evaluation signal, while constructing a
+richer trajectory-level object as loss evidence. Let
+rt(T ) = R(St; T ), and let ct(T ) denote the evalu-
+ator feedback for the execution at iteration t, such
+as the comparison between the produced output
+and the reference answer. We intentionally sam-
+ple the training tasks from failures of the initial
+skill. Thus, a current success can be paired with
+the corresponding initial failure. We define the loss
+evidence as
+Et(T ) =
+
+
+
+{τ −
+t , ct},
+rt(T ) = 0,
+{τ +
+t , τ −
+0 , c0},
+rt(T ) = 1,
+(1)
+where τ −
+t and τ +
+t denote failed and successful tra-
+jectories under the current skill St, and τ −
+0 denotes
+the failed trajectory from the initial skill S0 on
+the same task. The two branches provide com-
+plementary evidence. Failed trajectories identify
+behaviors associated with high terminal loss and
+support corrective diagnoses. Contrastive success-
+ful trajectories identify what changed between an
+earlier failure and the current successful execution,
+such as a more robust coding strategy, a complete
+inspection step, or a verification step that prevents
+common errors.
+This evidence design distinguishes SkillGrad
+from failure-only skill evolution methods such as
+Alzubi et al. (2026). Such methods diagnose failed
+trajectories, but do not use successful trajectories
+as diagnostic evidence. In contrast, our framework
+is motivated by the same intuition as gradient de-
+scent that correct terminal outcomes do not imply
+zero learning signal. Even when the current skill
+succeeds on a task, the successful trajectory can
+still provide useful inf
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Patcher prompt (continued)
+At iter 1 the base skill (~40 lines: YAML frontmatter + Quick Start + one
+operation section + Common Pitfalls) is your starting point. Existing base
+content stays unless the iter-1 evidence justifies change.
+- No iter-1 ban on L3. Principle 5 (textbook density) governs.
+- No iter-1 cap on operation H2 count. YAGNI + Frequency awareness govern.
+- No iter-1 mandate to keep or strip Quick Start; evidence decides.
+- `momentum_memory.md` is empty at iter 1. Empty prior record does not mean
+absent coverage - read the base skill before deciding what to patch.
+---
+# Section 8 - Worked example
+**Inputs for this iter:**
+*Workflow cluster A* - two successful / contrastive entries sharing a thinking
+step:
+```
+W1: signal=success, pattern=classify-before-operate, anchor=classify-input-first
+gap: executor read the input structure before choosing the operation path;
+task succeeded where prior attempts skipped this step and chose wrong path
+W2: signal=success, pattern=classify-before-operate, anchor=classify-input-first
+gap: same classify-before-operate step confirmed on a second task variant
+```
+WORKFLOW-THEMES emits: `classify input structure before choosing operation path:
+appeared in W1, W2 | covers: read input structure at planning time to select
+the correct branch`.
+*Operation cluster B* - one failure entry with recurrence:
+```
+O1: signal=failure, pattern=operation-X-precondition-check,
+anchor=verify-predicate-P-before-operation-X
+gap: executor applied operation-X without verifying predicate P on full
+input scope; produced incorrect deliverable Y; remedy_log shows two
+prior atomic edits at this anchor that did not resolve recurrence
+proposed_change: lift full branched algorithm to references/topic.md;
+rewrite L2 section to brief abstract + pointer
+```
+**Step 1 - Brainstorm for cluster A (workflow).**
+Option 1: add a new workflow H2 "Classify input structure before choosing
+operation path" with a 4-item procedural checklist.
+Option 2: extend an existing planning H2 by adding one checklist item.
+Option 3: add a brief prose paragraph in Quick Start.
+Frequency awareness: W1+W2 both support this theme; the behavior generalizes
+across operation-X variants. Option 1 fits best - a narrow, standalone workflow
+H2 is readable, skimmable, and leaves room to grow.
+**Step 2 - Patch cluster A.**
+Write or extend the workflow H2 "Classify input structure before choosing
+operation path":
+- Item 1: observe the input's structure (not the task description).
+- Item 2: select the operation branch based on that observation.
+- Item 3: record the chosen category; treat subsequent prompt language about
+category as metadata, not a directive to change the artifact.
+This H2 sits near the top of SKILL.md (before operation H2s).
+**Step 3 - Brainstorm for cluster B (operation + L3).**
+Option 1: strengthen the existing L2 inline rule ("check predicate P before
+operation-X") again - but remedy_log shows two prior atomic edits did not
+resolve recurrence; in-place edits are suspect.
+Option 2: lift the branched verification algorithm to
+`references/topic.md` and replace the L2 section with a brief abstract +
+25
+
+Patcher prompt (continued)
+pointer - structural move justified by recurrence >= 3.
+Option 2 is chosen.
+**Step 4 - Patch cluster B.**
+L2 operation-X section becomes:
+```
+## Operation-X
+Apply operation-X to produce deliverable Y. Verify predicate P on full input
+scope before writing output.
+Read references/topic.md when operation-X output must satisfy predicate P.
+Skip when the caller guarantees P on the input before invoking operation-X.
+```
+New L3 chapter `references/topic.md`:
+```python
+# Verify predicate P before operation-X
+# Branch A: input not pre-filtered - check full scope
+if not all(predicate_P(item) for item in input_scope):
+failing = [item for item in input_scope if not predicate_P(item)]
+raise ValueError(f"predicate P violated by: {failing}")
+# Branch B: input is pre-filtered by caller - skip check
+result = apply_operation_x(input_scope)
+# Verification: re-read deliverable Y and confirm P on written values
+written = read_deliverable_y()
+assert all(predicate_P(v) for v in written), "post-write P check failed"
+```
+Chapter also includes a trigger paragraph and a corrective step: if the
+post-write assertion fires, re-run the full-scope check to locate the
+violation before any further write.
+**Step 5 - Final read-back.**
+- Common Pitfalls: add a cross-cutting item for the predicate-P pattern if the
+Common Pitfalls section doesn't already mention scope-check failures.
+- Confirm no orphan L3: the new `references/topic.md` has its L2 pointer
+in the operation-X section above.
+- Confirm workflow H2 around 10 items: the new H2 has 3 items - within limit.
+**Output:** 2 `write_file` calls - `SKILL.md` (workflow H2 added, operation-X
+section rewritten) and `references/topic.md` (new L3 chapter).
+26
+

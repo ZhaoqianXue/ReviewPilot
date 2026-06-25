@@ -1,0 +1,602 @@
+=== PDF FIRST PAGE (title region) ===
+Library Drift: Diagnosing and Fixing a Silent Failure Mode
+in Self-Evolving LLM Skill Libraries
+Xing Zhang 1 Yanwei Cui 1 Guanghui Wang 1 Ziyuan Li 2 Wei Qiu 2 Bing Zhu 2 Peiyang He 1
+Abstract
+Self-evolving skill libraries face a silent failure
+mode we term library drift: unbounded skill
+accumulation without outcome-driven lifecycle
+management causes retrieval degradation, false-
+positive injections, and performance stagnation.
+Recent evaluation confirms the symptom—LLM-
+authored skills deliver +0.0pp gain while human-
+curated ones deliver +16.2pp (SkillsBench (Li
+et al., 2026))—yet the underlying mechanism
+has not been isolated.
+We provide (1) a re-
+producible trigger: ablations that isolate drift—
+one disables skill injection (flat floor, +0.002),
+one imposes premature retirement (active harm,
+−0.019); (2) trace-level diagnostics: an append-
+only evidence log with per-skill contribution
+scores, attribution verdicts, and router engage-
+ment metrics that make the failure visible be-
+fore it reaches end-task scores; and (3) a veri-
+fied fix: a minimal governance recipe (outcome-
+driven retirement + bounded active-cap + meta-
+skill authoring prior) that lifts held-out pass@1
+from a 0
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Library Drift: Diagnosing and Fixing a Silent Failure Mode
+in Self-Evolving LLM Skill Libraries
+Xing Zhang 1 Yanwei Cui 1 Guanghui Wang 1 Ziyuan Li 2 Wei Qiu 2 Bing Zhu 2 Peiyang He 1
+Abstract
+Self-evolving skill libraries face a silent failure
+mode we term library drift: unbounded skill
+accumulation without outcome-driven lifecycle
+management causes retrieval degradation, false-
+positive injections, and performance stagnation.
+Recent evaluation confirms the symptom—LLM-
+authored skills deliver +0.0pp gain while human-
+curated ones deliver +16.2pp (SkillsBench (Li
+et al., 2026))—yet the underlying mechanism
+has not been isolated.
+We provide (1) a re-
+producible trigger: ablations that isolate drift—
+one disables skill injection (flat floor, +0.002),
+one imposes premature retirement (active harm,
+−0.019); (2) trace-level diagnostics: an append-
+only evidence log with per-skill contribution
+scores, attribution verdicts, and router engage-
+ment metrics that make the failure visible be-
+fore it reaches end-task scores; and (3) a veri-
+fied fix: a minimal governance recipe (outcome-
+driven retirement + bounded active-cap + meta-
+skill authoring prior) that lifts held-out pass@1
+from a 0.258 baseline to a late-window mean
+of 0.584 (rolling gain +0.328) on MBPP+ hard-
+100 over 100 rounds. Eight ablations decompose
+which governance mechanisms are load-bearing
+and which are subsumed, providing a concrete
+playbook for diagnosing library drift in any self-
+evolving agent.
+1. Introduction
+Self-evolving skill libraries—pioneered by Voyager (Wang
+et al., 2023)—let frozen LLM agents accumulate reusable
+procedural knowledge without weight updates. The promise
+is compounding: each solved task deposits a skill that accel-
+erates future tasks. Yet SkillsBench (Li et al., 2026) reveals
+a striking gap: LLM-authored skills deliver +0.0pp over no-
+1AWS Generative AI Innovation Center 2HSBC Holdings Plc.,
+HSBC Technology Center, China. Correspondence to: Peiyang He
+<peiyan@amazon.com>.
+Preprint. May 20, 2026.
+skill baselines while human-curated ones deliver +16.2pp.
+A recent survey (Zhang et al., 2026a) of 20+ such systems
+reports that lifecycle management—versioning, conflict de-
+tection, deprecation—is “largely neglected.” The libraries
+grow, but the agents do not improve.
+We identify a specific, diagnosable failure mode behind this
+gap: library drift. As skills accumulate without quality
+gates, the library degrades retrieval precision, injects stale
+or harmful guidance, and the agent’s effective performance
+stagnates or drops below its no-skill baseline. The fail-
+ure is silent—end-task metrics decline gradually with no
+explicit error signal—making trace-level diagnostics essen-
+tial. While we demonstrate drift on single-call code tasks,
+the mechanism applies more acutely to multi-step agents,
+where a single misleading injection compounds through
+downstream tool calls and planning decisions.
+This paper makes three contributions toward understanding
+and fixing failure modes in agentic systems:
+1. Failure definition and reproducible trigger (Sec. 3):
+We define library drift operationally and show two
+ablations that bracket it—one establishes the no-skill
+floor (A1, +0.002), one triggers active harm via pre-
+mature retirement (A4, −0.019)—providing minimal
+reproductions for any system.
+2. Trace-level diagnostics beyond final scores (Sec. 4):
+An append-only evidence log with per-skill contribu-
+tion scores, attribution verdicts, and router engagement
+metrics exposes drift at per-skill granularity—before it
+reaches aggregate pass@1.
+3. Verified fix with documented trade-offs (Sec. 5):
+A minimal governance recipe (Ratchet)—outcome-
+driven retirement, bounded active-cap, meta-skill au-
+thoring prior—lifts held-out pass@1 by +0.328. Eight
+ablations decompose which mechanisms are load-
+bearing and which are safely removed.
+2. Background and Related Work
+Self-evolving skill libraries.
+Voyager (Wang et al., 2023)
+pioneered the ever-growing executable skill library in
+1
+arXiv:2605.19576v1  [cs.AI]  19 May 2026
+
+Library Drift: A Failure Mode in Self-Evolving Agents
+data ﬂow
+memory read / write
+inference band
+memory band
+reﬂection band
+INFERENCE
+per task · solves the problem
+MEMORY
+persistent · append-only · shared across rounds
+REFLECTION
+per round · writes new skills, curates the bank
+Task
+benchmark item
+Router
+LLM picks 0 or 1 skill
+Solver
+LLM + skill →code
+Grader
+outcome: pass / fail
+Capsule
+(task, skill, outcome)
+Skill Bank
+ACTIVE + DEPRECATED · never deletes
+Meta-Skill Bank
+one ACTIVE · authoring prior
+Evidence Log
+Capsules + Verdicts · append-only
+Critic
+capsule →verdict
+(helped/hurt · pattern)
+Synthesizer
+cluster-by-pattern (canonicalised)
+→new skill
+Curator
+retire if
+contribution < θ
+Meta-Synth
+every N rounds
+rewrites schema / prior
+verdict
+read bank
+chosen skill
+write
+capsules
+verdicts
+authoring
+new skill
+retire
+reads
+rewrite
+Ratchet: a monotonic skill-library loop
+Every round grows an evidence-driven skill bank; a slower cadence rewrites the meta-skill that authors it.
+Figure 1.
+The Ratchet loop and where library drift is diagnosed and fixed.
+Inference (top):
+each task flows through
+Router →Solver →Grader →Capsule. Memory (middle): Skill Bank, Meta-Skill, and Evidence Log. Reflection (bottom): the
+Critic produces attribution verdicts (the diagnostic signal); the Curator retires under-performers and enforces the bounded cap (the fix).
+Without outcome-driven retirement and the bounded cap, the Skill Bank accumulates unchecked and library drift emerges.
+Minecraft; ExpeL (Zhao et al., 2024) extracts textual in-
+sights from trajectories but lacks outcome-driven retirement;
+AutoManual (Chen et al., 2024) compiles instruction manu-
+als; CASCADE (Huang et al., 2025) pairs meta-skills with
+cumulative creation; AutoSkill (Yang et al., 2026) adds ver-
+sioning but does not retire on measured per-task contribution.
+Concurrent work advances orthogonal axes: EvolveR (Wu
+et al., 2025) distills trajectories into strategic principles;
+Trace2Skill (Ni et al., 2026) induces skills from trace pools;
+Strategy Genes (Wang et al., 2026) attaches failure history
+as metadata. A recent survey (Zhang et al., 2026a) of 20+
+such systems reports that lifecycle management is “largely
+neglected”; none pairs outcome-driven retirement with a
+bounded active-cap—the two mechanisms our ablation anal-
+ysis identifies as load-bearing for preventing drift.
+Agent failure modes.
+Prior work catalogs failure modes
+in tool use (Schick et al., 2023), planning (Yao et al., 2023),
+and self-correction (Shinn et al., 2023; Madaan et al., 2023).
+Library drift is a distinct failure mode specific to persis-
+tent cross-task memory: it emerges only when accumulated
+artifacts degrade future performance through a retrieval bot-
+tleneck. Catastrophic forgetting in weight-update systems
+occurs when new gradients overwrite previously learned
+representations (Kirkpatrick et al., 2017). Library drift is its
+frozen-weight counterpart: persistent skill artifacts replace
+neural weights as the degradation substrate, but the same
+fundamental issue applies—accumulating new information
+can degrade the system’s prior performance unless lifecycle
+management actively protects useful knowledge. Where
+EWC adds a regulariser over parameter space, our fix adds
+retirement and a bounded cap over skill space.
+Diagnostic signals.
+LLM-as-judge (Zheng et al., 2023) re-
+ports >80% agreement with human preferences; we extend
+this into per-skill attribution verdicts (helped/hurt/neutral)
+from a closed label set, requiring ≥3 failures sharing a
+canonical pattern before any skill is born. This detects drift
+before it surfaces in aggregate metrics—an early-warning
+system rather than a post-hoc evaluator.
+3. Library Drift: Definition and Trigger
+3.1. Operational definition
+Library drift occurs when a self-evolving skill library’s accu-
+mulated artifacts reduce the agent’s expected performance
+2
+
+Library Drift: A Failure Mode in Self-Evolving Agents
+below its no-skill baseline on a fixed task distribution. Let
+St be the active skill set at round t and p0 the no-skill pass
+rate. Drift manifests when:
+E[pass@1 | St] < E[p0]
+(1)
+for some t > 0. Crucially, drift can occur even when every
+individual skill appears reasonable—the failure is systemic,
+arising from retrieval dilution and stale injection at the li-
+brary level.
+3.2. Mechanism
+Library drift proceeds through three compounding stages:
+1. Accumulation without quality signal. Skills are born
+from failure patterns but never validated against out-
+comes. Marginal or harmful skills dilute the retrieval
+pool with each round.
+2. Retrieval degradation. The router selects skills by
+surface similarity. As the bank grows unbounded, near-
+duplicate or stale skills crowd out useful ones, degrad-
+ing precision at constant recall.
+3. Silent injection harm. A stale skill injected into the
+solver prompt actively misleads, but produces no ex-
+plicit error—the solver simply fails more often, indis-
+tinguishable from inherent task difficulty.
+In practice, these stages produce three distinguishable drift
+sub-modes depending on the governance regime: stagna-
+tion—skills accumulate but fail to reach the solver (no
+routing signal, no learning; A1 reproduces this floor);
+bloat—unbounded growth degrades retrieval until injec-
+tions become harmful (the failure mode of systems with-
+out a cap (Wang et al., 2023; Zhao et al., 2024); pre-
+vented in our Default by the active-cap); and erosion—over-
+aggressive governance destroys useful skills faster than they
+accumulate, collapsing the bank (A4 retains only 2 active
+skills). Which sub-mode dominates depends on governance
+strength: too little permits bloat, too much causes erosion,
+and disconnecting injection produces stagnation.
+3.3. Reproducible triggers
+We demonstrate library drift with two ablations of our full
+system (Ratchet; Sec. 5), both run on MBPP+ hard-100 (Liu
+et al., 2023) with Claude Opus 4.7 over 100 rounds:
+A1 (no skill injection): The Router is forced to NONE—
+the full pipeline (synthesizer, critic, curator) still runs, but
+no skill is ever injected into the solver prompt. The critic
+produces 0 calls because no skill-attributed failures exist
+to judge. Result: +0.002±0.005 gain (the no-skill floor).
+This isolates the routing effect: skill creation alone, without
+injection, produces no gain.
+A4 (harsh retirement): Evidence floor Nmin reduced
+from 100 to 20; threshold τ tightened to 0.0.
+Result:
+−0.019±0.010—below the no-skill baseline. The library
+actively harms performance. With only 20 trials, the Ho-
+effding deviation is ϵ ≈0.44; skills with true contribu-
+tion c ∈[−0.44, 0] are prematurely retired on unlucky
+draws, while genuinely harmful skills may survive early
+rounds before enough evidence accumulates. The bank col-
+lapses to 2 active skills, and the router’s 18.9% engagement
+means it rarely injects—yet when it does, the surviving
+skills hurt. The effect is consistent across all three seeds
+(−0.005, −0.027, −0.025; Table 3), confirming that harsh
+retirement reliably triggers erosion rather than reflecting a
+single unlucky run.
+Together, these triggers bracket the failure mode from both
+sides: A1 shows that skills must be injected to matter; A4
+shows that na¨ıve lifecycle management can be worse than
+none. A4 is a cautionary negative result: governance is
+not uniformly beneficial—acting on insufficient evidence
+(Nmin = 20 vs. the Default’s 100) actively harms perfor-
+mance rather than merely failing to help.
+4. Trace-Level Diagnostics
+End-task metrics (pass@1, solve rate) are insufficient to
+diagnose library drift: they conflate task difficulty, model
+stochasticity, and library quality into a single number. We
+introduce three complementary diagnostic signals that de-
+compose the failure into actionable components:
+4.1. Per-skill contribution score
+For each active skill s, we track:
+ˆc(s) = successes(s) −failures(s)
+trials(s)
+(2)
+computed from the evidence log (capsules where s was
+injected). A declining mean ˆc across the bank signals drift—
+the library is accumulating skills that do not help. In the
+Default condition, mean ˆc rises over rounds (skills that hurt
+are retired); in A4, it oscillates because premature retirement
+removes useful skills.
+4.2. Attribution verdicts
+For every failure capsule, a separate Critic LLM call pro-
+duces a structured verdict: HELPED, HURT, NEUTRAL, or
+INAPPLICABLE, plus a pattern label and confidence. These
+verdicts serve dual purpose: (1) synthesis substrate (clusters
+of ≥3 failures sharing a canonical pattern trigger new skills),
+and (2) early-warning diagnostic. A rising proportion of
+HURT verdicts is a leading indicator of drift: in A4, the bank
+collapses to 2 active skills by round 30 (visible in router
+engagement dropping to 18.9%), while aggregate pass@1
+3
+
+Library Drift: A Failure Mode in Self-Evolving Agents
+declines only gradually because the router adaptively selects
+NONE on most tasks.
+4.3. Router engagement metrics
+We track what fraction of tasks the router assigns a skill ver-
+sus NONE. Table 1 shows that healthy conditions maintain
+70–80% engagement, while A4 (drifting) drops to 19% as
+the bank empties. A2 (retrieval-only, no LLM gate) shows
+98% engagement but lower quality—the LLM gate’s ability
+to decline injection is itself a drift-prevention mechanism.
+5. Verified Fix: The Ratchet Recipe
+Having defined the failure mode and the diagnostics that
+expose it, we now describe the fix. Ratchet is a single-agent
+loop where a frozen LLM writes, retrieves, curates, and
+retires its own natural-language skills. Three governance
+mechanisms jointly prevent library drift:
+5.1. Outcome-driven retirement
+A skill is retired once n(s) ≥Nmin trials have accumulated
+and the empirical contribution ˆc(s) ≤−τ. The Default
+uses Nmin = 100, τ = 0.10—conservative enough that
+useful skills survive stochastic noise (Hoeffding ϵ ≈0.20)
+but aggressive enough that harmful skills are eventually
+removed. This directly addresses the “accumulation without
+quality signal” stage of drift.
+5.2. Bounded active-cap
+A hard cap C (Default: 50) forces the curator to evict
+the lowest-contribution skill when synthesis would exceed
+the cap. This directly addresses the “retrieval degradation”
+stage: by bounding the bank, retrieval precision cannot de-
+cay with unbounded growth. Combined with retirement, it
+provides a formal non-divergence guarantee:
+Proposition 1. Under bounded cap C and retirement thresh-
+old τ, the expected eval pass@1 cannot drift below the
+no-skill floor by more than τ + ϵ + Cδ, where ϵ is the Ho-
+effding estimation tolerance and δ is the per-skill failure
+probability.
+Systems without bounded C and τ (Wang et al., 2023; Zhao
+et al., 2024; Chen et al., 2024) have no finite analogue of
+this bound—library drift is unconstrained.
+5.3. Meta-skill authoring prior
+A meta-skill document constrains the Synthesizer to produce
+stylistically consistent skills. This addresses the “silent
+injection harm” stage at its source: by enforcing structural
+homogeneity, fewer harmful or redundant skills are born in
+the first place, reducing the load on downstream retirement.
+Ablation A3 (no meta-skill) shows that removing it costs
+43% of the Default’s gain—it is the single most valuable
+component.
+Surprisingly, explicit deduplication mechanisms (pattern
+canonicalisation, A5; cover-guard, A6) are not necessary
+given the meta-skill: A5 and A6 slightly exceed the Default.
+The meta-skill subsumes explicit dedup at this scale—a
+design insight relevant to any system with LLM-authored
+artifacts.
+6. Experiments
+6.1. Protocol
+We evaluate on MBPP+ hard-100: from the 378-task
+MBPP+ test split (Liu et al., 2023), we discard tasks that
+Claude Opus 4.7 solves on all 5 baseline seeds (∼273 tasks)
+and randomly sample 100 from the remainder (60 train / 40
+eval, fixed seed). This isolates tasks where a skill library
+can plausibly help. All LLM calls use Claude Opus 4.7; em-
+beddings use Cohere embed-v4 (both via Amazon Bedroc
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Library Drift: A Failure Mode in Self-Evolving Agents
+Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z.,
+Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E. P., Zhang, H.,
+Gonzalez, J. E., and Stoica, I. Judging LLM-as-a-judge
+with MT-bench and chatbot arena. In Advances in Neural
+Information Processing Systems, volume 36, 2023.
+A. System Architecture
+Ratchet operates a five-phase loop per round: (1) Eval:
+routes active skills on held-out tasks; (2) Train: same
+pipeline on train split,
+generating failure substrate;
+(3) Critic:
+per-failure attribution verdict (LLM call);
+(4) Synthesizer: clusters failures by canonical pattern, au-
+thors new skills from clusters with ≥3 members; (5) Cura-
+tor: computes contribution scores, retires under-performers,
+enforces cap.
+The Router selects one skill or NONE per task via two-stage
+retrieval (tf-idf + embedding, K=10 each) followed by an
+LLM gate.
+B. Hyperparameters
+Table 2. Default configuration hyperparameters.
+Knob
+Purpose
+Value
+Active-cap C
+Max active skills
+50
+Nmin
+Evidence floor
+100
+τ
+Retirement threshold
+0.10
+Canon threshold
+Pattern dedup
+0.85
+Cover threshold
+Cluster skip
+0.85
+Bank-dedup threshold
+Skill YAML dedup
+0.85
+Skill length budget
+YAML char cap
+1500
+Synth lookback
+Verdict window
+6 rounds
+Min cluster size
+Synthesis trigger
+3
+Max skills/round
+Synthesis cap
+2
+Router cutoff
+Full-bank mode
+20
+Retrieval K
+Shortlist size
+10
+Rollback τrb
+Regression depth
+0.10
+Rollback persistence
+Consecutive rounds
+5
+Rounds
+Per run
+100
+Seeds
+Per condition
+42, 7, 13
+C. Per-Seed Results
+D. Non-Divergence Proof Sketch
+Proposition 1. Let |St| ≤C, and suppose the Curator
+retires skill s when n(s) ≥Nmin and ˆc(s) ≤−τ. Un-
+der Hoeffding bounds with tolerance ϵ and per-skill failure
+probability δ:
+With probability ≥1 −Cδ (union bound over C skills),
+every surviving skill has c(s) ≥−τ −ϵ. Tasks routed to a
+surviving skill have expected pass probability ≥p0(x)−τ −
+ϵ; tasks routed to NONE achieve p0(x). Taking expectations:
+E[pass@1] ≥E[p0] −(τ + ϵ) −Cδ.
+With Default values (τ = 0.10, Nmin = 100, C = 50,
+δ = 10−3): ϵ ≈0.20, floor = E[p0] −0.35. The bound
+is loose at our scale (the system gains +0.328 rather than
+losing 0.35) but rules out unbounded degradation.
+8
+
+Library Drift: A Failure Mode in Self-Evolving Agents
+Table 3. Per-seed rolling-mean gain and peak on MBPP+ hard-100.
+Condition
+Seed
+Baseline
+Peak
+Gain
+Default
+42
+0.225
+0.675
++0.303
+7
+0.225
+0.600
++0.340
+13
+0.325
+0.700
++0.343
+A1 no injection
+42
+0.325
+0.375
++0.003
+7
+0.275
+0.375
+−0.005
+13
+0.250
+0.375
++0.008
+A2 retrieval
+42
+0.250
+0.475
++0.148
+7
+0.250
+0.550
++0.095
+13
+0.225
+0.450
+−0.010
+A3 no meta
+42
+0.175
+0.525
++0.148
+7
+0.250
+0.625
++0.177
+13
+0.175
+0.625
++0.235
+A4 harsh retire
+42
+0.325
+0.450
+−0.005
+7
+0.325
+0.375
+−0.027
+13
+0.250
+0.475
+−0.025
+A5 no canon
+42
+0.300
+0.725
++0.342
+7
+0.275
+0.700
++0.385
+13
+0.250
+0.700
++0.395
+A6 no guard
+42
+0.200
+0.725
++0.365
+7
+0.200
+0.725
++0.402
+13
+0.250
+0.650
++0.322
+A7 cap=100
+42
+0.350
+0.525
++0.172
+7
+0.250
+0.700
++0.340
+13
+0.275
+0.725
++0.440
+A8 meta refresh
+42
+0.200
+0.750
++0.365
+7
+0.275
+0.700
++0.355
+13
+0.275
+0.725
++0.395
+9
+

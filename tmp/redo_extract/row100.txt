@@ -1,0 +1,425 @@
+=== PDF FIRST PAGE (title region) ===
+CodeClinic: Evaluating Automation of Coding Skills
+for Clinical Reasoning Agents
+Timothy Ossowski1
+Xinchu Liu1
+Danyal Maqbool1
+Vaibhav Dhanuka1
+Sheng Zhang2
+Hoifung Poon2
+Majid Afshar1
+Tyler Bradshaw1
+Junjie Hu1
+1University of Wisconsin–Madison
+2Microsoft Research
+Abstract
+Clinical reasoning agents based on large language models (LLMs) aim to automate
+tasks such as intensive care unit (ICU) monitoring and patient state tracking from
+electronic health records (EHRs). Existing systems typically rely on manually
+curated clinical tools or skills for concepts such as sepsis detection and organ failure
+assessment. However, maintaining these tool libraries requires substantial expert
+effort, while zero-shot querying or code generation often produces inefficient and
+unreliable reasoning chains, especially under institution-specific clinical policies.
+We introduce CodeClinic, a benchmark built on MIMIC-IV for evaluating whether
+LLM agents can synthesize and compose reusable clinical skills instead of relying
+on fixed toolboxes. The benchmark contains two complementary tasks: longitudinal
+ICU surveillance and compositional information seeking. The longitudinal setting
+simulates monitoring pa
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+CodeClinic: Evaluating Automation of Coding Skills
+for Clinical Reasoning Agents
+Timothy Ossowski1
+Xinchu Liu1
+Danyal Maqbool1
+Vaibhav Dhanuka1
+Sheng Zhang2
+Hoifung Poon2
+Majid Afshar1
+Tyler Bradshaw1
+Junjie Hu1
+1University of Wisconsin–Madison
+2Microsoft Research
+Abstract
+Clinical reasoning agents based on large language models (LLMs) aim to automate
+tasks such as intensive care unit (ICU) monitoring and patient state tracking from
+electronic health records (EHRs). Existing systems typically rely on manually
+curated clinical tools or skills for concepts such as sepsis detection and organ failure
+assessment. However, maintaining these tool libraries requires substantial expert
+effort, while zero-shot querying or code generation often produces inefficient and
+unreliable reasoning chains, especially under institution-specific clinical policies.
+We introduce CodeClinic, a benchmark built on MIMIC-IV for evaluating whether
+LLM agents can synthesize and compose reusable clinical skills instead of relying
+on fixed toolboxes. The benchmark contains two complementary tasks: longitudinal
+ICU surveillance and compositional information seeking. The longitudinal setting
+simulates monitoring patient trajectories with structured decisions every four hours
+across 25 findings and eight clinical families, while the compositional setting spans
+63k instances across 259 tasks in nine domains and is stratified by compositional
+dependency depth to evaluate increasingly complex multi-step reasoning. We
+further propose an offline autoformalization pipeline that converts natural-language
+clinical guidelines into reusable and verified Python skill libraries through iterative
+LLM refinement. Compared with zero-shot code generation, the resulting libraries
+improve consistency while reducing per-query token usage by up to 40%.1.
+1
+Introduction
+Large language models (LLMs) have demonstrated remarkable potential for clinical reasoning,
+achieving expert-level performance on medical licensing examinations Singhal et al. [2023] and
+showing strong capabilities across a diverse range of medical tasks Bedi et al. [2026], Wu et al. [2025],
+Wang et al. [2025]. Recent works have extended these capabilities to agentic settings, where LLMs
+interact with electronic health record (EHR) databases to answer clinically meaningful questions Liao
+et al. [2026], Tang et al. [2024]. These agents typically generate code or queries to extract structured
+information from EHR systems and reason over retrieved data to support clinical decisions.
+A common approach is to equip agents with a user-designed toolbox of domain-specific functions
+for recurring clinical computations. While toolboxes improve reliability, they do not scale well:
+designing and maintaining them requires sustained expert effort and their coverage is inherently
+limited by the author’s foresight. The alternative is a single-tool setup where the agent has only a
+generic interface, such as a single query_db function, without hospital-specific helper functions.
+However, relying only on this minimal single-tool setup can hurt both accuracy and cost, as the agent
+must repeatedly issue complex queries and re-derive intermediate results.
+Beyond the toolbox size tradeoff, many clinically meaningful questions are not well-defined without
+additional context. Clinical concepts such as sepsis screening, organ failure scoring, and vasopressor
+1Code to reproduce data and evaluation available at https://github.com/tossowski/CodeClinic
+Preprint.
+arXiv:2605.09675v1  [cs.AI]  10 May 2026
+
+thresholds are not universal, with precise definitions varying across institutions and evolving with
+clinical guidelines over time. An agent answering such questions without access to the relevant insti-
+tutional policies and practice recommendations faces an underspecified problem, and any benchmark
+grading its output against a single fixed ground truth will produce misleading accuracy estimates.
+Thus, our benchmark aims to evaluate a central question: Given limited verification data, how well
+can LLMs synthesize modular, composable libraries that operate over EHR data while dynamically
+accounting for institutional definitions and policies? If successful, such models could remove the
+expert-curation bottleneck by generating code that adapts to location-specific clinical and health
+system policies.
+We introduce CodeClinic, a benchmark built on MIMIC-IV Johnson et al. [2020] to evaluate this
+capability through two complementary tasks. The first is longitudinal Intensive Care Unit (ICU)
+surveillance, where an agent tracks patient state over time and issues structured monitoring decisions
+at 4-hour checkpoints across ICU stays, covering 25 findings across eight clinical families. The task
+simulates a doctor engaging in ICU patient monitoring, requiring persistent state tracking, handling
+time-sensitive variables, and recomputing composite conditions (e.g., sepsis) over a 13-step horizon
+without access to future information. The second is compositional information seeking, spanning 63
+clinical concepts across nine domains and 63,000 queries, stratified by dependency depth to measure
+multi-step reasoning.
+As a baseline, we propose an offline autoformalization pipeline that converts natural-language clinical
+guidelines into a reusable, verified Python function library via iterative LLM refinement. This library
+is constructed once using limited supervision and reused across all queries, ensuring consistency and
+reducing redundant computation.
+Our contributions are as follows:
+• CodeClinic (Benchmark): a longitudinal agentic automation task for bedside ICU monitoring,
+paired with a compositional information seeking task which together surface the failure modes
+of LLM agents relying on static toolboxes and zeroshot code generation.
+• Benchmark Analysis (Findings): A systematic characterization of where and why current
+LLMs fail on compositional and longitudinal clinical reasoning.
+• Clinical Autoformalization (Baseline): An automated pipeline that transforms natural-language
+clinical guidelines into a verified Python function library using limited verification data, demon-
+strating a scalable alternative to user-designed toolboxes and serving as a strong baseline for
+future work on CodeClinic.
+2
+Related Work
+Benchmark
+Code Gen.
+Scale (>10K)
+Agentic
+Compositional
+Longitudinal
+EHRSQL Lee et al. [2022]
+✓
+✓
+✗
+✗
+✗
+EHRSHOT Wornow et al. [2023]
+✗
+✓
+✗
+✗
+✗
+EHRAgent Shi et al. [2024]
+✓
+✗
+✓
+✗
+✗
+AgentClinic Schmidgall et al. [2024]
+✗
+✗
+✓
+✗
+✗
+MedAgentGym Xu et al. [2025]
+✓
+✓
+✓
+✗
+✗
+MedAgentBench Jiang et al. [2025]
+✗
+✗
+✓
+✗
+✗
+EHRStruct Zhang et al. [2026]
+✓
+✗
+✗
+✗
+✗
+AgentEHR Liao et al. [2026]
+✗
+✓
+✓
+✗
+✗
+CodeClinic (Ours)
+✓
+✓
+✓
+✓
+✓
+Table 1: Comparison of EHR benchmarks relevant to clinical reasoning and agentic evaluation. Code
+Gen.: requires generating executable code or SQL. Agentic: supports iterative agent loop with
+execution feedback. Compositional: explicitly tests multi-hop reasoning over dependent clinical
+concepts. Longitudinal: evaluates reasoning over patient state as it evolves over time.
+EHR Databases and Benchmarks
+Most prior EHR benchmarks build on the MIMIC family John-
+son et al. [2020, 2018]. Text-to-SQL efforts (MIMICSQL Wang et al. [2020], EHRSQL Lee et al.
+[2022], EHR-SeqSQL Bae et al. [2024]) and broader QA benchmarks (DrugEHRQA Bardhan et al.
+[2022], EHRXQA Bae et al. [2023], EHRNoteQA Kim et al. [2024]) cover constrained query spaces
+2
+
+Figure 1: Illustration of the longitudinal ICU surveillance task in CodeClinic. The agent is prompted
+every 4 hours throughout an ICU stay to assess the patient’s current condition, with strict visibility
+constraints that limit it to data available up to the current checkpoint. At each checkpoint, the agent
+either reasons or writes code to gather evidence and outputs a surveillance decision. A rolling history
+of prior checkpoint decisions is carried forward across the stay via a summarization step.
+over structured tables, multimodal records, or notes. EHRSHOT Wornow et al. [2023] adds point-in-
+time foundation-model prediction, and code-generation benchmarks (EHRAgent Shi et al. [2024],
+EHRStruct Zhang et al. [2026]) frame EHR reasoning as iterative code generation. All evaluate static,
+individually posed queries with expert-curated toolboxes, and none jointly stratify multi-hop concept
+dependencies and time-evolving clinical state. Table 1 summarizes the comparison; CodeClinic is
+the only benchmark to combine compositional dependency-depth stratification across 63 clinical
+concepts with longitudinal reasoning over full ICU trajectories.
+LLM-Based Medical Agents
+A growing body of work builds LLM agents that interact with EHR
+data or simulated clinical environments Liao et al. [2026], Tang et al. [2024], Hager et al. [2024],
+Bani-Harouni et al. [2025], Xu et al. [2025], Huang et al. [2025], Jiang et al. [2025], Schmidgall
+et al. [2024], with broader medical evaluation suites such as MedHELM Bedi et al. [2026] measuring
+static task performance. Two limitations recur: agents rely on hand-crafted tool environments whose
+completeness bounds the evaluation, and re-executing full tool chains per query incurs significant
+token overhead. Our work is orthogonal: instead of evaluating an agent inside a fixed tool environment,
+we ask how well LLMs can generate that environment.
+Autoformalization and Code-Augmented Reasoning
+Autoformalization translates informal state-
+ments into executable form, an approach originally developed for mathematics by translating theorems
+into Lean or Isabelle Wu et al. [2022]. We adapt the idea to clinical guidelines, replacing proof check-
+ers with clinical verification and targeting a Python function library. Clinical definitions vary across
+institutions; although the natural-language guidelines we use draw on general consensus literature,
+the autoformalization loop grounds them in institution-specific practice by verifying generated code
+against labeled cases drawn from the target EHR system, fixing the ambiguity that makes zeroshot
+evaluation unreliable. Our pipeline runs a ReACT-style Yao et al. [2023] code-as-reasoning loop Gao
+et al. [2023], Chen et al. [2021] offline to produce a stable, reusable library, separating costly library
+construction from inference and avoiding the repeated token expenditure of agents that re-derive the
+same computations at query time.
+3
+Benchmark
+CodeClinic is built around two complementary tasks over MIMIC-IV Johnson et al. [2023]: a
+longitudinal ICU surveillance task (Figure 1) that stresses agentic state tracking across rolling
+checkpoints, and a compositional information seeking task (Figure 3) that stresses multi-hop reasoning
+over the dependency graph of clinical concepts.
+3
+
+0
+4
+8
+12
+16
+20
+24
+28
+32
+36
+40
+44
+48
+Hours since ICU admission
+off
+on
+State
+State semantics across disease families at each checkpoint
+Persistent episode
+Cumulative max stage (any stage > 0)
+Active interval
+Recent measurement + TTL
+Composite current state
+Figure 2: Example state dynamics across an ICU trajectory for different medical concepts. CodeClinic
+challenges models to interpret these changes in state dynamics across the patient timeline.
+3.1
+Longitudinal ICU Surveillance
+The longitudinal task evaluates whether an agent can maintain clinically accurate state over time
+instead of answering a single isolated question. We draw a cohort of roughly 46k ICU stays from
+MIMIC-IV by keeping only stays with at least 48 hours of in-unit time, so that every trajectory is
+long enough to expose meaningful clinical evolution. Each stay is sliced into a fixed sequence of
+decision points spaced every four hours from admission through hour 48, giving 13 checkpoints per
+stay. Patients are assigned to splits at the subject level, so no patient appears in both the train and
+test set. From this cohort we release a held-out 2,000 stay benchmark, sampled with a stratification
+which preserves the natural mix of ICU patients while preserving rarer high-acuity states.
+Task Setup
+At each checkpoint, the agent emits a structured decision: a set of suspected conditions,
+a set of alerts that have crossed escalation thresholds, a single global action (continue monitoring
+or escalate care), and a coarse priority level. This compact interface is intentionally agent-friendly:
+it avoids committing to a fixed disease ontology while requiring the model to reason over the full
+multi-organ state at every step, rather than focusing on a single salient issue. The task also exhibits
+broad coverage. In the source cohort, over 90% of stays trigger at least one surveillance family within
+the first day, and roughly two-thirds trigger three or more. The decision space spans both common
+and rare ICU conditions. The released 2,000-stay benchmark preserves realistic co-occurrence across
+families while ensuring sufficient support for clinically important but less frequent conditions such as
+Acute Kidney Injury (AKI), septic shock, severe acidemia, and severe coagulopathy.
+Label Generation
+Internally, we maintain a registry of 25 canonical ICU surveillance findings,
+organized into eight clinical families that together cover the dominant ICU monitoring concerns:
+infection, sepsis, renal injury, respiratory support, hemodynamic support, neurologic deterioration,
+metabolic derangement, and coagulopathy. For each finding we define a deterministic builder over
+MIMIC-IV that consumes the patient’s data up to the current checkpoint and decides whether the
+finding is currently active. The builder for each family encodes the appropriate clinical temporal
+semantics (Figure 2). Monotonic syndromes such as infection or sepsis remain active once they have
+been triggered within the trajectory. On the other hand, non-monotonic concepts such as ventilation
+or vasoactive support are active only while the intervention is in progress. A model therefore cannot
+solve the task by remembering a single binary label per disease. It must instead track which families
+persist once triggered, which families decay when evidence becomes stale, and which families are
+recomputed from multiple evolving components.
+Agent Loop
+At each of the 13 checkpoints the agent sees the current hour, a compact summary of
+its own decisions and observations from previous checkpoints, and access to a toolbox for grounding
+its predictions in the database. The benchmark supports several agent-facing configurations: an agent
+can be asked to decide each checkpoint independently or with rolling history. Tools can expose
+curated MIMIC-IV concept queries, the autoformalized function library produced by our pipeline
+(Appendix F), or only the raw EHR tables, allowing us to separately measure the contribution of
+longitudinal context and of higher-level clinical tooling. In all cases the agent must retrieve the
+evidence it deems relevant, commit to a structured decision for the current checkpoint, and write a
+short summary that will be visible at the next step.
+3.2
+MIMIC-IV Compositional Information Seeking
+We complement the longitudinal task with a clinical question answering benchmark grounded in
+the MIMIC-IV database. All questions are derived from tables in the MIMIC-IV derived schema,
+4
+
+Figure 3: Left: Example sepsis-related question with its corresponding dependency graph. An-
+swering the query requires composing intermediate clinical concepts (e.g., Sequential Organ Failure
+Assessment (SOFA) score used in organ dysfunction definitions for sepsis, suspected infection) that
+must be recomputed over time. Right: Hierarchical taxonomy of MIMIC clinical concepts, organized
+by supercategory and associated sub-concepts.
+a curated collection of structured representations of the raw ICU data produced by community-
+validated SQL transformations applied to the original MIMIC-IV tables Johnson et al. [2021]. The
+benchmark spans 63 clinical concepts covering nine physiological and pharmacological domains: co-
+morbidity scoring, patient demographics, first-day asses
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+I
+Compute Resources
+All inference experiments were run on a 8xB200 Node. Inference was served with vLLM. Approxi-
+mate runtimes per experimental condition are as follows:
+• Autoformalization (per concept): 20 GPU-hours on average for a Qwen3.5-27B model
+run with efficient parallelization via topological ordering of concepts.
+• GRPO Finetuning: 144 GPU-hours total on a subset of the training split (50 questions per
+concept) for a total of 3150 questions. 4xH200 GPUs were used for training.
+• zeroshot inference evaluation (56,700 queries, one model): 114 GPU-hours when using
+Qwen3.5-27B and parallel processing of 4 concepts at a time.
+Total compute across all reported experiments (all models, all baselines) is estimated at ∼1000-2000
+GPU-hours. No substantial additional compute was used for preliminary or failed experiments beyond
+the reported runs.
+J
+Sample Inference Trajectory
+We present a representative inference trajectory drawn from the MIMIC-IV Demo dataset (publicly
+available, no credentialing required).2 The trajectory uses Qwen/Qwen3.5-27B-Instruct as the
+inference model, consistent with the backbone used in the main experiments (Section 5). No pre-
+computed derived tables are available and no guideline text is pre-injected into the prompt — the
+agent must discover, retrieve, and apply clinical knowledge entirely through the guideline tools.
+Table 7: Summary of the sample inference trajectory.
+Field
+Value
+Concept
+SOFA — CNS component (GCS-based)
+Question
+“What is this patient’s CNS (GCS-based) SOFA
+component score during their first 24 hours in the ICU?”
+Patient
+subject_id=10007928, hadm_id=20338077, stay_id=35128235
+Ground truth
+0 (GCS = 15, full consciousness)
+Predicted
+0 ✓
+LLM turns
+7
+SQL queries
+2
+Derived tables
+None
+Guideline pre-injected
+No
+2MIMIC-IV Demo is available at https://physionet.org/content/mimic-iv-demo/ under the PhysioNet Open
+Data Commons License.
+22
+
+Trajectory Example: CNS SOFA Component Score (MIMIC-IV Demo)
+Patient Query:
+“What is this patient’s CNS (GCS-based) SOFA component score during their first 24
+hours in the ICU?”
+Label / Predicted: 0 / 0 ✓
+Agent Trajectory
+[Search]:
+search_guidelines(
+"What is this patient’s CNS (GCS-based)
+SOFA score during their first 24 hours in the ICU?")
+[Information]: [‘first_day_sofa_guideline’,
+‘saps-ii_guideline’,
+‘coma_altered_consciousness_icu_guideline’, ...]
+Semantic retrieval ranks first_day_sofa_guideline first over 351 section-level embeddings. Full
+clinical question used as query — not a short keyword.
+[Read]:
+get_guideline("first_day_sofa_guideline")
+[Information]: 500-char preview + section menu (not the full ∼6,000-token document):
+– Definition
+– Diagnostic Criteria
+– Scoring System
+– Time Windows
+– Severity Staging
+– Operational Notes
+[Read Section]:
+get_guideline_section("first_day_sofa", "Scoring System")
+[Information]: Exact GCS→score mapping retrieved (∼500 tokens):
+GCS total
+15
+13–14
+10–12
+6–9
+<6
+SOFA CNS score
+0
+1
+2
+3
+4
+[Read Section]:
+get_guideline_section("first_day_sofa", "Time Windows")
+[Information]: “Use the lowest GCS documented within the 24-hour window (worst-value selection).”
+[Query DB]:
+SELECT intime FROM icustays
+WHERE stay_id = ’35128235’
+⇒
+2129-04-06 00:25:00
+[Query DB]:
+SELECT itemid, valuenum FROM chartevents
+WHERE stay_id = ’35128235’
+AND itemid IN (220739, 223900, 223901)
+AND charttime WITHIN first 24h
+[Information]: Eye = 4, Verbal = 5, Motor = 6 at all 4 timepoints. Total GCS = 15 (consistent throughout
+window).
+[Think]: From scoring table (Turn 3): GCS = 15 →SOFA CNS = 0. From time window rule (Turn 4):
+minimum GCS used — all readings are 15, so minimum = 15.
+[Answer]: SOFA CNS score = 0.
+The agent retrieved only the two sections it needed (Scoring System
+and Time Windows) rather than loading the full guideline document.
+Figure 15: Sample inference trajectory on the MIMIC-IV Demo dataset. No guideline text is
+pre-injected; no derived tables are used. Model: Qwen/Qwen3.5-27B-Instruct.
+23
+

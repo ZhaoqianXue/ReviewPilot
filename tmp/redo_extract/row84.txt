@@ -1,0 +1,503 @@
+=== PDF FIRST PAGE (title region) ===
+Context Matters: Repository-Aware Security Analysis
+of the Agent Skill Ecosystem
+Florian Holzbauer
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+florian.holzbauer@it-u.at
+David Schmidt
+University of Vienna, CDL AsTra
+Faculty of Computer Science
+Vienna, Austria
+d.schmidt@univie.ac.at
+Gabriel K. Gegenhuber
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+gabriel.gegenhuber@it-u.at
+Sebastian Schrittwieser
+University of Vienna, CDL AsTra
+Faculty of Computer Science
+Vienna, Austria
+sebastian.schrittwieser@univie.ac.at
+Johanna Ullrich
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+johanna.ullrich@it-u.at
+Abstract
+Agent skills extend local AI agents, such as Claude Code
+and OpenClaw, with additional functionality. Their growing
+popularity has led to dedicated marketplaces resembling
+mobile app stores, as well as automated scanners that assess
+whether skills are benign or malicious. However, scanner
+reports from individual marketplaces classify up to 46.8%
+of skills as malicious, raising concerns about false positives.
+We present the largest empirical security analysis of the
+AI agent skill ecosystem to date. We collect 238,180 unique
+sk
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Context Matters: Repository-Aware Security Analysis
+of the Agent Skill Ecosystem
+Florian Holzbauer
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+florian.holzbauer@it-u.at
+David Schmidt
+University of Vienna, CDL AsTra
+Faculty of Computer Science
+Vienna, Austria
+d.schmidt@univie.ac.at
+Gabriel K. Gegenhuber
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+gabriel.gegenhuber@it-u.at
+Sebastian Schrittwieser
+University of Vienna, CDL AsTra
+Faculty of Computer Science
+Vienna, Austria
+sebastian.schrittwieser@univie.ac.at
+Johanna Ullrich
+Interdisciplinary Transformation
+University (IT:U)
+Linz, Austria
+johanna.ullrich@it-u.at
+Abstract
+Agent skills extend local AI agents, such as Claude Code
+and OpenClaw, with additional functionality. Their growing
+popularity has led to dedicated marketplaces resembling
+mobile app stores, as well as automated scanners that assess
+whether skills are benign or malicious. However, scanner
+reports from individual marketplaces classify up to 46.8%
+of skills as malicious, raising concerns about false positives.
+We present the largest empirical security analysis of the
+AI agent skill ecosystem to date. We collect 238,180 unique
+skills from three major distribution platforms and GitHub,
+and analyze their contents, behavior, and repository context.
+Unlike existing scanner-based assessments, which evalu-
+ate skills largely in isolation, our repository-aware analysis
+checks whether a flagged skill is consistent with its surround-
+ing GitHub project. This context substantially reduces the
+number of suspicious skills: only 0.52% remain suspicious
+after repository-aware analysis. Our results show that exist-
+ing scanners can substantially overestimate maliciousness
+when repository context is ignored. At the same time, we
+identify previously undocumented real-world attack vectors,
+including the hijacking of skills hosted in abandoned GitHub
+repositories. Overall, our findings provide a more robust
+view of the agent-skill ecosystem’s current risk surface and
+highlight the need for context-aware security evaluation.
+CCS Concepts: • Security and privacy;
+Keywords: Security, Privacy, Agent Skills, Skill Classifica-
+tion
+This work is licensed under a Creative Commons Attribution 4.0 Interna-
+tional License.
+Agent Skills ’26, San José, CA
+© 2026 Copyright held by the owner/author(s).
+ACM Reference Format:
+Florian Holzbauer, David Schmidt, Gabriel K. Gegenhuber, Sebas-
+tian Schrittwieser, and Johanna Ullrich. 2026. Context Matters:
+Repository-Aware Security Analysis of the Agent Skill Ecosystem.
+In Agent Skills ’26 Workshop: ACM Conference on AI and Agentic
+Systems, May 26, 2026, San José, CA. ACM, New York, NY, USA,
+10 pages.
+1
+Introduction
+Autonomous AI agents, such as Claude Code [3] or Open-
+Claw [34] extend large language models (LLMs) from stan-
+dalone text generation systems into truly autonomous, closed-
+loop assistants that can plan, act, and learn complex tasks.
+In a nutshell, the LLM interprets user requests, invokes
+adequate routines to serve them, and eventually integrates
+the results into subsequent reasoning steps. A key concept
+are skills, which are reusable, modular components that
+extend an agent’s capabilities like access to an external API,
+code execution, or data retrieval. Following a standardized
+and open format [2], skills consist of natural language de-
+scriptions, informing the user and the LLM about its capa-
+bilities, in combination with executable logic implementing
+the functionality. Skills are found on dedicated skill markets,
+e.g., ClawHub [33], Skill.sh [35], and SkillDirectory [31],
+or traditional repositories like Github. Agents might even
+discover them on their own, e.g., when reading on moltbook
+.com, a reddit-like platform for bots.
+On the one hand, the tight integration of LLM reasoning
+with execution capabilities poses unique risks as anecdotal
+evidence of undesired email deletion emphasizes [9]. A re-
+curring pattern, on the other hand, are supply chain risks
+by integrating external resources for a system’s extended
+functionality from market places or other sources. Examples
+are machine images in compute clouds [8], docker hub for
+containers [30], mobile applications for iPhones [27], or
+packet managers like npm and PyPI [37], and nowadays,
+it appears, also skills for AI agents. Among others, malicious
+skills attempted to steal private information from macOS [23]
+arXiv:2603.16572v2  [cs.CR]  1 Jun 2026
+
+Agent Skills ’26, May 26, 2026, San José, CA
+Holzbauer et al.
+or redirect cryptocurrency assets [19]. In consequence, skill
+markets nowadays automatically scan the provided skills
+for security, and provide the results for orientation to their
+users. The total share of malicious skills, however, varies
+significantly among market places – 46.8% (ClawHub), 23.0%
+(Skills.sh), and 6.0% (SkillsDirectory).
+In this paper, we present the largest empirical security
+study of the AI agent skill ecosystem, collecting and ana-
+lyzing 238,180 skills from three distribution platforms and
+GitHub. Our study revisits the high maliciousness rates
+reported by existing marketplaces and asks whether these
+classifications remain meaningful once skill and repository
+context are considered. We structure the analysis around the
+following research questions.
+RQ1 What skills are shared on marketplaces, and which new
+attack vectors emerge from the skill ecosystem?
+RQ2 How do marketplaces and scanners classify skills as
+malicious?
+RQ3 Can repository context improve existing security clas-
+sifications of skills?
+We first characterize the collected skills across market-
+places and GitHub, including their scripts, embedded arti-
+facts, and distribution structure. We then analyze how mar-
+ketplace scanners and the Cisco Skill Scanner [10] classify
+skills as malicious and compare the consistency of their
+detections. Finally, we reevaluate scanner-flagged skills by
+incorporating the surrounding GitHub repository context
+and measuring whether the repository documentation and
+code align with the skill specification. This repository-aware
+analysis shows that isolated skill scanning substantially over-
+estimates the ecosystem’s risk. At the same time, our broader
+analysis uncovers structural weaknesses in skill distribution
+platforms, including repository hijacking risks that allow
+adversaries to take over references to existing skills. Summa-
+rizing, our paper contributes the following aspects:
+• Large-scale ecosystem measurement. With 238,180
+unique skills, we construct the largest cross-platform
+dataset of agent skills to date by collecting skills from
+three official marketplaces as well as GitHub reposi-
+tories. The dataset not only facilitates the analysis at
+hand, but also provides a basis for future longitudinal
+studies of the AI skill ecosystem.
+• Repository-aware skill analysis. Existing security
+scanners classify a large share of offered skills as ma-
+licious. We conduct a semantic analysis that incor-
+porates not only the skill description, but also the
+surrounding repository context. Among 2,887 scanner-
+flagged skill and repository combinations, only 15
+remain associated with suspicious repositories, cor-
+responding to 0.52%. This substantially reduces the
+number of likely false positives and provides a more
+contextualized view of the ecosystem’s risk surface.
+• Discovery of new attack vectors. We identify pre-
+viously undocumented attack vectors in the AI skill
+ecosystem. In particular, we demonstrate repository
+hijacking risks for seven abandoned repositories ref-
+erenced by skill indexes, affecting 121 skills. One af-
+fected skill has more than 1,000 recorded installations,
+a significant number considering the recency of the
+ecosystem.
+To enable reproducibility and future work, we publish our
+code: https://github.com/holzsec/repository-context-agents
+kills/.
+2
+Background and Related Work
+Agent and Skills. AI agents autonomously execute tasks
+in interaction with external services, and operate in a reasoning-
+action loop. The LLM interprets a user request, selects and
+invokes an adequate capability, and eventually incorporates
+the results into subsequent reasoning. Many agents support
+modular extensions, such as API access, code execution,
+or data retrieval, that are referred to as skills. Skills typ-
+ically come in a repository, combining a specification file
+(SKILL.md) with optional scripts, configuration files, or static
+assets. The specification file describes the skill’s capabilities
+and its invocation context in natural language, enabling the
+autonomous agent to decide, while the latter represent the
+executable logic. For interoperability, Anthropic recently
+specified a skill packaging format [22].
+Skill Marketplaces. Agent skills are distributed over ded-
+icated marketplaces such as ClawHub [33], Skills.sh [35], and
+SkillsDirectory [31]. As of March 9, 2026, they provide 18,412,
+86,800, and 36,109 skills, respectively. Yet, the platforms
+differ, leading to different levels of control for the operators:
+ClawHub curates and reviews uploaded skills, and hosts
+them itself. Skills.sh adopts an open Git-based distribution
+model and indexes skills in external repositories. SkillsDi-
+rectory also refers to external repositories, but moderates
+submissions and performs rule-based security scanning.
+Security on Marketplaces. Malicious skills are known
+to manipulate agent behavior and after reports on their
+distribution over marketplaces [23, 19, 5, 28], marketplaces
+nowadays automatically scan the offered skills for security.
+The results, typically a classification of whether a skill is
+benign or malicious in combination with a short explanation
+on the reasoning, are provided as metadata to their users.
+Therefore, ClawHub relies on VirusTotal [36] and a custom
+LLM-based detection system, Skills.sh integrates several
+third-party scanners, and SkillsDirectory reports the use of
+more than 50 rule-based detection mechanisms. The share of
+skills reported as suspicious varies substantially across mar-
+ketplaces, namely 46.8% (ClawHub), 23% (Skills.sh), and 6%
+(SkillsDirectory). Across all marketplaces, the share remains
+
+Context Matters: Repository-Aware Security Analysis of the Agent Skill Ecosystem
+Agent Skills ’26, May 26, 2026, San José, CA
+high, which indicates either a large number of malicious
+skills or a high false positive rate.
+Empirical Studies on the Skill Ecosystem. Studies by
+third parties come to a similar share of malicious skills.
+An analysis of 3,984 skills on ClawHub and skills.sh [5]
+found 13.4% of them having a critical-level security flaw like
+malware distribution, or prompt injection, and 36.82% show
+(more minor) security pitfalls like hard-coded API keys or
+insecure credential handling. Another analysis investigated
+31,132 skills [21] from skills.rest and skillsmp.com, and found
+that 26.1% of the skills contain a security vulnerability such
+as prompt injection, and data exfiltration. The largest study
+by now investigated 40,285 skills from skills.sh [20]. While
+predominantly focusing on their publication behavior over
+time as well as prompt length, the author also assessed their
+security and concluded 9% of them having critical flaws.
+In this context, also multiple skill scanners emerged, e.g.,
+SkillScan [21], SkillFortify [7], Snyk [6], and the Cisco skill
+scanner [10]. Also, multiple works promise annotated data
+sets of skills for security benchmarking [7, 21]. However,
+upon inspection, we were unable to find them, impeding a
+direct comparison of our analysis with those from previous
+work on the same data sets.
+Security of AI Agents. Instead of skills, vulnerabilities
+might also directly affect the agent. (Meanwhile fixed) Claw-
+Jacked enabled an attacker to gain control over Open Claw
+instances using a web socket to localhost [19]. Alternatively,
+attackers could use web sockets to modify log files that the
+AI agents eventually rely on for troubleshooting [32]. Via
+prompt injection, OpenClaw was persuaded to reveal private
+keys [11]. In the manner of social engineering, moltbook ap-
+pears to be exploited to extract metadata for reconnaissance.
+The programming agent Claude Code was meanwhile also
+vulnerable to remote code execution [12], and revealed API
+keys [13]. Finally, Shodan currently discovers 55,561 of such
+OpenClaw instances on the Internet [29], and a honeypot
+provides a glimpse into the attackers’ current strategies [16].
+Scientific Literature. Due to the recency of the topic,
+most reports appear in non-scientific venues, e.g., blogs or
+as unaccepted preprints. Yet, scientific literature already dis-
+cusses autonomous AI agents [1, 25, 4]. Researchers consider
+security both a potential application of these systems and
+a major challenge for them. On the one hand, autonomous
+AI can continuously monitor malicious activities and im-
+mediately block them, which can improve security. On the
+other hand, these systems can themselves pose security
+threats because they combine autonomy with access to large
+and potentially sensitive datasets. A dedicated survey on
+security [14] classified the threat landscape of AI agents,
+also including supply chain threats.
+2. Malicious Classification
+Platform Reports
+Existing Skill-Based Analysis
+skill-to-analyze
+Malicious
+scripts
+assets
+SKILL.md
+Repo 1
+Repo 2
+skill-to-analyze
+README.md
+Codebase
+⭐ Stars 6.4K
+Issues
+7
+Forks 43
+Size
+Activity
+Age
+Repo 3
+   # Repositories 3
+2. Codebase Score: 82
+1. Metadata Score: 90
+Repo 1
+Clone
+Domain Alignment👍
+Code Intent 👍
+Description 👍 
+Malicious Behavior👎
+Repository Context Score:  85
+Repository-Aware Analysis
+Verdict: Likely Benign
+skill-to-analyze
+1. Cross-Platform Skill Collection
+3. Repository Context
+Skills.sh
+Cisco Skill Scanner
+LLM Feature Extraction
+Static Analysis
+Metadata
+Collection
+Repository
+Judgement
+SkillsDirectory
+Github Indexing
+Clawhub
+New attack vectors
+Verdict: Malicious
+Figure 1. Overview of our repository-aware skill analysis
+to reduce the high number of false positives. Our approach
+consists of three stages, encompassing skill collection, mali-
+cious classification, and repository context analysis.
+3
+Methodology
+We study the security of agent skills using a three-stage
+measurement pipeline, illustrated in Figure 1. Our method-
+ology is designed to capture the breadth of the emerging
+skill ecosystem, compare how existing tools assess skill risk,
+and evaluate whether repository context can help interpret
+scanner alerts. Rather than treating any individual scanner
+as ground truth, we use scanner outputs as security signals
+that require contextual interpretation.
+3.1
+Cross-Platform Skill Collection
+To answer RQ1 , we collect agent skills from multiple sources,
+including public skill marketplaces and GitHub reposito-
+ries. This cross-platform collection allows us to study both
+curated or indexed marketplace skills and skills that are
+published independently by developers. Since marketplaces
+differ in how they host and reference skills, we normalize all
+collected artifacts into a common representation based on
+the skill directory and its associated files.
+To extend coverage beyond known marketplaces, we search
+public GitHub activity data for repositories likely to con-
+tain skill definitions. Candidate repositories are cloned and
+scanned for SKILL.md files, which serve as the entry point
+for identifying skill artifacts. We apply resource limits during
+collection to ensure scalability and deduplicate skills using
+content hashes to avoid counting identical artifacts multiple
+times.
+After collection, we perform static analysis over each skill
+artifact. We enumerate contained files, record file types and
+directory structure, and extract ecosystem-level properties
+such as the presence of executable scripts. We further scan
+skill artifacts for embedded secrets and validate detected cre-
+dentials where possible. This analysis provides the basis for
+characterizing the structure, content, and potential exposure
+risks of the skill ecosystem.
+
+Agent 
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Context Matters: Repository-Aware Security Analysis of the Agent Skill Ecosystem
+Agent Skills ’26, May 26, 2026, San José, CA
+importantly, skills that are referenced rather than mirrored
+remain vulnerable to repository hijacking when abandoned
+GitHub namespaces can be re-registered. These findings
+show that the security of skill marketplaces depends not
+only on skill contents, but also on how skills are provisioned,
+authenticated, and archived.
+Skill Scanners. The scanner results in RQ2 show that
+malicious classification rates vary substantially across tools
+and marketplaces. Some scanners classify large fractions
+of skills as suspicious, yet cross-scanner agreement is low
+and most flagged skills are detected by only one tool. This
+indicates that scanner outputs should be interpreted as alerts
+rather than ground-truth labels. Strictly aggregating these
+alerts at the repository level further amplifies the problem:
+repositories containing multiple skills are more likely to be
+classified as malicious simply because they provide more
+opportunities for at least one skill to trigger a scanner. This
+effect can overstate the prevalence of malicious repositories,
+including for popular projects.
+Repository Context. The repository-aware analysis in
+RQ3 addresses this limitation by evaluating scanner-flagged
+skills within their surrounding project context. Many skills
+that appear suspicious in isolation are embedded in reposi-
+tories whose documentation, codebase, and stated purpose
+align with the skill functionality. As a result, only 15 skill–
+repository combinations remain suspicious after repository-
+aware analysis, corresponding to 0.52% of the evaluated
+sample. This does not imply that scanners are unnecessary;
+rather, it shows that users could be provided with more con-
+text than isolated skill scanning. Repository context provides
+an additional signal that can distinguish suspicious behavior
+from legitimate functionality.
+New Ecosystem, Familiar Risks. Although agent skills
+are a new distribution format, many of the observed risks mir-
+ror earlier software supply-chain problems. Similar to pack-
+age managers, container registries, and mobile app stores,
+skill ecosystems face challenges around authentication, de-
+pendency ownership, abandoned projects, and embedded
+secrets. We found functional credentials in published skills
+and identified marketplace designs that can enable repository
+hijacking. These results suggest that the agent skill ecosys-
+tem should adopt established supply-chain defenses early,
+including immutable skill snapshots, stronger publisher au-
+thentication, namespace retirement, secret scanning, and
+clearer provenance metadata.
+Practicality of Repository-Aware Scanning. Repository-
+aware analysis is more expensive than scanning a single
+SKILL.md file, but our cost measurements show that it is prac-
+tical for periodic marketplace scans. In our sample, repository-
+context analysis cost around $0.0097 per skill–repository
+pair without caching and $0.0021 with prompt caching. The
+full sample of 3,000 skills cost approximately $24 includ-
+ing retries. This makes repository-aware scanning feasible
+for marketplace operators, especially when combined with
+caching, incremental scans, and prioritization of newly added
+or widely installed skills.
+Limitations. Our repository-aware analysis does not es-
+tablish a definitive ground truth of maliciousness. It reduces
+false positives by incorporating repository context, but so-
+phisticated attackers could still craft repositories whose doc-
+umentation and code appear benign while hiding malicious
+behavior elsewhere. Our manual validation is limited to a
+small sample and focuses on visible repository evidence.
+Moreover, unavailable repositories, failed clones, and dy-
+namic marketplace references limit reproducibility. These
+limitations reinforce our central conclusion: scanner results
+should be treated as risk signals that require contextual
+interpretation, not as definitive labels.
+8
+Conclusion
+We presented the largest empirical security analysis of the
+AI agent skill ecosystem to date, covering 238,180 unique
+skills from three marketplaces and GitHub. Our analysis
+revealed embedded secrets, marketplace weaknesses, and
+substantial inconsistencies between existing scanners. Mali-
+cious classification rates ranged from 3.8% to 41.9%, while
+agreement was limited: only 0.12% of commonly analyzed
+skills were flagged by all five tested scanners. To address
+this inconsistency, we proposed a repository aware scan-
+ning approach that adds GitHub repository context to skill
+assessment. Re-evaluating 2,887 scanner flagged skill and
+repository combinations, only 0.52% remained associated
+with suspicious repositories. Repository context improved
+interpretability, as most flagged skills were embedded in
+repositories whose documentation and code matched the
+skill functionality, while only 4.2% showed weak repository
+linkage. Finally, we uncovered structural weaknesses in skill
+marketplaces. We identified repository hijacking risks affect-
+ing 121 skills and found that ClawHub exposed sensitive
+developer metadata, including email addresses associated
+with GitHub accounts. These findings show that agent skill
+security cannot be assessed from skill descriptions alone, but
+requires repository context, stronger provenance guarantees,
+and established supply chain safeguards.
+Acknowledgments
+The financial support by the Austrian Federal Ministry of
+Economy, Energy and Tourism, the National Foundation for
+Research, Technology and Development, and the Christian
+Doppler Research Association is gratefully acknowledged.
+
+Agent Skills ’26, May 26, 2026, San José, CA
+Holzbauer et al.
+References
+[1]
+D. B. Acharya, K. Kuppan, and B. Divya. 2025. Agentic AI: Au-
+tonomous Intelligence for Complex Goals—A Comprehensive Survey.
+IEEE Access, 13. doi:10.1109/ACCESS.2025.3532853.
+[2]
+Agent Skills. 2025. Agent Skills: A Simple, Open Format for Giving
+Agents New Capabilities. h

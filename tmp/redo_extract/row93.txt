@@ -1,0 +1,682 @@
+=== PDF FIRST PAGE (title region) ===
+Terminal-World: Scaling Terminal-Agent
+Environments via Agent Skills
+Zihao Cheng1, *
+Hongru Wang2, *
+Zeming Liu1, †
+Xinyi Wang2
+Xiangrong Zhu2
+Yuhang Guo3
+Wei Lin2
+Jeff Z. Pan4
+Yunhong Wang1
+1School of Computer Science and Engineering, Beihang University, Beijing, China
+2Independent Researcher
+3Beijing Institute of Technology
+4University of Edinburgh
+*Equal contribution
+†Corresponding author
+Email: {zihaocheng, zmliu}@buaa.edu.cn
+Abstract
+Terminal agents extend Large Language Models with the ability to execute tasks
+directly in command-line environments, but their progress is bottlenecked by the
+scarcity of high-quality training data. Existing approaches bootstrap from par-
+tial sources such as human-defined seeds or GitHub repositories to instantiate
+one component and then complete the rest, producing tasks confined to narrow
+seed distributions, environments misaligned with task semantics, and inefficient
+trajectories from unguided exploration. To address these limitations, we introduce
+Terminal-World, a fully automated pipeline that uses agent skills as the central
+synthesis primitive, which jointly encode what to accomplish, when to apply (pre-
+conditions and environment state),
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Terminal-World: Scaling Terminal-Agent
+Environments via Agent Skills
+Zihao Cheng1, *
+Hongru Wang2, *
+Zeming Liu1, †
+Xinyi Wang2
+Xiangrong Zhu2
+Yuhang Guo3
+Wei Lin2
+Jeff Z. Pan4
+Yunhong Wang1
+1School of Computer Science and Engineering, Beihang University, Beijing, China
+2Independent Researcher
+3Beijing Institute of Technology
+4University of Edinburgh
+*Equal contribution
+†Corresponding author
+Email: {zihaocheng, zmliu}@buaa.edu.cn
+Abstract
+Terminal agents extend Large Language Models with the ability to execute tasks
+directly in command-line environments, but their progress is bottlenecked by the
+scarcity of high-quality training data. Existing approaches bootstrap from par-
+tial sources such as human-defined seeds or GitHub repositories to instantiate
+one component and then complete the rest, producing tasks confined to narrow
+seed distributions, environments misaligned with task semantics, and inefficient
+trajectories from unguided exploration. To address these limitations, we introduce
+Terminal-World, a fully automated pipeline that uses agent skills as the central
+synthesis primitive, which jointly encode what to accomplish, when to apply (pre-
+conditions and environment state), and how to execute, enabling task instructions,
+environments, and teacher trajectories to be co-derived. To further broaden the
+synthesis space, Terminal-World composes skills into skill teams and skill graphs
+for multi-role and cross-domain task synthesis. Using this pipeline, we construct
+5,723 training environments and train Terminal-World-8B/14B/32B, evaluated
+across 6 benchmarks where the Terminal-World series consistently outperforms
+terminal-agent baselines. Notably, using the same teacher model and only 1.2%
+of the training data, Terminal-World-32B surpasses Nemotron-Terminal-32B on
+Terminal-Bench 2.0 by +4.5 Pass@1 (31.5) and achieves 43.8 Pass@3.
+# 
+$ 
+Name: 
+Description: Toolkit for survival analysis in Python. 
+                ......
+## When to Use This Skill
+- Working with 
+## Typical Workflows
+# 
+$ 
+censored survival data (right-censored, interval-censored)
+scikit-survival
+Task Generation
+Envionment Building
+Trajectory Collection
+Decode
+What
+When
+How
+Fit a Cox proportional hazards model on
+the provided survival dataset. Evaluate its
+performance using the concordance index.
+A CSV file survival_data.csv with columns
+event (binary) and feature. Must contain
+right-censored observations (event = 0).
+(a) Install dependency: 
+$ pip install scikit-survival 
+(b) Inspect the data
+$ head -5 survival_data.csv 
+Use when working
+models
+with censored survival data, fitting Cox models, building ensemble survival
+1. Install dependency
+pip install scikit-survival
+2. Prepare data
+head -3 survival_data.csv
+CSV contain 'event' column
+Pytest
+Verifier
+Task
+Instruction
+Env.
+Blurprint
+Execution
+Guidelines
+Agent Skill
+Task, Env, Trajectory
+Initial
+Files
+Env 
+Scripts
+Guided Efficient
+Trajectory Collection
+Figure 1: Overview of Terminal-World (left) and agent performance (right). Terminal-World uses
+agent skills as the synthesis primitive for terminal-agent data construction. Each skill encodes
+what the agent should accomplish, when the skill should be applied, and how the task should be
+executed. By decoding these three aspects, Terminal-World top-down synthesizes task instructions,
+environments, and trajectory in a unified process. With 85× less data than Nemotron-Terminal,
+Terminal-World achieves a 4.5% absolute improvement on Terminal-Bench 2.0.
+Preprint.
+arXiv:2605.20876v1  [cs.CL]  20 May 2026
+
+1
+Introduction
+LLM-based agents are increasingly moving from predefined API calls [1, 2, 3, 4, 5, 6, 7, 8] to direct
+terminal operation. Systems such as Claude Code [9] and Codex [10] issue shell commands inside
+real execution environments, replacing fixed tool schemas with a compositional action space that
+affords substantially greater generality [11, 12] and autonomy [13].
+Despite this potential, the progress of terminal agents is fundamentally bottlenecked by the scarcity of
+high-quality training data. Unlike API-based agents, which simply select and parameterize predefined
+tools [14], terminal agents operate within real file systems and runtime environments [15, 16].
+Each training example jointly specifies a task instruction, an executable environment with initial
+files, dependencies, and system configurations, and a high-quality multi-turn trajectory. The tight
+interdependence among these components makes manually curating such data prohibitively expensive
+and difficult to scale, motivating a growing line of work on automated terminal-agent data synthesis.
+Existing methods synthesize terminal-agent data by starting from partial sources, such as human-
+defined seed data (i.e., manually specified keywords or short descriptors) [16, 17, 18] or GitHub
+repositories [19], to instantiate one component of the data, and then rely on LLMs to complete the rest.
+Although this paradigm can synthesize terminal-agent data, it still suffers from three key limitations:
+(1) Limited Tasks: tasks are directly converted from human-defined seeds or repositories, resulting in
+a constrained distribution that fails to capture the diverse requirements and complexity of real-world
+tasks; (2) Environment Misalignment: task semantics and execution environments are not jointly
+specified from the beginning, so environments are retrofitted around tasks, producing configurations
+that are fragile or only loosely aligned with the intended task; (3) Trajectory Inefficiency: without
+explicit procedural guidance, teacher models often rely on autonomous exploration to solve each
+sandbox, producing trajectories with redundant exploration, suboptimal solution paths, and strong
+dependence on the teacher’s intrinsic terminal-solving capability.
+Our key observation is that a natural synthesis primitive for terminal-agent data already exists in open-
+source ecosystems: agent skills [20, 21], such as those collected in ClawHub [22] and SkillMP [23],
+which are human-authored guidance packages that encapsulate authentic terminal workflows distilled
+from real practice. As illustrated in Figure 1 (Left), each skill jointly encodes three aspects of an
+end-to-end terminal task: ①what should be accomplished, ②when the skill should be applied (i.e.,
+the preconditions, inputs, and environmental state required for execution), and ③how it should be
+executed. An agent skill thus constitutes a pre-aligned specification of task semantics, environmental
+constraints, and execution procedure, directly addressing the three limitations mentioned above.
+Building on this primitive, we introduce Terminal-World, a fully automated pipeline that orchestrates
+a multi-agent architecture to instantiate each agent skill as a unified task instruction–executable
+environment–teacher trajectory triple. To further scale the synthesis space, Terminal-World extends
+individual skills into agent skill teams and agent skill graphs, enabling more complex multi-role
+and cross-domain task synthesis. To broaden the usage scenarios of each skill, Terminal-World pairs
+skills with user personas [24], enabling the same underlying ability to be instantiated across diverse
+user backgrounds, goals, and preferences. Using Terminal-World, we construct 5,723 high-fidelity
+terminal-agent training environments and collect teacher trajectories with DeepSeek-V3.2 at an
+average cost of only $0.17, demonstrating the efficiency of our automated construction harness. We
+further train a family of models, Terminal-World-8B/14B/32B. Across 6 benchmarks, the Terminal-
+World series consistently outperforms existing terminal-agent baselines at comparable model scales.
+Notably, using the same teacher model and only 1.2% of the training data, Terminal-World-32B
+surpasses Nemotron-Terminal-32B [18] on Terminal-Bench 2.0 by +4.5 Pass@1 (31.5) and achieves
+43.8 Pass@3. It also exhibits more efficient task-execution behavior (Sec. 5.1), requiring fewer steps
+and commands while maintaining lower command-failure rates. These results demonstrate that our
+pipeline produces diverse, high-quality terminal environments and effective trajectories at low cost.
+Overall, our contributions are summarized as follows:
+• We propose Terminal-World, a fully automated synthesis pipeline that uses agent skills as the
+central synthesis primitive to jointly drive task instruction synthesis, environment construction,
+and teacher trajectory collection.
+• Using Terminal-World, we construct 5,723 high-fidelity terminal-agent training environments,
+each paired with a skill-guided teacher trajectory, and train a family of models Terminal-World-
+8B/14B/32B on this data.
+2
+
+Table 1: Comparison of existing datasets. Align. indicates whether task semantics and environments
+are jointly designed rather than post-hoc adapted. Open File Space indicates support for arbitrary file
+types in environments. Exec. Verif. indicates whether task completion can be verified by executing
+evaluation scripts. Sandbox:
+Web search,
+Python,
+SQL engine, and
+Terminal. Tool
+Space is Fixed for predefined toolsets and Open for extensible tool spaces. Teacher Source indicates
+whether trajectories are generated through self-solving or guided by additional structured guidelines.
+Dataset
+Task
+Environment
+Tool
+Trajectory
+Primitive
+Human Free Align. No Pre-def. Real World Open File Space Exec. Verif. Sandbox Tool Gen. Tool Space # Tools Teacher Source # Traj.
+Gorilla [1]
+API specs
+✗
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+1,645
+Self
+16,450
+ToolBridge [4]
+API specs
+✗
+–
+✗
+✗
+✗
+✓
+✗
+Fixed
+∞
+Self
+178,023
+APIGen [2]
+API specs
+✓
+–
+✗
+✓
+✗
+✓
+✗
+Fixed
+3,673
+Self
+60,000
+WebExplorer [25]
+Web entities
+✓
+–
+✓
+✓
+✗
+✗
+✗
+Fixed
+2
+Self
+13,000
+ProgSearch [26]
+Web entities
+✓
+–
+✓
+✓
+✗
+✗
++
+✓
+Fixed
+3
+Guided
+5,500
+Aseacher [27]
+Web entities
+✗
+–
+✗
+✓
+✗
+✗
+✗
+Fixed
+2
+Self
+35,000
+ToolACE [3]
+API specs
+✗
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+26,507
+Guided
+11,300
+ToolMind [6]
+API specs
+✓
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+20,000
+Guided
+111,941
+InfTool [7]
+API specs
+✓
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+3,059
+Self
+4,965
+DataMind [28]
+Data files
+✔
+✗
+✓
+✓
+✓
+✗
+✓
++
+✓
+Open
+∞
+Guided
+11,707
+APIGen-MT [5]
+API specs
+✓
+–
+✗
+✗
+✗
+✓
+–
+✗
+Fixed
+28
+Guided
+5,000
+TaskCraft [29]
+Seeds
+✗
+✓
+✗
+✗
+✗
+✗
+✗
+Open
+∞
+Guided
+36,000
+GEM [30]
+Raw text
+✓
+✓
+✓
+✗
+✗
+✗
+–
+✗
+Open
+∞
+Guided
+10,000
+Endless Terminal [16]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+420
+–
+–
+TermiGen [17]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+420
+Guided
+3,291
+Nemotron-Terminal [18]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+∞
+Self
+490,520
+Terminal-World (Ours)
+Agent skills
+✓
+✓
+✓
+✓
+✓
+✓
+✓
+Open
+∞
+Guided
+5,723
+• Extensive experiments across 6 benchmarks show that the Terminal-World series outperforms
+existing terminal-agent baselines. Notably, with the same teacher model and only 1.2% of the
+training data, Terminal-World-32B surpasses Nemotron-Terminal-32B on Terminal-Bench 2.0 by
++4.5 Pass@1 (31.5) and achieves 43.8 Pass@3.
+2
+Related Work
+Tool-Using Agents
+LLM-based agents interact with the external world through tool use, enabling
+them to execute actions beyond the limits of their parametric knowledge [14]. To strengthen this
+capability, early efforts synthesized training data for API selection and argument filling [1, 2]. Subse-
+quent work expanded API and tool coverage [4, 3], increased the interaction turns and orchestration
+complexity of tool use [6, 5, 7], and broadened workflow sources by mining latent tool-use patterns
+from raw text [30]. A parallel line studies web-search agents and synthesizes search trajectories
+over web content [31, 32, 25, 33, 26, 27, 34]. Despite this progress, these datasets typically operate
+over predefined toolsets, yielding a closed action space that cannot fully capture the open-ended
+and compositional nature of real-world tasks. In contrast, Terminal-World grounds agents in a Bash
+terminal, where the action space is no longer bounded by a predefined toolset but instead spans the
+full spectrum of composable system commands within a real execution environment.
+Terminal-Based Agents
+The rise of CLI-based coding agents such as Codex [10] and Claude
+Code [9] has shifted agent interaction toward direct operation in terminal environments, motivating
+recent efforts to synthesize terminal-agent training data. Endless Terminal [16], TermiGen [17],
+and Nemotron-Terminal [18] start from human-defined seed data and use LLMs to synthesize
+terminal tasks, before constructing the corresponding environments, verification scripts, and teacher
+trajectories. TerminalTraj [19] instead starts from GitHub repositories and infers task instructions
+and validation logic from existing codebases. However, these methods still face limitations in task
+diversity, environment-task alignment, and trajectory efficiency. Terminal-World addresses these
+limitations by using agent skills as the synthesis primitive. Each skill specifies ①what should be
+accomplished, ②when the skill is applicable, and ③how the task should be executed, providing
+a unified anchor from which task instructions, executable environments, verification criteria, and
+teacher trajectories can be co-derived.
+3
+Terminal-World
+As illustrated in Figure 2, Terminal-World uses agent skills as the synthesis primitive to jointly
+align task instructions, environments, and trajectories. The pipeline consists of four stages: (a)
+Agent Skill Collection (§3.1) constructs a terminal capability space from real-world agent skills;
+(b) Task Generation (§3.2) pairs each skill with user personas to diversify the usage scenarios of
+the underlying capability, and synthesizes instructions, environment blueprints, evaluation criteria,
+3
+
+(a) Agent Skill Collection
+(b) Task Generation
+(c) Environment Building
+(d) Trajectory Collection
+3-Stage Filter
+Rule-based
+LLM-based
+Popularity-
+based
+1K Skills
+10K Skills
+12 categories, 63 subcategories
+User Profile
+Agent Skill
+2-Stage LLM Synthesis
+LLM-as-a-Judge Filtering
+File Verifier
+Pytest Verification
+Env Buid
+Agent
+Shared
+Sandbox
+Env 
+Verifier
+Pytest 
+Verifier
+Phase1: Initial File Generation
+Phase2: Sandbox Consctruction
+Phase3: Verifier Generation
+Verifier
+Inial Files
+Sandbox
+Removal Guidelines Signals
+Before SFT Traning
+Analysis: I need to analyze log files
+in /app/logs, count severity levels...
+Plan: First, explore the /app/logs, ... 
+Commands: [{ "keystrokes": "ls -la
+/app/logs/\n", "duration": 1.0 }]
+Termius 2 Agent
+name: log-analyzer
+description: Production log analysis and
+diagnostics skill. 
+Use this skill when asked to:
+  - Fetch logs from a monitoring API
+  - Analyze log patterns and errors
+sandbox
+Observation
+  # New Terminal Output:
+  root@~ $ python3 /app/analyze.py
+  Done!
+  root@~ $ cat /app/summary.csv
+  period,severity,count
+  today,ERROR,370
+Teacher
+Model
+Guided Execution
+SkillsMP
+ClawHub
+SkillHub
+SkillMarket
+Web Crawl
+Pytest
+Gen Agent
+Pytest Scripts
+Score 4 on all dimensions
+0
+1
+2
+3
+4
+5
+Instruction
+Guidelines
+Environment
+Blueprint
+, 
+Evauation
+Criteria
+Figure 2: Overview of Terminal-World. We start from real-world agent skills, filter high-quality
+candidates via rule-based, LLM-based, and popularity-based screening, pair each skill with a user
+persona to synthesize diverse and verifiable task quadruples (I, E, V, G), construct executable sand-
+boxes through iterative generate-verify-repair cycles, and collect efficient trajectories.
+and execution guidelines; (c) Environment Building (§3.3) instantiates each blueprint into an
+executable sandbox with initial files, setup scripts, and pytest verifiers; and (d) Trajectory Collection
+(§3.4) collects efficient teacher trajectories under skill-derived guidance. We provide comprehensive
+statistics of Terminal-World in §3.5.
+3.1
+Agent Skill Collection
+To construct a high-quality and broadly distributed terminal capability space, we collect 10,000 agent
+skills from ClawHub and SkillMP, and apply a three-stage filter to retain those that are relevant
+and informative. (1) Rule-based filtering removes skills with terminal-irrelevant names (e.g., “skill
+creator”), leaving 8,520 skills. (2) LLM-based filtering scores each skill on terminal applicability
+and content richness (1–3 e
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+❸Step 7 (of 11) — Author ocr.py, run OCR
+analysis
+Frame extraction successful: 15 frames. Now step 7: create OCR script and run it.
+plan
+Create /app/ocr.py that globs frames, runs pytesseract on each, and appends to all_text.txt.
+commands
+import cv2, pytesseract, glob
+frames_dir
+= ’/app/frames’
+output_file = ’/app/all_text.txt’
+frame_paths = sorted(glob.glob(f’{frames_dir}/frame_*.png’))
+all_text = []
+for path in frame_paths:
+img = cv2.imread(path)
+if img is None:
+continue
+text = pytesseract.image_to_string(img)
+all_text.append(text)
+with open(output_file, ’w’) as f:
+f.write(’\n’.join(all_text))
+observation
+/app $ python3 /app/ocr.py
+/app $ wc -l /app/all_text.txt
+29 /app/all_text.txt
+/app $ head -c 200 /app/all_text.txt
+Slide 1: Introduction to Adolescent Depression
+Slide 1: Introduction to Adolescent Depression
+Slide 2: Cognitive Behavioral Therapy (CBT)
+Slide 2: Co. . .
+44
+
+❹Step 9 (of 11) — Refine parse.py to filter out the intro slide
+analysis
+Step 8 produced an initial parse with 5 unique lines, including the non-treatment Introduction to
+Adolescent Depression. Filter by treatment-related keywords.
+plan
+Rewrite /app/parse.py with a keyword whitelist [therapy, treatment, medication, cbt,
+ssri, antidepressant], dedup, re-run, verify ≥4 lines and CBT presence.
+commands
+input_file
+= ’/app/all_text.txt’
+output_file = ’/app/treatment_list.txt’
+keywords
+= [’therapy’, ’treatment’, ’medication’, ’cbt’, ’ssri’, ’antidepressant’]
+with open(input_file, ’r’) as f:
+lines = f.read().splitlines()
+treatments = set()
+for line in lines:
+line = line.strip()
+if not line:
+continue
+if line.startswith(’Slide’):
+parts = line.split(’:’, 1)
+if len(parts) == 2:
+treatment = parts[1].strip()
+if treatment and any(kw in treatment.lower() for kw in keywords):
+treatments.add(treatment)
+with open(output_file, ’w’) as f:
+for t in sorted(treatments):
+f.write(t + ’\n’)
+observation
+/app $ python3 /app/parse.py
+Extracted 4 unique treatments.
+/app $ cat /app/treatment_list.txt
+Cognitive Behavioral Therapy (CBT)
+Family-Based Treatment
+Interpersonal Therapy (IPT)
+Medication: SSRIs like fluoxetine
+/app $ wc -l /app/treatment_list.txt
+4 /app/treatment_list.txt
+/app $ grep -q "Cognitive Behavioral Therapy\|CBT" /app/treatment_list.txt && echo "Contains
+CBT"
+Contains CBT
+❺Verification Result (downstream pytest)
+Test Case
+Status
+Metric
+Value
+test_treatment_list_exists
+✓PASSED
+file present
+/app/treatment_list.txt
+test_treatment_list_min_lines
+✓PASSED
+line count
+≥4 (actual: 4)
+test_cbt_present
+✓PASSED
+CBT keyword
+found
+test_ssri_present
+✓PASSED
+SSRI keyword
+found
+test_ipt_present
+✓PASSED
+IPT keyword
+found
+test_family_based_present
+✓PASSED
+FBT keyword
+found
+Reward
+1.0
+(6/6 passed, 11 steps)
+45
+

@@ -1,0 +1,458 @@
+=== PDF FIRST PAGE (title region) ===
+MalSkillBench: A Runtime-Verified Benchmark of Malicious
+Agent Skills
+Wenbo Guo∗
+honywenair@gmail.com
+Nanyang Technological University
+Singapore
+Wei Zeng∗
+zengwei@stu.scu.edu.cn
+Sichuan University
+China
+Chengwei Liu†
+chengwei.liu@nankai.edu.cn
+Nankai University
+Singapore
+Xiaojun Jia
+jiaxiaojunqaq@gmail.com
+Nanyang Technological University
+Singapore
+Yijia Xu
+xuyijia@scu.edu.cn
+Sichuan University
+China
+Lei Tang
+layne.tang@digidations.com
+DIGIDATIONS PTE. LTD.
+Singapore
+Yong Fang
+yfang@scu.edu.cn
+Sichuan University
+China
+Yang Liu
+yangliu@ntu.edu.sg
+Nanyang Technological University
+Singapore
+Abstract
+AI coding agents such as Claude Code and Gemini CLI increas-
+ingly extend themselves with third-party skills, markdown pack-
+ages that bundle natural-language instructions, executable scripts,
+and tool permissions. Because a skill is at once executable code
+and agent-facing instruction, it introduces a software supply chain
+dependency whose risk is neither pure code nor pure prompt. Detec-
+tion tools have never been measured against verified ground truth
+that spans this hybrid space, leaving their effectiveness unknown
+and wild-only evaluations systematically biased.
+We present MalSkillBen
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+MalSkillBench: A Runtime-Verified Benchmark of Malicious
+Agent Skills
+Wenbo Guo∗
+honywenair@gmail.com
+Nanyang Technological University
+Singapore
+Wei Zeng∗
+zengwei@stu.scu.edu.cn
+Sichuan University
+China
+Chengwei Liu†
+chengwei.liu@nankai.edu.cn
+Nankai University
+Singapore
+Xiaojun Jia
+jiaxiaojunqaq@gmail.com
+Nanyang Technological University
+Singapore
+Yijia Xu
+xuyijia@scu.edu.cn
+Sichuan University
+China
+Lei Tang
+layne.tang@digidations.com
+DIGIDATIONS PTE. LTD.
+Singapore
+Yong Fang
+yfang@scu.edu.cn
+Sichuan University
+China
+Yang Liu
+yangliu@ntu.edu.sg
+Nanyang Technological University
+Singapore
+Abstract
+AI coding agents such as Claude Code and Gemini CLI increas-
+ingly extend themselves with third-party skills, markdown pack-
+ages that bundle natural-language instructions, executable scripts,
+and tool permissions. Because a skill is at once executable code
+and agent-facing instruction, it introduces a software supply chain
+dependency whose risk is neither pure code nor pure prompt. Detec-
+tion tools have never been measured against verified ground truth
+that spans this hybrid space, leaving their effectiveness unknown
+and wild-only evaluations systematically biased.
+We present MalSkillBench, the first runtime-verified bench-
+mark of malicious agent skills. It contains 3,944 malicious skills
+labeled along a three-dimensional taxonomy spanning 108 (attack
+vector, behavior, insertion strategy) cells. Of these, 3,214 come from
+a closed-loop Generate-Verify-Feedback pipeline that admits only
+samples whose malicious behavior fires inside a Docker sandbox
+under system-call monitoring and an LLM judge, with verification
+feedback shaping subsequent generation. We complement it with
+703 in-the-wild and 4,000 matched benign skills.
+Across these measurements, the picture is consistent. (1) Attacks
+are unevenly realizable: code injection reaches 94.5% verification
+yield but prompt injection only 75.8%, the same fragility that later
+makes prompt injection hard to detect. (2) The wild sample is strik-
+ingly narrow, dominated by a single cryptocurrency-theft campaign
+(86.6% one behavior, 81% from two accounts), with a small but ar-
+chitecturally new tail attacking the agent control plane. (3) The
+benchmark exposes that the strongest skill-specific detector reaches
+98.4% recall on code injection yet collapses on prompt-injection
+and agent-control attacks; wild-only scoring swings the ranking
+by up to 66 recall points, elevating VirusTotal from near-bottom
+to top. (4) Supply-chain scanners and prompt-injection defenses
+each see only one half of a skill, and no combination recovers the
+relationship between code and instructions. Detecting malicious
+skills therefore requires reasoning jointly over task intent, code,
+∗These authors contributed equally to this work.
+†Corresponding author.
+and instructions. We open source the dataset, code, baselines, and
+experimental results.
+Keywords
+AI coding agent, malicious skill, benchmark, code injection, prompt
+injection, supply chain security
+1
+Introduction
+AI coding agents such as Claude Code, OpenCode, Cursor, and
+Gemini CLI are reshaping software development by autonomously
+reading, writing, and executing code on behalf of developers [56].
+A central enabler of this autonomy is the skill: a distributable, third-
+party software artifact that bundles natural-language instructions,
+executable scripts, and tool configurations into a single SKILL.md-
+based package [1, 3]. When a user’s request semantically matches a
+skill’s description, the agent loads the skill, follows its instructions,
+and executes the code it prescribes. In this sense, skills serve as third-
+party software dependencies for AI coding agents, analogous to
+npm packages for Node.js or extensions for modern IDEs, and have
+been adopted as an open standard across major agent platforms [1].
+The ecosystem has scaled rapidly: SkillsMP currently hosts over
+1.6 million skills [49], ClawHub lists over 64,000 [42], and daily
+submissions on major platforms have surged from under 50 to over
+500 within weeks [51].
+However, this rapid adoption is already being actively exploited.
+Recent studies report that over 26% of skills in major marketplaces
+contain at least one security-relevant defect [6], and Snyk identified
+76 confirmed malicious payloads among 3,984 skills on ClawHub
+alone [51]. More recently, Antiy CERT documented a coordinated
+poisoning campaign in which attackers uploaded 1,184 malicious
+skills disguised as legitimate plugins to the same marketplace [4].
+Across these reports and prior work on AI agent attacks, skill
+abuse consistently exploits this hybrid nature along two comple-
+mentary vectors. Code Injection (CI) embeds executable payloads in
+a skill’s scripts or inline code blocks, performing actions such as
+data exfiltration, credential theft, or backdoor installation when the
+arXiv:2606.07131v2  [cs.CR]  9 Jun 2026
+
+Conference’17, July 2017, Washington, DC, USA
+Wenbo Guo, Wei Zeng, Chengwei Liu, Xiaojun Jia, Yijia Xu, Lei Tang, Yong Fang, and Yang Liu
+agent runs the code [4, 15, 51]. Prompt Injection (PI) hides manipula-
+tive instructions within the skill’s markdown text to alter the agent’s
+behavior, bypass safety constraints, or redirect its task [4, 47, 57].
+Notably, neither vector emerges in isolation: CI patterns closely mir-
+ror those documented in malicious PyPI and npm packages [28, 40],
+while PI patterns inherit from jailbreak and social-engineering
+techniques developed against general-purpose LLMs. Attackers are
+directly transplanting both classes of established attack patterns
+into the skill format (we present concrete evidence in Section 2).
+Skills thus introduce a new, hybrid attack surface that combines
+code-layer and instruction-layer threats within a single artifact.
+This makes skill security a software supply chain problem for the
+agent era: skills are how agents acquire third-party capability, but
+their risk surface, neither pure code nor pure prompt, falls outside
+any prior dependency-security or instruction-level defense.
+Such threats demand reliable detection, and various skill-specific
+detectors have already emerged from both academia and indus-
+try. However, the community still cannot determine which tools
+actually work, because three compounding gaps block reliable eval-
+uation of detector capability. (Gap 1: No public ground truth.)
+Industry reports such as Snyk and Antiy publish counts and behav-
+ioral summaries but withhold the underlying samples [4, 51]; the
+few public academic benchmarks, such as Liu et al.’s wild-collected
+dataset [34], total only 157 samples. We supplement this with 703
+wild malicious skills collected from public registries and sharing
+platforms, yet the cumulative pool remains far below the scale
+needed to evaluate detectors systematically. (Gap 2: Existing data
+covers a narrow attack surface.) Among the 703 wild samples
+we collected, 86.3% concentrate on dependency-impersonation at-
+tacks and prompt-injection attacks are nearly absent; Liu et al.’s
+dataset exhibits similar concentration [34]. Detectors trained or
+evaluated on such skewed data may appear effective against the
+dominant attack pattern but cannot be expected to generalize to
+the full attack space. (Gap 3: No unified evaluation methodol-
+ogy.) Detection tools span multiple paradigms, including rule-based
+scanners [19], hybrid static-plus-LLM analyzers [7, 52], LLM-native
+prompt scanners [45], and academic detector proposals [6, 22, 47].
+Each, however, is evaluated on its own private dataset under its
+own metrics, with no shared benchmark covering both CI and PI
+vectors for fair comparison. This fragmentation prevents the com-
+munity from identifying which approaches generalize and which
+are dataset-specific overfitting.
+These gaps are not just methodological inconveniences: they
+actively distort what the community believes about skill detection.
+In our measurements, a single detector’s recall on malicious skills
+swings by 66 points depending on which subset is used, enough to
+flip an off-the-shelf antivirus aggregator from near the bottom of
+the field to the top. To enable measurement that does not behave
+this way, we construct MalSkillBench, a runtime-verified bench-
+mark and unified evaluation harness built through an automated
+Generate-Verify-Feedback closed-loop pipeline. (Addressing Gap 1:
+Verified ground truth at scale.) We assemble 3,944 malicious
+skills from three complementary sources: 703 wild samples col-
+lected from public registries, 3,214 generated samples produced by
+our pipeline, and 27 samples curated for tool-compatibility valida-
+tion. Each generated sample is loaded by a real coding agent inside
+a Docker sandbox instrumented with strace and inotifywait;
+only samples whose observed behavior matches their declared
+ground-truth indicator enter the dataset. Runtime verification turns
+label claims into behavioral evidence, providing the ground truth
+that prior data lacked. (Addressing Gap 2: Systematic coverage
+via taxonomy and knowledge migration.) We define a three-
+dimensional taxonomy spanning attack vector, malicious behavior,
+and insertion strategy, yielding 108 cells that span the attack space.
+The pipeline mines real-world attack patterns from two external
+knowledge bases: a malicious package dataset [16] for CI patterns
+and prompt-injection corpora such as WildJailbreak [23] for PI pat-
+terns. Each pattern is embedded into a curated pool of legitimate
+benign skills spanning 12 categories that serve as camouflage. Cov-
+erage is therefore by construction, not by what attackers happened
+to publish. (Addressing Gap 3: Unified baseline evaluation.) We
+evaluate all 12 detection tools on this benchmark under identical
+input formats, configurations, and metrics. The unified evaluation
+directly compares coverage across both CI and PI vectors and across
+the 108 taxonomy cells, exposing capability gaps that single-dataset
+evaluations have obscured.
+Equipped with this benchmark, we can address questions about
+Skill detection that prior data could not support. We organize our
+study around four research questions:
+• RQ1 (Attack Realizability): Which regions of the hybrid attack
+surface can be reliably realized as working malicious skills, and
+which are hard to realize?
+• RQ2 (Wild Analysis): What attack patterns dominate real-
+world malicious skills, and what agent-native threats do they
+reveal beyond traditional supply-chain abuse?
+• RQ3 (Skill-Specific Detection): How well do skill-specific de-
+tectors perform across both CI and PI attack vectors?
+• RQ4 (Tool Transferability): Can supply-chain scanners and
+prompt-injection defenders be repurposed to detect malicious
+skills?
+In summary, this paper makes the following contributions:
+• We design a closed-loop Generate-Verify-Feedback pipeline that
+migrates real-world attack patterns from external knowledge
+bases into the skill format and verifies each generated sample
+through sandbox execution with system-call-level behavioral
+evidence.
+• We release MalSkillBench, the first runtime-verified measure-
+ment infrastructure for Skill detection research, labeled along
+a three-dimensional taxonomy (attack vector × behavior × in-
+sertion strategy, 108 cells) and comprising 3,944 malicious skills
+with 4,000 paired benign samples.
+• We conduct the first systematic study of the malicious-skill at-
+tack surface. Attack realizability is uneven: code injection reaches
+94.5% verification yield but prompt injection only 75.8%, a struc-
+tural fragility of the PI vector that resurfaces in detection. The
+wild sample is dominated by a single pattern, with 86.3% of sam-
+ples mounting dependency impersonation, while a small but
+architecturally new tail targets the agent’s control plane (session
+lifecycle, identity, instruction hierarchy) rather than the host.
+• We benchmark 12 detection tools and show that no current ap-
+proach is adequate. Skill-specific detectors reach at most 88.6%
+F1 with sharp drops on prompt-injection attacks, and wild-only
+
+MalSkillBench: A Runtime-Verified Benchmark of Malicious Agent Skills
+Conference’17, July 2017, Washington, DC, USA
+evaluation is systematically misleading, shifting individual re-
+call by up to 66.3 points (VirusTotal). Supply-chain scanners and
+prompt-injection defenders transfer poorly: high-recall trans-
+fers over-trigger with up to 3,979 false positives on 4,000 benign
+samples, and naive combinations cannot reconcile code- and
+instruction-level evidence.
+2
+Motivation
+2.1
+Limitations of Existing Data
+Reliable detector evaluation requires data that spans the attack
+space, but current sources do not provide it. We examine the two
+natural starting points: the most prominent public benchmark, and
+our own wild collection. Even combined, they leave most of the
+attack space empirically invisible.
+Liu et al.’s wild-collected dataset [34] contains 157 labeled sam-
+ples drawn from two platforms. The distribution is highly concen-
+trated: 86 samples (55%) come from a single upload of commercial-
+brand impersonation skills (e.g., spotify, docusign, linkedin,
+apple-music) sharing near-identical attack templates. The remain-
+ing samples cluster on Remote Code Execution and Credential Theft,
+while pure instruction-layer attacks are rare. At this scale and con-
+centration, a detector tuned to Liu’s data cannot claim coverage
+across the broader attack space.
+We curated 703 in-the-wild malicious skills from public registries
+and sharing platforms, but the distribution is similarly narrow. 86.3%
+of samples mount a dependency-impersonation attack, declaring a
+trusted-looking prerequisite (often a variant of openclaw-agent)
+that the agent is induced to install. Prompt-injection attacks are
+nearly absent, and the dominant outcome is host-level malware
+delivery via the fake dependency; attacks against the agent’s instruc-
+tion layer or control plane appear only as low-frequency outliers.
+Merging the 157 published samples with our 703 wild skills
+does not repair this gap. The combined sample remains dominated
+by a single dependency-impersonation pattern, with most of the
+attack surface (instruction-layer attacks, agent-control hijacks, full-
+camouflage payloads) empirically invisible. We turn next to whether
+attack patterns in this domain are structured in a way that allows
+systematic expansion of the evidence base.
+2.2
+Attacks Migrate Into Skills
+Across software ecosystems, attackers’ core behaviors (data ex-
+filtration, credential theft, backdoor installation, social engineering)
+remain largely the same; what changes is the carrier through which
+those behaviors are delivered. Package ecosystems and prompt-
+injection research have accumulated extensive bodies of docu-
+mented attack cases. We observe the same behaviors recurring
+in skill abuse, illustrated by two cases (Figure 1): a CI pattern trans-
+planted from a malicious PyPI package, and a PI pattern adapted
+from phishing-style social engineering against AI agents.
+Case 1: Code Injection Migration. The PyPI package pyconau-
+funtimes-1.0.6 embeds a reverse shell in setup.py: it opens a
+TCP socket to the attacker’s server, redirects standard I/O, and
+spawns an interactive shell. The malicious skill math-calculator
+contains functionally identical code in scripts/calculate.py,
+with only the target address changed. The code structure, system
+calls, and attack chain are the same; only the carrier (setup.py
+pyconau-funtimes/setup.py PyPI package
+math-calculator/scripts/calculate.py agent skill
+1
+1
+import socket, subprocess, os
+import socket, subprocess, os
+2
+2
+s = socket.socket(AF_INET, SOCK_STREAM)
+s = socket.socket(AF_INET, SOCK_STREAM)
+3
+3
+s.connect(("0.tcp.ngrok.io", 36946))
+s.connect(("20.120.229.246", 4444))
+4
+4
+os.dup2(s.fileno(), 0)
+os.dup2(s.fileno(), 0)
+5
+5
+os.dup2(s.fileno(), 1)
+os.dup2(s.fileno(), 1)
+6
+6
+os.dup2(s.fileno(), 2)
+os.dup2(s.fileno(), 2)
+7
+7
+subprocess.call(["/bin/sh", "-i"])
+subprocess.call(["/bin/sh", "-i"])
+phishing-email.txt phishing email
+google-workspace/SKILL.
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Conference’17, July 2017, Washington, DC, USA
+Wenbo Guo, Wei Zeng, Chengwei Liu, Xiaojun Jia, Yijia Xu, Lei Tang, Yong Fang, and Yang Liu
+References
+[1] Agent Skills Community. [n. d.]. Agent Skills: Open Standard for Agent Skill
+Files. https://agentskills.io. Accessed: 2026-04-04.
+[2] Maksym Andriushchenko, Alexandra Souly, Mateusz Dziemian, Derek Duenas,
+Maxwell Lin, Justin Wang, Dan Hendrycks, Andy Zou, Zico Kolter, Matt Fredrik-
+son, et al. 2025. Agentharm: A benchmark for measuring harmfulness of llm
+agents. In International Conference on Learning Representations, Vol. 2025. 79185–
+79220.
+[3] Anthropic. [n. d.]. Extend Claude with Skills. https://code.claude.com/docs/en/
+skills. Accessed: 2026-04-04.
+[4] Antiy CERT. 2026. ClawHavoc: Analysis of a Large-Scale Poisoning Campaign
+Against the OpenClaw AI Agent Skill Marketplace. https://www.antiy.com/
+response/OpenClaw_AI_Poisoning_Attack_Analysis.html. Accessed: 2026-05-
+25.
+[5] Andy Arditi, Oscar Obeso, Aaquib Syed, Daniel Paleka, Nina Panickssery, Wes
+Gurnee, and Neel Nanda. 2024. Refusal in language models is mediated by a
+single direction. Advances in Neural Information Processing Systems 37 (2024),
+136037–136083.
+[6] Varun Pratap Bhardwaj. 2026. Formal Analysis and Supply Chain Security for
+Agentic AI Skills. arXiv preprint arXiv:2603.00195 (2026).
+[7] Cisco AI Defense. 2026. Skill Scanner: Security Analysis for Agent Skills. https:
+//github.com/cisco-ai-defense/skill-scanner. Accessed: 2026-04-04.
+[8] Datadog. 2023. GuardDog: is a CLI tool to Identify malicious PyPI and npm
+packages. https://github.com/DataDog/guarddog. Accessed: 2026-04-27.
+[9] Edoardo Debenedetti, Jie Zhang, Mislav Balunović, Luca Beurer-Kellner, Marc
+Fischer, and Florian Tramèr. 2024. AgentDojo: A Dynamic Environment to
+Evaluate Prompt Injection Attacks and Defenses for LLM Agents. In Proc. NeurIPS.
+doi:10.48550/arxiv.2406.13352
+[10] Xinhao Deng, Yixiang Zhang, Jiaqing Wu, Jiaqi Bai, Sibo Yi, Zhuoheng Zou,
+Yue Xiao, Rennai Qiu, Jianan Ma, Jialuo Chen, et al. 2026. Taming openclaw:
+Security analysis and mitigation of autonomous llm agent threats. arXiv preprint
+arXiv:2603.11619 (2026).
+[11] Xingan Gao, Xiaobing Sun, Sicong Cao, Kaifeng Huang, Di Wu, Xiaolei Liu,
+Xingwei Lin, and Yang Xiang. 2025. MalGuard: Towards Real-Time, Accurate, and
+Actionable Detection of Malicious Packages in PyPI Ecosystem. In 34th USENIX
+Security Symposium (USENIX Security 25). USENIX Association, Seattle, WA, 4741–
+4758. https://www.usenix.org/conference/usenixsecurity25/presentation/gao-
+xingan
+[12] GitHub. 2026.
+Adding agent skills for GitHub Copilot.
+https:
+//docs.github.com/en/copilot/how-tos/copilot-on-github/customize-
+copilot/customize-cloud-agent/add-skills. Accessed: 2026-04-24.
+[13] Google. [n. d.]. Analyse suspicious files, domains, IPs and URLs to detect malware
+and other breaches, automatically share them with the security community.
+https://www.virustotal.com. Accessed: 2026-04-04.
+[14] Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten
+Holz, and Mario Fritz. 2023. Not what you’ve signed up for: Compromising real-
+world llm-integrated applications with indirect prompt injection. In Proceedings
+of the 16th ACM workshop on artificial intelligence and security. 79–90.
+[15] Saidakhror Gulyamov, Andrey Rodionov, Rustam Khursanov, Kambariddin
+Mekhmonov, and Djakhongir Babaev. 2026. Prompt Injection Attacks in Large
+Language Models and AI Agent Systems: A Comprehensive Review. Information
+(2026). doi:10.3390/info17010054
+[16] Wenbo Guo, Chengwei Liu, Limin Wang, Yiran Zhang, Jiahui Wu, Zhengzi Xu,
+and Yang Liu. 2024. IntelliRadar: A Comprehensive Platform to Pinpoint Malicious
+Package Information from Cyber Intelligence. arXiv preprint arXiv:2409.15049
+(2024).
+[17] Zihan Guo, Zhiyu Chen, Xiaohang Nie, Jianghao Lin, Yuanjian Zhou, and Weinan
+Zhang. 2026. SkillProbe: Security Auditing for Emerging Agent Skill Marketplaces
+via Multi-Agent Collaboration. arXiv preprint arXiv:2603.21019 (2026).
+[18] Haitao Hu, Peng Chen, Yanpeng Zhao, and Yuqi Chen. 2025. Agentsentinel: An
+end-to-end and real-time security defense framework for computer-use agents. In
+Proceedings of the 2025 ACM SIGSAC Conference on Computer and Communications
+Security. 3535–3549.
+[19] huifer. 2026. Skill Security Scan: skill-security-scan is a command-line tool
+designed to scan and detect security risks in Claude Skills. https://github.com/
+huifer/skill-security-scan. Accessed: 2026-04-04.
+[20] huihui.ai. 2025.
+Qwen3.5-abliterated: An Abliteration-Modified Qwen3.5
+Model with Refusal Behavior Removed. https://ollama.com/huihui_ai/qwen3.5-
+abliterated:35b. Accessed: 2026-04-26.
+[21] Kuo-Han Hung, Ching-Yun Ko, Ambrish Rawat, I-Hsin Chung, Winston H Hsu,
+and Pin-Yu Chen. 2025. Attention tracker: Detecting prompt injection attacks in
+llms. In Findings of the Association for Computational Linguistics: NAACL 2025.
+2309–2322.
+[22] Xiaojun Jia, Jie Liao, Simeng Qin, Jindong Gu, Wenqi Ren, Xiaochun Cao, Yang
+Liu, and Philip Torr. 2026. SkillJect: Automating Stealthy Skill-Based Prompt
+Injection for Coding Agents with Trace-Driven Closed-Loop Refinement. arXiv
+preprint arXiv:2602.14211 (2026).
+[23] Liwei Jiang et al. 2024. WildJailbreak: Diverse and Large-Scale Jailbreak Attacks
+on LLMs in the Wild. https://huggingface.co/datasets/allenai/wildjailbreak.
+[24] Yanna Jiang, Delong Li, Haiyu Deng, Baihe Ma, Xu Wang, Qin Wang, and Guang-
+sheng Yu. 2026. SoK: Agentic Skills–Beyond Tool Use in LLM Agents. arXiv
+preprint arXiv:2602.20867 (2026).
+[25] Chang Jin, An Wang, Zeming Wei, Kai Wang, Biaojie Zeng, Qiaosheng Zhang,
+Chao Yang, Jingjing Qu, Xia Hu, and Xingcheng Xu. 2026. SkillSafetyBench:
+Evaluating Agent Safety under Skill-Facing Attack Surfaces. arXiv preprint
+arXiv:2605.12015 (2026).
+[26] Juhee Kim, Xiaoyuan Liu, Zhun Wang, Shi Qiu, Bo Li, Wenbo Guo, and Dawn
+Song. 2026. The attack and defense landscape of agentic ai: A comprehensive
+survey. arXiv preprint arXiv:2603.11088 (2026).
+[27] Kurtpayne. 20

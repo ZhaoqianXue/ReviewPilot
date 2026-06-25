@@ -1,0 +1,545 @@
+=== PDF FIRST PAGE (title region) ===
+Skill Reuse as Compression in Agentic RL
+Zhikun Xu1, Yu Feng2, Jacob Dineen1, Taiwei Shi3, Jieyu Zhao3, Ben Zhou1
+1Arizona State University, 2University of Pennsylvania,
+3University of Southern California
+zhikunxu@asu.edu
+Abstract
+Large language model agents trained with re-
+inforcement learning (RL) often learn brittle,
+task-specific shortcuts. We hypothesize that
+agents generalize better when their success-
+ful trajectories are structurally compressible,
+decomposed into a small set of reusable ab-
+stract patterns. To formalize this, we introduce
+REUSERL, which grounds agentic RL in the
+Minimum Description Length (MDL) princi-
+ple. REUSERL extracts a shared skill dictio-
+nary from successful trajectories and augments
+the RL objective with a segmentation cost, ex-
+plicitly penalizing idiosyncratic behaviors that
+encode poorly. We prove a PAC-Bayes gener-
+alization bound for this compression penalty.
+Across ALFWorld, TextWorld-Cooking, and
+Countdown-Stepwise, REUSERL improves in-
+and out-of-distribution success over vanilla
+GRPO and strong round-length baselines.1
+1
+Introduction
+Large language model (LLM) agents have demon-
+strated remarkable capabilities across complex in-
+teractiv
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Skill Reuse as Compression in Agentic RL
+Zhikun Xu1, Yu Feng2, Jacob Dineen1, Taiwei Shi3, Jieyu Zhao3, Ben Zhou1
+1Arizona State University, 2University of Pennsylvania,
+3University of Southern California
+zhikunxu@asu.edu
+Abstract
+Large language model agents trained with re-
+inforcement learning (RL) often learn brittle,
+task-specific shortcuts. We hypothesize that
+agents generalize better when their success-
+ful trajectories are structurally compressible,
+decomposed into a small set of reusable ab-
+stract patterns. To formalize this, we introduce
+REUSERL, which grounds agentic RL in the
+Minimum Description Length (MDL) princi-
+ple. REUSERL extracts a shared skill dictio-
+nary from successful trajectories and augments
+the RL objective with a segmentation cost, ex-
+plicitly penalizing idiosyncratic behaviors that
+encode poorly. We prove a PAC-Bayes gener-
+alization bound for this compression penalty.
+Across ALFWorld, TextWorld-Cooking, and
+Countdown-Stepwise, REUSERL improves in-
+and out-of-distribution success over vanilla
+GRPO and strong round-length baselines.1
+1
+Introduction
+Large language model (LLM) agents have demon-
+strated remarkable capabilities across complex in-
+teractive tasks, from embodied household reason-
+ing (Shridhar et al., 2021) and text-based games
+(Côté et al., 2018) to symbolic reasoning (Sto-
+janovski et al., 2026), by combining natural-
+language reasoning with environmental interaction
+(Yao et al., 2023; Shinn et al., 2023). Reinforce-
+ment learning (RL) has become a central training
+paradigm for these agents (Schulman et al., 2017;
+Shao et al., 2024), with multi-turn agentic variants
+of GRPO now driving much of the recent progress
+on long-horizon decision-making (Jin et al., 2025;
+Feng et al., 2025; Xia et al., 2026; Shi et al., 2026).
+Yet a persistent challenge is that RL training
+often entrenches brittle behavioral shortcuts. This
+failure mode, sometimes termed reasoning collapse,
+1We will release all code and data under an open-source
+license upon publication.
+arises when prolonged optimization amplifies mem-
+orized action patterns at the expense of transferable
+reasoning (Wang et al., 2025b, 2026a,b). We do
+not claim this failure has a single cause; rather, we
+isolate one structural factor we can both formalize
+and act on: rewarding task success alone permits
+idiosyncratic, one-off solution patterns that satisfy
+the training tasks but transfer poorly. Crucially,
+compact, repeated solution patterns are desirable
+for generalization, so the difficulty is not that the
+policy forms shortcuts but that it also forms id-
+iosyncratic ones that complete training tasks with-
+out composing into reusable skills. Recent efforts
+combat this by augmenting RL with reusable struc-
+ture or experience via teacher distillation (Xia et al.,
+2026), reflection loops (Shi et al., 2026), or exter-
+nal memory (Shinn et al., 2023; Zhao et al., 2024;
+Wang et al., 2023a). But it remains unclear which
+shared structural property of the learned behavior
+is responsible for their gains.
+We argue that existing methods that improve
+agent RL do so because they implicitly encourage
+the formation of reusable structure. In both rein-
+forcement learning and information theory, such
+reusable structure is closely tied to data compres-
+sion and the Minimum Description Length (MDL)
+principle (Rissanen, 1978; Grünwald, 2007). This
+connection suggests a broader conjecture: success-
+ful, generalizable behaviors are precisely those that
+admit compact, reusable decompositions. We for-
+malize this property as the structural compressibil-
+ity of successful trajectories, defined as the degree
+to which successful behavior, represented as a se-
+quence of abstract skills, is built by composing a
+small set of reusable patterns. As illustrated in
+Fig. 1, an agent whose successes decompose into a
+compact repertoire of reusable skill compositions
+reasons more robustly than one that relies on id-
+iosyncratic, one-off sequences. This perspective
+naturally bridges temporal abstraction in hierar-
+chical RL, where options compress behavior into
+1
+arXiv:2605.31509v1  [cs.LG]  29 May 2026
+
+ALFWorld task
+put a clean ladle on the counter
+trajectory
+result
+Vanilla GRPO
+no compression
+brittle
+Round-length penalty
+uniform compression
+search discouraged
+collapses
+ReuseRL (ours)
+structural compression
+search routine
+clean-then-place
+generalizes
+Explore
+Take
+Transport
+Transform
+Deliver
+Figure 1: REUSERL distinguishes reusable compression from raw brevity. Each colored box is one ALFWorld atomic
+skill. Vanilla GRPO optimizes task success alone and can produce long trajectories with repeated or wasted steps. A pure
+round-length penalty is a degenerate singleton-only code that penalizes all steps uniformly, including the necessary search, so the
+agent under-explores and never reaches the target. REUSERL learns a multi-skill dictionary from successful trajectories and
+uses the segmentation cost under this dictionary as a trajectory-level penalty, keeping reusable subroutines cheap while leaving
+idiosyncratic waste expensive.
+reusable subroutines (Sutton et al., 1999), with the
+MDL principle. While BPE-based action tokeniza-
+tion (Sennrich et al., 2016; Zheng et al., 2024) and
+MDL-guided skill discovery (Zhang et al., 2021;
+Jiang et al., 2022) have begun bridging these ideas
+by treating behavioral abstraction as compression,
+none integrate this compression directly into the
+RL training signal as a trajectory-level penalty
+for LLM agents. Consequently, the compression-
+generalization hypothesis remains untested in this
+setting.
+To test this hypothesis, our contributions are as
+follows. (1) We first formalize the hypothesis that
+structural compressibility is a key driver of reason-
+ing generalization in RL-trained LLM agents. (2)
+We introduce REUSERL, a minimal framework that
+extracts a shared skill dictionary online from suc-
+cessful trajectories via greedy BPE-style merging
+and augments the per-trajectory GRPO signal with
+the resulting segmentation cost. (3) We ground our
+framework in the MDL principle via an EM-style
+alternating optimization, show that the pure round-
+length penalty is a degenerate fixed-code segmen-
+tation cost (Proposition 1), establish a PAC-Bayes
+generalization bound (Theorem 3), and provide
+a unifying interpretation of SkillRL and ERL as
+implicit, partial MDL minimizers. (4) On ALF-
+World (Shridhar et al., 2021), TextWorld-Cooking
+(Côté et al., 2018), and Countdown-Stepwise (Sto-
+janovski et al., 2026), REUSERL improves over
+both vanilla GRPO and the pure round-length base-
+line. Crucially, these results validate our central
+premise: successful trajectories should not merely
+be short; they should be compressible under a
+reusable skill dictionary. We isolate this effect
+in a self-contained RL loop, deliberately omitting
+experience-augmented methods like SkillRL or
+ERL that rely on auxiliary supervision. This allows
+us to rigorously validate the standalone impact of
+the MDL principle without confounding variables.
+2
+Related Work
+2.1
+Grammar-Based and MDL-Guided
+Hierarchical Abstraction
+Skill discovery can be framed as sequence compres-
+sion, where hierarchical abstraction yields reusable
+subroutines. Grounded in the MDL principle (Ris-
+sanen, 1978; Grünwald, 2007), prior methods learn
+compact skill codebooks that balance dictionary
+size against how well the data is described (Zhang
+et al., 2021; Jiang et al., 2022). In RL, BPE-style
+merging of frequent action patterns extends this
+idea to temporally extended macro-actions (Kozma
+and Voderholzer, 2024).
+PRISE (Zheng et al.,
+2024) applies compression-based abstractions to
+improve sample efficiency, and SkillVLA (Zhai
+2
+
+et al., 2026) leverages reusable skills for combi-
+natorial task diversity in embodied settings. PAC
+results for state abstraction (Cipollone et al., 2025)
+further show that compressed representations can
+preserve near-optimal behavior. REUSERL builds
+on this line of work but applies the MDL objective
+online, as a per-trajectory RL signal on success-
+ful behavior, instead of as an offline criterion for
+constructing reusable skills.
+2.2
+Skill Consolidation and
+Experience-Augmented Reasoning
+LLM agents increasingly build skills through envi-
+ronmental interaction. During training, ERL (Shi
+et al., 2026) and SkillRL (Xia et al., 2026) dis-
+till environmental feedback into behavioral cor-
+rections. Similarly, systems like RAGEN (Wang
+et al., 2025b) and DYSTIL (Wang et al., 2025a)
+self-improve through dense feedback, while oth-
+ers rely on retrieved past experiences (Shinn et al.,
+2023; Zhao et al., 2024; Wang et al., 2023a). Left
+unchecked, however, accumulating self-generated
+trajectories can trigger reasoning collapse, ampli-
+fying memorized shortcuts at the expense of trans-
+ferable behavior (Wang et al., 2025b, 2026b). This
+motivates explicit compression of reusable behav-
+ioral structure as a regularizer, which is exactly
+what REUSERL adds without relying on teacher
+distillation, retrieval, or other auxiliary modules.
+2.3
+Information-Theoretic Policy
+Compression
+Recent works apply information-theoretic objec-
+tives to constrain LLM reasoning traces, such as
+adaptively penalizing raw reasoning length (Wu
+et al., 2025; Yuan et al., 2026; Lin et al., 2026)
+or measuring token cost via surprisal under a
+language-model prior (Massoli et al., 2026). Cru-
+cially, these approaches shape reasoning at the to-
+ken or length level. In contrast, REUSERL operates
+at the behavioral level by compressing the struc-
+ture of successful skill sequences rather than their
+surface-level length.
+3
+REUSERL: Skill Reuse as Compression
+RL
+3.1
+Problem Setup and Skill Projection
+We consider a task distribution D over multi-turn
+reasoning tasks. For each sampled environment
+d ∼D, a language model policy πθ interacts with
+a partially observable environment for at most T
+steps, producing a trajectory τ ∼πθ(· | d) of
+the form τ = (o1, a1, o2, a2, . . . , oT , aT ), where
+ot is the observation and at is the action at step t.
+Each trajectory receives a binary terminal reward
+R(τ) ∈{0, 1} indicating success or failure. The
+standard RL objective maximizes the expected per-
+trajectory success rate:
+max
+θ
+Ed∼D, τ∼πθ(·|d)
+
+R(τ)
+
+(1)
+In GRPO-style training (Shao et al., 2024), Eq. (1)
+is optimized through sampled batches B
+=
+{(di, τi)}n
+i=1 and per-trajectory advantages com-
+puted inside each batch. As argued in §1, the struc-
+tural factor we isolate is the absence of pressure
+toward structurally reusable successful behavior
+under a success-only reward. The remainder of
+this section makes this notion precise: we represent
+behavior as a sequence of atomic skills, measure its
+reuse through a shared skill dictionary, and derive
+the per-trajectory signal that rewards compressible
+successful behavior.
+Skill alphabet and projection.
+We represent be-
+havior at a higher level as a sequence of discrete
+atomic skills, where each skill corresponds to an
+interpretable primitive such as EXPLORE, TAKE,
+etc. Let Σ = {σ1, . . . , σKΣ} denote a finite atomic
+skill alphabet, where each σi is a skill. A skill pro-
+jection φ maps each trajectory τ to a skill sequence
+s ∈Σ∗, abstracting away low-level action details:
+φ : τ 7→s ∈Σ∗. KΣ := |Σ| is the size of the skill
+alphabet and ∗denotes the Kleene star. In our in-
+stantiation, |Σ| is small and environment-specific,
+and φ is implemented by a rule-based mapping
+over the verbs of the raw actions; per-environment
+mapping rules are summarized in §4.
+Skill dictionary.
+To measure structural reuse, we
+represent successful behavior using a skill dictio-
+nary C = {p1, . . . , pM}, where each entry pj ∈
+Σ≤L is a short skill sub-sequence of length at most
+L. Each pj is therefore a reusable subsequence
+of atomic skills, and |pj| refers to the number of
+atomic skills in pj. Given the group of success-
+ful trajectories B+, we restrict our attention to the
+universe of valid dictionaries, A := {C ⊆Σ≤L :
+Σ ⊆C}, which guarantees that every dictionary
+contains all atomic singleton skills. This ensures
+that any atomic skill sequence s = φ(τ), τ ∈B+
+can always be exactly represented using phrases
+from C, in the worst case as a concatenation of
+singletons. Given s and C, let seg(s, C) denote the
+3
+
+minimum number of dictionary phrases needed to
+cover s exactly; we compute this quantity by dy-
+namic programming. Smaller values of seg(s, C)
+indicate that s is more compressible under C. Since
+B+ ⊆C∗and φ assigns at most one skill label per
+environment step, every non-empty skill sequence
+satisfies: 1 ≤seg(s, C) ≤|s| ≤T.
+3.2
+Two-Part Description Length of the
+Successful Batch
+For a sampled batch B = {(di, τi)}n
+i=1, let B+ :=
+{τi : R(τi) = 1, τi ∈B} denote the subset of suc-
+cessful trajectories, and let si = φ(τi) be the skill
+sequence of τi ∈B+. When B+ ̸= ∅, we evalu-
+ate a candidate skill dictionary C using a standard
+two-part code following the MDL principle (Rissa-
+nen, 1978; Grünwald, 2007): one part encodes the
+shared dictionary itself, and the other encodes the
+successful skill sequences using phrases from that
+dictionary. We thus define the dictionary cost as
+Lskill_dict(C) =
+M
+X
+j=1
+ |pj| log2 KΣ + log2 L
+
+(2)
+which measures the cost of storing the M phrases
+in C: |pj| log2 KΣ accounts for the cost of specify-
+ing the atomic skills in pj, and log2 L accounts for
+its length. The corresponding batch-level descrip-
+tion length of B+ under C is
+LBDL(B+, C) = Lskill_dict(C)
+|B+|
++
+1
+|B+|
+X
+τi∈B+
+seg(φ(τi), C) log2|C|
+(3)
+The first term is the shared cost of the dictionary,
+amortized across successful trajectories. The sec-
+ond term is the average cost of reconstructing
+their skill sequences using phrases from C. From
+a standard coding perspective, the dynamic pro-
+gramming segmentation partitions a sequence into
+seg(φ(τi), C) distinct phrases. Assuming a uni-
+form code over the dictionary entries, specifying
+each phrase requires log2 |C| bits to index. There-
+fore, their product yields the total bits required to
+encode the data given the dictionary. We select the
+batch dictionary by minimizing this objective:
+ˆC(B+) = arg min
+C∈A LBDL(B+, C)
+(4)
+Equation (3) is the objective we minimize over C
+to extract the shared dictionary. The next subsec-
+tion derives the corresponding per-trajectory signal
+that the policy should optimize, by examining the
+structure of joint MDL minimization over (C, πθ).
+3.3
+EM-style Optimization of the MDL
+Objective: The segmentation cost
+Jointly minimizing the description length over both
+the shared dictionary C and the policy πθ natu-
+rally yields an EM-style alternating procedure: the
+current policy generates a batch of successful tra-
+jectories B+, from which we infer a compressive
+dictionary C (E-step); holding this dictionary fixed,
+we then update πθ to favor successful trajectories
+that are cheaper to encode under C (M-step).
+E-step (dictionary extraction).
+With πθ fixed,
+we re-estimate the shared dictionary from the cur-
+rent successful batch B+ by solving Eq. (4). The
+dictionary-storage term Lskill_dict(C)/|B+| is con-
+structive here: it controls which shared structure
+we extract by trading dictionary size against per-
+trajectory segmentation cost.
+M-step (policy update).
+With C fixed at C(B+),
+we move πθ toward successful trajectories whose
+skill sequences are cheap to encode under C. Once
+C is fixed, the only part of the joint description
+length that varies with the individual trajectory is
+the conditional segmentation cost, and this is the
+quantity we attach to the per-trajectory RL signal.
+Concretely, we use the segmentation cost of a
+successful trajectory τi with skill sequence si =
+φ(τi) under dictionary C as.
+SegCost(si | C) := seg(si, C)
+T
+(5)
+A trajectory that decomposes into a few long
+reusable phrases has seg(s, C) ≪T and a lower
+segmentation cost; a trajectory composed of unre-
+lated singleton skills has seg(s, C) = |s| ≈T and
+the maximum segmentation cost of 1.
+The augmented trajectory-level RL objective is
+therefore to maximize
+E
+B∼(D,πθ)
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Countdown-Stepwise
+GRPO
+Pure
+Length
+SegCost
+(buf)
+SegCost
+(no buf)
+Succ.-episode length (steps, mean)
+6.70
+4.30
+4.51
+3.98
+Avg RESETs per success
+1.07
+0.52
+0.58
+0.00
+Zero-RESET successes (%)
+58.0
+82.0
+80.3
+99.9
+Invalid-action rate, success (%)
+5.0
+0.3
+0.5
+1.0
+Action-repetition rate, success (%)
+10.7
+5.5
+4.4
+5.9
+Operation diversity in successful episodes
+MUL/DIV share of OPs (%)
+3.1
+6.8
+10.9
+5.5
+Avg unique op types per success
+1.70
+1.82
+1.85
+1.75
+Env-level failure-mode partition (% of failures)
+Timeout (len=30)
+68.5
+82.6
+87.2
+56.8
+Stuck (len<30, OP/INVALID_PARSE)
+31.5
+17.4
+12.8
+43.2
+Table 9: Countdown-Stepwise per-method trajectory
+analysis. The only env-level failure modes are Timeout
+and Stuck.
+Learned dictionary phrases (Table 10) and
+SkillRL
+correspondence
+(Table
+11).
+The
+phrases recovered by REUSERL-SegCost re-
+flect
+environment-specific
+reusable
+structure:
+navigation-and-place skeletons in ALFWorld,
+recipe-faithful processing chains in TextWorld-
+Cooking, and multi-step solver templates in
+Countdown-Stepwise. On ALFWorld the learned
+non-singleton phrases align closely with skills
+distilled in SkillRL’s Skillbank (Xia et al., 2026).
+17
+
+Environment
+Representative top non-singleton phrases
+ALFWorld
+EXPLORE →TAKE
+TAKE →TRANSPORT →DELIVER
+EXPLORE →TAKE →TRANSPORT →DELIVER
+TAKE →TRANSPORT →TRANSFORM →DELIVER
+TextWorld-Cooking
+READ_RECIPE →TAKE
+TAKE →CUT
+CUT →COOK
+COOK →PREPARE_MEAL →EAT_MEAL
+Countdown-Stepwise
+OP_SUB-LARGE-NEAR_TARGET →OP_DIV-NEAR_TARGET-SMALL
+OP_ADD-SMALL-SMALL →OP_SUB-LARGE-NEAR_TARGET
+OP_SUB-LARGE-LARGE →OP_ADD-NEAR_TARGET-SMALL
+Table 10: Representative high-frequency non-singleton phrases of the extracted dictionary bC on each environment.
+Extracted phrase (ALFWorld)
+Closest SkillRL Skillbank skill
+TRANSPORT →TRANSFORM
+Approach a tool/appliance with the carried item and apply it
+(e.g. clean, heat, cool)
+EXPLORE →EXPLORE →EXPLORE →EXPLORE
+Systematic-search routine over candidate receptacles when the
+target location is unknown
+TRANSPORT →DELIVER
+Carry-and-place: move to the destination receptacle and place
+the held object
+EXPLORE →TAKE →TRANSPORT →DELIVER
+Canonical pick-and-place skeleton for simple Place tasks
+TAKE →TRANSPORT →TRANSFORM →DELIVER
+Clean/heat/cool-then-place: process the object at the appliance
+before delivery
+Table 11: Mapping between high-frequency non-singleton phrases recovered by REUSERL-SegCost on ALFWorld
+and the closest skill description in SkillRL’s Skillbank (Xia et al., 2026). The correspondence is qualitative; the
+rule-based projection only carries verb-class membership, so a single learned phrase may match more than one
+Skillbank skill.
+18
+

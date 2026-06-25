@@ -1,0 +1,350 @@
+=== PDF FIRST PAGE (title region) ===
+Automatically Learning Skills for Coding Agents
+Shangyin Tan∗
+University of California, Berkeley
+Berkeley, USA
+shangyin@berkeley.edu
+Lakshya A Agrawal∗
+UC Berkeley
+Berkeley, USA
+lakshyaaagrawal@berkeley.edu
+Rohit Sandadi
+University of California, Berkeley
+Berkeley, USA
+rohitsandadi@berkeley.edu
+Dan Klein
+University of California, Berkeley
+Berkeley, USA
+klein@berkeley.edu
+Koushik Sen
+UC Berkeley
+Berkeley, USA
+ksen@cs.berkeley.edu
+Alexandros G. Dimakis
+UC Berkeley
+Berkeley, USA
+alexdimakis@berkeley.edu
+Matei Zaharia
+UC Berkeley
+Berkeley, USA
+matei@berkeley.edu
+Abstract
+Coding agents powered by large language models can solve a wide
+range of software engineering tasks, yet they often struggle on unfa-
+miliar repositories whose conventions, testing patterns, and project
+structure differ from their training data. We introduce gskill, a fully
+automated pipeline that learns repository-specific skills, concise
+natural-language documents that capture the knowledge an agent
+needs to work effectively within a given codebase. gskill com-
+bines two components: (1) SWE-smith, a data-generation pipeline
+that creates diverse, verifiable software engineering tasks from
+any GitHub repository, and (2
+
+=== FRONT MATTER (abstract/intro/method, first 6 pages) ===
+Automatically Learning Skills for Coding Agents
+Shangyin Tan∗
+University of California, Berkeley
+Berkeley, USA
+shangyin@berkeley.edu
+Lakshya A Agrawal∗
+UC Berkeley
+Berkeley, USA
+lakshyaaagrawal@berkeley.edu
+Rohit Sandadi
+University of California, Berkeley
+Berkeley, USA
+rohitsandadi@berkeley.edu
+Dan Klein
+University of California, Berkeley
+Berkeley, USA
+klein@berkeley.edu
+Koushik Sen
+UC Berkeley
+Berkeley, USA
+ksen@cs.berkeley.edu
+Alexandros G. Dimakis
+UC Berkeley
+Berkeley, USA
+alexdimakis@berkeley.edu
+Matei Zaharia
+UC Berkeley
+Berkeley, USA
+matei@berkeley.edu
+Abstract
+Coding agents powered by large language models can solve a wide
+range of software engineering tasks, yet they often struggle on unfa-
+miliar repositories whose conventions, testing patterns, and project
+structure differ from their training data. We introduce gskill, a fully
+automated pipeline that learns repository-specific skills, concise
+natural-language documents that capture the knowledge an agent
+needs to work effectively within a given codebase. gskill com-
+bines two components: (1) SWE-smith, a data-generation pipeline
+that creates diverse, verifiable software engineering tasks from
+any GitHub repository, and (2) optimize_anything, an evolution-
+ary optimization loop that iteratively refines skill documents us-
+ing LLM-generated feedback. Skills learned by gskill on a light-
+weight agent (Mini-SWE-Agent with GPT-5-mini) transfer directly
+to stronger agents: on the bleve repository, Claude Code with
+Claude Haiku 4.5 improves from 79.3% to 100.0% pass rate while
+also reducing average task duration from 173s to 130s. On jinja,
+Claude Haiku 4.5 improves from 93.9% to 98.5% while Claude Sonnet
+4.5 maintains a perfect 100%. Our results demonstrate that automat-
+ically learned, repository-specific skills provide a lightweight and
+transferable mechanism for improving coding agent performance
+without model fine-tuning. gskill is publicly available at https:
+//github.com/gepa-ai/gepa/tree/main/src/gepa/gskill.
+ACM Reference Format:
+Shangyin Tan, Lakshya A Agrawal, Rohit Sandadi, Dan Klein, Koushik Sen,
+Alexandros G. Dimakis, and Matei Zaharia. 2026. Automatically Learning
+Skills for Coding Agents. In ACM Conference on AI and Agentic Systems
+(CAIS ’26), May 26–29, 2026, San Jose, CA, USA. ACM, New York, NY, USA,
+6 pages. https://doi.org/10.1145/3786335.3813196
+∗Equal contribution. Corresponding to shangyin@berkeley.edu
+This work is licensed under a Creative Commons Attribution 4.0 International License.
+CAIS ’26, San Jose, CA, USA
+© 2026 Copyright held by the owner/author(s).
+ACM ISBN 979-8-4007-2415-2/26/05
+https://doi.org/10.1145/3786335.3813196
+1
+Introduction
+Large language model (LLM) based coding agents [3, 7] have made
+rapid progress on software engineering benchmarks, demonstrat-
+ing the ability to navigate codebases, write patches, and run tests.
+Yet their performance varies dramatically across repositories: an
+agent that excels on well-known Python projects may stuck on an
+unfamiliar Go codebase with specific build systems, testing con-
+ventions, or architectural patterns. This gap is not primarily one of
+reasoning ability as the frontier model are showing super-human
+capabilities; it is a knowledge gap. The agent simply does not know
+how the repository works.
+In practice, human developers bridge this gap through onboard-
+ing documentation, team wikis, and accumulated institutional knowl-
+edge. For coding agents, this knowledge can be captured in skill
+files, concise documents placed alongside the code that describe
+repository-specific conventions, common pitfalls, testing proce-
+dures, and architectural patterns. When provided to an agent, these
+skills could act as a form of in-context knowledge (if the agent
+decides to invoke the skills) that guides the agent toward correct
+solutions without requiring model fine-tuning or retrieval augmen-
+tation.
+However, writing effective skill files by hand is labor-intensive,
+requires deep familiarity with the repository, and must be updated
+as the codebase evolves. This raises a natural question: can we au-
+tomatically learn skills that help coding agents work more effectively
+on any given repository?
+In this work, we introduce gskill, a fully automated pipeline
+that answers this question affirmatively. Given any GitHub reposi-
+tory, gskill produces high-quality skill documents through a two-
+stage process. First, gskill leverages SWE-smith [8] to generate a
+diverse set of verifiable software engineering tasks from the reposi-
+tory, providing the training signal needed for optimization. Second,
+optimize_anything [2], an evolutionary optimization API, itera-
+tively refines skill documents by evaluating an agent’s performance
+on these tasks and using a more powerful LLM to reflect on failures
+and update the skills accordingly.
+A key insight of gskill is that skills learned with one agent and
+model transfer effectively to entirely different agents and models.
+1310
+
+CAIS ’26, May 26–29, 2026, San Jose, CA, USA
+Tan, Agrawal, et al.
+In our experiments, skills optimized using Mini-SWE-Agent with
+GPT-5-mini transfer directly to Claude Code running Claude Haiku
+4.5 and Claude Sonnet 4.5, yielding substantial improvements in
+both accuracy and efficiency. This transferability means that skills
+can be learned cheaply with a lightweight agent and then deployed
+across an organization’s agent infrastructure.
+We evaluate gskill on two repositories spanning different lan-
+guages and domains: jinja [5] (Python, templating) and bleve [4]
+(Go, full-text search). On the in-distribution Mini-SWE-Agent, skills
+improve resolve rates from 55% to 82% on jinja and from 24% to 93%
+on bleve. These skills transfer to Claude Code: on bleve, Claude
+Haiku 4.5 improves from 79.3% to 100.0% while also completing
+tasks faster (173s →130s), and Claude Sonnet 4.5 also reaches a
+perfect 100% pass rate with duration dropping from 285s to 150s.
+On jinja, Claude Sonnet 4.5 maintains a perfect 100% while Claude
+Haiku 4.5 improves from 93.9% to 98.5%, and both models benefit
+from significantly reduced latency.
+Contributions. This work makes the following contributions:
+(1) We introduce gskill, a fully automated pipeline for learning
+repository-specific skills for coding agents, combining task
+generation via SWE-smith with evolutionary skill optimiza-
+tion via optimize_anything.
+(2) We demonstrate that learned skills dramatically improve
+agent performance, with up to a 4× improvement in resolve
+rate on repositories where the baseline agent struggles.
+(3) We show that skills learned on a lightweight agent (Mini-
+SWE-Agent with GPT-5-mini) transfer effectively to a differ-
+ent, more capable agent (Claude Code with Claude Haiku
+4.5 and Claude Sonnet 4.5), improving both accuracy and
+efficiency.
+2
+Method
+gskill consists of two main components: a task-generation pipeline
+that creates verifiable evaluation data from any repository, and
+an optimization loop that uses this data to iteratively refine skill
+documents. Figure 1 illustrates the full pipeline. We describe each
+component in turn.
+2.1
+Task Generation with SWE-smith
+Learning effective skills requires feedback, and feedback requires
+tasks with verifiable outcomes. We use SWE-smith [8], a data-
+generation pipeline that automatically creates software engineering
+tasks from GitHub repositories.
+Given a repository, SWE-smith generates tasks by creating syn-
+thetic bugs that break existing tests. It identifies programmatic
+entities such as functions and classes, then applies transformations
+including procedural AST mutations (e.g., inverting conditionals,
+flipping operators), LM-generated modifications, and PR mirror-
+ing that uses language models to revert real pull request changes.
+Each task presents the agent with a buggy repository state, and
+the agent’s solution is verified by running the associated test suite.
+This provides a fully automated source of training and evaluation
+data without any human annotation.
+For each repository in our evaluation, we use approximately
+300 SWE-smith tasks and split them into training (∼200 tasks),
+validation (∼50 tasks), and test (∼60 tasks) sets. The training set
+and validation sets are used during skill optimization, and the test
+set provides a held-out evaluation of the final learned skills.
+2.2
+Skill Optimization with optimize_anything
+A skill in our framework is a natural-language Markdown docu-
+ment that is provided to the coding agent following the standardized
+agent skill file format [1]. Skills may contain information about the
+repository’s architecture, coding conventions, testing patterns, com-
+mon pitfalls, and step-by-step guidance for typical modifications.
+Often, capable coding agents will retrieve relevant skills before
+attempting to solve the tasks.
+We optimize skills using optimize_anything [2], an evolution-
+ary optimization loop designed for refining textual artifacts. The
+process begins with an empty skill document. In each iteration,
+the agent is run on a mini-batch of 3 training tasks with the cur-
+rent chosen skill. Each task is executed inside an isolated Docker
+container via the SWE-smith harness: the container checks out
+the repository at the target commit, the agent interacts with it via
+bash commands, and the resulting patch is verified against both
+fail-to-pass and pass-to-pass test suites. For each task, we record
+the binary score, the agent’s action trace, and the test output.
+After evaluation, a reflective proposer, often a more powerful
+LLM, analyzes the results. It receives the current skills, the problem
+statement, the agent trace, and the test output for each task, and
+proposes an improved skill document that reinforces successful pat-
+terns, addresses failure modes, and remains concise and actionable.
+optimize_anything uses Pareto-based candidate selection: each
+candidate skill showing Pareto improvement in the mini-batch is
+also evaluated on the validation set, and the best candidate by
+validation score is tracked throughout the run.
+The key advantage of gskill is that it requires no gradient com-
+putation or model fine-tuning; the optimization operates entirely
+in natural-language space, making it applicable to any agent and
+any LLM, including closed-source models accessed via API.
+3
+Experiments
+3.1
+Experimental Setup
+We evaluate gskill on two repositories: jinja [5], a widely-used
+Python templating engine with standard project structure, and
+bleve [4], a Go full-text search library with a more complex build
+and testing setup less commonly encountered in LLM training data.
+For each repository, we load tasks from the SWE-smith dataset on
+HuggingFace and split them into training (∼200), validation (∼50),
+and test (∼60) sets.
+Skills are optimized using Mini-SWE-Agent [6] with GPT-5-mini
+as the evaluation agent and GPT-5.2-pro as the reflective proposer.
+We run the optimize_anything loop with a budget of 300 metric
+calls, Pareto-based candidate selection, and a reflection mini-batch
+size of 3. Sixteen parallel Docker workers execute tasks concur-
+rently. The best skill by validation score is selected for final evalua-
+tion. We then deploy the learned skills, without any further opti-
+mization, into Claude Code[3] with Claude Haiku 4.5 and Claude
+Sonnet 4.5, as .claude/skills/{repo}/SKILL.md files.
+We report standard pass@1: the fraction of test-set tasks where
+the agent’s patch passes all tests. For Claude Code experiments, we
+1311
+
+Automatically Learning Skills for Coding Agents
+CAIS ’26, May 26–29, 2026, San Jose, CA, USA
+Figure 1: The gskill pipeline. Given a target repository, SWE-smith generates verifiable tasks. These tasks feed into the GEPA
+optimization loop, where agent rollouts are evaluated for fitness, a reflective proposer generates candidate skills, and the best
+candidates are selected into a pool. The loop iterates until convergence, producing learned skills that can be deployed to any
+coding agent.
+Figure 2: Mini-SWE-Agent (GPT-5-mini) test-set resolve rates.
+Skills learned by gskill produce large improvements on both
+repositories, with especially dramatic gains on bleve (24% →
+93%).
+also report the average task duration (wall-clock, measured in
+seconds) as a measure of efficiency.
+3.2
+Mini-SWE-Agent Results
+We first evaluate the impact of learned skills on the agent used
+during optimization. Figure 2 shows the resolve rate on held-out
+test tasks for Mini-SWE-Agent with and without gskill skills. The
+improvements are substantial on both repositories. On jinja, skills
+raise the resolve rate from 55% to 82%, a 27-point improvement.
+On bleve, where the baseline agent struggles significantly (24%
+resolve rate), skills produce a dramatic improvement to 93%, nearly
+a 4× increase. This confirms that learned skills are most valuable
+when the agent lacks familiarity with a repository’s conventions
+and patterns.
+3.3
+Transfer to Claude Code
+A central question is whether skills learned on one agent and model
+transfer to a different agent and model, as the skill format promise
+portable as one of its strengths. We evaluate this by copying the
+skills learned with Mini-SWE-Agent and GPT-5-mini directly into
+Claude Code without any further optimization. Figure 3 presents
+the results, showing strong transfer across agents and models.
+On bleve (Figure 3a), skills produce large improvements for both
+models. Claude Haiku 4.5 improves from 79.3% to a perfect 100.0%
+pass rate, a 21-point gain, while average task duration decreases
+from 173s to 130s. Claude Sonnet 4.5 also reaches a perfect 100.0%
+pass rate, up from 94.8%, with duration dropping substantially from
+285s to 150s, a 47% reduction. On jinja (Figure 3b), Claude Haiku
+4.5 improves from 93.9% to 98.5% with reduced duration (177s →
+118s). Claude Sonnet 4.5 maintains a perfect 100.0% pass rate while
+duration improves from 254s to 198s. These results suggest that
+skills are most beneficial when the baseline model has room for
+improvement, while already-saturated configurations still benefit
+from efficiency gains.
+1312
+
+CAIS ’26, May 26–29, 2026, San Jose, CA, USA
+Tan, Agrawal, et al.
+(a) bleve
+(b) jinja
+Figure 3: Claude Code pass rates and average task durations with and without gskill skills. (a) On bleve, both Claude Haiku
+4.5 and Claude Sonnet 4.5 reach 100% pass rate with substantial reductions in duration. (b) On jinja, Claude Haiku 4.5 improves
+from 93.9% to 98.5%; Claude Sonnet 4.5 maintains 100% and both models benefit from reduced duration.
+3.4
+Analysis
+We highlight three key findings from our experiments:
+Largest gains on weakest baselines. The most striking im-
+provements occur when the baseline agent struggles. On bleve
+with Mini-SWE-Agent, the resolve rate jumps from 24% to 93%.
+This suggests that learned skills are especially valuable for reposi-
+tories whose conventions and patterns are underrepresented in the
+model’s training data. When the model already “knows” a reposi-
+tory well (e.g., Claude Sonnet 4.5 on jinja at 100%), there is little
+room for improvement.
+Cross-agent and cross-model transfer. Skills learned on GPT-
+5-mini with Mini-SWE-Agent transfer effectively to Claude Code
+with both Claude Haiku 4.5 and Claude Sonnet 4.5. This is a par-
+ticularly encouraging result because it means skills can be opti-
+mized cheaply using a lightweight setup and then deployed across
+an organization’s entire agent infrastructure. The skills capture
+repository-specific knowledge that is useful regardless of the un-
+derlying model or agent architecture.
+Skills improve efficiency, not just accuracy. Beyond pass
+rate improvements, we observe consistent reductions in average
+task duration when skills are applied. On bleve with Claude Sonnet
+4.5, duration drops from 285s to 150s, a 47% reduction, alongside
+the pass rate improvement. This suggests that skills help agents
+navigate directly to the right approach rather than exploring dead
+ends, reducing both the number of actions taken and the overall
+cost of each task.
+4
+Conclusion and Discussion
+We introduced
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+

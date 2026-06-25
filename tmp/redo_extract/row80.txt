@@ -1,0 +1,463 @@
+=== PDF FIRST PAGE (title region) ===
+Skill as Memory, Not Document: A Database‐Native Substrate for
+Agent Skill Catalogs
+Pranab Sarkar, Independent Researcher (ORCID 0009‐0009‐8683‐1481)
+2026‐05‐11
+Contents
+1
+Skill as Memory, Not Document: A Database‐Native Substrate for Agent Skill Catalogs
+2
+1.1
+Abstract
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2
+1.2
+1. Introduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3
+1.2.1
+1.1 Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+4
+1.2.2
+1.2 What this paper deliberately does NOT claim . . . . . . . . . . . . . . . . . .
+4
+1.3
+2. The Category Error . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+5
+1.3.1
+2.1 Documents and memory: different optimization criteria
+. . . . . . . . . . . .
+5
+1.3.2
+2.2 What “human‐readable structure” costs in agent memory
+. . . . . . . . . . .
+5
+1.3.3
+2.3 Three failure modes as symptoms of the category error . . . . . . . . . . . . .
+5
+1.3.4
+2.4 An operational definition of “memory” . . . . . . . . . . . . . . . . . . . . .
+6
+1.4
+3. Three Failure Modes — Formal Characterization . . . . . . . . . . . . . . . . . . . . .
+
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Skill as Memory, Not Document: A Database‐Native Substrate for
+Agent Skill Catalogs
+Pranab Sarkar, Independent Researcher (ORCID 0009‐0009‐8683‐1481)
+2026‐05‐11
+Contents
+1
+Skill as Memory, Not Document: A Database‐Native Substrate for Agent Skill Catalogs
+2
+1.1
+Abstract
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2
+1.2
+1. Introduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+3
+1.2.1
+1.1 Contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+4
+1.2.2
+1.2 What this paper deliberately does NOT claim . . . . . . . . . . . . . . . . . .
+4
+1.3
+2. The Category Error . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+5
+1.3.1
+2.1 Documents and memory: different optimization criteria
+. . . . . . . . . . . .
+5
+1.3.2
+2.2 What “human‐readable structure” costs in agent memory
+. . . . . . . . . . .
+5
+1.3.3
+2.3 Three failure modes as symptoms of the category error . . . . . . . . . . . . .
+5
+1.3.4
+2.4 An operational definition of “memory” . . . . . . . . . . . . . . . . . . . . .
+6
+1.4
+3. Three Failure Modes — Formal Characterization . . . . . . . . . . . . . . . . . . . . .
+6
+1.5
+4. The Substrate — Memory‐Shaped Storage . . . . . . . . . . . . . . . . . . . . . . . .
+7
+1.5.1
+4.1 Five operational invariants
+. . . . . . . . . . . . . . . . . . . . . . . . . . .
+7
+1.5.2
+4.2 API surface . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7
+1.5.3
+4.3 Implementation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7
+1.5.4
+4.4 What the substrate is NOT
+. . . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+1.6
+5. Failure Mode F1: Token Burn at Scale
+. . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+1.6.1
+5.1 Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+1.6.2
+5.2 Five disclosure patterns . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+1.6.3
+5.3 Kill‐test ablation — where does the 1.489× come from?
+. . . . . . . . . . . .
+10
+1.6.4
+5.4 K‐sensitivity (cl100k_base)
+. . . . . . . . . . . . . . . . . . . . . . . . . . .
+10
+1.6.5
+5.5 Multi‐tokenizer validation (K=5) . . . . . . . . . . . . . . . . . . . . . . . . .
+10
+1.6.6
+5.6 Body‐length sensitivity . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+11
+1.7
+6. Failure Mode F2: Slowdown at Scale . . . . . . . . . . . . . . . . . . . . . . . . . . .
+11
+1.7.1
+6.1 Setup . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+11
+1.7.2
+6.2 Latency . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+11
+1.7.3
+6.3 Retrieval quality
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.7.4
+6.4 Scope‐boundary
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.8
+7. Failure Mode F3: Hallucination Admission . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.8.1
+7.1 Adversarial corpus
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.8.2
+7.2 Substrates compared . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.8.3
+7.3 Headline results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+12
+1.8.4
+7.4 Per‐category breakdown
+. . . . . . . . . . . . . . . . . . . . . . . . . . . .
+13
+1
+
+1.8.5
+7.5 Interpretation and scope‐boundary . . . . . . . . . . . . . . . . . . . . . . .
+13
+1.9
+8. Operational Decomposition — What a Competent Filesystem Alternative Must Assemble
+14
+1.10 9. Autonomous‐Learning Consumers — Three Integration Observations
+. . . . . . . . . .
+14
+1.10.1 9.1 WisePick (capability routing over outcome history) . . . . . . . . . . . . . . .
+15
+1.10.2 9.2 Hermes Plugin (filesystem‐vs‐runtime skill lifecycle) . . . . . . . . . . . . . . .
+15
+1.10.3 9.3 RAI AI (state‐recovery‐aware routing) . . . . . . . . . . . . . . . . . . . . . .
+15
+1.10.4 9.4 What these support . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+1.11 10. Related Work . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+1.11.1 10.1 Filesystem‐based skill catalogs (document‐shape) . . . . . . . . . . . . . . .
+15
+1.11.2 10.2 Vector‐store‐backed memory frameworks . . . . . . . . . . . . . . . . . . .
+15
+1.11.3 10.3 Database‐backed agent infrastructure . . . . . . . . . . . . . . . . . . . . .
+16
+1.11.4 10.4 Schema and capability semantics
+. . . . . . . . . . . . . . . . . . . . . . .
+16
+1.11.5 10.5 Skill systematizations and benchmarks . . . . . . . . . . . . . . . . . . . . .
+16
+1.11.6 10.6 Position . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+1.12 11. Methodology Notes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+1.13 13. Limitations and Falsification Conditions . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+1.13.1 13.1 What I did not measure . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+1.13.2 13.2 Falsification conditions
+. . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+1.13.3 13.3 AGPL licensing tradeoff
+. . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+1.14 14. Discussion
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+1.14.1 14.1 What the category framing implies
+. . . . . . . . . . . . . . . . . . . . . .
+18
+1.14.2 14.2 When the framing matters . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+1.15 15. Future Work
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+1.16 16. Conclusion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+1.17 References . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+1.17.1 Primary system citation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+1.17.2 Skill systems and infrastructure . . . . . . . . . . . . . . . . . . . . . . . . . . .
+19
+1.17.3 Skill‐related research . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+1.18 Appendix A — Reproducibility
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+1
+Skill as Memory, Not Document: A Database‐Native Substrate for Agent Skill
+Catalogs
+Author: Pranab Sarkar, Independent Researcher ORCID: 0009‐0009‐8683‐1481 Date: 2026‐05‐11 License:
+CC BY 4.0 Related software:
+YantrikDB — https://doi.org/10.5281/zenodo.18793952 Code & data:
+https://github.com/yantrikos/yantrikdb‐server/tree/main/benchmarks/skill_recall
+1.1
+Abstract
+Current LLM agent skill systems use storage formats optimized for human editorial workflow: Anthropic
+Agent Skills stores skills as SKILL.md files with YAML frontmatter and Markdown body; Voyager persists
+agent‐authored skills as Python files. These document‐first conventions collapse human authoring format,
+retrieval metadata, and agent‐consumed runtime body into a single artifact. As autonomous agent learning
+becomes a primary use case — skills written by agents at runtime, retrieved by agents at inference, scoring
+composed over agent‐emitted outcome events — document‐shape choices become operational baggage.
+2
+
+I frame the required shift as “skill as memory, not document” and characterize three recurring failure
+modes when document‐first catalogs are used as agent memory substrates: (i) token burn from in‐context
+structural metadata; (ii) slowdown from filesystem organization not optimized for retrieval; (iii) invalid‐skill
+admission from YAML‐parseable acceptance.
+I characterize these failure modes formally and measure all three on a 5,000‐skill corpus.
+I report
+a database‐native resolution implemented as YantrikDB v0.8.13, an open‐source skill substrate that
+stores skills as agent‐shaped memory: structural metadata as indexed database columns (projected out
+of agent‐consumed content), body as opaque‐to‐humans agent‐optimized prose, outcome events as
+append‐only raw signal with no server‐side aggregation. (i) Token burn: full‐catalog disclosure at 5,000
+skills consumes 919,200 tokens, exceeding GPT‐4 Turbo 128K and Claude 3.7 200K windows entirely; the
+substrate’s top‐K disclosure consumes 369 tokens, constant in catalog size. A controlled ablation attributes
+the per‐query gap against optimized filesystem alternatives to ~36 tokens of YAML frontmatter overhead
+per retrieved skill — small but architecturally clean. (ii) Slowdown: p50 retrieval latency 87.3 ms, p95
+106.3 ms at 5,000‐skill scale on single‐node deployment. (iii) Invalid‐skill admission: substrate rejects 70
+of 70 adversarially‐malformed skills (0% admission rate) at write time; a document‐only YAML‐parseable
+admission policy baseline admits 68 of 70 (97% admission).
+The contributions are: the “skill as memory, not document” framing as a unifying lens for autonomous‐
+learning substrate design; the three‐failure‐mode taxonomy and its empirical measurement at 5,000‐skill
+scale on a public reproducible corpus; and an operational decomposition of substrate‐level primitives a
+competent filesystem alternative would need to assemble. I do not claim YantrikDB is a new database
+architecture — all individual primitives it ships (typed records, vector index, append‐only logs, schema vali‐
+dation, Raft replication) exist independently in prior work. I identify a category mismatch in document‐first
+skill catalogs and demonstrate a database‐native design pattern for agent‐written skill memory. I document
+three independent integrators, state explicit falsification conditions, and pre‐specify a follow‐up evaluation
+against indexed Postgres+pgvector boring baselines and end‐to‐end agent task success.
+Keywords: autonomous agent learning, agent memory, skill management, vector retrieval, database sub‐
+strate, schema validation, context window, experience report.
+1.2
+1. Introduction
+The dominant patterns for LLM agent skill management — Anthropic’s Agent Skills specification [Anthropic,
+2025], Voyager’s skill_library/ directory [Wang et al., NeurIPS 2023], framework‐level tool registries
+— treat skills as documents: files on disk with human‐readable structure, optimized for human editorial
+workflow. SKILL.md files have YAML frontmatter that humans read; Markdown bodies are formatted for
+IDE display and Git diff. Voyager’s Python skill files are code humans can debug. These format choices
+presuppose that the skill catalog is curated — humans author, review, version, and edit.
+Autonomous agent learning at scale changes this presupposition. When agents write skills at runtime via
+define‐style APIs, when catalogs grow past ~1,000 skills, when production systems demand audit logs and
+tenant isolation, the human‐editorial assumptions become operational baggage. I argue this is a category
+error: filesystem skill catalogs are documents; what autonomous learning needs is memory.
+Memory and documents have different optimization criteria. Documents optimize for human readability
+(section structure, YAML frontmatter), human authoring workflow (Git‐friendly file organization, IDE ed‐
+itability), and human review (PR diffs, code review). Memory optimizes for retrieval cost (index‐bound
+3
+
+disclosure, projected‐out metadata), write safety (schema enforcement at the API boundary), and machine
+consumption (compact body content, no human‐readable wrappers).
+When a skill catalog is consumed by humans (editing a SKILL.md in an IDE), the document format is right.
+When consumed by agents at runtime (retrieving top‐K candidates for a query, scoring outcome history),
+memory shape is right. As autonomous learning becomes the primary consumer, the substrate should
+change shape.
+This paper makes that argument concrete. I characterize three failure modes that arise when document‐
+shaped substrates are used as agent memory at scale (Section 3); I describe a database‐native substrate
+(YantrikDB) that ships memory‐shaped storage with the required operational primitives (Section 4); I mea‐
+sure each failure mode on a 5,000‐skill corpus (Sections 5–7); I enumerate the operational primitives a
+competent filesystem alternative would need to assemble (Section 8); I document three independent in‐
+tegrators using the substrate for autonomous learning (Section 9); and I state falsification conditions and
+pre‐specify a follow‐up evaluation (Sections 12–14).
+1.2.1
+1.1 Contributions
+1. The “skill as memory, not document” framing as a unifying lens for autonomous‐learning substrate
+design. Prior work either accepts the filesystem‐as‐substrate choice without examination (Anthropic
+Agent Skills spec) or persists skills to files because that was the artifact‐level abstraction (Voyager). I
+do not claim YantrikDB is a new database architecture; I identify a substrate mismatch in document‐
+first skill catalogs and demonstrate a database‐native design pattern for agent‐written skill memory.
+2. A three‐failure‐mode taxonomy (F1/F2/F3) — recurring substrate‐level symptoms that appear when
+document‐first catalogs are used as agent memory, with formal thresholds (Section 3).
+3. Empirical measurements of all three failure modes at 5,000‐skill scale on a public reproducible corpus
+(Sections 5–7).
+4. An operational decomposition (Section 8) of substrate‐level primitives a competent filesystem alter‐
+native must assemble to close F1+F2+F3 simultaneously.
+1.2.2
+1.2 What this paper deliberately does NOT claim
+• Not a paradigm shift. Individual primitives (typed records, vector index, append‐only logs, Raft,
+schema validation) exist independently in prior database, IR, and event‐sourcing literature. The con‐
+tribution is the framing + the operational packaging argument, not a new primitive.
+• Not that filesystems are inherently incapable of solving the problem. A filesystem‐backed system
+that adds external indexing, write‐time validation, transactional updates, and append‐only outcome
+logs becomes — by construction — an agent memory substrate. The question is which substrate
+ships those primitives together.
+• Not novel against an indexed Postgres+pgvector + JSON‐schema + audit‐table assembly. That as‐
+sembly could close all three failure modes; pre‐specified as the most important deferred comparison.
+• Not end‐to‐end agent task success. Retrieval cost / latency / admission rates are reported; down‐
+stream task accuracy is pre‐specified for the follow‐up paper.
+• Not large‐scale production attestation. Single‐node homelab + three early integrators. Multi‐tenant
+contention, leader failover, concurrent‐writer behavior at 50K+ scale all deferred.
+4
+
+1.3
+2. The Category Error
+1.3.1
+2.1 Documents and memory: different optimization criteria
+Optimization axis
+Documents (human‐curated)
+Memory (agent‐consumed)
+Primary reader
+Humans
+Agents
+Authoring workflow
+IDE, Git, code review
+Runtime API, no human in loop
+Structure
+Section headers, frontmatter,
+formatting
+Whatever the
+retrieval/consumption pipeline
+needs
+Update cadence
+Days/weeks (PRs)
+Milliseconds (per‐execution
+outcome events)
+Consistency model
+Eventual (Git merge conflicts ok)
+Strong (transactional, ACID‐style)
+Validation
+Code review, optional CI
+Required at write API boundary
+Audit
+Git log
+Append‐only typed event log
+Multi‐tenant
+File‐system ACLs (OS‐level)
+API‐level tenancy enforcement
+Replication
+Git remotes, NFS, manual sync
+Consensus protocol (Raft)
+Filesystem skill catalogs use documents‐optimized choices in nearly every row. That is right when humans
+are the primary author/reader. It becomes operational baggage when agents are. The point is not that
+filesystems cannot be re‐engineered into agent memory substrates — they can, by adding the missing prim‐
+itives — but that the document‐first defaults need to be replaced rather than extended.
+1.3.2
+2.2 What “human‐readable structure” costs in agent memory
+The YAML frontmatter on a SKILL.md file (name:, applies_to:, triggers:, skill_type:) exists because
+humans editing the file need to see and change those fields. When the same content is retrieved into an
+LLM context at runtime:
+• The structural metadata duplicates information already in the retrieval index (applies_to was used
+to
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+8. Task‐success ablation comparing YAML‐frontmatter‐intact vs frontmatter‐stripped skill content
+across at least three production LLM providers — measures whether metadata projection affects
+downstream agent behavior beyond raw token count.
+Commitment: follow‐up paper within 12 weeks (by 2026‐08‐04) regardless of outcome.
+1.16
+16. Conclusion
+I argue that LLM agent skill management at scale faces a category error: filesystem skill catalogs were de‐
+signed as documents for human editorial workflow, but autonomous agent learning at scale needs memory
+for agent consumption. The category error manifests as three coupled failure modes — token burn from
+in‐context structural metadata, slowdown from filesystem organization not optimized for retrieval, invalid‐
+skill admission from YAML‐parseable write acceptance. I measure all three at 5,000‐skill scale and report a
+database‐native resolution (YantrikDB v0.8.13) that stores skills as agent‐shaped memory: structural meta‐
+data as indexed columns, body as opaque‐to‐humans content, outcome events as append‐only raw signal.
+Headline empirical results: (i) full‐catalog disclosure at 5K skills consumes 919,200 tokens, exceeding Claude
+200K window; the substrate’s index‐bound disclosure consumes 369 tokens, constant in catalog size. The
+1.489× margin against an indexed filesystem baseline is YAML frontmatter overhead at ~36 tokens per skill
+— small but architecturally clean. (ii) p50 retrieval 87.3 ms at 5K‐scale single‐node. (iii) Substrate rejects
+70/70 structurally‐malformed skills (0%); document‐only YAML‐parseable admission policy admits 68/70
+(97%).
+The paper’s contributions are the category‐error framing, the three‐failure‐mode taxonomy, the empirical
+decomposition of where the substrate‐vs‐filesystem token gap actually comes from, the operational de‐
+composition of primitives a competent filesystem alternative would need to assemble. I document three
+autonomous‐learning consumers, state explicit falsification conditions, and pre‐specify follow‐up evalua‐
+tion against indexed boring‐database baselines and end‐to‐end agent task success.
+This is an experience report, not a field‐defining paper. The category framing may prove useful as future sys‐
+tems are designed for autonomous learning at scale; the empirical measurements may serve as baselines;
+the falsification conditions invite challenges that strengthen the field.
+1.17
+References
+(Full citations to be finalized in formatting pass.)
+1.17.1
+Primary system citation
+• Sarkar, P. 2026. YantrikDB: A Cognitive Memory Database for AI Agents (Software). Independent.
+DOI: 10.5281/zenodo.18793952. Source: https://github.com/yantrikos/yantrikdb‐server
+1.17.2
+Skill systems and infrastructure
+• Anthropic.
+2025.
+Agent Skills Specification.
+https://platform.claude.com/docs/en/agents‐and‐
+tools/agent‐skills/overview
+• Wang, G., et al. 2023. Voyager: An Open‐Ended Embodied Agent with Large Language Models.
+NeurIPS 2023.
+19
+
+• Wu, J.2026. WisePick v0.1.2 — Open‐source Apache‐2.0 capability‐routingtoolkit. https://github.com/w2jmoe/WiseP
+• Packer, C., et al. 2023. MemGPT: Towards LLMs as Operating Systems.
+• Rhodes, G. 2026. Why AI agents need a database for memory, not just a flat file like SKILL.md (blog
+post).
+1.17.3
+Skill‐related research
+• arxiv 2602.20867 — SoK: Agentic Skills — Beyond Tool Use in LLM Agents.
+• arxiv 2604.08224 — Externalization in LLM Agents: A Unified Review of Memory, Skills, Protocols and
+Harness Engineering.
+• arxiv 2506.11180 — Beyond Formal Semantics for Capabilities and Skills: Model Context Protocol in
+Manufacturing.
+• arxiv 2604.24026 — From Skill Text to Skill Structure.
+• arxiv 2604.05333 — Graph of Skills: Dependency‐Aware Structural Retrieval for Massive Agent Skills.
+• arxiv 2605.05726 — SkillRet: A Large‐Scale Benchmark for Skill Retrieval in LLM Agents.
+• arxiv 2602.10133 — AgentTrace: A Structured Logging Framework for Agent System Observability.
+• arxiv 2604.16911 — Skilldex: A Package Manager and Registry for Agent Skill Packages.
+• arxiv 2604.01687 — EvoSkills: Self‐Evolving Agent Skills via Co‐Evolutionary Verification.
+• arxiv 2604.03964 — SkillFoundry: Building Self‐Evolving Agent Skill Libraries.
+• arxiv 2512.17102 — Reinforcement Learning for Self‐Improving Agent with Skill Library.
+1.18
+Appendix A — Reproducibility
+All benchmarks reproducible from yantrikos/yantrikdb‐server/benchmarks/skill_recall/:
+• generate.py — corpus generator (deterministic seed=42)
+• token_cost_bench.py — §5 disclosure‐pattern sweep
+• kill_test_ablation.py — §5.3 body‐only ablation
+• k_sensitivity_and_tokenizer_bench.py — §5.4–5.5
+• invalid‐skill admission_admission_bench.py — §7 adversarial‐corpus measurement
+§6 latency from commit c886e9e (2026‐04‐29) per bench.py + RESULTS.md.
+The full GPT‐5.5 + DeepSeek redteam transcript that informed the paper is preserved at _brain‐
+storm_redteam.md + _brainstorm_round3_synthesis.md for methodological auditability.
+20
+

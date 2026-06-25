@@ -1,0 +1,727 @@
+=== PDF FIRST PAGE (title region) ===
+SkVM: Revisiting Language VM for Skills across
+Heterogenous LLMs and Harnesses
+Le Chen
+Shanghai Jiao Tong University
+Shanghai, China
+Erhu Feng
+Shanghai Jiao Tong University
+Shanghai, China
+Yubin Xia
+Shanghai Jiao Tong University
+Shanghai, China
+Haibo Chen
+Shanghai Jiao Tong University
+Shanghai, China
+Abstract
+LLM agents increasingly adopt skills as a reusable unit of
+composition. While skills are shared across diverse agent
+platforms, current systems treat them as raw context, causing
+the same skill to behave inconsistently for different agents.
+This fragility undermines skill portability and execution effi-
+ciency.
+To address this challenge, we analyze 118,000 skills and
+draw inspiration from traditional compiler design. We treat
+skills as code and LLMs as heterogeneous processors. To
+make portability actionable, we decompose a skill’s require-
+ments into a set of primitive capabilities, and measure how
+well each model-harness pair supports them. Based on these
+capability profiles, we propose SkVM, a compilation and
+runtime system designed for portable and efficient skill ex-
+ecution. At compile time, SkVM performs capability-based
+compilation, environment binding, and concurrency
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+SkVM: Revisiting Language VM for Skills across
+Heterogenous LLMs and Harnesses
+Le Chen
+Shanghai Jiao Tong University
+Shanghai, China
+Erhu Feng
+Shanghai Jiao Tong University
+Shanghai, China
+Yubin Xia
+Shanghai Jiao Tong University
+Shanghai, China
+Haibo Chen
+Shanghai Jiao Tong University
+Shanghai, China
+Abstract
+LLM agents increasingly adopt skills as a reusable unit of
+composition. While skills are shared across diverse agent
+platforms, current systems treat them as raw context, causing
+the same skill to behave inconsistently for different agents.
+This fragility undermines skill portability and execution effi-
+ciency.
+To address this challenge, we analyze 118,000 skills and
+draw inspiration from traditional compiler design. We treat
+skills as code and LLMs as heterogeneous processors. To
+make portability actionable, we decompose a skill’s require-
+ments into a set of primitive capabilities, and measure how
+well each model-harness pair supports them. Based on these
+capability profiles, we propose SkVM, a compilation and
+runtime system designed for portable and efficient skill ex-
+ecution. At compile time, SkVM performs capability-based
+compilation, environment binding, and concurrency extrac-
+tion. At runtime, SkVM applies JIT code solidification and
+adaptive recompilation for performance optimization.
+We evaluate SkVM across eight LLMs of varying scales
+and three agent harnesses, covering SkillsBench and rep-
+resentative skill tasks. Results demonstrate that SkVM sig-
+nificantly improves task completion rates across different
+models and environments while reducing token consump-
+tion by up to 40%. In terms of performance, SkVM achieves
+up to 3.2× speedup with enhanced parallelism, and 19–50×
+latency reduction through code solidification.
+1
+Introduction
+LLM-based agents [1, 11, 36–38, 54] are reshaping how soft-
+ware tasks get done. Instead of writing code by hand, a devel-
+oper describes a goal, and the agent reasons, invokes tools,
+and delivers the result [41, 58]. To support this paradigm, a
+growing ecosystem of skills [5, 6, 18, 50] has emerged to make
+agent execution more reliable and practical. Skills primarily
+consist of natural language descriptions and scripts, encap-
+sulating domain-specific procedures and best practices [7].
+Over 100,000 skills are now distributed across major plat-
+forms [13, 50], spanning data analysis, finance, office automa-
+tion, programming, and beyond.
+Stage 1:
+Assembly
+Stage 2: High-level Language
+Stage 3:
+Natural Language
+LLM
+Assembler & Linker
+Operating System
+Hardware
+loop:
+    add eax, ecx
+    inc ecx
+    cmp ecx, 6
+    jl loop
+    add eax, '0'
+    int 0x80
+Operating System
+Assembler & Linker
+Hardware
+#include <std>
+int main()
+    printf(“C\n”);
+    return 0;
+}
+class M{
+public static void 
+main(String[]a){
+System.out.println
+("Java”);!"
+C Compiler
+JVM
+Java Compiler
+Agent Harness
+name: calc_sum
+desc: sum numbers
+step1: read nums
+step2: add all
+step3: output
+Compiler & Runtime
+SkVM
+Figure 1. Evolution of programming abstractions. Skills are
+the current frontier: natural language programs of hundreds
+of lines that lack a compiler and runtime for cross-target
+portability.
+However, current agents’ support for skills is simplistic:
+skills are treated as additional context and passed directly to
+the model. Models differ substantially in their ability to un-
+derstand and execute skills [22, 30, 33]. Across eight models
+spanning a range of scales, enabling skills degrades perfor-
+mance on 15% of tasks overall (e.g., 7% for Opus 4.6 and 25%
+for Qwen3-30B). For another 17% of tasks, scores remain
+unchanged (excluding tasks with 100% completion), and on
+up to 87% of tasks, at least one model shows no improvement
+after skill usage. Recent work [22] has reached similar con-
+clusions, finding that on the SWE-Benchmark, 39 out of 49
+skills showed no score improvement, and 3 skills experienced
+significant score degradation.
+We attribute these issues to two factors: (1) even when
+a skill is loaded, the model may ignore its guidance during
+execution; and (2) even when the model follows the skill,
+the skill’s assumptions about model capabilities may not
+match the model’s actual competence. Beyond differences
+in task completion gains, the semi-structured code snippets
+and workflow-style formats common in current skills also
+incur substantial token overhead (e.g., 451% token increase
+while pass rates remain unchanged [22]) and higher latency
+during execution.
+This problem arises from a fundamental mismatch be-
+tween static skills and the variability of underlying models
+and agent harnesses. The capabilities a skill demands may
+not align with the capabilities of the LLM invoked at runtime.
+1
+arXiv:2604.03088v3  [cs.SE]  11 Apr 2026
+
+Revisiting the evolution of computing paradigms [15, 51, 53]
+(as shown in Figure 1), we observe that in the agent era,
+skills are code, and LLMs are processors. Yet today, no
+mechanism exists to efficiently and reliably execute skills
+across heterogeneous LLMs and agent harnesses.
+Inspired by how classical computing systems handle code,
+we introduce SkVM, a compilation and runtime system for
+skills that enables efficient cross-model execution and pro-
+vides unified underlying support for skill execution. Through
+SkVM, skills are compiled into forms tailored to different
+models, allowing each model to better understand and exe-
+cute skills. Furthermore, SkVM provides a unified runtime
+environment that systematically manages skill loading, pars-
+ing, and concurrent execution.
+We structure SkVM around classical compilation techniques:
+interpreted execution [25], ahead-of-time (AOT) compilation [48,
+49], and just-in-time (JIT) optimization [3, 12, 15, 24, 52]. Cur-
+rently, agents handle skills using only interpreted execution,
+feeding raw skill text directly to the model. This approach
+hampers skill portability and execution efficiency. In contrast,
+SkVM further applies AOT and JIT compilation to optimize
+for diverse backend models and execution environments:
+AOT compilation: Skills inherently encode requirements
+of model capabilities, environment configuration, and par-
+allelism opportunities. Therefore, SkVM analyzes these re-
+quirements before execution and optimizes skills accordingly.
+Capability-based compilation characterizes the capability gap
+between LLMs and skill requirements by extracting 26 prim-
+itive capabilities. Each capability abstracts a distinct dimen-
+sion of model behavior with multiple proficiency levels. The
+compiler measures the target model against these capabil-
+ity dimensions and adapts the skill specification to better
+align with model strengths and limitations. Second, environ-
+ment binding extracts implicit dependencies on packages and
+tools from skill descriptions and generates setup scripts exe-
+cutable at load time, ensuring all dependencies are satisfied
+before skill execution. Finally, concurrency extraction draws
+inspiration from classical compiler optimizations for data-
+level parallelism (DLP) [27], instruction-level parallelism
+(ILP) [28, 45], and thread-level parallelism (TLP) [46]. It ex-
+tracts parallelism opportunities at similar three granularities
+from skills and explicitly exposes them to the agent harness,
+thereby improving task execution efficiency.
+JIT optimization: At runtime, SkVM leverages runtime
+information to continuously optimize skill performance and
+correctness. Code solidification: Skills may contain parame-
+terized script templates which may be instantiated multiple
+times during different executions. JIT compilation materi-
+alizes these high-frequency templates into instantiated exe-
+cutable code, bypassing LLM parsing. Adaptive recompilation:
+JIT monitoring tracks model execution and adaptively re-
+compiles skills when capability gaps emerge, ensuring skills
+can self-improve through iterative optimization.
+After skill compilation completes, the skill runtime parses
+compiled skill artifacts (including optimized skills, instan-
+tiated scripts, and concurrency dependency graphs) rather
+than simply passing raw text to the model. Additionally,
+the skill runtime coordinates with the system’s available
+resources and tool capabilities to schedule agent execution
+in real time, and ensures stable and reliable agent execution.
+We evaluate SkVM across eight LLMs of varying scales
+and three agent harnesses, covering SkillsBench [30] and rep-
+resentative skill tasks (118 tasks). Results demonstrate that
+SkVM significantly improves task completion rates (averag-
+ing 15.3%) across different models and agent harnesses [11,
+38]. Furthermore, for tasks that can be completed, SkVM re-
+duces token consumption up to 40%. In terms of performance,
+SkVM achieves 3.2×–50× wall-clock speedups through fine-
+grained parallelization and JIT code solidification.
+2
+Skills in the Wild
+In this section, we first introduce skills, the agent that uses
+them, and how skills are invoked in practice. We study the
+skill ecosystem at scale through more than 110,000 skills col-
+lected from two major distribution platforms: clawhub.ai [13]
+(28,990 skills) and skills.sh [50] (89,280 skills). Based on this
+ecosystem analysis, we further conduct experiments to iden-
+tify concrete problems in current skill usage.
+2.1
+Skill Definition
+A skill is a distributable, self-contained knowledge pack
+that enhances an AI agent’s capability on a specific class of
+tasks [2, 5]. A skill may introduce knowledge the base model
+does not have, or constrain the model toward a prescribed
+workflow when it already has the relevant capability but
+would otherwise improvise. For example, a PDF-processing
+skill [6] teaches the model how to use pdfplumber for ta-
+ble extraction, and also constrains the model to use pypdf
+instead of the deprecated PyPDF2 when merging PDF files.
+A skill is typically defined in a structured file comprising
+three layers: (1) metadata—a name, description, and trigger
+conditions that allow the agent runtime to discover and select
+the skill automatically; (2) instructions—the main body of a
+skill that encodes multi-step workflows, tool references, and
+other task-specific guidance in natural language; and (3) bun-
+dled resources—scripts, references, and templates stored in
+companion files.
+This structure distinguishes skills from ad-hoc prompt
+snippets. The metadata makes a skill a discoverable, se-
+lectable unit, enabling the agent runtime to match tasks
+to applicable skills automatically rather than requiring man-
+ual prompt assembly [8]. Compared with fine-tuning, skills
+require no weight modification and can be operated entirely
+at the prompt level [32, 39], making them lightweight to
+distribute and easy to compose. Multiple agent platforms
+have converged on this abstraction [2, 8, 14, 16, 19, 36], and
+2
+
+Claude Opus 4.6
+Gemini 3 Flash
+Claude 3.5 Haiku
+Devstral Small
+Qwen3-30B
+45
+40
+100
+60
+70
+85
+100
+100
+100
+60
+88
+100
+90
+100
+100
+100
+100
+100
+100
+0
+45
+40
+100
+60
+70
+85
+65
+75
+100
+60
+30
+100
+90
+100
+100
+100
+100
+100
+100
+0
+0
+40
+100
+60
+70
+40
+30
+50
+100
+60
+90
+100
+80
+78
+68
+100
+70
+0
+63
+0
+15
+40
+100
+60
+100
+85
+5
+100
+83
+60
+88
+100
+80
+87
+80
+100
+49
+0
+0
+0
+15
+40
+14
+60
+70
+65
+0
+50
+100
+60
+30
+100
+90
+100
+5
+0
+0
+100
+100
+0
+BareAgent
+Parallel WC
+HP Detrend
+File Organize
+D3 Line Chart
+Batch Rename
+Power Flow
+Feed Digest
+PDF Merge
+Weather Travel
+D3 Bar Chart
+SQL Query
+Workday Sched.
+DOCX Create
+SQL Migrate
+Git Log
+PPTX Create
+Regex Extract
+File Dedup
+Flood Risk
+Parallel SHA
+Claude Opus 4.6
+Gemini 3 Flash
+Claude 3.5 Haiku
+Devstral Small
+Qwen3-30B
+100
+100
+100
+60
+70
+85
+85
+100
+100
+60
+100
+100
+90
+100
+100
+100
+100
+100
+100
+93
+93
+100
+14
+60
+70
+85
+60
+100
+100
+60
+100
+0
+90
+55
+0
+100
+100
+100
+100
+19
+35
+100
+43
+60
+60
+40
+55
+50
+96
+45
+78
+100
+80
+35
+68
+0
+70
+100
+100
+69
+93
+0
+14
+0
+0
+40
+65
+0
+68
+45
+88
+75
+0
+30
+0
+0
+0
+0
+63
+93
+93
+0
+14
+60
+40
+0
+5
+0
+53
+60
+30
+0
+90
+100
+60
+0
+100
+0
+0
+93
+OpenCode
+100
+75
+50
+25
+0
+25
+50
+75
+100
+ Score (Original Skill 
+ No Skill)
+Figure 2. Skill performance across models and harnesses. Columns are tasks, rows are models, and each subplot corresponds
+to one harness. Cell colors indicate score deltas relative to the no-skill baseline, and cell labels show absolute task scores. Both
+model identity and harness choice significantly affect outcomes.
+existing tools support basic skill authoring, management,
+and optimization.
+2.2
+LLM Agent and Agent Harness
+An LLM agent works in a ReAct loop [58]. It receives a task,
+reasons about what to do, issues a tool call (reading a file,
+running a command, making an API request) [35, 47], ob-
+serves the result, and reasons again. This loop repeats until
+the task is done.
+The agent does not interact with the outside world directly.
+It runs inside an agent harness, a runtime framework that sits
+between the model and the operating environment [29, 56].
+The harness manages the LLM API connection, registers the
+tools the agent can call, dispatches those calls, and controls
+how much conversation history fits in the context window.
+Claude Code [11], OpenCode [38], and OpenClaw [37] are
+examples of widely used harnesses.
+Harnesses differ in ways that matter for skills [20]. Some
+provide a rich set of file-system and web search tools, while
+others expose only basic read, write, and shell execution
+operations. Some can spawn independent sub-agents that
+work concurrently, while others only support sequential
+execution. These differences directly affect whether a skill’s
+instructions can be carried out.
+2.3
+Characterizing Skills
+Ecosystem Scale and Distribution. The skill ecosystem is
+large but uneven. Figure 3 shows the download counts across
+both platforms. On skills.sh, 89% of the 89,280 skills have
+fewer than 86 downloads, while a handful of head skills reach
+104–106. clawhub.ai follows a similar long-tailed pattern,
+peaking around 102–103 downloads. In total, over 118,000
+skills exist across the two platforms, but the vast majority
+see little use.
+Skill Taxonomy. Skills differ substantially in what they
+provide the agent with. We use LLM-assisted analysis to
+classify 15,063 skills that have more than 100 downloads
+into three categories, based on which aspect the skill most
+100
+101
+102
+103
+104
+105
+Downloads
+0
+1000
+2000
+3000
+Number of Skills
+clawhub.ai (28,990 skills)
+100
+102
+104
+106
+Downloads
+0
+500
+1000
+1500
+2000
+Number of Skills
+Downloads < 86
+79,601 skills
+skills.sh (89,280 skills)
+Figure 3. Skill download distribution on clawhub.ai and
+skills.sh. Both platforms show a long-tailed distribution.
+emphasizes: tool reference (52%), procedural guidance (28%),
+and content generation (20%).
+Tool-reference skills teach the model how to operate spe-
+cific tools, APIs, or CLIs. They are essentially usage docu-
+mentation loaded into the agent’s context. A representative
+example is a skill that documents how to use python to
+merge, split, and manipulate PDF files.
+Procedural skills prescribe step-by-step workflows and
+reasoning strategies for carrying out a task. A representa-
+tive example is a debugging skill that enforces a four-phase
+process: reproduce the failure, trace the root cause, apply a
+targeted fix, and verify the fix with tests.
+Generative skills ask the model to produce content, code,
+documents, or prose. The core quality depends on the model’s
+own capability. An example is a frontend-design skill [6] that
+generates production-grade web components with specific
+design guidelines and styling conventions.
+Tool-reference and procedural skills together account for
+80% of the ecosystem. These skills encode analyzable struc-
+ture, including script fragments and step-by-step workflows.
+The correctness of executing these skills depends on whether
+the agent executes the prescribed steps, not on its generative
+ability.
+Workflow Structure. Beyond task type, skills also exhibit
+repeated internal structure. Across the 15,063 classified skills,
+76% contain explicit procedural structure: numbered steps,
+conditional branches, and data dependencies between steps.
+Code Fragments. 75% of skills embed code-like fragments:
+shell commands, API call patterns, or script snippets wh
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+8
+Conclusion
+Skills have emerged as a new code form in the agent era.
+However, after analyzing over 100,000 skills, we discover a
+significant mismatch between skills and underlying LLMs.
+To address this, we propose SkVM, a compilation and run-
+time system specifically tailored for skills. SkVM leverages
+compilation techniques such as AOT and JIT to optimize skill
+structure, extract environment dependencies, and identify
+parallelism opportunities. As models and agent harnesses
+continue to diversify, skill compilation provides a systematic
+pathway to transform skills into portable components, rather
+than fragile prompts.
+References
+[1] Josh Achiam, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge
+Akkaya, Florencia Leoni Aleman, Diogo Almeida, Janko Altenschmidt,
+Sam Altman, Shyamal Anadkat, et al. Gpt-4 technical report. arXiv
+preprint arXiv:2303.08774, 2023.
+[2] Agent Skills Initiative. Agent skills specification. https://agentskills.io/
+specification, 2025. Open SKILL.md format for agent skill portability;
+accessed: 2026-02-06.
+[3] Alfred V. Aho, Monica S. Lam, Ravi Sethi, and Jeffrey D. Ullman.
+Compilers: Principles, Techniques, and Tools. Addison-Wesley, 2nd
+edition, 2006.
+[4] Anthropic. Claude 3.5 haiku. https://www.anthropic.com/news/3-5-
+models-and-computer-use, 2024. Accessed: 2026-04-02.
+[5] Anthropic. Agent skills. https://platform.claude.com/docs/en/agents-
+and-tools/agent-skills/overview, 2025. Accessed: 2026-02-02.
+[6] Anthropic. Anthropic skills repository. https://github.com/anthropics/
+skills, 2025. Accessed: 2026-03-22.
+[7] Anthropic.
+Equipping agents for the real world with agent
+skills. https://claude.com/blog/equipping-agents-for-the-real-world-
+with-agent-skills, 2025. Accessed: 2026-02-06.
+[8] Anthropic. Extend claude with skills. https://code.claude.com/docs/
+en/skills, 2025. Claude Code skill mechanism; accessed: 2026-02-06.
+[9] Anthropic. Skill creator. https://github.com/anthropics/skills/tree/
+main/skills/skill-creator, 2025. Accessed: 2026-03-23.
+[10] Anthropic. Claude 4.6 opus. https://www.anthropic.com/claude/opus,
+2026. Accessed: 2026-04-02.
+[11] Anthropic. Claude code. https://github.com/anthropics/claude-code,
+2026. Accessed: 2026-04-01.
+[12] John Aycock. A brief history of just-in-time. ACM computing surveys
+(CSUR), 35(2):97–113, 2003.
+[13] ClawHub. Clawhub: Agent skills marketplace. https://clawhub.ai,
+2025. Accessed: 2026-03-22.
+[14] Coze. Plugin development guide. https://www.coze.com/docs/guides/
+plugin?_lang=en, 2025. Coze bot plugins and skills; accessed: 2026-02-
+06.
+[15] Timothy Cramer, Richard Friedman, Terrence Miller, David Seberger,
+Robert Wilson, and Mario Wolczko. Compiling java just in time. Ieee
+micro, 17(3):36–43, 1997.
+[16] Cursor. Agent skills. https://cursor.com/docs/context/skills, 2025.
+Cursor IDE skill mechanism; accessed: 2026-02-06.
+[17] DeepMind. Our latest gemini 3 model that helps you bring any idea
+to life - faster. https://deepmind.google/models/gemini/flash/, 2026.
+Accessed: 2026-04-02.
+[18] FreedomIntelligence. Openclaw medical skills. https://github.com/
+FreedomIntelligence/OpenClaw-Medical-Skills, 2025. Accessed: 2026-
+03-23.
+[19] Google.
+Agent skills.
+https://antigravity.google/docs/skills, 2025.
+Google Antigravity coding agent skills; accessed: 2026-02-06.
+[20] Google. Agent2agent (a2a) protocol. https://developers.googleblog.
+com/en/a2a-a-new-era-of-agent-interoperability/, 2025. Accessed:
+2026-02-06.
+[21] Jim Gray. The transaction concept: Virtues and limitations. Proceedings
+of the 7th International Conference on Very Large Data Bases (VLDB),
+pages 144–154, 1981.
+[22] Tingxu Han, Yi Zhang, Wei Song, Chunrong Fang, Zhenyu Chen,
+Youcheng Sun, and Lijie Hu.
+Swe-skills-bench: Do agent skills
+actually help in real-world software engineering? arXiv preprint
+arXiv:2603.15401, 2026.
+[23] John L. Hennessy and David A. Patterson. Computer Architecture: A
+Quantitative Approach. Morgan Kaufmann, 6th edition, 2019.
+[24] Kazuaki Ishizaki, Motohiro Kawahito, Toshiaki Yasue, Hideaki Ko-
+matsu, and Toshio Nakatani. A study of devirtualization techniques
+for a java just-in-time compiler. In Proceedings of the 15th ACM SIG-
+PLAN conference on Object-oriented programming, systems, languages,
+and applications, pages 294–310, 2000.
+[25] Jan Martin Jansen, Pieter Koopman, and Rinus Plasmeijer. From inter-
+pretation to compilation. In Central European Functional Programming
+School, pages 286–301. Springer, 2007.
+[26] Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin
+Pei, Ofir Press, and Karthik Narasimhan. Swe-bench: Can language
+models resolve real-world github issues? In International Conference
+on Learning Representations (ICLR), 2024.
+[27] Sajith Kalathingal, Caroline Collange, Bharath N Swamy, and André
+Seznec. Dynamic inter-thread vectorization architecture: extracting
+dlp from tlp.
+In 2016 28th International Symposium on Computer
+Architecture and High Performance Computing (SBAC-PAD), pages
+18–25. IEEE, 2016.
+[28] Daniel Kästner and Sebastian Winkel. Ilp-based instruction scheduling
+for ia-64. ACM SIGPLAN Notices, 36(8):145–154, 2001.
+[29] LangChain. Langgraph: Build resilient language agents as graphs.
+https://github.com/langchain-ai/langgraph, 2024. Accessed: 2026-03-
+22.
+[30] Xiangyi Li, Wenbo Chen, Yimin Liu, Shenghan Zheng, Xiaokun Chen,
+Yifeng He, Yubo Li, Bingran You, Haotian Shen, Jiankai Sun, et al.
+Skillsbench: Benchmarking how well agent skills work across diverse
+tasks. arXiv preprint arXiv:2602.12670, 2026.
+[31] Aixin Liu, Aoxue Mei, Bangcai Lin, Bing Xue, Bingxuan Wang,
+Bingzheng Xu, Bochao Wu, Bowei Zhang, Chaofan Lin, Chen Dong,
+et al. Deepseek-v3.2: Pushing the frontier of open large language
+models. arXiv preprint arXiv:2512.02556, 2025.
+[32] Pengfei Liu, Weizhe Yuan, Jinlan Fu, Zhengbao Jiang, Hiroaki Hayashi,
+and Graham Neubig. Pre-train, prompt, and predict: A systematic
+survey of prompting methods in natural language processing. ACM
+Computing Surveys, 55(9):1–35, 2023. arXiv:2107.13586, 2021.
+[33] 

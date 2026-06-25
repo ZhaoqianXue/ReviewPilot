@@ -8,6 +8,8 @@ import requests
 import time
 import json
 import os
+import itertools
+import re
 from typing import List, Dict, Optional
 
 
@@ -54,71 +56,115 @@ class OpenAlexSearcher:
         if len(existing_articles) >= max_results:
             return existing_articles[:max_results]
 
-        # Convert query to OpenAlex filter format
-        openalex_filter = self._convert_to_openalex_format(query)
+        query_param_sets = self._build_query_param_sets(query)
 
         articles = list(existing_articles)
-        per_page = min(200, max_results)  # API max is 200
-        cursor = "*"
 
-        while len(articles) < max_results:
-            params = {
-                "filter": openalex_filter,
-                "per_page": per_page,
-                "cursor": cursor
-            }
+        for base_params in query_param_sets:
+            cursor = "*"
+            while len(articles) < max_results:
+                params = {
+                    **base_params,
+                    "per_page": min(200, max_results - len(articles)),
+                    "cursor": cursor
+                }
 
-            if self.email:
-                params["mailto"] = self.email
+                if self.email:
+                    params["mailto"] = self.email
 
-            try:
-                response = requests.get(self.BASE_URL, params=params, timeout=60)
-                response.raise_for_status()
-                data = response.json()
+                try:
+                    response = requests.get(self.BASE_URL, params=params, timeout=60)
+                    response.raise_for_status()
+                    data = response.json()
 
-                results = data.get("results", [])
-                if not results:
+                    results = data.get("results", [])
+                    if not results:
+                        break
+
+                    new_count = 0
+                    for result in results:
+                        article = self._parse_result(result)
+                        if article:
+                            article_id = article.get('id')
+                            if article_id and article_id not in seen_ids:
+                                seen_ids.add(article_id)
+                                articles.append(article)
+                                new_count += 1
+
+                                # Save immediately if output file is provided
+                                if output_file:
+                                    with open(output_file, 'a', encoding='utf-8') as f:
+                                        f.write(json.dumps(article, ensure_ascii=False) + '\n')
+
+                    if new_count > 0:
+                        print(f"  Progress: {len(articles)} articles (saved {new_count} new)")
+
+                    # Get next cursor
+                    meta = data.get("meta", {})
+                    cursor = meta.get("next_cursor")
+                    if not cursor:
+                        break
+
+                    time.sleep(0.1)  # Rate limiting
+
+                except requests.exceptions.Timeout:
+                    print(f"  Timeout at {len(articles)} articles, retrying in 5s...")
+                    time.sleep(5)
+                    continue
+                except requests.exceptions.HTTPError as e:
+                    print(f"  OpenAlex API error: {e}")
                     break
+                except requests.exceptions.ConnectionError:
+                    print(f"  Connection error at {len(articles)} articles, retrying in 5s...")
+                    time.sleep(5)
+                    continue
 
-                new_count = 0
-                for result in results:
-                    article = self._parse_result(result)
-                    if article:
-                        article_id = article.get('id')
-                        if article_id and article_id not in seen_ids:
-                            seen_ids.add(article_id)
-                            articles.append(article)
-                            new_count += 1
-
-                            # Save immediately if output file is provided
-                            if output_file:
-                                with open(output_file, 'a', encoding='utf-8') as f:
-                                    f.write(json.dumps(article, ensure_ascii=False) + '\n')
-
-                if new_count > 0:
-                    print(f"  Progress: {len(articles)} articles (saved {new_count} new)")
-
-                # Get next cursor
-                meta = data.get("meta", {})
-                cursor = meta.get("next_cursor")
-                if not cursor:
-                    break
-
-                time.sleep(0.1)  # Rate limiting
-
-            except requests.exceptions.Timeout:
-                print(f"  Timeout at {len(articles)} articles, retrying in 5s...")
-                time.sleep(5)
-                continue
-            except requests.exceptions.HTTPError as e:
-                print(f"  OpenAlex API error: {e}")
+            if len(articles) >= max_results:
                 break
-            except requests.exceptions.ConnectionError:
-                print(f"  Connection error at {len(articles)} articles, retrying in 5s...")
-                time.sleep(5)
-                continue
 
         return articles[:max_results]
+
+    def _build_query_param_sets(self, query: str) -> List[Dict[str, str]]:
+        groups = self._parse_boolean_groups(query)
+        if len(groups) >= 2:
+            param_sets = []
+            # OpenAlex title_and_abstract.search does not support arbitrary
+            # nested Boolean syntax. Try focused AND-combinations and dedupe.
+            trimmed_groups = [group[:8] for group in groups[:3] if group]
+            for combo in itertools.product(*trimmed_groups):
+                filter_value = ",".join(
+                    f"title_and_abstract.search:{term}"
+                    for term in combo
+                    if term
+                )
+                if filter_value:
+                    param_sets.append({"filter": filter_value})
+                if len(param_sets) >= 120:
+                    break
+            if param_sets:
+                return param_sets
+
+        search_text = self._clean_query_text(query)
+        return [{"search": search_text}] if search_text else [{"search": query}]
+
+    def _parse_boolean_groups(self, query: str) -> List[List[str]]:
+        groups = []
+        for part in re.split(r'\bAND\b', query or "", flags=re.IGNORECASE):
+            terms = []
+            for term in re.split(r'\bOR\b', part.strip().strip("()"), flags=re.IGNORECASE):
+                cleaned = self._clean_query_text(term)
+                if cleaned and cleaned.lower() not in {"and", "or"}:
+                    terms.append(cleaned)
+            if terms:
+                groups.append(terms)
+        return groups
+
+    def _clean_query_text(self, text: str) -> str:
+        text = (text or "").replace("*", " ")
+        text = text.replace("'", " ").replace('"', " ")
+        text = re.sub(r"[()]", " ", text)
+        text = re.sub(r"\b(AND|OR)\b", " ", text, flags=re.IGNORECASE)
+        return " ".join(text.split())
 
     def _convert_to_openalex_format(self, query: str) -> str:
         """

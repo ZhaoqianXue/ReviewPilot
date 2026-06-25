@@ -1,0 +1,461 @@
+=== PDF FIRST PAGE (title region) ===
+Published as a conference paper at COLM 2024
+Empowering Large Language Model Agents through Action
+Learning
+Haiteng Zhao1
+Chang Ma3
+Guoyin Wang2
+Jing Su2
+Lingpeng Kong3
+Jingjing Xu2
+Zhi-Hong Deng1
+Hongxia Yang2
+1 Peking University 2 ByteDance 3 The University of Hong Kong
+Abstract
+Large Language Model (LLM) Agents have recently garnered increasing interest
+yet they are limited in their ability to learn from trial and error, a key element of
+intelligent behavior. In this work, we argue that the capacity to learn new actions
+from experience is fundamental to the advancement of learning in LLM agents.
+While humans naturally expand their action spaces and develop skills through
+experiential learning, LLM agents typically operate within fixed action spaces,
+limiting their potential for growth. To address these challenges, our study explores
+open-action learning for language agents. We introduce a framework LearnAct with
+an iterative learning strategy to create and improve actions in the form of Python
+functions. In each iteration, LLM revises and updates the currently available actions
+based on the errors identified in unsuccessful training tasks, thereby enhancing
+action effectiveness.
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Published as a conference paper at COLM 2024
+Empowering Large Language Model Agents through Action
+Learning
+Haiteng Zhao1
+Chang Ma3
+Guoyin Wang2
+Jing Su2
+Lingpeng Kong3
+Jingjing Xu2
+Zhi-Hong Deng1
+Hongxia Yang2
+1 Peking University 2 ByteDance 3 The University of Hong Kong
+Abstract
+Large Language Model (LLM) Agents have recently garnered increasing interest
+yet they are limited in their ability to learn from trial and error, a key element of
+intelligent behavior. In this work, we argue that the capacity to learn new actions
+from experience is fundamental to the advancement of learning in LLM agents.
+While humans naturally expand their action spaces and develop skills through
+experiential learning, LLM agents typically operate within fixed action spaces,
+limiting their potential for growth. To address these challenges, our study explores
+open-action learning for language agents. We introduce a framework LearnAct with
+an iterative learning strategy to create and improve actions in the form of Python
+functions. In each iteration, LLM revises and updates the currently available actions
+based on the errors identified in unsuccessful training tasks, thereby enhancing
+action effectiveness. Our experimental evaluations across Robotic Planning and
+Alfworld environments reveal that after learning on a few training task instances,
+our approach to open-action learning markedly improves agent performance for the
+type of task—by 32% in AlfWorld compared to ReAct+Reflexion, for instance—
+highlighting the importance of experiential action learning in the development of
+more intelligent LLM agents.
+1
+Introduction
+Language agents, which employ the large language model (LLM) as the policy model to control
+agents to iteratively take actions and interact with environments, have recently garnered increasing
+interest (Yao et al., 2023a; Brohan et al., 2023; Wang et al., 2023a; Xie et al., 2023; Song et al., 2023;
+Xu et al., 2023). The underlying reason is that LLMs offer a fresh angle to address the commonsense
+issue that is difficult to tackle in the reinforcement learning paradigm which learns the agent policy
+solely from trial and error. Reasoning and planning of agents are often derived from prior knowledge
+in the particular environment, precisely where LLMs excel.
+Researchers increasingly recognize that, while leveraging LLMs for agent control shows promise,
+it is far from perfect due to their limited ability to learn from experience (Yao et al., 2023b; Shinn
+et al., 2023; Huang et al., 2023). The substantial scale of LLMs makes direct policy model finetuning
+impractical. Instead, LLMs depend on incorporating historical interactions into prompts to leverage
+past experiences for future action planning (Yao et al., 2023a; Shinn et al., 2023; Sun et al., 2023;
+Madaan et al., 2023). However, these approaches are often constrained in their capacity to learn
+from long-term experiences and typically draw experience on single-instance examples (Wang et al.,
+2023c; Ma et al., 2024; Wang et al., 2023a).
+While humans naturally expand their action spaces and develop skills through experiential learning,
+LLM agents typically operate within predetermined action spaces (Qin et al., 2023; Schick et al.,
+2023), limiting their potential for growth. In this work, we propose a novel learning paradigm
+for LLM agents that focuses on learning to expand and iteratively refine the action space, thereby
+aligning tasks more closely with the agents’ planning abilities. By adapting the action space to fit the
+LLM’s planning, we address the limitations imposed by fixed action spaces, such as the misalignment
+between commonsense knowledge-guided planning and actions, and the prevalence of action errors
+due to unmet prerequisites or ineffective strategies(Gu et al., 2022; Ma et al., 2024; Ahn et al.,
+1
+arXiv:2402.15809v2  [cs.AI]  8 Aug 2024
+
+Published as a conference paper at COLM 2024
+Act Agent
+move(
+!
+, 
+"
+)
+carry_two_to(
+"
+, 
+!
+,
+#
+,
+#
+)
+carry_to(
+, 
+!
+, 
+$
+,
+%
+)
+pick(
+$
+,
+"
+,
+%
+)
+Drop:  drop(
+#
+,
+!
+,
+%
+)
+Error: You already have a 
+ball in hand, cannot pick 
+up another ball.
+Error
+Feedback
+[Instruction]:  You can use the following action: pick, 
+move, drop, carry_to, carry_two_to……
+User
+[History]:  Init obs: Ball1 is a ball.  Ball1 is at rooma.  Ball10 is a 
+ball.  Ball10 is at rooma…… Left is a gripper.  Left is free.  Right is 
+a gripper.  Right is free.  Robby is at roomb. rooma is a room. 
+roomb is a room.
+Action: move('roomb','rooma')
+Obs: Ball1 is a ball.  Ball1 is at rooma ……Robby is at rooma.
+Action: carry_to('ball1','rooma','right')
+Obs: Ball1 is a ball. Ball1 is at roomb ……
+Action: carry_to('ball2','rooma','right’)
+Obs: Ball1 is a ball. Ball1 is at roomb. Ball2 is a ball. Ball2 
+is at roomb……
+Test Stage：Using Learned Actions        with 
+Act Prompting 
+Train Stage: Create/Revise Learnable Actions 
+Assess Agent on Training Instances
+Move:  move(
+"
+,
+!
+)
+Action Learner
+Carry:  carry_to(
+"
+, 
+!
+,
+#
+,
+%
+)
+def carry_to(room1,room2,obj,gripper):
+      try:
+            move(room2,room1)
+      except:
+            pass
+      pick(obj,room1,gripper)
+      move(room1,room2)
+      drop(obj,room2,gripper)
+Pickup:  pick(
+#
+,
+"
+,
+%
+)
+Adapted 
+Policy Model
+Augmented 
+Action Space
+[Goal]: You should perform actions to accomplish the goal: 
+ball1 is at roomb…ball10 is at roomb
+Figure 1: Illustration of the training and test stage of LearnAct: Left: During the training stage,
+LearnAct expands the action space by first creating actions and then optimizing them based on
+the execution feedback. Right: The test stage uses learned action space to facilitate sequential
+decision-making. The prompting format follows the Act (Yao et al., 2023a) agent.
+2022). This approach not only mitigates bottlenecks in language agent performance but also allows
+transferring experience across different tasks.
+For a more illustrative view, we could look at the example where an LLM agent is asked to make
+cocktails. With a learnable and open action space, LLMs may naturally instruct the agent to gather
+all the components in a specific order and mix them, while the closed action space may only involve
+basic handling, such as moving to different places and grabbing bottles, which greatly increases the
+difficulty of the task for LLM agent. On the other hand, it is necessary to update existing actions
+to accommodate changing factors in the environment. Still, in the cocktail example, when making
+an Old Fashioned cocktail, muddling sugar is often the standard practice. However, if only syrup
+is available, the agent should adapt its pre-set actions to prevent repeated failures despite being
+competent to accomplish the task.
+To solve these issues, we conduct an extensive exploration of action learning in LLM agents. We
+introduce a framework LearnAct, designed to generate and optimize new action types as APIs dynam-
+ically. The newly generated action types are in the form of Python functions, leveraging the LLM’s
+extensive prior knowledge and code generation ability to devise a diverse and representative action
+space. Furthermore, LearnAct stands out due to its iterative learning strategy, which continuously
+refines actions through a feedback loop. In each cycle, the LLM evaluates the effectiveness of current
+actions using training examples, identifying and rectifying errors in failed instances. The learning
+strategy progressively deepens task understanding and improves learnable actions.
+Our experimental results demonstrate that this method of iterative refinement not only creates complex
+and user-friendly action types but also achieves more effective and efficient learning compared to
+previous state-of-the-art methods such as Reflexion (Shinn et al., 2023). By learning on a few problem
+instances, LearnAct can generalize to a general type of task with strong performance. In summary,
+our contributions are as follows.
+• We propose the action learning framework by generating and updating learnable actions,
+enabling learning customized action space that better fits the LLM’s planning capacity.
+• To implement the action learning framework, our method LearnAct employs Python func-
+tions to generate new actions, enabling flexible definitions of action types. Our iterative
+learning strategy incorporates LLM to autonomously refine and updates the currently avail-
+able actions based on errors in failed tasks.
+• Our experimental results demonstrate that LearnAct effectively learns action spaces within
+a few trials, acquiring transferable capabilities in diverse environments. Through action
+learning, LearnAct outperforms SOTA agents by a significant margin, showcasing the
+potential of action learning for LLM agents.
+2
+
+Published as a conference paper at COLM 2024
+2
+Related Work
+LLM Agent Learning Recent research has advanced the use of large language models (LLMs) in
+embodied agents (Duan et al., 2022; Huang et al., 2022a; Ahn et al., 2022; Huang et al., 2022b; Yao
+et al., 2023a; Park et al., 2023; Wu et al., 2023; Sun et al., 2023; Ma et al., 2024; Yuan et al., 2023;
+Qiao et al., 2023; Stengel-Eskin et al., 2024). These methods differ from previous reasoning-centered
+methods like Chain-of-Thought (Wei et al., 2022; Chen et al., 2022; Liang et al., 2023; Wang et al.,
+2023b) as they iteratively incorporate environment feedback to modify subsequent plans. This
+closed-loop process is centered on the ability of LLM agents to learn from environment.
+The majority of previous work on multi-turn reflection concentrates on learning from environment
+feedback within the same problem (Lai et al., 2023; Le et al., 2022; Chen et al., 2023; Liu & Abbeel,
+2023; Singh et al., 2023). ReAct (Yao et al., 2023a) propose a basic framework for using thought
+to enforce the LLM reflect on previous behaviors within the same trial. Reflexion (Shinn et al.,
+2023; Park et al., 2023), on the other hand, uses a multi-trial approach to perform reflection. By
+summarizing historical experiences and identifying reasons for failure, LLM is prompted to generate
+insights for more effective agent instruction. Similarly, ExpeL (Zhao et al., 2023) facilitates a general
+learning system that extracts insights and past experiences with retrieval. Retroformer (Yao et al.,
+2023b) propels introduce prompt-based training to enhance LLM reflections.
+Our method differs from this line of work in two points (1) LearnAct performs direct learning in
+the action space, which substantially improves the reliability and utility of generated actions. (2)
+LearnAct does not target a single problem instance but learns experience from a few training instances
+and is tested on a general type of task. A more detailed comparison is provided in Table 1.
+Hierarchical Reinforcement Learning LearnAct generates new action types based on atomic
+actions to enable more informative and applicable actions, similar to the approach in hierarchical
+reinforcement learning (Erol et al., 1994; Kulkarni et al., 2016; Bacon et al., 2017), where a high-level
+executor plan with high-level action types, and then executes the seed actions according to the
+high-level plan (Yao et al., 2023a; Sharma et al., 2022; Wang et al., 2023a; Sun et al., 2023). Our
+approach also differs from hierarchical reinforcement learning by not only using code-based action
+space, providing stronger capacity due to the code statements such as conditions and loops (Cai et al.,
+2023; Qian et al., 2023), but also avoiding the typical imposition of a strict two-level structure, using
+flexible mixed-level actions instead.
+Table 1: The comparison of our method and other open action agents. !
+–
+Voyager used a curriculum
+learning pipeline tailored for Minedojo to learn new actions.
+Closed Loop
+Action Type
+Learnable
+Transferable
+Learnable Module
+ReAct
+✔
+Natural language
+✗
+-
+-
+ReAct+Reflexion
+✔
+Natural language
+✔
+✗
+Policy
+CodeAsPolicy
+✗
+Code
+✗
+-
+-
+Voyager
+✔
+Code
+!
+–
+✔
+Action
+LearnAct
+✔
+Code
+✔
+✔
+Action
+3
+Problem Statement
+The task of a language agent can be succinctly modeled as a Partially Observable Markov Decision
+Process (POMDP), which is defined by a tuple ⟨S, O, A, T , R⟩, with S representing the set of all
+possible states, O being the observation space through which the agent perceives the state, A denoting
+the action space, T : S × A →S being the state transition function, and R : S × A →{0, 1}
+being the reward function.
+At step t, the language agent G takes an action step at based on policy π (policy prompt), problem E
+(problem instructions), and previous observation-action trajectory ht = [o1, a1, . . . , ot−1, at−1, ot],
+at = G(π, E, ht)
+(1)
+π, E, and ht correspond to the instruction, goal, and history in Figure 1 (right), respectively. Action
+at is successfully grounded (executable) only if it is within the action space, i.e. at ∈A. Even
+successfully grounded action may be invalid due to unmet conditions or has no effect in the current
+3
+
+Published as a conference paper at COLM 2024
+Algorithm 1 Training Process of LearnAct
+Input: Training Set Dtrain = {E1, . . . , EM}, Language Agent G, Learner LLM F.
+Input: Original Actions A0, Basic Task Instruction π0
+# Assess action space
+function SolveProblem(π, E, A, G)
+for t = 1 to maxsteps do
+at = G(π, E, ht)
+Execute at, add observation or fail info to ht
+end for
+return IsSolved(E, ht)
+end function
+# Training Procedure
+A1, πA1 = ActionCreation(π0, F)
+for i = 1 to maxiter do
+results = SolveProblem(π0 + πAi, Em, A0 ∪Ai, G), m = 1 to M
+s1:T, a1:T, r = SelectErrorCase(results)
+Ai+1, πAi+1 = ActionLearn(Ai, s1:T, a1:T, r, F)
+end for
+Return Alast, πAlast
+state. The agent aims to maximize the final reward r. In our problem setup, we use an outcome-based
+reward mechanism (ORM) (Uesato et al., 2022) that assigns a binary indicator as a reward signal,
+depending on whether the task has been successfully completed.
+In this work, we try to answer the question How to learn from experience and apply them to other
+decision-making problems? We focus on the training-testing setting, where for each task, our LLM
+agent optimizes its action space and corresponding policy on the training set Dtrain = {E1, . . . , EM},
+before trying to accomplish problems in the test set Dtest = {EM+1, . . . , EM+N}. These problems
+share the same original action spaces and rules, though requiring varied policies to solve them as they
+have different scenarios and goals. This setting poses a challenge for the agent to develop a general
+capacity through learning to accumulate experience and accomplish tasks of this general type.
+To address this problem, we introduce an action-learning framework designed for language agents,
+enabling them to autonomously enhance their skills by learning from interactions within their
+environment, as shown in Figure 1. The framework considers the action space, denoted as A, to
+be an open set capable of learning and expanding. More specifically, we define the original action
+space as A0 and augment it with newly learned action type (API) A′, represented as A0 ∪A′. Also,
+instruction for using these new actions πA′ is updated to the original policy instructions π0, i.e.
+the new policy is denoted as π0 + πA′. Consequently, subsequent actions by this LLM agent are
+characterized as at = G(π0 + πA′, E, ht), at ∈A0 ∪A′, as depicted in Figure 1 (right), where the
+agent is guided to generate both origin and learned actions.
+4
+Method
+The overall pipeline of LearnAct is illustrated in Figure 1 and Algorithm 1. The training stage of
+LearnAct involves first creating new actions and then refine them based on the error feedback on
+training samples. After learning the action space and policy instructions in the training stage, the
+refined agent perform actions from the augmented action space and try to accomplish the problem
+step by step. The training stage is specified in §4.1, and test stage is detailed in §4.2.
+4.1
+Training Stage
+1. Expanding Action Space by Action Creation. We develop a set of enhanced action types, akin to
+an API, to enable LLMs to interact with environment more sea
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Published as a conference paper at COLM 2024
+dismantle stack until(block list, block target): Allows the arm to dismantle a stack of blocks
+one by one, stopping when it reaches a specific target block. ‘dismantle stack until(block list,
+block target)‘ sequentially unstacks each block from the block list starting from the top and
+places it on the table until it reaches the target block. The blocks in the list must be clear and
+stacked consecutively. If the top block from the list matches the target block, the function
+ends, leaving the arm empty and the blocks dismantled on the table. For example, if blocks
+b3, b2, and b1 are clear with b3 on top of b2 and b2 on top of b1, and the arm is empty,
+‘dismantle stack until([’b3’,’b2’,’b1’], ’b2’)‘ will unstack b3 from b2 and put b3 on the table
+without touching b2 or b1.
+construct stack(block list): This function allows the arm to construct a stack of blocks given
+a list of blocks if the arm is empty and all the blocks are clear and on the table. It achieves
+this by iterating from the end of the list, picking each block starting from the penultimate
+block and stacking it on the block next to it (assuming the list is arranged from bottom block
+to top block). After the execution of construct stack, all the blocks in the list will be stacked
+on top of each other in the order they were arranged in the block list, the arm will be empty
+and only the top block will be clear. For example, if block1, block2, and block3 are all clear
+and on the table and the arm is empty, calling construct stack([block1, block2, block3])
+will result in block3 being stacked on block2 and block2 on block1, and the arm will be empty.
+usage example for learned actions
+The goal is to satisfy the following conditions: b1 is on b2, b2 is on b3.
+Observation: b3 is on b2, b2 is on b1, b1 is on the table. Robot arm is empty. The b3 is clear.
+Action: dismantle stack until([’b3’,’b2’,’b1’], ’b1’)
+Observation: b1 is on the table. b2 is on the table. b3 is on the table. Robot arm is empty.
+The b1 is clear. The b2 is clear. The b3 is clear.
+Action: construct stack([’b1’,’b2’,’b3’])
+Observation: b1 is on b2. b2 is on b3, b3 is on the table. Robot arm is empty. The b1 is clear.
+The goal is satisfied.
+Figure 9: Prompt details of agent testing for task Blockworld.
+A.6
+Experiment Details
+A.6.1
+Baselines
+We imply baseline Reflexion for our learning-testing setting, where the testing instances are unseen
+during learning. Original Reflexion learns policy on a single instance, which can generate very
+detailed hints for the next turn, like “In this trial, I was able to find the desklamp on desk 1, but I did
+not find the bowl under the desklamp. In the next trial, I will go to desk 1, turn on the desklamp, then
+look for the bowl under the desklamp on desk 1 or desk 2. If I still cannot find the bowl, I will check
+the shelves and drawers.” The detailed hint helps the agent perform in the same task instance, but
+can not transfer to different instances. We imply Reflexion to generate transferable policies based
+on the failed trial, such as “To accomplish the task, first locate the object, then navigate towards the
+cleaning location, clean the object, and finally deposit it at the specified receptacle. Follow the action
+sequence: locate - navigate - clean - store. Ensure to recheck your inventory to confirm the success of
+your actions.”. The experiment shows that general policy can improve agent performance, as shown
+in Table 2 and 3.
+A.6.2
+Setting
+We use language models GPT-4 and GPT-3.5 Turbo through interface openai.ChatCompletion.create
+via Azure platform. For all the learnable models, including LearnAct, Reflexion, and Voyager, GPT-4
+serves as the learner for both GPT-4 and GPT-3.5 Turbo agents. This choice is driven by the necessity
+for substantial model capacity to facilitate agent learning, aligning with original papers of baselines
+where learning is implied by strong language models.
+18
+
+Published as a conference paper at COLM 2024
+def find_and_take(obj, recep):
+observation = goto(recep)
+object_name = parse_object_name(obj, observation)
+if object_name is not None:
+observation = take(object_name, recep)
+return observation
+Error: The action is not valid. The cabinet 2 is closed.
+Update:
+def find_and_take(obj, recep):
+observation = goto(recep)
+if not any([recep.startswith(location) for 
+location in ['shelf', 'countertop']]):
+observation = open(recep)
+if 'is open' in observation:
+object_name = parse_object_name(obj, 
+observation)
+if object_name is not None:
+observation = take(object_name, recep)
+return observation
+To find the object I need, I should explore 
+different receptacles.
+Failed Trail. In the trial, saw a closed cabinet but do not open it.
+Reflexion:
+Before attempting to interact with the 
+receptacle, ensure that it is open or 
+accessible in the first place. Validate 
+object's existence and accessibility in the 
+said location.
+Figure 10: The failed cases of LearnAct (left) and Reflexion (right). The learning overfits the
+current task instance with misunderstanding. Left: The agent causes error when using action
+find and take because the action does not consider the case that the cabinet is closed. However,
+the learner updates action find and take by adding a conditional based on the receptacle name,
+which is not the correct condition to open the receptacle. Right: The agent failed in a trial in which it
+saw a closed cabinet but did not open it. The Reflexion learner advises the misleading policy “before
+attempting to interact with the receptacle, ensure that it is open or accessible in the first place”.
+A.6.3
+Case Study for Failed Learning
+Figure 3 demonstrates that excessive iterations can degrade performance, likely due to overfitting and
+misinterpretations of the learning task. Failed cases involving LearnAct and Reflexion are shown in
+Figure 10, in which the learner inaccurately diagnoses failure causes, resulting in misguided actions
+or policies that further impair performance.
+19
+

@@ -1,0 +1,3588 @@
+Terminal-World: Scaling Terminal-Agent
+Environments via Agent Skills
+Zihao Cheng1, *
+Hongru Wang2, *
+Zeming Liu1, †
+Xinyi Wang2
+Xiangrong Zhu2
+Yuhang Guo3
+Wei Lin2
+Jeff Z. Pan4
+Yunhong Wang1
+1School of Computer Science and Engineering, Beihang University, Beijing, China
+2Independent Researcher
+3Beijing Institute of Technology
+4University of Edinburgh
+*Equal contribution
+†Corresponding author
+Email: {zihaocheng, zmliu}@buaa.edu.cn
+Abstract
+Terminal agents extend Large Language Models with the ability to execute tasks
+directly in command-line environments, but their progress is bottlenecked by the
+scarcity of high-quality training data. Existing approaches bootstrap from par-
+tial sources such as human-defined seeds or GitHub repositories to instantiate
+one component and then complete the rest, producing tasks confined to narrow
+seed distributions, environments misaligned with task semantics, and inefficient
+trajectories from unguided exploration. To address these limitations, we introduce
+Terminal-World, a fully automated pipeline that uses agent skills as the central
+synthesis primitive, which jointly encode what to accomplish, when to apply (pre-
+conditions and environment state), and how to execute, enabling task instructions,
+environments, and teacher trajectories to be co-derived. To further broaden the
+synthesis space, Terminal-World composes skills into skill teams and skill graphs
+for multi-role and cross-domain task synthesis. Using this pipeline, we construct
+5,723 training environments and train Terminal-World-8B/14B/32B, evaluated
+across 6 benchmarks where the Terminal-World series consistently outperforms
+terminal-agent baselines. Notably, using the same teacher model and only 1.2%
+of the training data, Terminal-World-32B surpasses Nemotron-Terminal-32B on
+Terminal-Bench 2.0 by +4.5 Pass@1 (31.5) and achieves 43.8 Pass@3.
+# 
+$ 
+Name: 
+Description: Toolkit for survival analysis in Python. 
+                ......
+## When to Use This Skill
+- Working with 
+## Typical Workflows
+# 
+$ 
+censored survival data (right-censored, interval-censored)
+scikit-survival
+Task Generation
+Envionment Building
+Trajectory Collection
+Decode
+What
+When
+How
+Fit a Cox proportional hazards model on
+the provided survival dataset. Evaluate its
+performance using the concordance index.
+A CSV file survival_data.csv with columns
+event (binary) and feature. Must contain
+right-censored observations (event = 0).
+(a) Install dependency: 
+$ pip install scikit-survival 
+(b) Inspect the data
+$ head -5 survival_data.csv 
+Use when working
+models
+with censored survival data, fitting Cox models, building ensemble survival
+1. Install dependency
+pip install scikit-survival
+2. Prepare data
+head -3 survival_data.csv
+CSV contain 'event' column
+Pytest
+Verifier
+Task
+Instruction
+Env.
+Blurprint
+Execution
+Guidelines
+Agent Skill
+Task, Env, Trajectory
+Initial
+Files
+Env 
+Scripts
+Guided Efficient
+Trajectory Collection
+Figure 1: Overview of Terminal-World (left) and agent performance (right). Terminal-World uses
+agent skills as the synthesis primitive for terminal-agent data construction. Each skill encodes
+what the agent should accomplish, when the skill should be applied, and how the task should be
+executed. By decoding these three aspects, Terminal-World top-down synthesizes task instructions,
+environments, and trajectory in a unified process. With 85× less data than Nemotron-Terminal,
+Terminal-World achieves a 4.5% absolute improvement on Terminal-Bench 2.0.
+Preprint.
+arXiv:2605.20876v1  [cs.CL]  20 May 2026
+
+1
+Introduction
+LLM-based agents are increasingly moving from predefined API calls [1, 2, 3, 4, 5, 6, 7, 8] to direct
+terminal operation. Systems such as Claude Code [9] and Codex [10] issue shell commands inside
+real execution environments, replacing fixed tool schemas with a compositional action space that
+affords substantially greater generality [11, 12] and autonomy [13].
+Despite this potential, the progress of terminal agents is fundamentally bottlenecked by the scarcity of
+high-quality training data. Unlike API-based agents, which simply select and parameterize predefined
+tools [14], terminal agents operate within real file systems and runtime environments [15, 16].
+Each training example jointly specifies a task instruction, an executable environment with initial
+files, dependencies, and system configurations, and a high-quality multi-turn trajectory. The tight
+interdependence among these components makes manually curating such data prohibitively expensive
+and difficult to scale, motivating a growing line of work on automated terminal-agent data synthesis.
+Existing methods synthesize terminal-agent data by starting from partial sources, such as human-
+defined seed data (i.e., manually specified keywords or short descriptors) [16, 17, 18] or GitHub
+repositories [19], to instantiate one component of the data, and then rely on LLMs to complete the rest.
+Although this paradigm can synthesize terminal-agent data, it still suffers from three key limitations:
+(1) Limited Tasks: tasks are directly converted from human-defined seeds or repositories, resulting in
+a constrained distribution that fails to capture the diverse requirements and complexity of real-world
+tasks; (2) Environment Misalignment: task semantics and execution environments are not jointly
+specified from the beginning, so environments are retrofitted around tasks, producing configurations
+that are fragile or only loosely aligned with the intended task; (3) Trajectory Inefficiency: without
+explicit procedural guidance, teacher models often rely on autonomous exploration to solve each
+sandbox, producing trajectories with redundant exploration, suboptimal solution paths, and strong
+dependence on the teacher’s intrinsic terminal-solving capability.
+Our key observation is that a natural synthesis primitive for terminal-agent data already exists in open-
+source ecosystems: agent skills [20, 21], such as those collected in ClawHub [22] and SkillMP [23],
+which are human-authored guidance packages that encapsulate authentic terminal workflows distilled
+from real practice. As illustrated in Figure 1 (Left), each skill jointly encodes three aspects of an
+end-to-end terminal task: ①what should be accomplished, ②when the skill should be applied (i.e.,
+the preconditions, inputs, and environmental state required for execution), and ③how it should be
+executed. An agent skill thus constitutes a pre-aligned specification of task semantics, environmental
+constraints, and execution procedure, directly addressing the three limitations mentioned above.
+Building on this primitive, we introduce Terminal-World, a fully automated pipeline that orchestrates
+a multi-agent architecture to instantiate each agent skill as a unified task instruction–executable
+environment–teacher trajectory triple. To further scale the synthesis space, Terminal-World extends
+individual skills into agent skill teams and agent skill graphs, enabling more complex multi-role
+and cross-domain task synthesis. To broaden the usage scenarios of each skill, Terminal-World pairs
+skills with user personas [24], enabling the same underlying ability to be instantiated across diverse
+user backgrounds, goals, and preferences. Using Terminal-World, we construct 5,723 high-fidelity
+terminal-agent training environments and collect teacher trajectories with DeepSeek-V3.2 at an
+average cost of only $0.17, demonstrating the efficiency of our automated construction harness. We
+further train a family of models, Terminal-World-8B/14B/32B. Across 6 benchmarks, the Terminal-
+World series consistently outperforms existing terminal-agent baselines at comparable model scales.
+Notably, using the same teacher model and only 1.2% of the training data, Terminal-World-32B
+surpasses Nemotron-Terminal-32B [18] on Terminal-Bench 2.0 by +4.5 Pass@1 (31.5) and achieves
+43.8 Pass@3. It also exhibits more efficient task-execution behavior (Sec. 5.1), requiring fewer steps
+and commands while maintaining lower command-failure rates. These results demonstrate that our
+pipeline produces diverse, high-quality terminal environments and effective trajectories at low cost.
+Overall, our contributions are summarized as follows:
+• We propose Terminal-World, a fully automated synthesis pipeline that uses agent skills as the
+central synthesis primitive to jointly drive task instruction synthesis, environment construction,
+and teacher trajectory collection.
+• Using Terminal-World, we construct 5,723 high-fidelity terminal-agent training environments,
+each paired with a skill-guided teacher trajectory, and train a family of models Terminal-World-
+8B/14B/32B on this data.
+2
+
+Table 1: Comparison of existing datasets. Align. indicates whether task semantics and environments
+are jointly designed rather than post-hoc adapted. Open File Space indicates support for arbitrary file
+types in environments. Exec. Verif. indicates whether task completion can be verified by executing
+evaluation scripts. Sandbox:
+Web search,
+Python,
+SQL engine, and
+Terminal. Tool
+Space is Fixed for predefined toolsets and Open for extensible tool spaces. Teacher Source indicates
+whether trajectories are generated through self-solving or guided by additional structured guidelines.
+Dataset
+Task
+Environment
+Tool
+Trajectory
+Primitive
+Human Free Align. No Pre-def. Real World Open File Space Exec. Verif. Sandbox Tool Gen. Tool Space # Tools Teacher Source # Traj.
+Gorilla [1]
+API specs
+✗
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+1,645
+Self
+16,450
+ToolBridge [4]
+API specs
+✗
+–
+✗
+✗
+✗
+✓
+✗
+Fixed
+∞
+Self
+178,023
+APIGen [2]
+API specs
+✓
+–
+✗
+✓
+✗
+✓
+✗
+Fixed
+3,673
+Self
+60,000
+WebExplorer [25]
+Web entities
+✓
+–
+✓
+✓
+✗
+✗
+✗
+Fixed
+2
+Self
+13,000
+ProgSearch [26]
+Web entities
+✓
+–
+✓
+✓
+✗
+✗
++
+✓
+Fixed
+3
+Guided
+5,500
+Aseacher [27]
+Web entities
+✗
+–
+✗
+✓
+✗
+✗
+✗
+Fixed
+2
+Self
+35,000
+ToolACE [3]
+API specs
+✗
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+26,507
+Guided
+11,300
+ToolMind [6]
+API specs
+✓
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+20,000
+Guided
+111,941
+InfTool [7]
+API specs
+✓
+–
+✗
+✗
+✗
+✗
+–
+✗
+Fixed
+3,059
+Self
+4,965
+DataMind [28]
+Data files
+✔
+✗
+✓
+✓
+✓
+✗
+✓
++
+✓
+Open
+∞
+Guided
+11,707
+APIGen-MT [5]
+API specs
+✓
+–
+✗
+✗
+✗
+✓
+–
+✗
+Fixed
+28
+Guided
+5,000
+TaskCraft [29]
+Seeds
+✗
+✓
+✗
+✗
+✗
+✗
+✗
+Open
+∞
+Guided
+36,000
+GEM [30]
+Raw text
+✓
+✓
+✓
+✗
+✗
+✗
+–
+✗
+Open
+∞
+Guided
+10,000
+Endless Terminal [16]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+420
+–
+–
+TermiGen [17]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+420
+Guided
+3,291
+Nemotron-Terminal [18]
+Seeds
+✗
+✗
+✓
+✓
+✔
+✗
+✓
+✓
+Open
+∞
+Self
+490,520
+Terminal-World (Ours)
+Agent skills
+✓
+✓
+✓
+✓
+✓
+✓
+✓
+Open
+∞
+Guided
+5,723
+• Extensive experiments across 6 benchmarks show that the Terminal-World series outperforms
+existing terminal-agent baselines. Notably, with the same teacher model and only 1.2% of the
+training data, Terminal-World-32B surpasses Nemotron-Terminal-32B on Terminal-Bench 2.0 by
++4.5 Pass@1 (31.5) and achieves 43.8 Pass@3.
+2
+Related Work
+Tool-Using Agents
+LLM-based agents interact with the external world through tool use, enabling
+them to execute actions beyond the limits of their parametric knowledge [14]. To strengthen this
+capability, early efforts synthesized training data for API selection and argument filling [1, 2]. Subse-
+quent work expanded API and tool coverage [4, 3], increased the interaction turns and orchestration
+complexity of tool use [6, 5, 7], and broadened workflow sources by mining latent tool-use patterns
+from raw text [30]. A parallel line studies web-search agents and synthesizes search trajectories
+over web content [31, 32, 25, 33, 26, 27, 34]. Despite this progress, these datasets typically operate
+over predefined toolsets, yielding a closed action space that cannot fully capture the open-ended
+and compositional nature of real-world tasks. In contrast, Terminal-World grounds agents in a Bash
+terminal, where the action space is no longer bounded by a predefined toolset but instead spans the
+full spectrum of composable system commands within a real execution environment.
+Terminal-Based Agents
+The rise of CLI-based coding agents such as Codex [10] and Claude
+Code [9] has shifted agent interaction toward direct operation in terminal environments, motivating
+recent efforts to synthesize terminal-agent training data. Endless Terminal [16], TermiGen [17],
+and Nemotron-Terminal [18] start from human-defined seed data and use LLMs to synthesize
+terminal tasks, before constructing the corresponding environments, verification scripts, and teacher
+trajectories. TerminalTraj [19] instead starts from GitHub repositories and infers task instructions
+and validation logic from existing codebases. However, these methods still face limitations in task
+diversity, environment-task alignment, and trajectory efficiency. Terminal-World addresses these
+limitations by using agent skills as the synthesis primitive. Each skill specifies ①what should be
+accomplished, ②when the skill is applicable, and ③how the task should be executed, providing
+a unified anchor from which task instructions, executable environments, verification criteria, and
+teacher trajectories can be co-derived.
+3
+Terminal-World
+As illustrated in Figure 2, Terminal-World uses agent skills as the synthesis primitive to jointly
+align task instructions, environments, and trajectories. The pipeline consists of four stages: (a)
+Agent Skill Collection (§3.1) constructs a terminal capability space from real-world agent skills;
+(b) Task Generation (§3.2) pairs each skill with user personas to diversify the usage scenarios of
+the underlying capability, and synthesizes instructions, environment blueprints, evaluation criteria,
+3
+
+(a) Agent Skill Collection
+(b) Task Generation
+(c) Environment Building
+(d) Trajectory Collection
+3-Stage Filter
+Rule-based
+LLM-based
+Popularity-
+based
+1K Skills
+10K Skills
+12 categories, 63 subcategories
+User Profile
+Agent Skill
+2-Stage LLM Synthesis
+LLM-as-a-Judge Filtering
+File Verifier
+Pytest Verification
+Env Buid
+Agent
+Shared
+Sandbox
+Env 
+Verifier
+Pytest 
+Verifier
+Phase1: Initial File Generation
+Phase2: Sandbox Consctruction
+Phase3: Verifier Generation
+Verifier
+Inial Files
+Sandbox
+Removal Guidelines Signals
+Before SFT Traning
+Analysis: I need to analyze log files
+in /app/logs, count severity levels...
+Plan: First, explore the /app/logs, ... 
+Commands: [{ "keystrokes": "ls -la
+/app/logs/\n", "duration": 1.0 }]
+Termius 2 Agent
+name: log-analyzer
+description: Production log analysis and
+diagnostics skill. 
+Use this skill when asked to:
+  - Fetch logs from a monitoring API
+  - Analyze log patterns and errors
+sandbox
+Observation
+  # New Terminal Output:
+  root@~ $ python3 /app/analyze.py
+  Done!
+  root@~ $ cat /app/summary.csv
+  period,severity,count
+  today,ERROR,370
+Teacher
+Model
+Guided Execution
+SkillsMP
+ClawHub
+SkillHub
+SkillMarket
+Web Crawl
+Pytest
+Gen Agent
+Pytest Scripts
+Score 4 on all dimensions
+0
+1
+2
+3
+4
+5
+Instruction
+Guidelines
+Environment
+Blueprint
+, 
+Evauation
+Criteria
+Figure 2: Overview of Terminal-World. We start from real-world agent skills, filter high-quality
+candidates via rule-based, LLM-based, and popularity-based screening, pair each skill with a user
+persona to synthesize diverse and verifiable task quadruples (I, E, V, G), construct executable sand-
+boxes through iterative generate-verify-repair cycles, and collect efficient trajectories.
+and execution guidelines; (c) Environment Building (§3.3) instantiates each blueprint into an
+executable sandbox with initial files, setup scripts, and pytest verifiers; and (d) Trajectory Collection
+(§3.4) collects efficient teacher trajectories under skill-derived guidance. We provide comprehensive
+statistics of Terminal-World in §3.5.
+3.1
+Agent Skill Collection
+To construct a high-quality and broadly distributed terminal capability space, we collect 10,000 agent
+skills from ClawHub and SkillMP, and apply a three-stage filter to retain those that are relevant
+and informative. (1) Rule-based filtering removes skills with terminal-irrelevant names (e.g., “skill
+creator”), leaving 8,520 skills. (2) LLM-based filtering scores each skill on terminal applicability
+and content richness (1–3 each), retaining only those scoring the maximum on both, yielding 3,025
+skills. (3) Popularity-based filtering ranks the remaining skills by their download counts and selects
+the top 1,000, spanning 12 categories and 63 subcategories. The full taxonomy is shown in Fig. 6.
+Building on these single skills as atomic primitives, we further extend the synthesis space along
+two complementary dimensions: agent skill teams, which compose multiple skills within the same
+subcategory into a multi-role workflow as a depth extension, and agent skill graphs, which connect
+skills across different subcategories into an end-to-end pipeline as a breadth extension. Specifically,
+we use SkillNet [35] to classify pairs of skills into 4 relations: Compose with, Depends on, Similar
+to, and Belong to. We treat Compose with and Depends on as composition signals, use Similar
+to as a deduplication signal, and discard Belong to as redundant with our subcategory taxonomy.
+Composition relations within the same subcategory are grouped into agent skill teams and synthesized
+into multi-role workflows via TeamSkill-Creator [36] driven by Claude Code, yielding 76 skill teams.
+Composition relations spanning different subcategories are used to construct a cross-subcategory
+composition graph, from which we greedily extract maximal paths until all nodes are consumed,
+yielding 237 skill graphs. Both teams and graphs are flattened into the same skill.md format and,
+together with the 1,000 single skills, serve as the synthesis primitives S = Ssingle ∪Steam ∪Sgraph
+for the next stage.
+3.2
+Task Generation
+Given the synthesis primitives S from Sec. 3.1, this stage converts each into a unified task specification.
+These primitives are well-suited for this purpose because they explicitly describe what the agent
+should accomplish, when the skill should be applied, and how the task should be executed. These
+three aspects provide natural anchors for constructing the task instruction, execution context, and
+4
+
+execution guideline, respectively. To diversify the usage scenarios of each capability, we pair each
+primitive S with a user persona U sampled from FinePersonas [37, 24], which consists of short
+natural-language profiles describing potential users’ backgrounds, roles, and preferences. During
+task synthesis, the LLM instantiates a task only when the sampled persona forms a coherent usage
+scenario for the given primitive, while irrelevant pairs are ignored. For each pair, we synthesize a
+quadruple (I, E, V, G) as follows:
+I, E, V = LLM(Ps, S, U),
+G = LLM(Pg, I, S),
+(1)
+where Ps and Pg denote the prompt templates for task synthesis (Appendix D.1) and guideline
+generation (Appendix D.2), respectively. Here, I denotes the task instruction. E denotes the
+environment blueprint used for sandbox construction, consisting of initial files Efiles and setup steps
+Esteps. V specifies the evaluation criteria that translate the task goal into verifiable completion
+conditions, which are later used to generate pytest-based verifiers. G provides skill-derived execution
+guidance for collecting teacher trajectories.
+To ensure task quality, we apply an LLM-as-a-Judge filter along five dimensions: ①instruction
+quality, ②closed-world solvability, ③blueprint completeness, ④guideline quality, and ⑤evaluation-
+criteria quality, and the Prompt in Appendix D.3. We retain only samples that receive a score of at
+least 4 on every dimension and pass them to the subsequent stages. An end-to-end example of this
+stage is provided in Appendix E.1.
+3.3
+Environment Building
+Given the task specification (I, E, V, G), this stage instantiates the environment blueprint into an
+executable and verifiable sandbox. Each sandbox comprises three artifacts: initial files F that define
+the starting workspace, a setup script Benv that prepares runtime dependencies and services, and a
+pytest verifier Ttest that provides automatic completion checking. To ensure the quality of all three
+artifacts, we construct them through a unified generate-verify-repair (GVR) mechanism:
+x(0) = Generate(·),
+x(t+1) = Repair
+ x(t), Verify(x(t))
+
+,
+(2)
+where x denotes the artifact. Tasks that cannot be repaired within T = 3 iterations are discarded. We
+now describe the Generate(·) and Verify(·) procedures instantiated for each artifact.
+(1) Initial Files: To support the generation of arbitrary file types, we adopt a multi-agent architecture
+that routes each file in Efiles to a dedicated agent based on its generation mode, which is annotated
+during task generation in Section 3.2. Specifically, an LLM-synthesis agent Allm_direct, a local-tool
+agent Alocal_tool equipped with file-creation tools, or a remote-fetch agent Aremote_fetch with search
+tools, and each conditioned on I and the file description (prompts in Appendices D.4, D.5, and
+D.6). A file-verification agent (prompt in Appendix D.7) then inspects both ①internal correctness
+(well-formedness and description alignment) and ②external consistency (cross-file paths, references,
+and schemas), with failures triggering joint repair across dependent files.
+(2) Setup Scripts: For scalability, rather than building a per-task Docker image, we use a shared
+general-purpose sandbox with task-specific setup scripts. An environment-building agent converts
+the natural-language steps Esteps into executable shell commands for dependency installation, service
+initialization, and runtime configuration (Appendix D.8). To confirm logical correctness rather than
+relying on script exit codes alone, an environment-verification agent then generates and executes
+diagnostic probing scripts that inspect whether required packages, services, and runtime states are
+properly established (Appendix D.9); detected issues are returned to the building agent for repair.
+(3) Pytest Verifiers: A verifier-generation agent translates the evaluation criteria V into pytest
+scripts over the expected post-execution state, conditioned on I, V, F, and Benv (Appendix D.11).
+A verifier-validation agent then checks two properties: ①executability, requiring all test scripts to
+run without syntax or import errors, and ②reliability, requiring all tests to fail on the pre-execution
+initial state to rule out vacuous passes. Tests violating either property are returned to the generation
+agent for repair. An example of this stage is provided in Appendix E.2.
+3.4
+Trajectory Collection
+Given the synthesized tasks and their executable sandboxes, this stage collects efficient teacher
+trajectories. Specifically, we use the execution guideline G synthesized in Section 3.2 as skill-derived
+5
+
+Table 2:
+Key statistics of
+Terminal-World.
+Statistic
+Value
+Task
+# Persona
+4,973
+# Single-skill Tasks
+3,723
+# Team-skill Tasks
+1,000
+# Graph-skill Tasks
+1,000
+# Total Tasks
+5,723
+Environment
+Avg. Init. Files
+2.25
+# File Types
+104
+Avg. pytest Tests
+4.27
+Trajectory
+Avg. Steps
+13.44
+Avg. Tokens
+18,176
+# Bash Cmd.
+1,939
+Figure 3: Comprehensive statistics of the Terminal-World.
+guidance for the teacher model, rather than letting it explore freely, which often results in lengthy
+and redundant trajectories. Following the setup of [18] for fair comparison, we adopt DeepSeek-
+V3.2 [38] with the Terminus2 scaffolding [39] as the teacher, which isolates the contribution of
+our data construction pipeline from differences in teacher capability. At each step, the teacher
+produces an action At = πteacher(I, G, Ht−1) and receives an observation Ot from the sandbox,
+where Ht−1 = (A1, O1, . . . , At−1, Ot−1) denotes the prior interaction history. After rollout, we run
+the verifier Ttest against the resulting sandbox state to annotate each trajectory with its verification
+outcome, while retaining both successful and failed trajectories [19]. A representative trajectory with
+per-step analysis, commands, and observations is shown in Appendix E.3. Importantly, the guideline
+G is used only during trajectory collection: before SFT training, we remove G from the training input
+so that the student model learns from the verified terminal interaction itself rather than relying on
+auxiliary procedural hints.
+3.5
+Data Statistics
+To characterize the resulting dataset, we analyze Terminal-World from three dimensions: task
+coverage, environment diversity, and trajectory complexity, as shown in Table 2 and Figure 3. At the
+task level, Terminal-World uses 1,000 single skills together with 76 skill teams and 237 skill graphs to
+synthesize 5,723 terminal-agent tasks, covering diverse capability scenarios. At the environment level,
+each task contains an executable sandbox with an average of 2.25 initial files and 4.27 pytest tests.
+These environments span 104 file types, including both textual formats (e.g., JSON) and non-textual
+formats (e.g., SQL and Parquet), reflecting the diversity of realistic terminal workspaces. At the
+trajectory level, each verified demonstration contains 13.44 steps and 18,176 tokens on average,
+and the collected trajectories cover 1,939 distinct Bash commands. These statistics indicate that
+Terminal-World constructs not only diverse task scenarios, but also executable environments and
+long-horizon trajectories suitable for terminal-agent training.
+4
+Experiments
+4.1
+Experiment Setting
+Baselines
+Following prior work [17], we compare Terminal-World against the following baselines.
+Frontier Proprietary Models: GPT-5.2, Gemini-3-Flash, Gemini-3.1-Pro-Preview, and Claude-
+Sonnet-4.5. Open-source Models (>100B): GPT-OSS-120B [40], MiniMax-M2.7, Qwen3-Coder-
+480B [41], DeepSeek-V3.2 [38], GLM-5 [42], and Kimi-K2-Thinking [43]. Open-source Models
+(<100B): Qwen3-8B/14B/32B [41], GPT-OSS-20B, EndLess Terminal-8B [16], TermiGen-Qwen3-
+32B [17], Terminal-Traj-32B [19], and Nemotron-Terminal-8B/14B/32B [18]. All models are
+evaluated under the Terminus2 Agent scaffolding [39], except Endless Terminal-8B and TermiGen-
+32B, which are evaluated in their native formats (i.e., EndlessAgent and BashAgent).
+6
+
+Table 3: Main results on 6 benchmarks: Terminal-Bench 2.0, AIME 24, AIME 25, DABench,
+TableBench, and BIRD. We report accuracy (%), including pass@1 and pass@3. In the Open-source
+Models (<100B) block, the best result is shown in bold, and the second-best result is underlined.
+Model
+# Training
+Samples
+TB 2.0
+AIME24
+AIME25
+DABench
+TableBench
+BIRD
+Avg.
+P@1 P@3
+P@1
+P@3
+P@1
+P@3
+P@1 P@3 P@1
+P@3
+P@1
+P@3
+P@1
+P@3
+Frontier Proprietary Models
+GPT-5.2
+–
+53.9
+74.2
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+Gemini-3-Flash
+–
+51.7
+66.3
+93.3
+100.0
+90.0
+96.7
+87.0
+92.0
+73.5
+77.5
+49.5
+58.0
+74.2
+81.8
+Gemini-3.1-Pro-Preview
+–
+68.5
+80.9
+96.7
+100.0 100.0 100.0
+88.0
+92.5
+77.0
+79.0
+59.0
+62.5
+81.5
+85.8
+Claude-Sonnet-4.5
+–
+42.7
+53.9
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+–
+Open-source Models (>100B)
+GPT-OSS-120B (High)
+–
+13.5
+27.0
+90.0
+96.7
+86.7
+96.7
+75.0
+90.0
+66.5
+79.0
+50.0
+59.5
+63.6
+74.8
+MiniMax-M2.7
+–
+56.2
+65.2
+50.0
+83.3
+63.3
+96.7
+85.5
+90.5
+76.0
+83.0
+49.5
+58.5
+63.4
+79.5
+Qwen3-Coder
+–
+23.6
+39.3
+70.0
+73.3
+46.7
+66.7
+81.0
+88.5
+67.5
+75.5
+49.5
+62.0
+56.4
+67.6
+DeepSeek-V3.2
+–
+38.2
+52.8
+83.3
+96.7
+93.3
+96.7
+87.0
+92.5
+72.5
+79.5
+50.0
+56.5
+70.7
+79.1
+GLM-5
+–
+56.2
+65.2
+86.7
+96.7
+83.3
+93.3
+88.0
+91.5
+76.5
+82.5
+56.0
+60.5
+74.5
+81.6
+Kimi-K2-Thinking
+–
+36.0
+49.4
+76.7
+83.3
+70.0
+86.7
+85.0
+91.5
+75.0
+82.0
+52.5
+58.5
+65.9
+75.2
+Open-source Models (<100B)
+Qwen3-8B
+–
+2.2
+3.37
+63.3
+76.7
+53.3
+63.3
+16.5
+32.5
+24.5
+39.0
+4.0
+9.0
+27.3
+37.3
+Qwen3-14B
+–
+4.5
+7.87
+76.7
+86.7
+53.3
+66.7
+38.0
+69.0
+35.5
+60.0
+7.5
+18.5
+35.9
+51.5
+Qwen3-32B
+–
+4.5
+9.0
+60.0
+86.7
+43.3
+66.7
+44.5
+75.0
+26.5
+53.5
+6.5
+16.0
+30.9
+51.2
+GPT-OSS-20B (High)
+–
+3.4
+9.0
+93.3
+96.7
+83.3
+93.3
+59.5
+82.5
+38.5
+64.0
+0.0
+6.0
+46.3
+58.6
+EndLess Terminal-8B
+3.3k
+6.7
+12.4
+23.3
+36.7
+30.0
+43.3
+26.0
+38.5
+28.0
+42.0
+6.0
+11.5
+20.0
+30.7
+TermiGen-32B
+3.3k
+19.1
+27.0
+46.7
+56.7
+33.3
+43.3
+81.0
+91.5
+68.0
+79.0
+50.5
+62.5
+49.8
+60.0
+Termial-Traj-32B
+50.7k
+22.0
+27.0
+46.7
+60.0
+26.7
+46.7
+76.0
+88.0
+62.0
+76.0
+49.5
+61.5
+47.2
+59.9
+Nemotron-Terminal-8B
+490.5k
+13.5
+21.3
+83.3
+83.3
+63.3
+90.0
+80.5
+92.0
+66.5
+73.5
+44.0
+55.5
+58.5
+69.3
+Nemotron-Terminal-14B
+490.5k
+20.2
+24.7
+90.0
+96.7
+90.0
+93.3
+80.5
+90.5
+70.0
+75.0
+50.5
+59.0
+66.9
+73.2
+Nemotron-Terminal-32B
+490.5k
+27.0
+37.1
+93.3
+100.0
+86.7
+93.3
+81.5
+93.0
+72.5
+75.5
+52.5
+57.0
+68.9
+76.0
+Ours
+Terminal-World-8B
+5.7k
+15.7
+23.6
+86.7
+93.3
+80.0
+90.0
+80.5
+91.0
+69.5
+74.5
+48.5
+58.0
+63.5
+71.7
+Terminal-World-14B
+5.7k
+21.3
+27.0
+90.0
+96.7
+83.3
+93.3
+81.0
+92.0
+70.5
+76.0
+50.0
+59.5
+66.0
+74.1
+Terminal-World-32B
+5.7k
+31.5
+43.8
+93.3
+96.7
+86.7
+93.3
+83.5
+93.0
+71.5
+79.0
+49.5
+61.5
+69.3
+77.9
+Benchmarks
+Following prior work [29, 18, 17], we evaluate models on six benchmarks. Terminal-
+Bench 2.0 [15, 42] evaluates terminal-agentic coding ability. The remaining benchmarks are converted
+into terminal-based tasks [18]: AIME24/25 [44, 45] evaluate mathematical reasoning, DABench [46]
+and TableBench [47] evaluate table-based data analysis, and BIRD [48] evaluates SQL-based data
+analysis. Details in Appendix B.1.
+Implementation Details
+Following prior work [18], we conduct SFT using Swift [49]. Specifically,
+we set the learning rate to 2e−5, with a warmup ratio of 0.1, weight decay of 1e−4, and train for
+2 epochs with sequence length of 32,768. During inference, we adopt a context length of 40,960
+tokens, temperature 0.6, top-p = 0.95, top-k = 20, and min-p = 0.0. All experiments are conducted
+on 4 nodes, and each is equipped with 8 H20-141GB GPUs. For all other baselines, we follow the
+officially recommended sampling parameters. Details in the Appendix B.3.
+4.2
+Main Results
+Table 3 presents the main results across six benchmarks. We summarize the key findings as follows:
+Terminal-World delivers strong performance with significantly higher sample efficiency.
+At
+all three model sizes, Terminal-World outperforms existing terminal-synthetic baselines across
+benchmarks. Terminal-World-32B achieves 69.3 Avg. Pass@1 and 77.9 Avg. Pass@3. On Terminal-
+Bench 2.0, Terminal-World-32B achieves 31.5 Pass@1 and 43.8 Pass@3, surpassing all <100B
+open-source models. Notably, these results are obtained with only 5.7K training trajectories (1.2%
+of the 490.5K used by Nemotron-Terminal), demonstrating that skill-grounded synthesis can achieve
+superior performance at a fraction of the data scale.
+Skill-grounded trajectories generalize beyond terminal-native coding without auxiliary data.
+Un-
+like Nemotron-Terminal, which supplements terminal data with 226.3K auxiliary samples spanning
+math, code, and SWE tasks, Terminal-World is trained exclusively on 5.7K terminal-style trajec-
+tories. Despite this, Terminal-World-32B matches or exceeds Nemotron-Terminal-32B on all five
+non-terminal benchmarks, indicating that skill-grounded trajectories develop transferable problem-
+7
+
+solving capabilities that generalize to mathematical reasoning, table analysis, and SQL tasks without
+domain-specific training data.
+The performance advantage is most pronounced at the 32B scale.
+On Terminal-Bench 2.0,
+Terminal-World-32B achieves the largest absolute margin over its counterpart, surpassing Nemotron-
+Terminal-32B by +4.5 Pass@1 and +6.7 Pass@3. This pronounced gain at the largest scale suggests
+that higher-capacity models can better leverage the structured supervision encoded in skill-grounded
+trajectories.
+5
+Analysis
+In this section, we conduct a comprehensive analysis to answer the following research questions: RQ1:
+Does Terminal-World learn efficient and reliable terminal execution behaviors? (§5.1; Appendix C.1)
+RQ2: Which SFT data construction choices are most important? (§5.2; Appendix C.2) RQ3: Can
+Terminal-World synthesize diverse, high-quality, and cost-effective terminal-agent training data?
+(§5.3; Appendices C.3, C.4, and C.5)
+5.1
+RQ1: Behavior Analysis
+Figure 4: Behavior statistics on Terminal-Bench 2.0 with the Terminus2 scaffolding. Terminal-
+World-32B provides more efficient interactions and more reliable task execution.
+In Table 3, we report the accuracy of the Terminal-World series. In this section, we further examine
+their task-execution behavior. Specifically, we analyze four behavioral metrics: the average number
+of steps (Avg Steps), the command failure rate (Command Error Rate), and the average number
+of commands at both the step (Commands / Step) and trajectory (Avg Total Commands) levels.
+To avoid confounding effects caused by differences in task difficulty, we conduct the analysis on
+the intersection of tasks correctly solved by both Terminal-World-32B and Nemotron-Terminal-32B
+across three independent runs on Terminal-Bench 2.0. The results are shown in Figure 4. Terminal-
+World-32B requires only 10.2 steps and 40.3 commands on average to complete each task, while also
+exhibiting a lower command failure rate. Notably, even without guideline assistance, Terminal-World-
+32B outperforms its teacher model, DeepSeek-V3.2, across all four behavioral metrics. This suggests
+that skill-guided trajectories in Terminal-World teach the model more concise and goal-directed
+execution strategies.
+5.2
+RQ2: Impact of SFT Data Strategies
+Building on the SFT setup in Sec.4, we further investigate the effects of different data construction
+strategies. Specifically, we conduct SFT at both the 8B and 14B scales under four ablation settings:
+retaining the guidelines in the instructions (i.e., w/o guideline removal), using a reduced dataset (i.e.,
+w/ reduced data scale), training only on successful trajectories (i.e., w/o failure trajectories), and
+suppressing unsuccessful trajectories with a negative SFT loss while keeping successful trajectories
+unchanged (i.e., w/ failure-trajectory suppression). As shown in Tab. 4, retaining guidelines substan-
+tially degrades performance, suggesting that prescriptive step-by-step instructions discourage the
+model from learning autonomous planning. Reducing data size also leads to a clear drop, confirming
+the scaling benefit of Terminal-World. More importantly, these two ablations together reveal the
+critical role of failure trajectories. Removing them causes a larger decline than reducing the data scale,
+suggesting that they cover harder tasks and contain richer error-correction and recovery processes.
+Penalizing them with a negative SFT loss further degrades performance, because failure trajectories
+8
+
+Table 4: Effect of SFT data strategies. Performance comparison under different data strategies.
+SFT Data Strategy
+#Samples
+Terminal-World-8B
+Terminal-World-14B
+Pass@1
+Pass@3
+Pass@1
+Pass@3
+Full data strategy
+5.7k
+15.7
+23.6
+21.3
+27.0
+w/ 1k single-skill traj.
+1.0k
+9.0 (↓6.7)
+12.4 (↓11.2)
+13.5 (↓7.8)
+16.9 (↓10.1)
+w/ 1k team-skill traj.
+1.0k
+10.1 (↓5.6)
+13.5 (↓10.1)
+14.6 (↓6.7)
+19.1 (↓7.9)
+w/ 1k graph-skill traj.
+1.0k
+10.1 (↓5.6)
+14.6 (↓9.0)
+15.7 (↓5.6)
+20.2 (↓6.8)
+w/o full data scale
+2.3k
+12.4 (↓3.3)
+18.0 (↓5.6)
+18.0 (↓3.3)
+22.5 (↓4.5)
+w/o guideline removal
+5.7k
+13.5 (↓2.2)
+20.2 (↓3.4)
+19.1 (↓2.2)
+24.7 (↓2.3)
+w/o failure trajectory
+2.3k
+10.1 (↓5.6)
+14.6 (↓9.0)
+15.7 (↓5.6)
+20.2 (↓6.8)
+w/ failure-trajectory suppression
+5.7k
+9.0 (↓6.7)
+13.5 (↓10.1)
+14.6 (↓6.7)
+19.1 (↓7.9)
+contain many correct intermediate steps; penalizing the entire trajectory inevitably suppresses correct
+behaviors alongside erroneous ones. We provide detailed analysis in Appendix C.2.
+5.3
+RQ3: Task Diversity and Cost Analysis
+Figure 5: Task diversity of Terminal-World.
+Table 5: API cost for Terminal-World data col-
+lection.
+Stage
+Model
+Cost ($)
+Output
+Avg. Cost ($)
+Task Generation
+DeepSeek-V3.2
+101.71
+6,884 tasks
+0.015
+Env Building
+Gemini-3-Flash
+476.61
+5,723 envs
+0.083
+Trajectory
+DeepSeek-V3.2
+421.27
+5,723 traj.
+0.074
+Total
+999.59
+5,723 traj.
+0.170
+To evaluate the diversity and cost-efficiency of Terminal-World, we examine task diversity by
+independently generating 250 tasks under 3 settings: 50 skills without persona pairing, 50 skills paired
+with 5 personas each, and 25 skills paired with 10 personas each. We extract scenario descriptions
+from each instruction and apply clustering-based deduplication to identify unique scenario clusters.
+As shown in Fig. 5, persona grounding substantially improves scenario coverage. The no-persona
+setting yields 74 scenario clusters, whereas adding personas increases this to 145 (1.96×). Doubling
+the number of personas further increases coverage to 153 clusters (2.07×), confirming that personas
+serve as effective context multipliers for a fixed set of skill primitives.
+Table 5 further shows that this increased diversity is achieved at low cost. Our pipeline uses DeepSeek-
+V3.2 for task generation and trajectory collection, and Gemini-3-Flash for environment construction.
+The automated harness converts 6,884 accepted tasks into 5,723 valid, executable environments,
+resulting in an 83.1% construction success rate. Overall, the full pipeline costs $999.59, equivalent to
+only $0.17 per trajectory. Taken together, these results demonstrate that Terminal-World produces
+diverse, challenging, and well-aligned terminal data at low cost, as further evidenced by task difficulty
+analysis (Appendix C.3) and multi-dimensional environment quality evaluation (Appendix C.4).
+6
+Conclusion
+In this paper, we introduce Terminal-World, a fully automated pipeline that uses agent skills as
+the central synthesis primitive to jointly drive task, environment, and trajectory construction, and
+further extends individual skills into skill teams and skill graphs to scale the coverage of the
+synthesis space. Using this pipeline, we construct 5,723 terminal-agent training environments and
+train Terminal-World-8B/14B/32B. Across 6 benchmarks, these models consistently outperform
+existing terminal-agent baselines. These findings demonstrate the effectiveness of skill-grounded
+synthesis and suggest a practical path toward building more capable terminal agents.
+9
+
+References
+[1] Shishir G Patil, Tianjun Zhang, Xin Wang, and Joseph E Gonzalez. Gorilla: Large language
+model connected with massive apis. Advances in Neural Information Processing Systems,
+37:126544–126565, 2024. 2, 3
+[2] Zuxin Liu, Thai Hoang, Jianguo Zhang, Ming Zhu, Tian Lan, Juntao Tan, Weiran Yao, Zhiwei
+Liu, Yihao Feng, Rithesh RN, et al. Apigen: Automated pipeline for generating verifiable
+and diverse function-calling datasets. Advances in Neural Information Processing Systems,
+37:54463–54482, 2024. 2, 3
+[3] Weiwen Liu, Xu Huang, Xingshan Zeng, Shuai Yu, Dexun Li, Shuai Wang, Weinan Gan,
+Zhengying Liu, Yuanqing Yu, Zezhong WANG, et al. Toolace: Winning the points of llm
+function calling. In The Thirteenth International Conference on Learning Representations. 2, 3
+[4] Zhenchao Jin, Mengchen Liu, Dongdong Chen, Lingting Zhu, Yunsheng Li, and Lequan Yu.
+Toolbridge: An open-source dataset to equip llms with external tool capabilities. arXiv preprint
+arXiv:2410.10872, 2024. 2, 3
+[5] Akshara Prabhakar, Zuxin Liu, Ming Zhu, Jianguo Zhang, Tulika Awalgaonkar, Shiyu Wang,
+Zhiwei Liu, Haolin Chen, Thai Hoang, Juan Carlos Niebles, et al. Apigen-mt: Agentic
+pipeline for multi-turn data generation via simulated agent-human interplay. arXiv preprint
+arXiv:2504.03601, 2025. 2, 3
+[6] Chen Yang, Ran Le, Yun Xing, Zhenwei An, Zongchao Chen, Wayne Xin Zhao, Yang Song,
+and Tao Zhang. Toolmind technical report: A large-scale, reasoning-enhanced tool-use dataset.
+arXiv preprint arXiv:2511.15718, 2025. 2, 3
+[7] Yuwen Li, Wei Zhang, Zelong Huang, Mason Yang, Jiajun Wu, Shawn Guo, Huahao Hu, Lingyi
+Sun, Jian Yang, Mingjie Tang, et al. Close the loop: Synthesizing infinite tool-use data via
+multi-agent role-playing. arXiv preprint arXiv:2512.23611, 2025. 2, 3
+[8] Guanting Dong, Junting Lu, Junjie Huang, Wanjun Zhong, Longxiang Liu, Shijue Huang,
+Zhenyu Li, Yang Zhao, Xiaoshuai Song, Xiaoxi Li, et al. Agent-world: Scaling real-world
+environment synthesis for evolving general agent intelligence. arXiv preprint arXiv:2604.18292,
+2026. 2
+[9] Anthropic. Claude code: Best practices for agentic coding. https://www.anthropic.com/
+engineering/claude-code-best-practices, Apr 2025. 2, 3
+[10] OpenAI. Introducing codex. https://openai.com/index/introducing-codex/, May 2025.
+Overview of the Codex coding agent accessible via ChatGPT and related clients. 2, 3
+[11] Qianyu Meng, Yanan Wang, Liyi Chen, Qimeng Wang, Chengqiang Lu, Wei Wu, Yan Gao,
+Yi Wu, and Yao Hu. Agent harness for large language model agents: A survey. Preprints, April
+2026. 2
+[12] Nghi DQ Bui. Building effective ai coding agents for the terminal: Scaffolding, harness, context
+engineering, and lessons learned. arXiv preprint arXiv:2603.05344, 2026. 2
+[13] Hongru Wang, Cheng Qian, Manling Li, Jiahao Qiu, Boyang Xue, Mengdi Wang, Heng Ji,
+and Kam-Fai Wong. Toward a theory of agents as tool-use decision-makers. arXiv preprint
+arXiv:2506.00886, 2025. 2
+[14] Changle Qu, Sunhao Dai, Xiaochi Wei, Hengyi Cai, Shuaiqiang Wang, Dawei Yin, Jun Xu,
+and Ji-Rong Wen. Tool learning with large language models: A survey. Frontiers of Computer
+Science, 19(8):198343, 2025. 2, 3
+[15] Mike A Merrill, Alexander G Shaw, Nicholas Carlini, Boxuan Li, Harsh Raj, Ivan Bercovich, Lin
+Shi, Jeong Yeon Shin, Thomas Walshe, E Kelly Buchanan, et al. Terminal-bench: Benchmarking
+agents on hard, realistic tasks in command line interfaces. arXiv preprint arXiv:2601.11868,
+2026. 2, 7, 17
+10
+
+[16] Kanishk Gandhi, Shivam Garg, Noah D Goodman, and Dimitris Papailiopoulos. Endless
+terminals: Scaling rl environments for terminal agents. arXiv preprint arXiv:2601.16443, 2026.
+2, 3, 6
+[17] Kaijie Zhu, Yuzhou Nie, Yijiang Li, Yiming Huang, Jialian Wu, Jiang Liu, Ximeng Sun, Zhenfei
+Yin, Lun Wang, Zicheng Liu, Emad Barsoum, William Yang Wang, and Wenbo Guo. Termigen:
+High-fidelity environment and robust trajectory synthesis for terminal agents. arXiv preprint
+arXiv:2602.07274, 2026. 2, 3, 6, 7
+[18] Renjie Pi, Grace Lam, Mohammad Shoeybi, Pooya Jannaty, Bryan Catanzaro, and Wei Ping.
+On data engineering for scaling llm terminal capabilities. arXiv preprint arXiv:2602.21193,
+2026. 2, 3, 6, 7, 17
+[19] Siwei Wu, Yizhi Li, Yuyang Song, Wei Zhang, Yang Wang, Riza Batista-Navarro, Xian Yang,
+Mingjie Tang, Bryan Dai, Jian Yang, and Chenghua Lin. Large-scale terminal agentic trajectory
+generation from dockerized environments, 2026. 2, 3, 6
+[20] Peng Xia, Jianwen Chen, Hanyang Wang, Jiaqi Liu, Kaide Zeng, Yu Wang, Siwei Han, Yiyang
+Zhou, Xujiang Zhao, Haifeng Chen, et al. Skillrl: Evolving agents via recursive skill-augmented
+reinforcement learning. arXiv preprint arXiv:2602.08234, 2026. 2
+[21] Zhengxi Lu, Zhiyuan Yao, Jinyang Wu, Chengcheng Han, Qi Gu, Xunliang Cai, Weiming
+Lu, Jun Xiao, Yueting Zhuang, and Yongliang Shen. Skill0: In-context agentic reinforcement
+learning for skill internalization. arXiv preprint arXiv:2604.02268, 2026. 2
+[22] ClawHub. Clawhub. https://clawhub.ai/, 2026. 2
+[23] SkillsMP. Agent skills marketplace. https://skillsmp.com/, 2026. 2
+[24] Xin Chan, Xiaoyang Wang, Dian Yu, Haitao Mi, and Dong Yu. Scaling synthetic data creation
+with 1,000,000,000 personas. arXiv preprint arXiv:2406.20094, 2024. 2, 5
+[25] Junteng Liu, Yunji Li, Chi Zhang, Jingyang Li, Aili Chen, Ke Ji, Weiyu Cheng, Zijia Wu,
+Chengyu Du, Qidi Xu, et al. Webexplorer: Explore and evolve for training long-horizon web
+agents. arXiv preprint arXiv:2509.06501, 2025. 3
+[26] Shrey Pandit, Xuan-Phi Nguyen, Yifei Ming, Austin Xu, Jiayu Wang, Caiming Xiong, and
+Shafiq Joty. Synthesizing agentic data for web agents with progressive difficulty enhancement
+mechanisms. arXiv preprint arXiv:2510.13913, 2025. 3
+[27] Jiaxuan Gao, Wei Fu, Minyang Xie, Shusheng Xu, Chuyi He, Zhiyu Mei, Banghua Zhu, and
+Yi Wu. Beyond ten turns: Unlocking long-horizon agentic search with large-scale asynchronous
+rl. In First Workshop on Multi-Turn Interactions in Large Language Models. 3
+[28] Shuofei Qiao, Yanqiu Zhao, Zhisong Qiu, Xiaobin Wang, Jintian Zhang, Zhao Bin, Ningyu
+Zhang, Yong Jiang, Pengjun Xie, Fei Huang, et al. Scaling generalist data-analytic agents.
+arXiv preprint arXiv:2509.25084, 2025. 3
+[29] Dingfeng Shi, Jingyi Cao, Qianben Chen, Weichen Sun, Weizhen Li, Hongxuan Lu, Fangchen
+Dong, Tianrui Qin, King Zhu, Minghao Liu, et al. Taskcraft: Automated generation of agentic
+tasks. arXiv preprint arXiv:2506.10055, 2025. 3, 7, 17, 18
+[30] Zhihao Xu, Rumei Li, Jiahuan Li, Rongxiang Weng, Jingang Wang, Xunliang Cai, and Xiting
+Wang. Unlocking implicit experience: Synthesizing tool-use trajectories from text. arXiv
+preprint arXiv:2601.10355, 2026. 3
+[31] Gongrui Zhang, Jialiang Zhu, Ruiqi Yang, Kai Qiu, Miaosen Zhang, Zhirong Wu, Qi Dai, Bei
+Liu, Chong Luo, Zhengyuan Yang, et al. Infoagent: Advancing autonomous information-seeking
+agents. arXiv preprint arXiv:2509.25189, 2025. 3
+[32] Zhengwei Tao, Jialong Wu, Wenbiao Yin, Junkai Zhang, Baixuan Li, Haiyang Shen, Kuan Li,
+Liwen Zhang, Xinyu Wang, Yong Jiang, et al. Webshaper: Agentically data synthesizing via
+information-seeking formalization. arXiv preprint arXiv:2507.15061, 2025. 3
+11
+
+[33] Shuang Sun, Huatong Song, Yuhao Wang, Ruiyang Ren, Jinhao Jiang, Junjie Zhang, Fei Bai,
+Jia Deng, Wayne Xin Zhao, Zheng Liu, et al. Simpledeepsearcher: Deep information seeking
+via web-powered reasoning trajectory synthesis. arXiv preprint arXiv:2505.16834, 2025. 3
+[34] Zhaoyang Wang, Yiming Liang, Xuchao Zhang, Qianhui Wu, Siwei Han, Anson Bastos, Rujia
+Wang, Chetan Bansal, Baolin Peng, Jianfeng Gao, et al. Adapting web agents with synthetic
+supervision. arXiv preprint arXiv:2511.06101, 2025. 3
+[35] Yuan Liang, Ruobin Zhong, Haoming Xu, Chen Jiang, Yi Zhong, Runnan Fang, Jia-Chen Gu,
+Shumin Deng, Yunzhi Yao, Mengru Wang, Shuofei Qiao, Xin Xu, Tongtong Wu, Kun Wang,
+Yang Liu, Zhen Bi, Jungang Lou, Yuchen Eleanor Jiang, Hangcheng Zhu, Gang Yu, Haiwen
+Hong, Longtao Huang, Hui Xue, Chenxi Wang, Yijun Wang, Zifei Shan, Xi Chen, Zhaopeng
+Tu, Feiyu Xiong, Xin Xie, Peng Zhang, Zhengke Gui, Lei Liang, Jun Zhou, Chiyu Wu, Jin
+Shang, Yu Gong, Junyu Lin, Changliang Xu, Hongjie Deng, Wen Zhang, Keyan Ding, Qiang
+Zhang, Fei Huang, Ningyu Zhang, Jeff Z. Pan, Guilin Qi, Haofen Wang, and Huajun Chen.
+Skillnet: Create, evaluate, and connect ai skills, 2026. 4, 16
+[36] openJiuwen-ai. Jiuwenclaw. https://github.com/openJiuwen-ai/jiuwenclaw, 2026. 4
+[37] Anton Lozhkov, Loubna Ben Allal, Leandro von Werra, and Thomas Wolf. Fineweb-edu, May
+2024. 5
+[38] Aixin Liu, Aoxue Mei, Bangcai Lin, Bing Xue, Bingxuan Wang, Bingzheng Xu, Bochao Wu,
+Bowei Zhang, Chaofan Lin, Chen Dong, et al. Deepseek-v3. 2: Pushing the frontier of open
+large language models. arXiv preprint arXiv:2512.02556, 2025. 6
+[39] Harbor Framework Team. Harbor: A framework for evaluating and optimizing agents and
+models in container environments, January 2026. 6
+[40] Sandhini Agarwal, Lama Ahmad, Jason Ai, Sam Altman, Andy Applebaum, Edwin Arbus,
+Rahul K Arora, Yu Bai, Bowen Baker, Haiming Bao, et al. gpt-oss-120b & gpt-oss-20b model
+card. arXiv preprint arXiv:2508.10925, 2025. 6
+[41] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu,
+Chang Gao, Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint
+arXiv:2505.09388, 2025. 6, 18
+[42] Aohan Zeng, Xin Lv, Zhenyu Hou, Zhengxiao Du, Qinkai Zheng, Bin Chen, Da Yin, Chendi
+Ge, Chenghua Huang, Chengxing Xie, et al. Glm-5: from vibe coding to agentic engineering.
+arXiv preprint arXiv:2602.15763, 2026. 6, 7, 17
+[43] Kimi Team, Yifan Bai, Yiping Bao, Y Charles, Cheng Chen, Guanduo Chen, Haiting Chen,
+Huarong Chen, Jiahao Chen, Ningxin Chen, et al. Kimi k2: Open agentic intelligence. arXiv
+preprint arXiv:2507.20534, 2025. 6
+[44] Yifan Zhang and Team Math-AI. American invitational mathematics examination (aime) 2024,
+2024. 7, 17, 18
+[45] Yifan Zhang and Team Math-AI. American invitational mathematics examination (aime) 2025,
+2025. 7, 17, 18
+[46] Xueyu Hu, Ziyu Zhao, Shuang Wei, Ziwei Chai, Qianli Ma, Guoyin Wang, Xuwu Wang, Jing
+Su, Jingjing Xu, Ming Zhu, et al. Infiagent-dabench: Evaluating agents on data analysis tasks.
+arXiv preprint arXiv:2401.05507, 2024. 7, 17, 18
+[47] Xianjie Wu, Jian Yang, Linzheng Chai, Ge Zhang, Jiaheng Liu, Xeron Du, Di Liang, Daixin
+Shu, Xianfu Cheng, Tianzhen Sun, et al. Tablebench: A comprehensive and complex benchmark
+for table question answering. In Proceedings of the AAAI Conference on Artificial Intelligence,
+volume 39, pages 25497–25506, 2025. 7, 17, 18
+[48] Jinyang Li, Binyuan Hui, Ge Qu, Jiaxi Yang, Binhua Li, Bowen Li, Bailin Wang, Bowen Qin,
+Ruiying Geng, Nan Huo, et al. Can llm already serve as a database interface? a big bench for
+large-scale database grounded text-to-sqls. Advances in Neural Information Processing Systems,
+36:42330–42357, 2023. 7, 17, 18
+12
+
+[49] Yuze Zhao, Jintao Huang, Jinghan Hu, Xingjun Wang, Yunlin Mao, Daoze Zhang, Zeyinzi
+Jiang, Zhikai Wu, Baole Ai, Ang Wang, Wenmeng Zhou, and Yingda Chen. Swift:a scalable
+lightweight infrastructure for fine-tuning, 2024. 7
+[50] Lianmin Zheng, Liangsheng Yin, Zhiqiang Xie, Chuyue Sun, Jeff Huang, Cody H Yu, Shiyi
+Cao, Christos Kozyrakis, Ion Stoica, Joseph E Gonzalez, et al. Sglang: Efficient execution
+of structured language model programs. Advances in neural information processing systems,
+37:62557–62583, 2024. 18
+13
+
+Table of Contents
+1
+Introduction
+2
+2
+Related Work
+3
+3
+Terminal-World
+3
+3.1
+Agent Skill Collection
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+4
+3.2
+Task Generation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+4
+3.3
+Environment Building . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+5
+3.4
+Trajectory Collection . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+5
+3.5
+Data Statistics . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+6
+4
+Experiments
+6
+4.1
+Experiment Setting . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+6
+4.2
+Main Results
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+7
+5
+Analysis
+8
+5.1
+RQ1: Behavior Analysis
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+5.2
+RQ2: Impact of SFT Data Strategies . . . . . . . . . . . . . . . . . . . . . . . . .
+8
+5.3
+RQ3: Task Diversity and Cost Analysis
+. . . . . . . . . . . . . . . . . . . . . . .
+9
+6
+Conclusion
+9
+A Terminal-World Details
+15
+A.1
+Skill Taxonomy . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+A.2
+Skill Composition: Team and Graph Construction . . . . . . . . . . . . . . . . . .
+16
+A.3
+Environment Building . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+B
+Experimental Setup and Reproducibility
+17
+B.1
+Benchmark Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+B.2
+Terminalization of Benchmarks . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+B.3
+Sampling Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+18
+B.4
+Training Compute Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+C Supplementary Analyses
+20
+C.1
+Error Analysis . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+20
+C.2
+Semantic Correctness of Failure Trajectories . . . . . . . . . . . . . . . . . . . . .
+22
+C.3
+Difficulty of Synthesized Tasks . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+C.4
+Quality of Task and Environment . . . . . . . . . . . . . . . . . . . . . . . . . . .
+22
+C.5
+Effect of Execution Guidelines . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+C.6
+LLM-as-a-Judge Consistency Analysis . . . . . . . . . . . . . . . . . . . . . . . .
+23
+14
+
+D Prompt Templates
+25
+E
+Data Examples
+37
+E.1
+Example 1: Task Generation — ELF Binary Parsing (Astrophysics)
+. . . . . . . .
+37
+E.2
+Example 2: Environment Building — Multi-Format Data Merger . . . . . . . . . .
+39
+E.3
+Example 3: Trajectory Collection — Video OCR Extraction
+. . . . . . . . . . . .
+43
+A
+Terminal-World Details
+A.1
+Skill Taxonomy
+Back to ToC
+Figure 6 presents the full skill taxonomy used in Terminal-World, organized into 12 major categories
+and 63 subcategories. Each skill defines a core terminal capability that an agent must possess, ranging
+from low-level system operations to high-level data engineering and scientific computing tasks.
+Figure 6: Skill category taxonomy. The taxonomy covers 12 major categories and 63 subcategories.
+15
+
+Algorithm 1 Skill Composition: Team and Graph Construction
+Require: Ssingle: 1,000 filtered skills with subcategory attribute sub(·)
+Ensure: Skill teams Steam and skill graphs Sgraph in skill.md format
+1: R ←SKILLNET(Ssingle)
+// label each pair with 1 of 4 relations
+2: // Relation filtering (Similar-to: dedup; Belong-to: discarded)
+3: Rteam ←{(si, sj) ∈RCompose-with | sub(si) = sub(sj)}
+4: Rgraph ←{(si, sj) ∈RDepend-on | sub(si) ̸= sub(sj)}
+5: // Skill Teams (depth extension)
+6: Steam ←TEAMSKILL-CREATOR(Rteam)
+7: // Skill Graphs (breadth extension): greedy maximal-path cover
+8: G ←DIRECTEDGRAPH(V =SKILLS(Rgraph), E=Rgraph)
+9: Sgraph ←∅
+10: while V (G) ̸= ∅do
+11:
+p∗←arg maxv∈V (G)
+LONGESTSIMPLEPATH(G, v)
+
+12:
+if |p∗| < 2 then break
+// only isolated nodes left
+13:
+end if
+14:
+Sgraph ←Sgraph ∪{FLATTEN(p∗)}
+15:
+G ←G
+
+V (G) \ p∗
+16: end while
+17: return Steam, Sgraph
+18: function LONGESTSIMPLEPATH(G, v)
+19:
+best ←[v]
+20:
+DFS(v, {v}, [v]) where
+21:
+DFS(u, vis, path):
+22:
+extended ←false
+23:
+for each (u →w) ∈E(G) with w /∈vis do
+24:
+DFS(w, vis ∪{w}, path ◦[w]); extended ←true
+25:
+if ¬ extended and |path| > |best| then best ←path
+26:
+return best
+27: end function
+A.2
+Skill Composition: Team and Graph Construction
+Back to ToC
+Algorithm 1 details how the 1,000 filtered single skills are extended into skill teams and skill graphs
+(introduced in §3.1). The key design choices are: (1) SkillNet [35] operates on the full skill set to
+produce pairwise relations, avoiding manual enumeration; (2) Compose-with relations within the
+same subcategory drive depth extension (teams), while Depend-on relations across subcategories
+drive breadth extension (graphs); (3) greedy longest-path extraction ensures every skill participates in
+at least one graph primitive without duplication.
+A.3
+Environment Building
+Back to ToC
+This subsection complements Sec. 3.3 by detailing the tool interfaces used in the initial-file generation
+stage of our multi-agent generate-verify-repair pipeline. Each file in the environment blueprint is
+annotated with a generation mode and routed to a specialized agent. Files tagged as llm_direct are
+generated directly by an LLM-synthesis agent without external tools. Files tagged as local_tool are
+handled by a Local Tool Agent (Alocal_tool), which programmatically creates or repairs artifacts inside
+the sandbox. Files tagged as web_fetch are delegated to a Remote Fetch Agent (Aremote_fetch),
+which searches, inspects, and downloads public resources when the target artifact depends on external
+sources. Table 6 summarizes the tool schemas of the two tool-augmented agents in a unified format.
+After file generation, all produced artifacts are passed to the File Verify Agent described in Ap-
+pendix D.7, which checks both internal correctness and cross-file consistency. Any detected issues
+are returned to the corresponding generation agent for repair.
+16
+
+Table 6: Tool schema for the Local Tool Agent (Alocal_tool) and the Remote Fetch Agent
+(Aremote_fetch).
+Tool Name
+Description
+Parameters
+Local Tool Agent, Alocal_tool
+python
+Run Python code inside /app to create or
+repair the target artifact.
+• target_filepath (string, required):
+canonical target file path for the job; must
+exactly match the requested target path.
+• code (string, required): Python code to
+execute inside /app.
+• timeout_sec (integer, optional): timeout
+for the Python execution.
+Remote Fetch Agent, Aremote_fetch
+web_search
+Search the web for candidate pages or
+download locations for the target artifact.
+• query (string, required): search query to
+run.
+• top_k (integer, optional): number of
+search results to request.
+• domain_hint (string, optional): domain
+substring to prefer or filter by.
+fetch_page
+Fetch and inspect a page to discover useful
+links or download candidates.
+• url (string, required): page URL to
+inspect.
+• mode (string, required): fetch mode, one of
+http, dynamic, or stealth.
+• timeout_ms (integer, optional): timeout
+for the page fetch in milliseconds.
+download_file
+Download the target artifact to the requested
+sandbox path.
+• url (string, required): file URL to
+download.
+• save_as (string, required): destination
+path inside the sandbox.
+• timeout_ms (integer, optional): timeout
+for the download in milliseconds.
+B
+Experimental Setup and Reproducibility
+B.1
+Benchmark Details
+Back to ToC
+Table 7: Overview of the benchmarks, domains, test set sizes, and evaluation metrics used in
+our experiments. † indicates that the test set was randomly sampled.
+Benchmark
+Domain
+Test Size
+Metric
+Terminal-Bench 2.0 [15, 42]
+Terminal Agentic Coding
+89
+Exact Match
+AIME 24 [44]
+Math Reasoning
+30
+Exact Match
+AIME 25 [45]
+Math Reasoning
+30
+Exact Match
+DABench [46]
+CSV Data Analysis
+500†
+LLM-as-a-Judge
+TableBench [47]
+CSV Data Analysis
+500†
+LLM-as-a-Judge
+BIRD [48]
+SQL Data Analysis
+500†
+Exact Match
+To evaluate the capabilities of terminal agents across different domains, we conduct experiments
+on six benchmarks, as summarized in Table 7. Since the latter five benchmarks were not originally
+designed for terminal agents, we convert them into executable terminal tasks following Nemotron-
+Terminal [18], where agents must solve the problems by manipulating files, running code, and
+interacting with the command line. For DABench and TableBench, we follow TaskCraft [29] to
+employ an LLM-as-a-Judge for evaluation.
+• Terminal-Bench 2.0: Terminal-Bench 2.0 [15, 42] is a native terminal-agentic coding benchmark
+that assesses an agent’s ability to navigate the command line, perform system administration,
+manipulate files, and write code in a real Bash environment. We evaluate on its 89 tasks, where the
+success is measured by exact match criteria verifying the final state of the environment.
+17
+
+• AIME 24/25: These benchmarks correspond to the problem sets from the 2024 and 2025 American
+Invitational Mathematics Examinations [44, 45]. Each dataset consists of 30 high-difficulty math
+problems that test advanced mathematical reasoning and creative problem-solving abilities. Within
+the terminal setting, agents write and execute Python scripts to compute the correct mathematical
+answers. We use exact match of the final extracted answer to measure accuracy.
+• DABench: DABench [46] is a benchmark designed to evaluate data analysis capabilities. The tasks
+require the agent to load, process, and analyze data from CSV files to answer complex analytical
+queries. We convert these tasks into terminal environments where agents must write Python scripts
+to analyze the provided CSV files. We randomly sample a subset of 500 instances as the test set
+and evaluate the output using an LLM-as-a-Judge following TaskCraft [29].
+• TableBench: Similar to DABench, TableBench [47] assesses an agent’s ability to perform complex
+table-based reasoning and data manipulation. The tasks involve interpreting tabular data, filtering,
+joining, and aggregating information to answer specific questions. We randomly sample 500
+instances for testing and evaluate the output using an LLM-as-a-Judge following TaskCraft [29].
+• BIRD: BIRD [48] is a large-scale, complex SQL-based data analysis benchmark that evaluates
+text-to-SQL and database querying capabilities over real-world, large-scale databases. We deploy
+the SQLite databases in the terminal environment. Agents must explore the database schema and
+write correct SQL queries to extract the required information. We randomly sample 500 instances
+for evaluation, and performance is measured by the exact match of the query execution results
+against the ground truth.
+B.2
+Terminalization of Benchmarks
+Back to ToC
+To evaluate the general-purpose task-solving capability of models in real-world scenarios, we system-
+atically converted several established domain-specific benchmarks (AIME, DABench, TableBench,
+and BIRD) into fully executable terminal environments.
+This conversion places the models in an open-ended Bash sandbox. Instead of merely outputting
+reasoning steps or raw code in an isolated context, the agent must navigate the file system, read data
+files (e.g., CSV, SQLite), execute code or queries, debug based on terminal output, and finally save
+the result into a designated target file (e.g., /app/answer.txt or /app/result.csv).
+Table 8 illustrates how the original questions from each benchmark are wrapped with specific file
+paths and formatting constraints to form the final terminalized instructions.
+B.3
+Sampling Details
+Back to ToC
+To ensure a fair and reproducible comparison across all evaluated models, we adopt the officially
+recommended sampling parameters released by the respective model providers whenever available.
+For models served through remote APIs, we follow the configurations specified in their official
+documentation. For models deployed locally, we use the SGLang inference framework [50] with the
+recommended decoding parameters from each model’s technical report or model card. A complete
+summary of the sampling parameters used in our experiments is provided in Table 9 for closed-source
+and large-scale open-source models served via API, and in Table 10 for locally deployed models.
+API-based Models
+For closed-source models (i.e., GPT-5.2, Claude-Sonnet-4.5, Gemini-3-Flash,
+and Gemini-3.1-Pro-Preview) and large-scale open-source models exceeding 100B parameters (i.e.,
+DeepSeek-V3.2, GLM-5, Kimi-K2-Thinking, MiniMax-M2.7, and Qwen3-Coder-480B), we conduct
+inference through their official API endpoints. The detailed sampling configurations are summarized
+in Table 9. For models that support explicit reasoning or thinking modes (e.g., DeepSeek-V3.2,
+Gemini-3-Flash, and Gemini-3.1-Pro-Preview), we enable the corresponding reasoning options to
+obtain their full reasoning capability.
+Locally Deployed Models
+All open-source models with fewer than 120B parameters are deployed
+locally using the SGLang framework[50]. For the Qwen3 series (8B/14B/32B) and the Nemotron-
+Terminal series (8B/14B/32B), we adopt the official recommended sampling configuration from
+the Qwen3 technical report [41], with thinking mode enabled to leverage the model’s reasoning
+capability. For TermiGen-32B and TerminalTraj-32B, we follow their original released decoding
+configuration with a temperature of 0.7 and no additional sampling constraints. For the GPT-OSS
+18
+
+Table 8: Examples of terminalized instructions. Original questions are wrapped with file paths,
+tool constraints, and output format requirements to form executable terminal tasks.
+Benchmark
+Original Question
+Terminalized Instruction
+AIME 24/25
+Every morning Aya goes for a 9-
+kilometer-long walk and stops at
+a coffee shop afterwards... Find
+the number of minutes the walk
+takes her.
+Solve the following problem. Reason step by step, create
+the file /app/answer.txt, and put your final answer
+there. Your answer should be a single integer from 1 to
+999 inclusive.
+Every morning Aya goes for a 9-kilometer-long walk
+and stops at a coffee shop afterwards... Find the
+number of minutes the walk takes her.
+DABench
+Calculate the mean fare paid by
+the passengers.
+and there are
+some constraints: Calculate the
+mean fare using Python’s built-
+in statistics module or appropri-
+ate statistical method in pandas.
+Rounding off the answer to two
+decimal places.
+You are given a CSV data file located at
+/app/data/test_ave.csv. Analyze the data and answer
+the following question:
+Calculate the mean fare paid by the passengers. and
+there are some constraints: Calculate the mean fare
+using Python’s built-in statistics module or
+appropriate statistical method in pandas. Rounding
+off the answer to two decimal places.
+Write your answer to /app/answer.txt using exactly
+these keys, one per line:
+@mean_fare[value]
+TableBench
+What is the average number of
+tropical cyclones per season?
+You are given a CSV data file located at
+/app/data/table_000000.csv. Analyze the data and
+answer the following question:
+What is the average number of tropical cyclones per
+season?
+Write your answer to /app/answer.txt using exactly
+this key:
+@answer[value]
+BIRD
+Please list the lowest three eligi-
+ble free rates for students aged 5-
+17 in continuation schools.
+You are given a SQLite database at
+/app/data/california_schools.sqlite. Answer the
+following question by querying the database:
+Please list the lowest three eligible free rates for
+students aged 5-17 in continuation schools.
+Write a SQL query that answers the question, execute it,
+and save the result as a CSV file at /app/result.csv.
+The CSV file must include a header row with column
+names.
+Table 9: Sampling parameters of API-based models used in our experiments.
+Model
+Context
+Temp.
+Top-p
+Top-k
+Thinking
+Notes
+Gemini-3-Flash
+1,000,000
+1.0
+–
+–
+✓
+–
+Gemini-3.1-Pro-Preview
+1,000,000
+1.0
+–
+–
+✓
+–
+DeepSeek-V3.2
+163,840
+1.0
+–
+–
+✓
+–
+GLM-5
+202,752
+0.7
+1.0
+–
+✓
+–
+Kimi-K2-Thinking
+262,144
+1.0
+–
+–
+✓
+–
+MiniMax-M2.7
+204,800
+1.0
+0.95
+40
+✓
+–
+Qwen3-Coder-480B
+262,144
+0.7
+0.8
+20
+✗
+repetition_penalty=1.05
+series, we set reasoning_effort=high to enable the model’s strongest reasoning behavior. The
+complete configurations are summarized in Table 10.
+19
+
+Table 10: Sampling parameters of locally deployed models served via SGLang.
+Model
+Context
+Temp.
+Top-p
+Top-k
+Min-p
+Thinking
+Notes
+Qwen3-8B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+Qwen3-14B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+Qwen3-32B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+Nemotron-Terminal-8B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+Nemotron-Terminal-14B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+Nemotron-Terminal-32B
+40,960
+0.6
+0.95
+20
+0.0
+✓
+–
+TermiGen-32B
+32,768
+0.7
+–
+–
+–
+✗
+–
+TerminalTraj-32B
+32,768
+0.7
+–
+–
+–
+✗
+–
+GPT-OSS-20B
+131,072
+1.0
+1.0
+−1
+–
+✓
+reasoning_effort=high
+GPT-OSS-120B
+131,072
+1.0
+1.0
+−1
+–
+✓
+reasoning_effort=high
+B.4
+Training Compute Details
+Back to ToC
+Table 11: SFT hyperparameters for Terminal-World.
+Hyperparameter
+Value
+Training sequence length
+32,768 tokens
+Global batch size
+32
+Training epochs
+2
+Optimizer
+Adam
+Peak learning rate
+2 × 10−5
+LR schedule
+Cosine decay
+LR warmup
+10% of total steps
+Minimum LR
+5 × 10−7
+Weight decay
+1 × 10−4
+Gradient clipping
+1.0
+Tensor parallel size
+4
+Pipeline parallel size
+4
+Sequence parallelism
+Enabled
+Random seed
+42
+We fine-tune Terminal-World-32B using the hyperparameters summarized in Table 11, which include
+a peak learning rate of 2 × 10−5, a cosine decay schedule with a 10% warmup ratio, weight decay of
+1 × 10−4, gradient clipping of 1.0, and a training sequence length of 32,768 tokens over 2 epochs.
+Training is conducted on 4 nodes, each equipped with 8 NVIDIA H20 141 GB, totaling 32 GPUs.
+Under this configuration, a full training run completes in approximately 80 hours.
+C
+Supplementary Analyses
+C.1
+Error Analysis
+Back to ToC
+To systematically investigate the failure modes of our model, we conducted an in-depth error analysis
+based on three independent evaluation runs of Terminal-World-32B within the Terminal-World
+2.0 environment. By manually examining the execution trajectories of unsuccessful attempts, we
+identified and categorized the critical bottlenecks into four distinct error types, as illustrated in
+Table 12.
+(1) Context Window Overflow. In tasks requiring extensive trial-and-error, the accumulated terminal
+outputs quickly exceed the model’s context limit, triggering history summarization. Consequently,
+the agent loses fine-grained memory of its prior actions. This amnesia causes the model to confidently
+propose supposedly “new” solutions that are, in fact, logically identical to previously failed attempts,
+ultimately leading to execution timeouts without algorithmic convergence.
+(2) Execution Deadlock. This error occurs when the agent correctly identifies an abnormal terminal
+state (e.g., being stuck in an interactive prompt or a heredoc) but fails to adapt its recovery strategy.
+Instead of exploring alternative escape mechanisms after an initial failure, the model falls into a
+20
+
+Table 12: Error Analysis of Terminal-World-32B on Terminal-Bench 2.0. Red highlights the
+critical error at each failure point.
+Error Type
+Agent Trajectory (Failure Point)
+Error Reason & Result
+(1) Context Window
+Overflow
+[winning-avg-corewars]
+[Step 21] System: Context limit
+reached. History compressed.
+[Step 22] “. . . fails against stone (66
+wins)...”
+,→writes new warrior Omni
+[Step 23] System: Context limit
+reached. History compressed.
+[Step 24] “Let’s try a new
+strategy... ”
+,→writes the exact same warrior
+Omni2
+Reason: Due to severe summarization,
+the model completely loses memory of
+its specific prior failed attempts,
+causing it to confidently repeat identical
+strategies without converging.
+Result: AgentTimeout
+(2) Execution
+Deadlock
+[dna-insert]
+[Step 29] “Terminal is stuck in a
+heredoc. I will send EOF.”
+,→EOF\n
+[Step 30] “Still stuck. I will try
+Ctrl+C.”
+,→C-c\n
+[Steps 31–50] Repeats the exact
+same reasoning and ‘\n’ →‘EOF’
+→‘C-c’ sequence 20 more times.
+Reason: Agent falls into an endless
+execution loop. It correctly identifies
+the stuck terminal but fails to adapt its
+recovery strategy when the initial
+sequence fails.
+Result: AgentTimeout
+(3) Premature
+Completion
+[overfull-hbox]
+[Step 8] Fixes layout by replacing
+arbitrary words with shorter ones
+(ignoring the synonyms.txt
+constraint).
+[Step 9, task_complete=True]
+“Overfull hbox warnings eliminated
+(count=0). I replaced words from
+the provided list, which is
+allowed.”
+Reason: Agent verified the terminal
+feedback (warning count = 0) but
+hallucinated its compliance with the
+strict sub-constraints (only using
+allowed synonyms), terminating
+prematurely.
+Result: FAILED (modified illegal
+words)
+(4) Task Substitution
+[gcode-to-text]
+[Step 3] Notices metadata: ; M486
+AEmbossed text
+[Step 4] Instead of decoding G-code
+toolpaths, takes a shortcut:
+,→grep -i "emboss"
+text.gcode
+[Step 12, task_complete=True]
+“Successfully extracted the text:
+Embossed text”
+Reason: Substituted the complex
+required task (geometric coordinate
+decoding) with a superficially similar
+but incorrect shortcut (metadata string
+search).
+Result: FAILED (Expected flag{...},
+got Embossed text)
+deterministic loop, repeatedly issuing the exact same sequence of interruption commands (such as
+EOF and Ctrl+C) until the environment times out.
+(3) Premature Completion. Agents frequently terminate tasks prematurely by over-relying on
+superficial environmental feedback. In these cases, the model successfully resolves the primary pro-
+grammatic trigger (e.g., eliminating compiler warnings) but hallucinates its compliance with implicit
+or secondary constraints (e.g., restricting vocabulary to a provided synonym list). Consequently, the
+agent confidently declares the task complete without rigorously verifying the semantic correctness of
+its modifications.
+(4) Task Substitution. Faced with computationally or logically complex objectives, such as geo-
+metric coordinate decoding, the model occasionally attempts to bypass the intended procedure. It
+substitutes the required rigorous analytical process with a superficial heuristic, such as applying
+simple string matching (grep) to extract metadata. While this behavior creates the illusion of progress,
+it fundamentally circumvents the core requirements of the task.
+21
+
+C.2
+Semantic Correctness of Failure Trajectories
+Back to ToC
+To further understand why suppressing failure trajectories hurts performance, we conduct an additional
+analysis on the semantic correctness of unsuccessful trajectories. Specifically, we randomly sample
+300 trajectories that are labeled as failed by the original execution pipeline. For each trajectory, we
+provide four independent judge models (Gemini-3-Flash, GPT-4.1, GLM-5, and Doubao-2.0-Pro)
+with the task instruction and the complete trajectory, and ask each judge to determine whether the
+task has actually been completed.
+Table 13: Multi-judge agreement for semantic correctness of verifier-failed trajectories. We
+report judgments from Gemini-3-Flash, GPT-4.1, GLM-5, and Doubao-2.0-Pro on 300 trajectories
+labeled as failed by the execution verifier. Completed denotes the rate of verifier-failed trajectories
+judged as task-completing. Maj. Completed denotes the majority-vote completed rate. The 95%
+confidence interval is computed over majority-vote labels, and Agreement reports Fleiss’ κ among
+the four judges.
+Trajectory Set
+Completed Rate
+Maj. Completed
+95% CI
+Agreement
+Gemini-3-Flash
+GPT-4.1
+GLM-5
+Doubao-2.0-Pro
+All Failed Trajectories
+0.703
+0.660
+0.633
+0.687
+0.677
+[0.622, 0.728]
+κ = 0.742
+As shown in Table 13, the individual completion rates across the four judges range from 63.3% to
+70.3%, and the majority-vote completion rate is 67.7% (95% CI: [0.622, 0.728]). The inter-judge
+agreement is substantial (Fleiss’ κ = 0.742), confirming that the finding is consistent across models
+and not an artifact of any single evaluator. This high semantic completion rate carries an important
+implication about the step-level quality of these trajectories. A trajectory that is holistically judged
+as task-completing must, by necessity, consist predominantly of correct reasoning steps and valid
+tool-use actions, since an LLM judge would not deem a task completed if most intermediate steps
+were erroneous. Consequently, the failure label assigned by the execution verifier does not imply
+that the trajectory is wrong throughout. Instead, it reflects a narrow execution-level discrepancy
+at a small number of critical steps, while the vast majority of the trajectory remains semantically
+correct. Applying a uniform negative SFT loss to the entire failed trajectory therefore indiscriminately
+penalizes these correct steps together with the genuinely erroneous ones, which explains why failure-
+trajectory suppression degrades performance beyond simply excluding them.
+C.3
+Difficulty of Synthesized Tasks
+Back to ToC
+Table 14: Difficulty of terminal environ-
+ments.We compare different terminal environ-
+ments and report Pass@1 with Deepseek-V3.2.
+Environment
+Pass@1
+∆%
+rel
+Terminal-Bench 2.0
+38.2
+–
+Terminal-World
+39.8
++4.2%
+Nemotron-Terminal-Corpus
+79.8
++108.9%
+TermiGen
+59.0
++54.5%
+Endless-Terminal
+58.1
++52.1%
+To further examine the quality of Terminal-
+World and investigate why Terminal-World achieves
+stronger performance with substantially less train-
+ing data, we conduct an in-depth analysis of its task
+quality. Specifically, we use the same agent con-
+figuration (i.e., DeepSeek-V3.2 with the Terminus
+2 scaffolding) to run experiments on four terminal-
+oriented datasets and compute the corresponding
+pass rates. We exclude Terminal-Traj from this com-
+parison because it does not provide publicly accessi-
+ble Docker images for reproducing its environments.
+As shown in Table 14, DeepSeek-V3.2 achieves a pass rate of only 39.8% on Terminal-World, which
+is only 4.2% relatively higher than its performance on Terminal-Bench 2.0. In contrast, its pass rates
+on the other three terminal environments all exceed 50%, with Nemotron-Terminal-Corpus reaching
+79.8%. These results suggest that the environments synthesized by Terminal-World are substan-
+tially more challenging. Consequently, the collected execution trajectories contain higher-quality
+supervision signals, making them more effective for improving the model’s terminal-task solving
+capabilities.
+C.4
+Quality of Task and Environment
+Back to ToC
+To directly examine the intrinsic quality of synthesized terminal-agent data, we evaluate each dataset
+along four dimensions: ①terminal nativeness, ②environment-task consistency, ③environment
+22
+
+quality, and ④verifier robustness. To reduce evaluator bias, we use Claude Code as the agent
+framework and employ three judge models, Claude Sonnet 4.5, Kimi K2.5, and GLM-5. For each
+example, the agent is allowed to freely inspect and explore the corresponding environment before
+assigning scores for the four dimensions.
+Table 15: Quality assessment of terminal-agent datasets across four dimensions. We report
+scores from three judge models: Claude Sonnet 4.5 (C), Kimi K2.5 (K), and GLM-5 (G).
+Dataset
+Terminal Nativeness
+Env-Task Consistency
+Env Quality
+Verifier Robustness
+C
+K
+G
+Avg.
+C
+K
+G
+Avg.
+C
+K
+G
+Avg.
+C
+K
+G
+Avg.
+Terminal-World
+2.72 2.71 2.64
+2.69
+2.99 2.94 2.99
+2.97
+2.77 2.86 3.00
+2.88
+2.97 2.71 3.00
+2.92
+Endless-Terminal 2.10 2.32 2.54
+2.32
+2.90 2.94 2.89
+2.91
+2.93 2.96 2.74
+2.88
+2.81 2.98 2.96
+2.92
+TermiGen
+1.93 2.07 1.99
+2.00
+2.73 2.45 2.59
+2.59
+2.44 2.44 2.75
+2.54
+2.24 2.34 2.42
+2.33
+Terminal-Traj
+1.91 2.12 2.22
+2.08
+1.12 1.10 1.06
+1.09
+1.01 1.03 1.05
+1.03
+1.80 1.84 2.15
+1.93
+As shown in Table 15, Terminal-World consistently achieves the highest quality across all four
+dimensions and all three judge models. In particular, the high scores on both environment-task
+consistency and environment quality indicate that the synthesized task instructions are well aligned
+with their executable environments, rather than being valid only in isolation. These results demonstrate
+that our skill-driven synthesis pipeline can construct higher-quality terminal tasks and environments
+with stronger task-environment alignment.
+C.5
+Effect of Execution Guidelines
+Back to ToC
+Table 16: Effect of execution guidelines. We compare
+teacher trajectories collected with and without skill-
+derived execution guidelines using DeepSeek-V3.2 on
+500 sampled tasks.
+Setting
+Success
+∆%
+rel
+Avg. Steps
+∆%
+rel
+w/ guideline
+39.6
+–
+12.66
+–
+w/o guideline
+27.6
+-30.3%
+14.27
++12.7%
+To examine whether execution guidelines
+improve teacher trajectory collection, we
+randomly sample 500 tasks from Terminal-
+World and collect two sets of trajectories
+with the same DeepSeek-V3.2 teacher, hold-
+ing all other settings fixed. In the w/ guide-
+line setting, the teacher receives the skill-
+derived execution guideline G as input; in
+the w/o guideline setting, the teacher must
+infer the solution path from the task alone. We evaluate trajectory efficiency using two metrics:
+task success rate and the average number of steps to completion, computed only over successful
+trajectories.
+As shown in Table 16, execution guidelines substantially improve both reliability and efficiency. With
+guidelines, the teacher achieves a success rate of 39.6%, compared with 27.6% without guidelines,
+indicating a 30.3% relative drop when guidelines are removed. Moreover, successful trajectories
+require only 12.66 steps on average with guidelines, compared with 14.27 steps without guidelines.
+These results show that skill-derived guidelines help the teacher avoid redundant exploration and
+produce more concise successful demonstrations. This supports our design choice of using G during
+trajectory collection while removing it from SFT inputs, enabling the student to learn from efficient
+demonstrations without depending on guideline information at inference time.
+C.6
+LLM-as-a-Judge Consistency Analysis
+Back to ToC
+Our pipeline relies on LLM-as-a-Judge at two distinct stages: task quality filtering (Sec. 3.2) and
+evaluation on DABench and TableBench (Sec. 4; Appendix B.1). To verify the reliability of these
+judgments, we conduct multi-judge consistency analyses using four independent judge models:
+Gemini-3-Flash, GPT-4.1, GLM-5, and Doubao-2.0-Pro, and additionally report human evaluation
+on randomly sampled subsets.
+Task Quality Filtering.
+Table 17 reports inter-judge agreement for the five filtering criteria used
+in task quality filtering. We randomly sample 500 valid generated task specifications and ask
+each judge model to assign scores on a 0–5 scale. We further annotate a random subset of 200
+samples with three independent human annotators. The two-way random-effects intraclass correlation
+coefficient ICC(2,1) ranges from 0.708 to 0.812 across criteria, with an overall ICC of 0.770,
+23
+
+indicating substantial agreement among the four judge models. The human scores are also close to
+the model-judge averages, supporting the reliability of the filtering procedure.
+Table 17: Multi-judge agreement for task quality filtering. Each judge scores the five filtering
+criteria used in Sec. 3.2 on a 0–5 scale across 500 randomly sampled task specifications, where higher
+scores indicate better quality. Avg. denotes the average score across the four judges. ICC(2,1) reports
+the two-way random-effects absolute-agreement intraclass correlation coefficient among the four
+judges. Human reports scores from three independent human annotators averaged over a random
+subset of 200 samples.
+Filtering Criterion
+Judge Score
+Avg.
+ICC(2,1)
+Gemini-3-Flash
+GPT-4.1
+GLM-5
+Doubao-2.0-Pro
+Instruction Quality
+4.62
+4.40
+4.28
+4.55
+4.46
+0.812
+Closed-World Solvability
+4.38
+4.18
+4.05
+4.30
+4.23
+0.784
+Blueprint Completeness
+4.15
+3.92
+3.78
+4.08
+3.98
+0.741
+Guideline Quality
+4.05
+3.80
+3.65
+3.95
+3.86
+0.708
+Evaluation Criteria Quality
+4.52
+4.30
+4.18
+4.42
+4.36
+0.795
+Overall
+4.34
+4.12
+3.99
+4.26
+4.18
+0.770
+Human (200 samples)
+4.27
+4.13
+3.94
+4.21
+4.14
+0.763
+LLM-as-a-Judge on DABench and TableBench.
+Table 18 reports per-judge Pass@1 scores
+and majority-vote results on the full 500-instance DABench and TableBench test sets (Sec. 4;
+Appendix B.1) for three 32B models, together with human evaluation on a random subset of 200
+instances per benchmark. Fleiss’ κ among the three audit judges (GPT-4.1, GLM-5, and Doubao-
+2.0-Pro) is 0.873 and 0.881 on the two benchmarks, respectively, indicating near-perfect agreement.
+The majority-vote results remain well aligned with both the individual judge scores and the human
+evaluation, confirming that the LLM-as-a-Judge evaluation is reliable.
+Table 18: Multi-judge agreement for LLM-as-a-Judge evaluation on DABench and TableBench.
+We report Pass@1 judging results from Gemini-3-Flash, GPT-4.1, GLM-5, and Doubao-2.0-Pro on
+three 32B models. Maj. denotes majority-vote accuracy computed from the audit judges GPT, GLM,
+and Doubao. Avg. Maj. averages the majority-vote accuracies on DABench and TableBench. Fleiss’
+κ among the audit judges is 0.873 for DABench and 0.881 for TableBench. Human reports Pass@1
+scores from three independent human annotators on a random subset of 200 samples per benchmark.
+Model
+DABench
+TableBench
+Avg. Maj.
+Gemini-3-Flash GPT-4.1 GLM-5 Doubao-2.0-Pro Maj. Human Gemini-3-Flash GPT-4.1 GLM-5 Doubao-2.0-Pro Maj. Human
+Qwen3-32B
+44.4
+42.0
+43.0
+44.6
+43.4
+42.0
+26.4
+24.0
+25.0
+26.0
+25.2
+23.5
+34.3
+Nemotron-Terminal-32B
+81.6
+78.4
+80.0
+82.0
+80.4
+78.5
+72.4
+70.0
+71.6
+73.0
+71.8
+70.0
+76.1
+Terminal-World-32B
+83.6
+81.0
+82.4
+84.0
+82.8
+81.0
+71.6
+69.6
+70.4
+72.0
+70.8
+68.5
+76.8
+24
+
+D
+Prompt Templates
+Prompt for Task Generation (Core Goal)
+Back to ToC
+You are creating realistic Linux-terminal tasks for training a terminal AI agent.
+Each task should be synthesized from two inputs: an Agent Skill and a Persona. The
+Agent Skill defines the core kind of work the task should require, including the
+underlying capability, workflow, and typical failure modes. The Persona provides
+the real-world setting in which that work would naturally arise, shaping the
+domain context, motivation, and tone of the request.
+Your job is to combine these two inputs into a single self-contained terminal task
+that feels like a genuine piece of work someone would ask an autonomous coding
+agent to complete. The task should stay faithful to the core mechanics of the
+Agent Skill, while using the Persona to make the scenario specific, realistic, and
+grounded.
+# TASK ENVIRONMENT
+Tasks run in an isolated Debian 13 (trixie) container and must be solvable
+entirely via bash.
+Pre-installed tools include:
+- Python 3.12, pip 25 · Node.js 20, npm 10 · Java 8 (OpenJDK)
+- gcc/g++ 14, make, git, curl, wget, tmux
+- apt-get for additional packages
+- Working directory: /app (subdirs: /output, /logs, /tests, /solution)
+# INSTRUCTIONS
+## 1. Relevance Check
+Judge whether the Persona and Agent Skill are meaningfully related enough to
+produce a realistic task.
+- If the pair is clearly mismatched, set ‘pair_relevance‘ to "unrelated", give a
+concrete reason, set ‘task_title‘ to "UNRELATED_PAIR", and leave all other content
+fields empty.
+- If there is a plausible real-world connection, set ‘pair_relevance‘ to "related"
+and generate the full task below.
+## 2. Instruction
+The "instruction" field is the exact prompt the agent will see. It should describe
+a self-contained terminal task grounded in the Agent Skill. Aim for a task that
+is challenging yet solvable in the sandbox, and whose success can be verified
+through observable outputs.
+## 3. Initial Files
+Each entry in "initial_files" must include:
+- generation_mode: "llm\_direct" | "local\_tool" | "remote\_fetch"
+- description: A complete reproduction spec -- file format, internal structure,
+scale, 2-3 concrete example values, and any deliberate anomalies the agent must
+handle.
+## 4. Setup Steps
+An ordered list of environment preparation steps (natural language, not shell
+commands). Use [] if no extra setup is needed.
+## 5. Evaluation Criteria
+Each criterion must be precise enough to translate directly into a pytest
+assertion -- include exact file paths, key names, value thresholds, and expected
+formats.
+## 6. Output Format
+Output STRICTLY as a JSON object. Do not include markdown fences or text outside
+the JSON.
+25
+
+# INPUTS
+## Agent Skill
+{skill}
+## Persona
+{persona}
+Prompt for Guideline Generation
+Back to ToC
+You are generating an execution guideline for a terminal-agent SFT data synthesis
+pipeline. The guideline guides the agent through the task step-by-step.
+# REQUIREMENTS
+Each step must be:
+- Actionable: include the specific command, file path, or edit
+- Verifiable: say how to confirm it worked
+- Ordered: respect task dependencies
+Extract concrete steps from the Agent Skill’s SOP when available. Prefix critical
+caveats with "IMPORTANT:" or "WARNING:". Do not leak final file content or
+complete solutions.
+Each step should be written as a single string in this style:
+"Step N: <action> -- <exact command or edit> -- <verification or warning>"
+# GOOD EXAMPLES
+- "Step 1: Benchmark current state -- Run ’du -sh public/images/’ and ’find public
+/images -type f -name "*.png" | wc -l’ to measure baseline."
+- "Step 2: Update schema.prisma generator -- Change provider from ’prisma-client-
+js’ to ’prisma-client’, add output = ’../src/generated/prisma’."
+- "Step 3: Run ’bunx prisma generate’ and verify generated client appears at
+packages/db/src/generated/prisma/."
+- "Step 4: IMPORTANT: Verify prisma/client remains in package.json dependencies (
+do NOT remove -- needed at runtime)."
+Avoid vague steps like "Inspect the project" or "Fix any errors" that lack
+specific commands or targets.
+# OUTPUT FORMAT
+Return STRICTLY as a JSON object:
+{"guideline": ["Step 1: ...", "Step 2: ..."]}
+Do not include markdown fences, explanation, or any text outside the JSON.
+# INPUTS
+## Skill
+{skill}
+## Core Goal
+{core_goal_json}
+26
+
+Prompt for Task Quality Judgment
+Back to ToC
+You are an expert quality evaluator for bash terminal tasks. Your job is to
+evaluate the quality of the task specification across five dimensions (0-5 each)
+and justify each score.
+# INPUT
+## Persona (the user role that motivates this task)
+{persona_text}
+## Skill (the technical capability being exercised)
+{skill_text}
+## Generated Goal (the full task specification to evaluate)
+{goal_json}
+# IMPORTANT JUDGING PRINCIPLES
+- Judge for realism, task quality, and training value -- not for rigid formatting.
+- A concise, natural instruction can receive a high score.
+- Do NOT require a fixed opener, numbered list, or a "Requirements:" section.
+- High scores should reflect realistic task framing, clear task intent, strong
+skill alignment, solvability, and verifiability.
+# EVALUATION DIMENSIONS
+## Dim 1 -- Instruction Quality (instruction_quality)
+Is the instruction realistic, skill-aligned, actionable, and clear enough for the
+agent to start the right kind of work?
+5 - Realistic, strongly skill-aligned, clear goal and success condition.
+4 - Strong and usable; slightly synthetic or less precise than ideal.
+3 - Executable but generic or partially under-specified.
+2 - Weakly aligned with the skill, artificial, or too vague.
+1 - Barely actionable or missing the task’s core objective.
+0 - Self-contradictory, incoherent, or not a workable instruction.
+## Dim 2 -- Solvable & Closed-World (solvable_closed_world)
+Can the task be completed entirely inside an isolated container without internet
+access, private credentials, or privileged operations?
+5 - Strictly closed-world; all dependencies and data are in the blueprint.
+4 - Essentially closed-world; a few installable deps; no external data needed.
+3 - Likely closed-world; some unclear details can reasonably be filled in.
+2 - Significant external-dependency risk or critical data gaps.
+1 - Highly unsolvable -- critical inputs missing or strong external dependencies.
+0 - Definitively unsolvable or contradicts environment constraints.
+## Dim 3 -- Blueprint Completeness (blueprint_completeness)
+Is the environment blueprint specific enough to construct the environment
+deterministically?
+5 - All 5 categories complete: filesystem, data schema, deps, entrypoints,
+validation.
+4 - At least 4 of 5 categories covered; minor details missing.
+3 - Buildable but 1-2 of schema/versions/validation are missing.
+2 - Too abstract; builder must guess extensively.
+1 - Nearly unbuildable environment.
+0 - Empty blueprint or clearly inconsistent with the instruction.
+## Dim 4 -- Guideline Quality (guideline_quality)
+Does the guideline drive a realistic terminal trace with correct ordering,
+appropriate granularity, checkpoints, and SOP coverage -- without spoiling the
+final answer?
+27
+
+5 - Captures skill workflow well; sensible ordering, useful checkpoints, no
+spoilers.
+4 - Strong and useful; slightly coarse or sparse on checkpoints.
+3 - Usable but generic; some workflow value, incomplete ordering or checkpoints.
+2 - Too abstract to guide execution, or too script-like and overprescriptive.
+1 - Does not match instruction/blueprint, or steps are disordered.
+0 - No guideline or completely unusable.
+## Dim 5 -- Evaluation Criteria Quality (evaluation_criteria_quality)
+Do the evaluation criteria clearly define how task completion will be assessed?
+Can they be translated into reliable black-box pytest checks without guessing?
+5 - Explicit, outcome-focused, concrete, and directly translatable to pytest.
+4 - Mostly strong; minor ambiguity but overall reliably judgeable.
+3 - Partially useful but incomplete or vague on at least one important condition.
+2 - Weak or underspecified; difficult to translate into stable assertions.
+1 - Mostly unusable; major conditions missing, vague, or subjective.
+0 - Absent, contradictory, or cannot assess task completion at all.
+# OUTPUT FORMAT
+Respond with ONLY a JSON object -- no markdown fences, no explanation outside the
+JSON.
+{
+"instruction_quality":
+{"score": <0-5>, "reason": "..."},
+"solvable_closed_world":
+{"score": <0-5>, "reason": "..."},
+"blueprint_completeness":
+{"score": <0-5>, "reason": "..."},
+"guideline_quality":
+{"score": <0-5>, "reason": "..."},
+"evaluation_criteria_quality": {"score": <0-5>, "reason": "..."}
+}
+Prompt for File Generation (llm_direct mode)
+Back to ToC
+You are an expert environment builder for AI coding agent benchmarks.
+Given a task description, environment blueprint, and a target file to generate,
+create the actual file content for that specific file.
+# Task Instruction
+{instruction}
+# Environment Blueprint
+{blueprint}
+# Target File to Generate
+{target_file}
+# Previously Generated Files
+{previous_files}
+# Instructions
+Generate the content for the target file based on:
+1. The file’s description and filepath
+2. The task instruction (what the agent needs to accomplish)
+3. The overall environment context (system requirements, pre-setup)
+4. Previously generated files (maintain consistency with imports, APIs, etc.)
+You MUST end your response with a ‘‘‘json fenced code block -- this block is
+required.
+28
+
+The JSON object must have exactly two fields:
+- "filepath": the exact path from the target file
+- "content": the full file content as a string
+Prompt for File Generation (local_tool mode)
+Back to ToC
+[System]
+You are a specialized local artifact generation agent running inside a Linux
+sandbox.
+You must respond with exactly one required function call and nothing else.
+Available tool:
+python: {"target_filepath": string, "code": string, "timeout_sec": integer (
+optional)}
+Rules:
+- Only use the python tool.
+- target_filepath must exactly match the requested target path.
+- Use Python to create or repair the target artifact.
+- Keep working until the tool observation reports a valid artifact.
+[User]
+Target file: {target_filepath}
+Description: {file_description}
+Task context (for reference only -- do NOT solve the whole task, only create the
+target artifact):
+{instruction_summary}
+Prompt for File Generation (remote_fetch mode)
+Back to ToC
+[System]
+You are a specialized stateless remote fetch agent running inside a Linux sandbox.
+You must respond with exactly one required function call and nothing else.
+Available tools:
+web_search:
+{"query": string, "top_k": integer (optional), "domain_hint":
+string (optional)}
+fetch_page:
+{"url": string, "mode": "http"|"dynamic"|"stealth", "timeout_ms":
+integer (optional)}
+download_file: {"url": string, "save_as": string, "timeout_ms": integer (
+optional)}
+Rules:
+- Stateless: do not assume browser state or session reuse between actions.
+- save_as must exactly match the requested target path.
+- Use search, fetch, and download as separate steps.
+- Keep working until the downloaded artifact validates successfully.
+[User]
+Target file: {target_filepath}
+Description: {file_description}
+Task context (for reference only -- do NOT solve the whole task, only fetch the
+target artifact):
+29
+
+{instruction_summary}
+Prompt for File Verification
+Back to ToC
+[System]
+You are a file verifier agent running inside a Linux sandbox.
+Your role is verification-only.
+Rules:
+- You are not a task-solving agent.
+- Your scope is limited to the declared filepaths and their file specifications.
+- Use shell commands only to inspect the provided files.
+- Do NOT modify files, use network access, or evaluate runtime state.
+- Prefer status="continue" whenever evidence is incomplete.
+- Respond with exactly one JSON object per turn.
+- Continue mode must use:
+analysis, status="continue", commands
+- Finalize mode must use:
+analysis, status="finalize", result
+- Finalize result keys:
+overall_verdict, file_findings, global_findings
+- overall_verdict must be exactly "pass" or "fail"
+- Each item in file_findings:
+{filepath, reason, repair_instructions}
+- Each item in global_findings: {reason, primary_owner, repair_instructions}
+(primary_owner: "llm_direct" | "specialized" | "unattributed")
+- If overall_verdict is "pass", both findings arrays must be empty.
+- If overall_verdict is "fail", at least one finding must be present.
+- repair_instructions must be concrete and actionable for the repair agent.
+Valid response examples:
+Continue:
+{
+"analysis": "Need to check file content.",
+"status": "continue",
+"commands": ["cat /app/data.csv"]
+}
+Finalize (pass):
+{
+"analysis": "All files match their specifications.",
+"status": "finalize",
+"result": {"overall_verdict": "pass", "file_findings": [], "global_findings":
+[]}
+}
+Finalize (fail):
+{
+"analysis": "Found a mismatch in /app/example.txt.",
+"status": "finalize",
+"result": {
+"overall_verdict": "fail",
+"file_findings": [{
+"filepath": "/app/example.txt",
+"reason": "Content does not match the declared format.",
+"repair_instructions": "Rewrite /app/example.txt to match the declared
+format."
+}],
+"global_findings": []
+}
+}
+30
+
+[User]
+Task instruction:
+{instruction}
+Verification scope:
+- Only verify the declared filepaths below.
+- Ignore runtime state and broader task completion.
+Files to verify:
+{file_lines}
+File-only verification objective:
+- Verify each declared file against its description and the task instruction.
+- Only use global_findings for still-file-scoped cross-file issues.
+- If you fail any file or emit any global finding, include detailed
+repair_instructions.
+Initial workspace tree (initial hint only):
+{workspace_tree}
+Prompt for Environment Setup (env build)
+Back to ToC
+You are an expert DevOps engineer setting up a Linux sandbox environment for an AI
+coding agent. Your job is ONLY to prepare the environment -- install system
+packages, language runtimes, and libraries. You must NOT write application code or
+execute the task itself.
+# Base Environment (already provisioned -- do NOT reinstall these)
+- OS: Debian 13 (trixie), kernel 6.1.x, x86_64
+- User: user (uid=1000), non-root. Use sudo for privileged operations.
+- Working directory: /app
+- Pre-installed: Python 3.12, pip 25.x, Node.js 20.x, npm 10.x, Java 8 (OpenJDK),
+gcc/g++ 14.x, make 4.x, git 2.x, curl 8.x, wget 1.x
+- Harbor directories (perms=777): /logs/agent, /logs/verifier, /tests, /app, /
+output, /solution
+# Task Instruction (for context only -- do NOT execute this task)
+{instruction}
+# Environment Blueprint
+{blueprint}
+# Pre-seeded Assets
+The following assets have already been written into the sandbox. Reference them
+directly (e.g. ‘pip install -r /app/requirements.txt‘). Do NOT recreate or
+overwrite them.
+{pre_seeded_files}
+# Instructions
+Generate shell commands to ONLY:
+1. Execute each step listed in setup_steps, in order
+2. Create necessary directories
+3. Install from any dependency manifest in the pre-seeded assets
+4. Start or configure required services, environment variables, and permissions
+IMPORTANT:
+- HIGHEST PRIORITY: Never create, download, or overwrite any pre-seeded asset path
+- Scope is limited to environment configuration only -- no application source code
+- Do NOT execute the task (e.g. do NOT run ‘node index.js‘ or ‘python main.py‘)
+31
+
+- When using sudo with network commands, ALWAYS use ‘sudo -E‘ to preserve proxy
+env vars
+End your response with a ‘‘‘bash fenced code block containing the commands.
+Prompt for Environment Verification (env verify)
+Back to ToC
+You are an expert DevOps engineer verifying that a Linux sandbox environment has
+been correctly set up. A setup script has already been executed successfully (exit
+code 0). Your job is to generate verification commands that check whether the
+environment is truly ready for the task.
+# Base Environment (already provisioned)
+- OS: Debian 13 (trixie), kernel 6.1.x, x86_64; Working directory: /app
+- Pre-installed: Python 3.12, Node.js 20.x, Java 8, gcc/g++ 14.x, make, git, curl,
+wget
+# Task Instruction (for context -- do NOT execute this task)
+{instruction}
+# Environment Blueprint
+{blueprint}
+# Pre-seeded Assets
+{pre_seeded_files}
+# Setup Script That Was Executed
+{setup_script}
+# Instructions
+Generate shell commands that ONLY verify the environment is ready:
+1. Check that required packages/libraries are importable (e.g. ‘python3 -c "import
+flask"‘, ‘node -e "require(’express’)"‘)
+2. Check that required CLI tools are available (e.g. ‘which gcc‘, ‘java -version‘)
+3. Check that required directories exist
+4. Check that dependency versions meet requirements if specific versions were
+requested
+IMPORTANT:
+- Do NOT install anything -- only verify
+- Do NOT execute the task itself or write application code
+- The script does NOT use ‘set -e‘ -- all commands run even if some fail
+End your response with a ‘‘‘bash fenced code block containing the verification
+commands.
+Prompt for Environment Repair (env repair)
+Back to ToC
+You are an expert DevOps engineer fixing a failed sandbox environment setup. Your
+job is ONLY to prepare the environment -- install packages and configure services.
+You must NOT write application code or execute the task.
+# Base Environment (already provisioned -- do NOT reinstall these)
+- OS: Debian 13 (trixie), kernel 6.1.x, x86_64; Working directory: /app
+- Pre-installed: Python 3.12, Node.js 20.x, Java 8, gcc/g++ 14.x, make, git, curl,
+wget
+32
+
+# Task Instruction (for context only -- do NOT execute this task)
+{instruction}
+# Environment Blueprint
+{blueprint}
+# Pre-seeded Assets
+The following assets will be re-written before your commands run. Do NOT recreate
+them.
+{pre_seeded_files}
+# Previous Setup Commands
+{commands}
+# Command Failure Details
+{errors}
+# Instructions
+The previous attempt failed. The next attempt runs in a FRESH sandbox -- do NOT
+rely on any side effects from the previous attempt.
+Generate a FULL corrected list of setup commands (not a patch/delta). All commands
+will be combined into a single bash script with ‘set -euxo pipefail‘ and executed
+once.
+IMPORTANT:
+- HIGHEST PRIORITY: Never create, download, or overwrite any pre-seeded asset path
+- Scope is limited to environment configuration only -- no application source code
+- Do NOT execute the task (e.g. do NOT run ‘node index.js‘ or ‘python main.py‘)
+- When using sudo with network commands, ALWAYS use ‘sudo -E‘ to preserve proxy
+env vars
+End your response with a ‘‘‘bash fenced code block containing the full corrected
+commands.
+Prompt for Pytest Verifier Generation
+Back to ToC
+You are generating a pytest-based task verifier for a terminal benchmark task.
+Your verifier will run AFTER the agent has finished executing the task, inside the
+SAME sandbox state. Do not assume the environment is restarted. Verify ONLY
+whether the task was actually completed -- do not inspect the agent’s messages or
+tool traces.
+You must output a JSON object with this exact schema:
+{
+"system_packages": ["..."],
+"python_packages": ["..."],
+"helper_files": [{"path": "tests/filename.ext", "content": "..."}],
+"test_outputs_py": "..."
+}
+Rules:
+1. The verifier must use pytest.
+2. ‘test_outputs_py‘ must contain valid Python source code.
+3. Tests must be black-box.
+4. Prefer verifying via files, command behavior, local HTTP behavior, or
+deterministic end-to-end examples.
+5. Tests must be deterministic and self-contained.
+33
+
+6. Avoid network access unless the task explicitly requires localhost access.
+7. Only add packages required by the verifier itself.
+8. Put any extra test assets into ‘helper_files‘.
+9. Do not generate explanations outside the JSON.
+# Instruction
+{instruction}
+# Evaluation Criteria
+{evaluation_criteria}
+# Target Output File
+{target_output_file}
+# Initial Text Files (ACTUAL CONTENT -- already present in environment)
+IMPORTANT: These files already exist when the agent starts. DO NOT test for them.
+They are provided as context only.
+{initial_text_files}
+# Initial Asset Files (METADATA ONLY -- already present in environment)
+IMPORTANT: These files exist but only metadata is provided. Do NOT assume actual
+content.
+{initial_asset_files}
+# Validated Environment File Paths
+{validated_filepaths}
+CRITICAL RULES:
+- DO NOT test whether initial files exist (guaranteed to exist)
+- DO NOT test initial file content (already validated)
+- ONLY test whether the evaluation criteria are met
+- Test what the AGENT creates, not what the environment provides
+System Prompt for Terminus2 Agent (JSON Format)
+Back to ToC
+You are an AI assistant tasked with solving command-line tasks in a Linux
+environment. You will be given a task description and the output from previously
+executed commands. Your goal is to solve the task by providing batches of shell
+commands.
+Format your response as JSON with the following structure:
+{
+"analysis": "Analyze the current state based on the terminal output. What has
+been accomplished? What still needs to be done?",
+"plan": "Describe your plan for the next steps. What commands will you run and
+why? Be specific about what you expect each command to accomplish.",
+"commands": [
+{"keystrokes": "ls -la\n",
+"duration": 0.1},
+{"keystrokes": "cd project\n", "duration": 0.1}
+],
+"task_complete": true
+}
+Required fields:
+- "analysis":
+Your analysis of the current situation
+- "plan":
+Your plan for the next steps
+- "commands":
+Array of command objects to execute
+34
+
+Optional fields:
+- "task_complete": Boolean indicating if the task is complete (defaults to false)
+Command object structure:
+- "keystrokes": Exact keystrokes to send to the terminal (required, must end with
+\n)
+- "duration":
+Seconds to wait before executing the next command (default: 1.0)
+IMPORTANT: The text inside "keystrokes" is sent verbatim to the terminal:
+- Every command must end with \n or it will not execute.
+- Special key sequences use tmux-style escape sequences: C-c for Ctrl+C, C-d for
+Ctrl+D.
+The "duration" attribute controls how long to wait for output before proceeding:
+- Immediate commands (cd, ls, echo, cat):
+0.1 s
+- Standard commands (gcc, find, rustc):
+1.0 s
+- Slow commands (make, wget, long scripts): set an appropriate value as needed
+- Prefer shorter durations; poll by sending {"keystrokes": "", "duration": 10.0}
+rather than blocking.
+Important notes:
+- Send keystrokes exactly as written; do not add extra whitespace unless intended.
+- Extra text outside the JSON generates warnings but is tolerated.
+- The JSON must be valid -- escape quotes and special characters inside strings.
+- An empty "commands" array is valid when you need to observe without acting.
+Task Description:
+{instruction}
+Current terminal state:
+{terminal_state}
+Prompt for Environment Quality Evaluation
+Back to ToC
+You are evaluating a Harbor-format terminal benchmark task.
+Task directory: {task_dir}
+Please read the task contents (instruction.md, environment/ files,
+tests/test_outputs.py or tests/test_final_state.py) and score it on
+four dimensions. Each dimension is scored 1-3:
+1 = poor
+2 = acceptable
+3 = good
+Important: base your scores ONLY on the file contents you read.
+Ignore the directory path and any dataset name it may imply --
+treat every task as anonymous.
+Scoring dimensions:
+1. terminal_nativeness
+Does the task genuinely require terminal CLI operations (compilers,
+package managers, system commands, build tools, network tools)?
+High score = real CLI toolchain required.
+Low score
+= just writing files or trivial echo commands.
+2. env_task_consistency
+Do the pre-placed environment files and setup precisely match what
+the instruction requires?
+High score = environment provides exactly the right scaffolding,
+35
+
+no excess or gap.
+Low score
+= environment is empty, irrelevant, or contradicts
+the task.
+3. env_quality
+Are the environment files (Dockerfile, setup.sh, initial files)
+well-formed and credible?
+High score = files are realistic, complete, and executable.
+Low score
+= files are fabricated stubs, have obvious bugs, or
+are missing critical dependencies.
+4. verifier_robustness
+Do the pytest assertions in tests/ accurately distinguish
+task-complete from task-incomplete?
+High score = assertions are specific, cover all key acceptance
+criteria from the instruction, low false-positive risk.
+Low score
+= only checks file existence, or assertions are
+unrelated to the instruction requirements.
+Important: if a dimension is not applicable (e.g. no tests/ directory
+exists), score it 1.
+Respond with ONLY a JSON object, no other text:
+{
+"terminal_nativeness":
+<1|2|3>,
+"terminal_nativeness_reason":
+"<one sentence>",
+"env_task_consistency":
+<1|2|3>,
+"env_task_consistency_reason": "<one sentence>",
+"env_quality":
+<1|2|3>,
+"env_quality_reason":
+"<one sentence>",
+"verifier_robustness":
+<1|2|3>,
+"verifier_robustness_reason":
+"<one sentence>"
+}
+36
+
+E
+Data Examples
+To complement the textual pipeline description in Section 3, this section presents three stage-focused
+examples drawn from the Terminal-World dataset. Rather than compressing an end-to-end rollout
+for every task, each example zooms into a single synthesis stage and displays its inputs and outputs
+verbatim so the reader can see the concrete shape of each artifact:
+1. Example E.1 illustrates Task Generation (§3.2): from a single (Skill S, Persona U) pair to the
+synthesized quadruple (I, E, V, G). We show all six artifacts verbatim.
+2. Example E.2 illustrates Environment Building (§3.3): a three-file blueprint is routed through
+three different sub-agents of the multi-agent GVR architecture, producing the initial files F,
+setup script Benv, and pytest verifier Ttest.
+3. Example E.3 illustrates Trajectory Collection (§3.4): a multi-turn teacher-model rollout with
+verbatim analysis/plan/commands/observation for four representative steps.
+E.1
+Example 1: Task Generation — ELF Binary Parsing (Astrophysics)
+Back to ToC
+Ð Stage-Focused Example 1 | Stage: Task Generation (§3.2)
+❶Input S — Agent Skill
+---
+name: elf-binary-analysis
+description: >
+Analyze ELF binary files for reverse engineering, security research, and
+exploitation. Use this skill whenever the user needs to understand ELF
+structure, analyze program headers, section headers, symbols, relocations,
+GOT/PLT, or identify binary protections like RELRO, stack canaries, and PIE.
+Trigger on any request involving ELF files, binary analysis, readelf output
+interpretation, or exploitation reconnaissance.
+tags: [’reverse-engineering’, ’binary-analysis’, ’elf’]
+source: github.com/abelrguezr/hacktricks-skills
+task_slug: binary-exploitation/elf-tricks
+route_label: segment-buffer-allocation
+---
+❷Input U — User Persona (FinePersonas)
+An astrophysicist or a science writer covering recent developments in
+astrophysics, particularly focused on gamma-ray bursts, gravitational
+waves, and astronomical research.
+labels: [Science, Academia, Space Exploration]
+37
+
+❸Output I — Task Instruction
+As an astrophysicist, I have a compiled binary tool grb_processor.elf used for gamma-
+ray burst data analysis. To validate its memory mapping and extract calibration constants,
+write a Node.js script that parses the ELF file. Your script should identify the PT_LOAD
+segment with RW flags (the data and BSS region), allocate a buffer with zero-padding for
+the BSS section, and extract 32-bit integer values from all 4-byte aligned virtual addresses
+within that segment. Output a JSON object where keys are virtual addresses as decimal
+strings and values are the 32-bit integers. Save the JSON to /app/memory_map.json.
+❹Output E — Environment Blueprint
+Initial Files: /app/grb_processor.elf
+•
+mode: local_tool
+ELF 64-bit LSB executable binary file. To generate, compile the following C program
+with gcc -o /app/grb_processor.elf /tmp/source.c. C source code:
+#include <stdint.h>
+int calibration = 271828;
+// Euler’s number * 100000
+int flux_readings[255] = {0};
+// 255 x 4 = 1020 bytes of initialized data
+char photon_buffer[4096];
+// uninitialized BSS (zero-padded at load time)
+int main() { return 0; }
+After compilation, readelf -l shows two LOAD segments: LOAD[0] (text, R E)
+with VirtAddr=0x400000, FileSiz=0x238, MemSiz=0x238 — code only, not used
+for extraction; LOAD[1] (data+BSS, RW) with VirtAddr=0x601000, FileSiz=0x400,
+MemSiz=0x1400. Extraction targets only the RW LOAD segment: MemSiz 0x1400 = 5120
+bytes, yielding 1280 key-value pairs (5120/4=1280). calibration occupies the first 4
+bytes of LOAD[1] at VirtAddr=0x601000.
+Setup Steps
+• Install binutils package via apt-get to ensure readelf command is available for
+ELF inspection.
+❺Output V — Evaluation Scope
+✓File /app/memory_map.json exists and contains valid JSON.
+✓JSON object has exactly 1280 key-value pairs, matching total MemSiz 0x1400
+bytes divided by 4.
+✓Key ’6295552’ (decimal for virtual address 0x601000, start of the RW LOAD
+segment) has value 271828.
+✓All keys in the JSON are strings that can be parsed as integers, and all values are
+numbers.
+38
+
+❻Output G — Execution Guideline
+Step 1. Install binutils for readelf command — Run apt-get update && apt-get
+install -y binutils — Verify with readelf –version.
+Step 2. Inspect ELF header to confirm binary properties — Execute readelf
+-h
+/app/grb_processor.elf — Confirm output shows Class: ELF64 and little-
+endian.
+Step 3. Identify the data LOAD segment — Run readelf -l /app/grb_processor.elf
+— Locate the PT_LOAD entry with RW flags; note its VirtAddr (0x601000), FileSiz
+(0x400), and MemSiz (0x1400); confirm two LOAD segments exist.
+Step 4. Verify Node.js runtime — Run node –version — Ensure version is v14.x or
+higher for BigInt support.
+Step 5. [IMPORTANT]
+Create
+Node.js
+script
+with
+BSS
+handling
+—
+Write
+/app/extract.js implementing buffer allocation based on MemSiz and 4-byte
+aligned reads — Verify file creation with ls -l /app/extract.js.
+Step 6. Run extraction script — node /app/extract.js /app/grb_processor.elf >
+/app/memory_map.json 2>&1 — Check exit code with echo $?; it should be 0.
+Step 7. Validate JSON output format — head -c 200 /app/memory_map.json — Con-
+firm it starts with { and appears as valid JSON.
+Step 8. Final verification — use a Node.js one-liner to parse the JSON, verify key count
+is 1280 and value at ’6295552’ (VirtAddr 0x601000) is 271828.
+E.2
+Example 2: Environment Building — Multi-Format Data Merger
+Back to ToC
+39
+
+Ð Stage-Focused Example 2 | Stage: Environment Building (§3.3)
+❶Input — Environment Blueprint Efiles
+Initial Files: (1) /app/quiz_data.json
+•
+mode: llm_direct
+JSON array of objects with keys: student_id (int), topic (string, either ’algebra’
+or ’scientific_notation’), score (float or null), timestamp (ISO8601 string). 50
+objects. Example objects:
+{"student_id": 101, "topic": "algebra",
+"score": 88.5, ...}
+{"student_id": 102, "topic": "scientific_notation", "score": 85.5, ...}
+Student_id 103 has a null score for algebra (missing data). Student_id 101 appears twice
+with different scores for algebra (88.5) and scientific_notation (92.0) — agent must map
+these to separate fields.
+Initial Files: (2) /app/gradebook.csv
+•
+mode: llm_direct
+CSV file with columns: id (int), name (string), algebra_grade (float), sci_not_grade
+(float), updated (ISO8601 string). 50 rows. Example rows:
+101,Alice Johnson,90.0,88.5,2024-10-17T09:00:00
+102,Bob Smith,76.5,89.0,2024-10-17T09:05:00
+Row for id 104 has algebra_grade=-1.0 (sentinel for missing data). Column id
+corresponds to student_id in other sources.
+Initial Files: (3) /app/project_scores.parquet
+•
+mode: local_tool
+Parquet file with columns: student_id (int), project_type (string, ’algebra’ or
+’scientific_notation’), project_score (int or string), date (string in YYYY-MM-
+DD format).
+30 rows.
+Example: student_id=105,
+project_type=’algebra’,
+project_score=95, date=’2024-10-18’. Three rows have project_score as string
+’N/A’ instead of integer (type inconsistency to handle). Scores are out of 100. The
+final merged output must store all score columns (algebra_score, sci_not_score) as
+float64 dtype.
+Setup Steps
+• Install pandas and pyarrow via pip to handle CSV, JSON, and Parquet file operations.
+40
+
+❷Artifact F — Generated Initial Files (head of each)
+Routed to Allm_direct — (1) /app/quiz_data.json:
+[
+{"student_id": 101, "topic": "algebra",
+"score": 88.5, "timestamp": "2024-10-15T10
+:30:00"},
+{"student_id": 101, "topic": "scientific_notation", "score": 92.0, "timestamp": "2024-10-15T11
+:45:00"},
+{"student_id": 102, "topic": "scientific_notation", "score": 85.5, "timestamp": "2024-10-16T11
+:00:00"},
+{"student_id": 103, "topic": "algebra",
+"score": null, "timestamp": "2024-10-16T11
+:15:00"},
+{"student_id": 104, "topic": "algebra",
+"score": 77.0, "timestamp": "2024-10-15T09
+:00:00"},
+{"student_id": 104, "topic": "scientific_notation", "score": 82.5, "timestamp": "2024-10-15T10
+:00:00"},
+... (44 more entries)
+]
+Routed to Allm_direct — (2) /app/gradebook.csv:
+id,name,algebra_grade,sci_not_grade,updated
+101,Alice Johnson,90.0,88.5,2024-10-17T09:00:00
+102,Bob Smith,76.5,89.0,2024-10-17T09:05:00
+103,Charlie Brown,82.0,81.5,2024-10-17T09:10:00
+104,David Williams,-1.0,90.0,2024-10-17T09:15:00
+105,Eva Martinez,91.0,89.5,2024-10-17T09:20:00
+106,Frank Miller,85.0,84.0,2024-10-17T09:25:00
+... (44 more rows)
+149,Will Morgan,82.0,79.5,2024-10-17T12:35:00
+150,Zoe Carter,88.5,91.0,2024-10-17T12:40:00
+Routed to Alocal_tool — (3) /app/project_scores.parquet:
+>>> import pandas as pd; df = pd.read_parquet(’/app/project_scores.parquet’)
+>>> df.dtypes
+student_id
+int64
+project_type
+str
+project_score
+str
+<- type inconsistency: some rows hold ’N/A’
+date
+str
+>>> df.head(8)
+student_id
+project_type
+project_score
+date
+101
+algebra
+70
+2024-10-16
+102
+scientific_notation
+81
+2024-10-13
+103
+algebra
+95
+2024-10-22
+104
+scientific_notation
+91
+2024-10-24
+105
+algebra
+95
+2024-10-18
+106
+scientific_notation
+N/A
+2024-10-17
+107
+algebra
+94
+2024-10-22
+108
+scientific_notation
+86
+2024-10-14
+>>> df.shape
+(30, 4)
+❸Artifact Benv — Generated setup.sh
+#!/usr/bin/env bash
+set -euxo pipefail
+cd /app
+sudo -E pip install pandas pyarrow
+41
+
+❹Artifact Ttest — Generated pytest Verifier
+import pandas as pd, json, os, pytest
+import numpy as np
+def test_output_files_exist():
+assert os.path.exists("/app/merged_students.parquet")
+assert os.path.exists("/app/conflicts.json")
+def test_merged_parquet_structure():
+df = pd.read_parquet("/app/merged_students.parquet")
+expected_cols = [’student_id’, ’name’, ’algebra_score’, ’sci_not_score’]
+assert set(df.columns) == set(expected_cols)
+assert pd.api.types.is_integer_dtype(df[’student_id’])
+assert pd.api.types.is_float_dtype(df[’algebra_score’])
+assert pd.api.types.is_float_dtype(df[’sci_not_score’])
+assert df[’student_id’].dtype == ’int64’
+def test_row_count():
+quiz
+= pd.read_json
+("/app/quiz_data.json")
+gradebook = pd.read_csv
+("/app/gradebook.csv")
+project
+= pd.read_parquet("/app/project_scores.parquet")
+all_ids
+= set(quiz[’student_id’]) | set(gradebook[’id’]) | set(project[’student_id’])
+df
+= pd.read_parquet("/app/merged_students.parquet")
+assert len(df) == len(all_ids)
+assert set(df[’student_id’]) == all_ids
+def test_priority_and_data_logic():
+df = pd.read_parquet("/app/merged_students.parquet")
+# Student 101: Quiz(alg=88.5, sci=92.0) beats Gradebook(alg=90.0, sci=88.5) by priority.
+s101 = df[df[’student_id’] == 101].iloc[0]
+assert s101[’algebra_score’] == 88.5
+assert s101[’sci_not_score’] == 92.0
+# Student 103: Quiz(alg=null) -> fallback to Gradebook(alg=82.0).
+s103 = df[df[’student_id’] == 103].iloc[0]
+assert s103[’algebra_score’] == 82.0
+# Student 104: Quiz(alg=77.0) beats Gradebook(alg=-1.0 sentinel).
+s104 = df[df[’student_id’] == 104].iloc[0]
+assert s104[’algebra_score’] == 77.0
+assert s101[’name’] == "Alice Johnson"
+# Student only in Gradebook.
+s149 = df[df[’student_id’] == 149].iloc[0]
+assert s149[’name’] == "Will Morgan"
+assert s149[’algebra_score’] == 82.0
+def test_conflicts_json_content():
+with open("/app/conflicts.json", ’r’) as f:
+data = json.load(f)
+assert "total_conflicts" in data
+assert "conflicts"
+in data
+assert isinstance(data[’conflicts’], list)
+# Student 101 had a conflict on algebra_score (Quiz 88.5 vs Gradebook 90.0).
+for conflict in data[’conflicts’]:
+if conflict[’student_id’] == 101 and conflict[’field’] == ’algebra_score’:
+assert conflict[’selected_value’] == 88.5
+assert ’quiz’
+in conflict[’values’]
+assert ’gradebook’ in conflict[’values’]
+# General priority check: selected_value must match highest-priority non-missing source.
+for conflict in data[’conflicts’]:
+vals, selected = conflict[’values’], conflict[’selected_value’]
+priority_val = None
+for src in [’quiz’, ’gradebook’, ’project’]:
+val = vals.get(src)
+if val is not None and val != -1.0 and val != ’N/A’ \
+and not (isinstance(val, float) and np.isnan(val)):
+priority_val = val
+break
+if priority_val is not None:
+assert float(selected) == float(priority_val)
+42
+
+E.3
+Example 3: Trajectory Collection — Video OCR Extraction
+Back to ToC
+Ð Stage-Focused Example 3 | Stage: Trajectory Collection (§3.4)
+❶Step 2 (of 11) — Install ffmpeg
+analysis
+We’re at /app with a fresh terminal. The task is to process a video file using OCR to extract
+treatment methods and save a cleaned list. A checklist is provided with 10 steps. We need to start with step
+1: update package lists.
+plan
+Execute step 1: run apt-get update to update package lists. Then proceed to step 2: install ffmpeg.
+commands
+apt-get update
+apt-get install -y ffmpeg
+observation
+/app $ apt-get update
+Hit:1 http://mirrors.tuna.tsinghua.edu.cn/debian trixie InRelease
+Reading package lists... Done
+/app $ apt-get install -y ffmpeg
+Reading package lists... Done
+Building dependency tree... Done
+ffmpeg is already the newest version (7:7.1.3-0+deb13u1).
+0 upgraded, 0 newly installed, 0 to remove and 79 not upgraded.
+❷Step 6 (of 11) — Extract video frames with ffmpeg
+analysis
+All prerequisites installed. Proceed to step 6: extract video frames. Create /app/frames and run
+ffmpeg at fps=1.
+plan
+mkdir -p /app/frames, then ffmpeg with fps=1. Verify with find ... | wc -l.
+commands
+mkdir -p /app/frames
+ffmpeg -i /app/education_video.mp4 -vf "fps=1" /app/frames/frame_%04d.png
+find /app/frames -name "*.png" | wc -l
+observation
+/app $ ffmpeg -i /app/education_video.mp4 -vf "fps=1" /app/frames/frame_%04d.png
+ffmpeg version 7.1.3-0+deb13u1 Copyright (c) 2000-2025 the FFmpeg developers
+. . .
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from ’/app/education_video.mp4’:
+Duration: 00:00:15.00, start: 0.000000, bitrate: 21 kb/s
+Stream #0:0: Video: h264 (High) (avc1/0x31637661), yuv420p, 1280x720, 20 kb/s, 1 fps
+Stream mapping:
+Stream #0:0 -> #0:0 (h264 (native) -> png (native))
+Output #0, image2, to ’/app/frames/frame_%04d.png’:
+Stream #0:0: Video: png, rgb24, 1280x720, q=2-31, 1 fps
+frame=
+15 fps=0.0 q=-0.0 Lsize=N/A time=00:00:15.00 bitrate=N/A speed= 157x
+/app $ find /app/frames -name "*.png" | wc -l
+15
+43
+
+❸Step 7 (of 11) — Author ocr.py, run OCR
+analysis
+Frame extraction successful: 15 frames. Now step 7: create OCR script and run it.
+plan
+Create /app/ocr.py that globs frames, runs pytesseract on each, and appends to all_text.txt.
+commands
+import cv2, pytesseract, glob
+frames_dir
+= ’/app/frames’
+output_file = ’/app/all_text.txt’
+frame_paths = sorted(glob.glob(f’{frames_dir}/frame_*.png’))
+all_text = []
+for path in frame_paths:
+img = cv2.imread(path)
+if img is None:
+continue
+text = pytesseract.image_to_string(img)
+all_text.append(text)
+with open(output_file, ’w’) as f:
+f.write(’\n’.join(all_text))
+observation
+/app $ python3 /app/ocr.py
+/app $ wc -l /app/all_text.txt
+29 /app/all_text.txt
+/app $ head -c 200 /app/all_text.txt
+Slide 1: Introduction to Adolescent Depression
+Slide 1: Introduction to Adolescent Depression
+Slide 2: Cognitive Behavioral Therapy (CBT)
+Slide 2: Co. . .
+44
+
+❹Step 9 (of 11) — Refine parse.py to filter out the intro slide
+analysis
+Step 8 produced an initial parse with 5 unique lines, including the non-treatment Introduction to
+Adolescent Depression. Filter by treatment-related keywords.
+plan
+Rewrite /app/parse.py with a keyword whitelist [therapy, treatment, medication, cbt,
+ssri, antidepressant], dedup, re-run, verify ≥4 lines and CBT presence.
+commands
+input_file
+= ’/app/all_text.txt’
+output_file = ’/app/treatment_list.txt’
+keywords
+= [’therapy’, ’treatment’, ’medication’, ’cbt’, ’ssri’, ’antidepressant’]
+with open(input_file, ’r’) as f:
+lines = f.read().splitlines()
+treatments = set()
+for line in lines:
+line = line.strip()
+if not line:
+continue
+if line.startswith(’Slide’):
+parts = line.split(’:’, 1)
+if len(parts) == 2:
+treatment = parts[1].strip()
+if treatment and any(kw in treatment.lower() for kw in keywords):
+treatments.add(treatment)
+with open(output_file, ’w’) as f:
+for t in sorted(treatments):
+f.write(t + ’\n’)
+observation
+/app $ python3 /app/parse.py
+Extracted 4 unique treatments.
+/app $ cat /app/treatment_list.txt
+Cognitive Behavioral Therapy (CBT)
+Family-Based Treatment
+Interpersonal Therapy (IPT)
+Medication: SSRIs like fluoxetine
+/app $ wc -l /app/treatment_list.txt
+4 /app/treatment_list.txt
+/app $ grep -q "Cognitive Behavioral Therapy\|CBT" /app/treatment_list.txt && echo "Contains
+CBT"
+Contains CBT
+❺Verification Result (downstream pytest)
+Test Case
+Status
+Metric
+Value
+test_treatment_list_exists
+✓PASSED
+file present
+/app/treatment_list.txt
+test_treatment_list_min_lines
+✓PASSED
+line count
+≥4 (actual: 4)
+test_cbt_present
+✓PASSED
+CBT keyword
+found
+test_ssri_present
+✓PASSED
+SSRI keyword
+found
+test_ipt_present
+✓PASSED
+IPT keyword
+found
+test_family_based_present
+✓PASSED
+FBT keyword
+found
+Reward
+1.0
+(6/6 passed, 11 steps)
+45

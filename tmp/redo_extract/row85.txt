@@ -1,0 +1,330 @@
+=== PDF FIRST PAGE (title region) ===
+Organizing, Orchestrating, and Benchmarking Agent Skills
+at Ecosystem Scale
+Hao Li∗Chunjiang Mu∗Jianhao Chen
+Siyue Ren
+Zhiyao Cui
+Yiqun Zhang
+Lei Bai
+Shuyue Hu†
+Shanghai Artificial Intelligence Laboratory
+Abstract
+The rapid proliferation of Claude agent skills has raised the central question of how to
+effectively leverage, manage, and scale the agent skill ecosystem. In this paper, we propose
+AgentSkillOS, the first principled framework for skill selection, orchestration, and ecosystem-
+level management. AgentSkillOS comprises two stages: (i) Manage Skills, which organizes
+skills into a capability tree via node-level recursive categorization for efficient discovery;
+and (ii) Solve Tasks, which retrieves, orchestrates, and executes multiple skills through
+DAG-based pipelines.
+To evaluate the agent’s ability to invoke skills, we construct a
+benchmark of 30 artifact-rich tasks across five categories: data computation, document
+creation, motion video, visual design, and web interaction. We assess the quality of task
+outputs using LLM-based pairwise evaluation, and the results are aggregated via a Bradley–
+Terry model to produce unified quality scores. Experiments across three skill eco
+
+=== FRONT MATTER (abstract/intro/method, first 7 pages) ===
+Organizing, Orchestrating, and Benchmarking Agent Skills
+at Ecosystem Scale
+Hao Li∗Chunjiang Mu∗Jianhao Chen
+Siyue Ren
+Zhiyao Cui
+Yiqun Zhang
+Lei Bai
+Shuyue Hu†
+Shanghai Artificial Intelligence Laboratory
+Abstract
+The rapid proliferation of Claude agent skills has raised the central question of how to
+effectively leverage, manage, and scale the agent skill ecosystem. In this paper, we propose
+AgentSkillOS, the first principled framework for skill selection, orchestration, and ecosystem-
+level management. AgentSkillOS comprises two stages: (i) Manage Skills, which organizes
+skills into a capability tree via node-level recursive categorization for efficient discovery;
+and (ii) Solve Tasks, which retrieves, orchestrates, and executes multiple skills through
+DAG-based pipelines.
+To evaluate the agent’s ability to invoke skills, we construct a
+benchmark of 30 artifact-rich tasks across five categories: data computation, document
+creation, motion video, visual design, and web interaction. We assess the quality of task
+outputs using LLM-based pairwise evaluation, and the results are aggregated via a Bradley–
+Terry model to produce unified quality scores. Experiments across three skill ecosystem
+scales (200 to 200K skills) show that tree-based retrieval effectively approximates oracle
+skill selection, and that DAG-based orchestration substantially outperforms native flat
+invocation even when given the identical skill set. Our findings confirm that structured
+composition is the key to unlocking skill potential. Our GitHub repository is available at:
+https://github.com/ynulihao/AgentSkillOS.
+1
+Introduction
+The agent skill ecosystem is rapidly expanding (Ling et al., 2026). Introduced by Claude in October 2025,
+a skill is a markdown file that defines a structured folder comprising declarative instructions, executable
+scripts, and auxiliary resources (Anthropic, 2025). By supporting dynamic loading and execution at runtime,
+skills enable a large language model (LLM) to acquire domain-specific knowledge and extend its operational
+capabilities (Xu & Yan, 2026). Skills have been adopted by multiple model service providers and integrated
+into platforms such as Coze, enabling cross-model skill reuse and execution. As of late Feb 2026, more
+than 280,000 skills are publicly available,1 and the overwhelming majority is developed and maintained
+by decentralized, third-party contributors. At this scale and degree of decentralization, a critical question
+emerges: how can the agent skill ecosystem be effectively leveraged, managed, and scaled?
+This question is of both practical importance and research interest. From a user perspective, the sheer
+number of available skills makes it difficult to obtain a global view of the ecosystem. Users often lack visibility
+into what skills exist, what capabilities they expose, and how they differ from or overlap with one another,
+making targeted skill selection for specific tasks challenging. From a platform provider perspective, a rapidly
+expanding, largely third-party ecosystem creates major governance challenges, especially around quality
+and reliability (Liu et al., 2026; Schmotz et al., 2025). More fundamentally, as the ecosystem scales, skills
+increasingly become fragmented and isolated contributions; without explicit mechanisms for composition and
+coordination, many skills remain underused, and the ecosystem fails to deliver its key value: orchestrating
+multiple skills to solve tasks beyond any single skill (Li, 2026).
+∗Equal contribution
+†Corresponding author. Email: hushuyue@pjlab.org.cn.
+1https://skillsmp.com/
+1
+arXiv:2603.02176v1  [cs.CL]  2 Mar 2026
+
+In this paper, we introduce AgentSkillOS, the first principled framework for skill selection, orchestration,
+and ecosystem-level management. It consists of two stages: Manage Skills and Solve Tasks. In the
+Manage Skills stage, we construct a capability tree that organizes skills into a hierarchy based on their
+capabilities. Specifically, starting from the root node, AgentSkillOS organizes skills into a node-level hierarchy
+by recursively partitioning each node’s skill set into category groups, splitting any category node that
+exceeds a per-node capacity threshold until all nodes conform to the limit. We note that the construction of
+a capability tree is essential. It surfaces non-obvious yet functionally relevant skills, thereby enabling broader
+and more creative skill discovery than pure semantic retrieval. In the Solve Tasks stage, AgentSkillOS builds
+on the capability tree to retrieve and orchestrate multiple skills, equipping a task-specific agent to solve tasks
+beyond any single skill. This stage comprises three steps: (i) Task-driven Skill Retrieval, which explores
+the capability tree to retrieve a broad set of relevant skills and then prunes them via filtering, deduplication,
+and relevance ranking; (ii) DAG-based Skill Orchestration, which decomposes the task into subtasks
+and composes the selected skills into Directed-Acyclic-Graph (DAG) plans, offering three different strategies
+for orchestration; and (iii) Multi-skill Task Execution, which executes the selected DAG, automatically
+managing execution order, dependencies, and data flow across steps.
+To systematically evaluate AgentSkillOS, we construct a benchmark of 30 tasks across five categories: data
+computation, document creation, motion video, visual design, and web interaction. All tasks are constructed
+by human experts who first curate high-quality skills from public marketplaces and GitHub repositories, then
+craft task descriptions and deliverable requirements based on these skills and real-world user needs, either from
+a single skill or by cross-composing multiple skills. The benchmark features three key properties tailored for
+skill evaluation: (i) Multi-format Creative Tasks: each task requires delivering a complete, end-user-facing
+artifact, going beyond code generation or question answering to test real-world delivery quality; (ii) Pairwise
+Comparison with Position-bias Mitigation: we evaluate via LLM-based pairwise judging conducted in
+both orderings to counteract position bias, and aggregate preferences via a Bradley–Terry model (Bradley &
+Terry, 1952) for fine-grained ranking; and (iii) High Skill-discriminability: by grounding tasks in specific
+skills, task quality depends critically on whether the agent correctly selects and invokes the relevant skills,
+clearly surfacing differences in skill configuration.
+We evaluate different configurations across three skill ecosystem sizes (200, 1K, 200K). Results show that our
+AgentSkillOS consistently achieves the highest scores across all ecosystem sizes, substantially outperforming
+both the vanilla Claude Code skill invocation and the skill-free baseline. Notably, our ablation study reveals
+that DAG-based skill orchestration is a critical contributor to performance: even when provided with the
+identical oracle skill set, the vanilla Claude Code agent, which invokes skills in a flat, unstructured manner,
+performs significantly worse than AgentSkillOS with DAG orchestration. This demonstrates that structured
+skill composition, not merely skill availability, is the key to unlocking the full potential of the skill ecosystem.
+The main contributions of this paper are summarized as follows:
+• We propose AgentSkillOS, the first principled framework comprising capability-tree-based skill
+organization and DAG-based multi-skill orchestration, for efficiently leveraging, managing, and
+scaling agent skill ecosystems.
+• We construct a benchmark of 30 artifact-rich tasks across five categories with an LLM-based pairwise
+evaluation protocol aggregated via a Bradley–Terry model for fine-grained quality assessment.
+• Through comprehensive experiments across three ecosystem scales (200 to 200K skills), we demon-
+strate that tree-based retrieval effectively approximates oracle skill selection, and that DAG-based
+orchestration substantially outperforms native flat skill invocation even when given the oracle skill
+set.
+2
+Method
+In this section, we present AgentSkillOS, the first principled framework for efficiently selecting, orchestrating,
+and managing skills from a large-scale ecosystem to solve a user-specified task. AgentSkillOS comprises
+two stages: (i) Manage Skills, which organizes a large-scale skill ecosystem into a capability tree to
+2
+
+Skill Ecosystem
+Skills Management
+Skill Retrieval & Orchestration
+Multi-skill Execution
+TopK +
+User Selected
+Capability Tree Construcion
+Usage-frequency
+Queue
+Root 
+Content
+Creation
+Data
+Processing
+Software
+Development Automation
+Domain-
+specific
+User Task
+Task-specific Agent
+Task-Driven Retrieval
+Group Discovery 
+& Skill Assignment
+Skill Orchestration Graph (DAG)
+Qulaity-First
+Simplicity-First
+Efficiency-First
+Layer 1
+Layer 3
+Layer 2
+(Parallel)
+...
+Layered DAG Execution 
+Prompt
+(for each node)
+Environment
+pdf
+image
+frontend
+pptx
+social-media
+Task-Driven
+Retrieval
+Capability Tree
+Deduplication &
+Ranking
+Help me promote my paper
+Artifacts
+Summary
+- Task
+- SubTask
+- Skill
+- Upstream 
+   Artifacts
+- Expected 
+   Outputs
+Task Solution
+Recipe Pool
+...
+...
+Figure 1: AgentSkillOS is a principled framework for efficient skill retrieval, orchestration, and ecosystem-level
+management to solve user-specified tasks.
+enable efficient use of available skills prior to task execution; and (ii) Solve Tasks, which automatically
+selects, orchestrates, and executes multiple skills during task execution. Fig. 1 shows the overall workflow of
+AgentSkillOS.
+2.1
+Manage Skills: Capability Tree Construction
+To enable efficient retrieval of required skills from a large-scale skill ecosystem, we organize the skill ecosystem
+using a tree structure. We refer to this tree as the capability tree, which is constructed and updated offline,
+independent of the task execution process. Formally, we denote skill ecosystem to be managed by S, and
+the capability tree by T. Each node n ∈T corresponds to a skill partition and is assigned a specific subset
+of skills Sn ⊆ST , where ST is the set of all skills used to construct the capability tree T. Therefore, for
+the root node r, it holds that Sr = ST . For node n with children ch(n), the node’s children c ∈ch(n) form
+a partition of Sn which satisfies Sn = S
+c∈ch(n) Sc and Sc ∩Sc′ = ∅for any c ̸= c′. From high-level nodes
+to low-level nodes of this capability tree, the skill number of each level of nodes decreases approximately
+exponentially. Ultimately, each leaf node in the capability tree corresponds to a skill partition containing
+exactly one skill. This structure of our capability tree supports coarse-to-fine, level-by-level localization:
+agents can first identify relevant top-level capability domains and then search within the corresponding node
+partitions, avoiding unguided retrieval over ST . It is worth noting that ST is not necessarily equal to the
+entire skill ecosystem, which we denote as S. In the following subsections, we first describe how the capability
+tree is constructed and updated through node-level recursive categorization over ST . We further introduce a
+usage-frequency queue to select ST from S to control the tree size and reduce the inclusion of low-quality
+skills when S becomes excessively large.
+2.1.1
+Node-Level Recursive Categorization
+Prior to capability tree construction, AgentSkillOS scans ST and extracts name and description of each skill
+as the basis for subsequent partition. Then, starting from the root node, AgentSkillOS adopts a breadth-first
+strategy to generate child nodes for each node, thereby building the capability tree T level by level. The
+child nodes are generated by partitioning the skill sets of the current node, which consists of two steps:
+3
+
+Group Discovery and Skill Assignment. Given the current node n and its assigned skill set Sn, during Group
+Discovery, AgentSkillOS employs an LLM to generate a specific number of category groups for Sn, including
+the name and description of each category. The target number of groups is guided by a branching factor
+B. In Skill Assignment, AgentSkillOS employs an LLM to assign each skill in Sn to one of the generated
+categorie groups. By splitting children generation into two steps, AgentSkillOS greatly reduces the probability
+of missing skills during tree construction.
+AgentSkillOS performs additional handling for three special cases. (i) If the current node is the root node,
+to ensure stable and reliable classification, five fixed category groups are manually specified in the Group
+Discovery: content creation, data processing, software development, automation, and domain-specific. (ii) If
+the number of skills in any generated category after Skill Assignment is equal to 1, that category and all
+its skills will be merged into the most relevant target category, and the name and description of the target
+category will be updated. If the number of skills in a category is below the per-node capacity threshold C but
+greater than or equal to 2, all skills in that category are converted into leaf nodes, and no further child nodes
+of them will be generated. By ensuring that each node is assigned a sufficient number of skills, AgentSkillOS
+reduces the depth of the capability tree and accelerating skill retrieval. (iii) If some skills are not assigned to
+any category because of LLM hallucination or other bugs, these skills will be reassigned. If they still have no
+category after the second Skill Assignment, they will be assigned to the category with the largest number of
+skills. Ultimately, each node in the capability tree corresponds to a category of skills, while each leaf node
+represents an individual skill.
+The capability tree will be updated if S changes. The newly introduced skills are incorporated into the
+capability tree as follows. Starting from the root node, each new skill is progressively assigned to the most
+appropriate category at each level, forming a path down the tree and ultimately being inserted as a new leaf
+node at the proper position. After insertion, we perform a bottom-up update along the constructed path to
+refine the category names and descriptions of the affected nodes. Overall, our tree construction and update
+method achieves a balance between skill classification accuracy and retrieval efficiency.
+2.1.2
+Usage-Frequency Queue for Skill Selection for Tree-construction
+We control the depth of the tree by selecting only the skills that satisfy specific criteria from S to construct the
+capability tree, when the number of skills in S is above the threshold K. To select ST , AgentSkillOS maintains
+a usage-frequency queue Q that ranks s ∈S by a frequency score f(s), which we set as the install count of
+skill s on the marketplace2. Then, ST is selected to construct the tree by ST = TopK(Q, K) ∪Suser, where
+Suser denotes the skills manually selected by the user from the S. This design enables users to conveniently
+incorporate their own custom and private skills. We place the remaining skills S \ ST into a dormant index
+that supports semantic suggestions. Specifically, we build a vector index over dormant-skill metadata (name
+and description) and retrieve suggestions by embedding similarity. If a suggested dormant skill proves useful
+during task solving, AgentSkillOS allows users to add it to Suser and trigger the tree update.
+2.2
+Solve Tasks: a Task-Specific Agent with Multiple Skills
+Building on the capability tree of skills, AgentSkillOS retrieves and orchestrates multiple skills to equip a
+task-specific agent, enabling it to solve tasks beyond the reach of any single skill and improving overall skill
+utilization. The key to constructing a task-specific agent lies in generating and executing a skill orchestration
+graph for the given task, formulated as a Directed Acyclic Graph (DAG). We denote it by G = (V, E), where
+each node v ∈V denotes a skill in the capability tree and is selected to solve the task, and each directed
+edge (u, v) ∈E indicates that skill v depends on the outputs o
+
+=== BACK MATTER (conclusion/limitations, last pages) ===
+Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir Press, and Karthik Narasimhan.
+Swe-bench: Can language models resolve real-world github issues? In 12th International Conference on
+Learning Representations, ICLR 2024, 2024.
+Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Heinrich
+Küttler, Mike Lewis, Wen-tau Yih, Tim Rocktäschel, et al. Retrieval-augmented generation for knowledge-
+intensive nlp tasks. Advances in neural information processing systems, 33:9459–9474, 2020.
+Minghao Li, Yingxiu Zhao, Bowen Yu, Feifan Song, Hangyu Li, Haiyang Yu, Zhoujun Li, Fei Huang, and
+Yongbin Li. Api-bank: A comprehensive benchmark for tool-augmented llms. In Proceedings of the 2023
+conference on empirical methods in natural language processing, pp. 3102–3116, 2023.
+Xiangyi Li, Wenbo Chen, Yimin Liu, Shenghan Zheng, Xiaokun Chen, Yifeng He, Yubo Li, Bingran You,
+Haotian Shen, Jiankai Sun, et al. Skillsbench: Benchmarking how well agent skills work across diverse
+tasks. arXiv preprint arXiv:2602.12670, 2026.
+Xiaoxiao Li. When single-agent with skills replace multi-agent systems and when they fail. arXiv preprint
+arXiv:2601.04748, 2026.
+George Ling, Shanshan Zhong, and Richard Huang. Agent skills: A data-driven analysis of claude skills for
+extending large language model functionality. arXiv preprint arXiv:2602.08004, 2026.
+Xiao Liu, Hao Yu, Hanchen Zhang, Yifan Xu, Xuanyu Lei, Hanyu Lai, Yu Gu, Hangliang Ding, Kaiwen Men,
+Kejuan Yang, et al. Agentbench: Evaluating llms as agents. In 12th International Conference on Learning
+Representations, ICLR 2024, 2024.
+Yi Liu, Zhihao Chen, Yanjun Zhang, Gelei Deng, Yuekang Li, Jianting Ning, and Leo Yu Zhang. Malicious
+agent skills in the wild: A large-scale security empirical study. arXiv preprint arXiv:2602.06547, 2026.
+Grégoire Mialon, Clémentine Fourrier, Thomas Wolf, Yann LeCun, and Thomas Scialom. Gaia: a benchmark
+for general ai assistants. In 12th International Conference on Learning Representations, ICLR 2024, 2024.
+Shishir G Patil, Tianjun Zhang, Xin Wang, and Joseph E Gonzalez. Gorilla: Large language model connected
+with massive apis. Advances in Neural Information Processing Systems, 37:126544–126565, 2024.
+Yujia Qin, Shengding Hu, Yankai Lin, Weize Chen, Ning Ding, Ganqu Cui, Zheni Zeng, Xuanhe Zhou, Yufei
+Huang, Chaojun Xiao, et al. Tool learning with foundation models. ACM Computing Surveys, 57(4):1–40,
+2024a.
+Yujia Qin, Shihao Liang, Yining Ye, Kunlun Zhu, Lan Yan, Yaxi Lu, Yankai Lin, Xin Cong, Xiangru Tang,
+Bill Qian, et al. Toolllm: Facilitating large language models to master 16000+ real-world apis. In 12th
+International Conference on Learning Representations, ICLR 2024, 2024b.
+Timo Schick, Jane Dwivedi-Yu, Roberto Dessì, Roberta Raileanu, Maria Lomeli, Eric Hambro, Luke
+Zettlemoyer, Nicola Cancedda, and Thomas Scialom. Toolformer: Language models can teach themselves
+to use tools. Advances in neural information processing systems, 36:68539–68551, 2023.
+David Schmotz, Sahar Abdelnabi, and Maksym Andriushchenko. Agent skills enable a new class of realistic
+and trivially simple prompt injections. arXiv preprint arXiv:2510.26328, 2025.
+Yongliang Shen, Kaitao Song, Xu Tan, Dongsheng Li, Weiming Lu, and Yueting Zhuang. Hugginggpt: Solving
+ai tasks with chatgpt and its friends in hugging face. Advances in Neural Information Processing Systems,
+36:38154–38180, 2023.
+Yongliang Shen, Kaitao Song, Xu Tan, Wenqi Zhang, Kan Ren, Siyu Yuan, Weiming Lu, Dongsheng Li,
+and Yueting Zhuang. Taskbench: Benchmarking large language models for task automation. Advances in
+Neural Information Processing Systems, 37:4540–4574, 2024.
+Xingyao Wang, Yangyi Chen, Lifan Yuan, Yizhe Zhang, Yunzhu Li, Hao Peng, and Heng Ji. Executable code
+actions elicit better llm agents. In Forty-first International Conference on Machine Learning, 2024.
+14
+
+Tianbao Xie, Danyang Zhang, Jixuan Chen, Xiaochuan Li, Siheng Zhao, Ruisheng Cao, Toh J Hua, Zhoujun
+Cheng, Dongchan Shin, Fangyu Lei, et al. Osworld: Benchmarking multimodal agents for open-ended tasks
+in real computer environments. Advances in Neural Information Processing Systems, 37:52040–52094, 2024.
+Frank F Xu, Yufan Song, Boxuan Li, Yuxuan Tang, Kritanjali Jain, Mengxue Bao, Zora Zhiruo Wang, Xuhui
+Zhou, Zhitong Guo, Murong Cao, et al. Theagentcompany: Benchmarking llm agents on consequential real
+world tasks. In The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets
+and Benchmarks Track, 2024.
+Renjun Xu and Yang Yan. Agent skills for large language models: Architecture, acquisition, security, and the
+path forward. arXiv preprint arXiv:2602.12430, 2026.
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak Shafran, Karthik R Narasimhan, and Yuan Cao. React:
+Synergizing reasoning and acting in language models. In The eleventh international conference on learning
+representations, 2022.
+Shuyan Zhou, Frank F Xu, Hao Zhu, Xuhui Zhou, Robert Lo, Abishek Sridhar, Xianyi Cheng, Tianyue Ou,
+Yonatan Bisk, Daniel Fried, et al. Webarena: A realistic web environment for building autonomous agents.
+In 12th International Conference on Learning Representations, ICLR 2024, 2024.
+15
+
