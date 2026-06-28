@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import time
+import inspect
 from pathlib import Path
 from datetime import datetime
 import sys
@@ -24,6 +25,13 @@ from utils.memory import MemoryManager, ExtractionSchema, ExtractionField, Scree
 from utils.agent_memory import AgentMemory
 from main import AcademicSearcher
 from pydantic import BaseModel, Field, create_model
+from ui_state import (
+    WORKFLOW_STEPS,
+    build_step_states,
+    clamp_resume_step,
+    project_stage_label,
+    schema_workbench_state,
+)
 
 
 def app_llm_model() -> str:
@@ -75,1108 +83,142 @@ st.set_page_config(
     page_title="ReviewPilot",
     page_icon="logo.png",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for professional styling - Arial font, clean minimal design
-# Color palette: dark blue (#1a365d), light blue (#4a7ab5), grey (#6b7280), black (#1f2937)
+# ============================================================================
+# DESIGN SYSTEM
+# Color/typography/focus are owned by .streamlit/config.toml (the single source
+# of truth). This small stylesheet only adds what native theming can't express:
+# design tokens, quiet elevation on cards, and a visible keyboard-focus ring.
+# (Replaces the former ~1040 lines of !important overrides + 30ms JS loop.)
+# ============================================================================
 st.markdown("""
 <style>
-    /* ========== ROOT CSS VARIABLE OVERRIDES ========== */
+    /* ---------- Design tokens ---------- */
     :root {
-        --baseweb-input-border-color-focus: #1a365d !important;
-        --baseweb-input-enhancer-fill-focus: #1a365d !important;
-        --baseui-primary: #1a365d !important;
-        --baseui-primary50: #1a365d !important;
-        --baseui-primary100: #1a365d !important;
-        --baseui-primary200: #1a365d !important;
-        --baseui-primary300: #1a365d !important;
-        --baseui-primary400: #1a365d !important;
-        --baseui-primary500: #1a365d !important;
-        --baseui-primary600: #1a365d !important;
-        --baseui-primary700: #1a365d !important;
+        --brand: #1a365d;
+        --brand-hover: #2c5282;
+        --brand-soft: #eaf0f7;
+        --ink: #1f2937;
+        --ink-soft: #5b6573;
+        --border: #e3e8ef;
+        --surface: #ffffff;
+        --surface-2: #f6f8fb;
+        --radius: 10px;
+        --radius-sm: 7px;
+        --shadow-sm: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.04);
     }
 
-    /* Force ALL elements to never have red/orange box-shadows */
-    *, *::before, *::after {
-        --focus-ring-color: #1a365d !important;
+    /* ---------- Layout: honor wide mode, comfortable measure ---------- */
+    .main .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1360px; }
+
+    /* ---------- Typography: real scale (no Arial lock, no 0.85rem clamps) ---------- */
+    h1, h2, h3, h4, h5, h6 { color: var(--ink); font-weight: 650; letter-spacing: -0.01em; }
+    h1 { font-size: 1.75rem; }
+    h2 { font-size: 1.4rem; }
+    h3 { font-size: 1.15rem; }
+
+    /* ---------- Visible, brand-colored keyboard focus (keyboard-only) ---------- */
+    *:focus-visible { outline: 2px solid var(--brand) !important; outline-offset: 2px !important; }
+
+    /* ---------- Buttons: calm, consistent radius ---------- */
+    .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
+        border-radius: var(--radius-sm); font-weight: 550;
     }
 
-    /* NUMBER INPUT - Complete restyle to match text inputs */
-    /* Hide the entire baseweb styling and create custom border */
-    .stNumberInput > div > div {
-        position: relative !important;
-        border: 2px solid #d1d5db !important;
-        border-radius: 6px !important;
-        background: #ffffff !important;
-        overflow: hidden !important;
-    }
-
-    /* Blue border on focus - same as text input */
-    .stNumberInput:focus-within > div > div {
-        border-color: #1a365d !important;
-    }
-
-    /* Hide ALL inner borders, shadows, outlines */
-    .stNumberInput > div > div > div,
-    .stNumberInput > div > div > div > div,
-    .stNumberInput > div > div > div > div > div,
-    .stNumberInput input,
-    .stNumberInput button {
-        border: none !important;
-        box-shadow: none !important;
-        outline: none !important;
-        background: transparent !important;
-    }
-
-    /* Style the +/- buttons */
-    .stNumberInput button {
-        background: #f3f4f6 !important;
-        color: #1a365d !important;
-        border-radius: 4px !important;
-        margin: 2px !important;
-    }
-
-    .stNumberInput button:hover {
-        background: #e5e7eb !important;
-    }
-
-    .stNumberInput button:focus {
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    /* ========== TOOLBAR STYLING ========== */
-    /* Keep toolbar visible and functional */
-    header[data-testid="stHeader"] {
-        visibility: visible !important;
-        display: flex !important;
-        z-index: 999999 !important;
-    }
-
-    /* Toolbar buttons (stop, menu) - keep visible */
-    [data-testid="stToolbar"],
-    [data-testid="stStatusWidget"],
-    header button {
-        visibility: visible !important;
-        display: inline-flex !important;
-    }
-
-    /* ========== SIDEBAR TOGGLE - Custom button ========== */
-
-    /* Hide broken Material Icons text ONLY in sidebar toggle button */
-    button[kind="headerNoPadding"] span,
-    [data-testid="collapsedControl"] span {
-        font-size: 0 !important;
-        color: transparent !important;
-        visibility: hidden !important;
-        position: absolute !important;
-        width: 0 !important;
-        height: 0 !important;
-        overflow: hidden !important;
-    }
-
-    button[kind="headerNoPadding"],
-    [data-testid="collapsedControl"] {
-        visibility: visible !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        width: 32px !important;
-        height: 32px !important;
-        min-width: 32px !important;
-        background: #1a365d !important;
-        border: none !important;
-        border-radius: 6px !important;
-        cursor: pointer !important;
-        position: relative !important;
-    }
-
-    button[kind="headerNoPadding"]:hover {
-        background: #2c5282 !important;
-    }
-
-    /* Add hamburger icon */
-    button[kind="headerNoPadding"]::before {
-        content: "☰";
-        font-size: 16px;
-        color: #ffffff !important;
-        font-weight: bold;
-        position: absolute;
-    }
-
-    /* ========== GLOBAL STYLES ========== */
-
-    /* Global font */
-    * {
-        font-family: Arial, Helvetica, sans-serif !important;
-    }
-
-    /* Force all alert/notification colors to blue - no red/orange/green */
-    div[data-baseweb="notification"],
-    [role="alert"] {
-        background-color: #f0f4f8 !important;
-        border-color: #4a7ab5 !important;
-    }
-
-    /* Remove red from any element */
-    [style*="rgb(255"], [style*="red"] {
-        color: #1a365d !important;
-    }
-
-    /* Main container */
-    .main .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
-        max-width: 1200px;
-    }
-
-    /* Headers - consistent sizing */
-    h1, h2, h3, h4, h5, h6 {
-        font-family: Arial, Helvetica, sans-serif !important;
-        color: #1a365d;
-        font-weight: 600;
-    }
-
-    h3 {
-        font-size: 1.1rem !important;
-    }
-
-    h4 {
-        font-size: 1rem !important;
-    }
-
-    /* Sidebar styling - blue theme */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a365d 0%, #2c5282 100%);
-        border-right: none;
-    }
-
-    [data-testid="stSidebar"] * {
-        color: #ffffff !important;
-    }
-
-    /* Sidebar title */
-    .sidebar-title {
-        font-size: 1.2rem;
-        font-weight: 600;
-        padding: 1rem 0;
-        border-bottom: 1px solid rgba(255,255,255,0.2);
-        margin-bottom: 1rem;
-        color: #ffffff !important;
-    }
-
-    /* Step indicators - simple clean style */
-    .step-item {
-        padding: 0.5rem 0.6rem;
-        margin: 0.15rem 0;
-        border-radius: 4px;
-        font-size: 0.85rem;
-        transition: background 0.15s ease;
-    }
-
-    .step-complete {
-        background: rgba(255,255,255,0.15);
-        color: #ffffff !important;
-    }
-
-    .step-active {
-        background: rgba(255,255,255,0.25);
-        color: #ffffff !important;
-        font-weight: 500;
-    }
-
-    .step-pending {
-        background: transparent;
-        color: rgba(255,255,255,0.5) !important;
-    }
-
-    /* Sidebar buttons - visible on dark background */
-    [data-testid="stSidebar"] .stButton > button {
-        background: rgba(255,255,255,0.15) !important;
-        border: 1px solid rgba(255,255,255,0.3) !important;
-        color: #ffffff !important;
-    }
-
-    [data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(255,255,255,0.25) !important;
-        border-color: rgba(255,255,255,0.5) !important;
-    }
-
-    /* Metric cards */
+    /* ---------- Metric cards: quiet elevation ---------- */
     [data-testid="stMetric"] {
-        background: #ffffff;
-        padding: 0.75rem;
-        border-radius: 6px;
-        border: 1px solid #e5e7eb;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 0.85rem 1rem; box-shadow: var(--shadow-sm);
     }
+    [data-testid="stMetricValue"] { color: var(--brand); font-weight: 650; }
 
-    [data-testid="stMetric"] label {
-        color: #6b7280 !important;
-        font-weight: 500;
-        font-size: 0.8rem;
-    }
-
-    [data-testid="stMetric"] [data-testid="stMetricValue"] {
-        color: #1a365d !important;
-        font-weight: 600;
-        font-size: 1.25rem !important;
-    }
-
-    /* Main area buttons - clean style */
-    .main .stButton > button {
-        border-radius: 6px;
-        font-weight: 500;
-        font-size: 0.85rem;
-        font-family: Arial, Helvetica, sans-serif !important;
-        transition: all 0.15s ease;
-        border: 1px solid #d1d5db;
-        background: #ffffff;
-        color: #374151;
-    }
-
-    .main .stButton > button[kind="primary"] {
-        background: #1a365d;
-        border: none;
-        color: white;
-    }
-
-    .main .stButton > button[kind="primary"]:hover {
-        background: #2c5282;
-    }
-
-    .main .stButton > button:hover {
-        border-color: #9ca3af;
-    }
-
-    /* Chat container */
+    /* ---------- Chat messages: subtle card ---------- */
     [data-testid="stChatMessage"] {
-        background: #ffffff;
-        border-radius: 8px;
-        border: 1px solid #e5e7eb;
-        padding: 1rem;
-        margin-bottom: 0.5rem;
-    }
-
-    /* Progress indicators - blue */
-    .stProgress > div > div {
-        background: #1a365d;
-        border-radius: 4px;
-    }
-
-    /* Alert boxes - consistent blue/grey theme, no red/orange/green */
-    .stAlert {
-        border-radius: 6px;
-        border-left-width: 3px;
-        background: #f8fafc !important;
-        border-color: #4a7ab5 !important;
-    }
-
-    .stAlert [data-testid="stMarkdownContainer"] {
-        color: #374151 !important;
-    }
-
-    /* Override ALL alert colors - info/warning/success/error to blue */
-    [data-testid="stAlert"],
-    .stAlert,
-    [data-baseweb="notification"],
-    .element-container div[data-testid="stNotification"] {
-        background-color: #f0f4f8 !important;
-        border-left-color: #4a7ab5 !important;
-        border-color: #4a7ab5 !important;
-    }
-
-    /* Error messages - use dark blue instead of red */
-    .stException,
-    [data-testid="stException"],
-    div[data-baseweb="notification"][kind="negative"] {
-        background-color: #f0f4f8 !important;
-        border-left-color: #1a365d !important;
-    }
-
-    /* PRIMARY BUTTON - Dark blue with circular icon before text */
-    button[kind="primary"],
-    .stButton > button[kind="primary"],
-    [data-testid="stBaseButton-primary"],
-    button[data-testid="baseButton-primary"],
-    .main button[kind="primary"],
-    div[data-testid="column"] button[kind="primary"],
-    .stButton button[kind="primary"] {
-        background-color: #1a365d !important;
-        background: #1a365d !important;
-        border: none !important;
-        color: #ffffff !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        gap: 10px !important;
-        padding: 0.6rem 1.2rem !important;
-        border-radius: 8px !important;
-        position: relative !important;
-    }
-
-    /* Circular icon before primary button text - like chat avatar */
-    button[kind="primary"]::before,
-    .stButton > button[kind="primary"]::before,
-    [data-testid="stBaseButton-primary"]::before {
-        content: "→";
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 22px;
-        height: 22px;
-        background: rgba(255,255,255,0.2);
-        border-radius: 50%;
-        font-size: 12px;
-        font-weight: bold;
-    }
-
-    button[kind="primary"]:hover,
-    .stButton > button[kind="primary"]:hover,
-    [data-testid="stBaseButton-primary"]:hover {
-        background-color: #2c5282 !important;
-        background: #2c5282 !important;
-    }
-
-    /* Secondary/sidebar buttons - with circular icon style */
-    .main .stButton > button:not([kind="primary"]),
-    [data-testid="stSidebar"] .stButton > button {
-        display: flex !important;
-        align-items: center !important;
-        gap: 10px !important;
-        border-radius: 8px !important;
-    }
-
-    /* Sidebar "New Project" button - special circular icon */
-    [data-testid="stSidebar"] .stButton > button::before {
-        content: "+";
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
-        background: rgba(255,255,255,0.25);
-        border-radius: 50%;
-        font-size: 14px;
-        font-weight: bold;
-        color: #ffffff;
-    }
-
-    /* Chat input - border on outer container ONLY */
-    [data-testid="stChatInput"] {
-        border: 1px solid #d1d5db !important;
-        border-radius: 8px !important;
-    }
-
-    /* Remove borders from ALL inner elements */
-    [data-testid="stChatInput"] > *,
-    [data-testid="stChatInput"] textarea,
-    [data-testid="stChatInput"] div {
-        border: none !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    [data-testid="stChatInput"]:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    [data-testid="stChatInput"] textarea:focus,
-    .stChatInput textarea:focus {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* Remove ALL focus rings from chat elements */
-    [data-testid="stChatInput"] *:focus,
-    .stChatInput *:focus {
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    /* Chat send button - blue circle like chat avatar */
-    [data-testid="stChatInputSubmitButton"],
-    .stChatInput button {
-        background-color: #1a365d !important;
-        color: #ffffff !important;
-        border-radius: 50% !important;
-        width: 32px !important;
-        height: 32px !important;
-        min-width: 32px !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-    }
-
-    [data-testid="stChatInputSubmitButton"]:hover {
-        background-color: #2c5282 !important;
-    }
-
-    /* Expander - clean style */
-    .streamlit-expanderHeader {
-        font-weight: 500;
-        font-size: 0.85rem;
-        color: #374151;
-        background: #f9fafb;
-        border-radius: 6px;
-    }
-
-    /* Dataframes */
-    .stDataFrame {
-        border-radius: 6px;
-        overflow: hidden;
-        border: 1px solid #e5e7eb;
-    }
-
-    /* Dividers */
-    hr {
-        border: none;
-        height: 1px;
-        background: #e5e7eb;
-        margin: 0.75rem 0;
-    }
-
-    /* ========== ALL INPUT FOCUS STATES - Single blue border, no red ========== */
-
-    /* Remove ALL default outlines and double borders */
-    input, textarea, select,
-    [data-baseweb="input"],
-    [data-baseweb="textarea"],
-    [data-baseweb="select"],
-    .stTextInput input,
-    .stNumberInput input,
-    .stSelectbox select,
-    .stMultiSelect div {
-        outline: none !important;
-    }
-
-    /* Text inputs - single border */
-    .stTextInput > div > div > input,
-    .stTextInput input {
-        border-radius: 6px !important;
-        border: 1px solid #d1d5db !important;
-        font-size: 0.85rem;
-        font-family: Arial, Helvetica, sans-serif !important;
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    .stTextInput > div > div > input:focus,
-    .stTextInput input:focus {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* Number inputs - single border, NO RED RING */
-    .stNumberInput input,
-    .stNumberInput > div > div > input {
-        border-radius: 6px !important;
-        border: 1px solid #d1d5db !important;
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    .stNumberInput input:focus,
-    .stNumberInput > div > div > input:focus {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* NUCLEAR OPTION: Override ALL red/orange focus colors in baseweb */
-    .stNumberInput *,
-    .stSelectbox *,
-    .stMultiSelect * {
-        --baseui-input-focus-ring: none !important;
-        caret-color: #1a365d !important;
-    }
-
-    /* Target the exact baseweb focus ring div */
-    .stNumberInput div[data-baseweb="input"] > div:last-child,
-    .stNumberInput div[data-baseweb="base-input"] > div:last-child {
-        background-color: transparent !important;
-        border-color: transparent !important;
-        box-shadow: none !important;
-    }
-
-    /* Remove red focus ring from number input wrapper - AGGRESSIVE */
-    .stNumberInput [data-baseweb="input"],
-    .stNumberInput [data-baseweb="input"] > div,
-    .stNumberInput div[data-baseweb="base-input"],
-    .stNumberInput > div > div {
-        box-shadow: none !important;
-        outline: none !important;
-        border: 1px solid #d1d5db !important;
-        border-radius: 6px !important;
-    }
-
-    .stNumberInput [data-baseweb="input"]:focus-within,
-    .stNumberInput [data-baseweb="input"]:focus-within > div,
-    .stNumberInput div[data-baseweb="base-input"]:focus-within,
-    .stNumberInput:focus-within [data-baseweb="input"],
-    .stNumberInput:focus-within div[data-baseweb="base-input"],
-    .stNumberInput:focus-within > div > div {
-        box-shadow: none !important;
-        outline: none !important;
-        border-color: #1a365d !important;
-    }
-
-    /* Remove the inner red border on number input */
-    .stNumberInput [data-baseweb="input"] input,
-    .stNumberInput div[data-baseweb="base-input"] input {
-        border: none !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* Override any baseweb focus styles with blue */
-    [data-baseweb="base-input"]:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-    }
-
-    /* Override red RGB values directly */
-    [style*="rgb(255, 85"],
-    [style*="rgb(255,85"],
-    [style*="#ff5555"],
-    [style*="border-color: rgb(255"] {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-    }
-
-    /* Selectbox - single border */
-    .stSelectbox > div > div,
-    .stSelectbox [data-baseweb="select"] > div {
-        border-radius: 6px !important;
-        border: 1px solid #d1d5db !important;
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    .stSelectbox > div > div:focus-within,
-    .stSelectbox [data-baseweb="select"] > div:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-    }
-
-    /* Multiselect - single border */
-    .stMultiSelect > div > div,
-    .stMultiSelect [data-baseweb="select"] > div {
-        border-radius: 6px !important;
-        border: 1px solid #d1d5db !important;
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    .stMultiSelect > div > div:focus-within,
-    .stMultiSelect [data-baseweb="select"] > div:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-    }
-
-    /* Date input - single border */
-    .stDateInput input,
-    input[type="date"] {
-        border-radius: 6px !important;
-        border: 1px solid #d1d5db !important;
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    .stDateInput input:focus,
-    input[type="date"]:focus {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* Global focus override - remove ALL red/orange rings */
-    *:focus {
-        outline: none !important;
-    }
-
-    /* Baseweb components - remove double borders */
-    [data-baseweb="input"]:focus-within,
-    [data-baseweb="select"]:focus-within,
-    [data-baseweb="textarea"]:focus-within,
-    [data-baseweb="base-input"]:focus-within {
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    [data-baseweb="input"] > div,
-    [data-baseweb="select"] > div,
-    [data-baseweb="textarea"] > div,
-    [data-baseweb="base-input"] > div {
-        border-color: #d1d5db !important;
-    }
-
-    [data-baseweb="input"]:focus-within > div,
-    [data-baseweb="select"]:focus-within > div,
-    [data-baseweb="base-input"]:focus-within > div {
-        border-color: #1a365d !important;
-        box-shadow: none !important;
-    }
-
-    /* Override baseweb focus ring - MOST AGGRESSIVE */
-    div[data-baseweb] *:focus,
-    div[data-baseweb]:focus-within {
-        outline: none !important;
-        box-shadow: none !important;
-    }
-
-    /* Force border color on ALL baseweb wrappers */
-    .stNumberInput div[data-baseweb],
-    .stSelectbox div[data-baseweb] {
-        border-color: #d1d5db !important;
-    }
-
-    .stNumberInput:focus-within div[data-baseweb],
-    .stSelectbox:focus-within div[data-baseweb] {
-        border-color: #1a365d !important;
-    }
-
-    /* Selectbox - smaller text */
-    .stSelectbox label {
-        font-size: 0.85rem !important;
-    }
-
-    /* Number input - smaller text */
-    .stNumberInput label {
-        font-size: 0.85rem !important;
-    }
-
-    /* Checkbox - smaller text */
-    .stCheckbox label {
-        font-size: 0.85rem !important;
-    }
-
-    /* Caption text */
-    .stCaption, [data-testid="stCaption"] {
-        font-size: 0.8rem !important;
-        color: #6b7280 !important;
-    }
-
-    /* Markdown text in control panel */
-    .main [data-testid="stMarkdownContainer"] p {
-        font-size: 0.9rem;
-    }
-
-    /* Tables in markdown */
-    table {
-        border-collapse: collapse;
-        width: 100%;
-        margin: 1rem 0;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: 0.85rem;
-    }
-
-    th {
-        background: #f9fafb;
-        color: #374151;
-        font-weight: 600;
-        padding: 0.6rem;
-        text-align: left;
-        border-bottom: 1px solid #e5e7eb;
-    }
-
-    td {
-        padding: 0.6rem;
-        border-bottom: 1px solid #f3f4f6;
-        color: #4b5563;
-    }
-
-    tr:hover {
-        background: #f9fafb;
-    }
-
-    /* Code blocks */
-    code {
-        background: #f3f4f6;
-        padding: 0.2rem 0.4rem;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        color: #1f2937;
-    }
-
-    /* Logo header container */
-    .logo-header {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-        padding: 0.5rem 0 1.5rem 0;
-    }
-
-    .logo-header img {
-        width: 64px;
-        height: 64px;
-    }
-
-    .logo-header h1 {
-        margin: 0;
-        font-size: 1.75rem;
-        color: #1a365d;
-        font-weight: 600;
-    }
-
-    .logo-header p {
-        margin: 0;
-        color: #6b7280;
-        font-size: 0.85rem;
-    }
-
-    /* Info text styling */
-    .stInfo, [data-baseweb="notification"] {
-        background-color: #f0f4f8 !important;
-        border-left-color: #4a7ab5 !important;
-    }
-
-    /* GLOBAL COLOR OVERRIDE - No red/orange/green anywhere */
-    /* Force all focus/active states to blue */
-    *:focus, *:active {
-        outline-color: #1a365d !important;
-        border-color: #1a365d !important;
-    }
-
-    /* All form elements focus states - blue */
-    input:focus, textarea:focus, select:focus,
-    [data-baseweb="input"]:focus-within,
-    [data-baseweb="textarea"]:focus-within,
-    [data-baseweb="select"]:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: 0 0 0 2px rgba(26, 54, 93, 0.15) !important;
-    }
-
-    /* Chat input specific - FORCE blue, no red */
-    [data-testid="stChatInput"] {
-        border: 1px solid #d1d5db !important;
-    }
-
-    [data-testid="stChatInput"]:focus-within {
-        border-color: #1a365d !important;
-        box-shadow: 0 0 0 2px rgba(26, 54, 93, 0.15) !important;
-    }
-
-    /* Force chat input textarea border - no red */
-    [data-testid="stChatInput"] textarea,
-    .stChatInput textarea {
-        border-color: #d1d5db !important;
-    }
-
-    [data-testid="stChatInput"] textarea:focus,
-    .stChatInput textarea:focus {
-        border-color: #1a365d !important;
-    }
-
-    /* Chat send button - dark blue */
-    [data-testid="stChatInputSubmitButton"] {
-        background-color: #1a365d !important;
-        color: #ffffff !important;
-        border: none !important;
-    }
-
-    [data-testid="stChatInputSubmitButton"]:hover {
-        background-color: #2c5282 !important;
-    }
-
-    /* SVG icons in chat - blue */
-    [data-testid="stChatInputSubmitButton"] svg {
-        fill: #ffffff !important;
-        color: #ffffff !important;
-    }
-
-    /* Multiselect tags - blue/grey instead of red */
-    [data-baseweb="tag"] {
-        background-color: #1a365d !important;
-        border-color: #1a365d !important;
-    }
-
-    [data-baseweb="tag"] span {
-        color: #ffffff !important;
-    }
-
-    /* Chat avatar colors - blue/grey theme */
-    [data-testid="stChatMessageAvatarUser"],
-    [data-testid="chatAvatarIcon-user"] {
-        background-color: #6b7280 !important;
-    }
-
-    [data-testid="stChatMessageAvatarAssistant"],
-    [data-testid="chatAvatarIcon-assistant"] {
-        background-color: #1a365d !important;
-    }
-
-    /* Force all chat avatars to blue/grey */
-    .stChatMessage div[data-testid="stAvatar"],
-    [data-testid="stChatMessage"] > div:first-child > div {
-        background-color: #1a365d !important;
-        background: #1a365d !important;
-    }
-
-    /* Hide broken Material Icon text in toolbar only (not sidebar toggle) */
-    [data-testid="stToolbar"] span,
-    .stDeployButton span,
-    header[data-testid="stHeader"] [data-testid="stToolbar"] span {
-        font-size: 0 !important;
-        visibility: hidden !important;
-    }
-
-    /* Hide deploy button completely */
-    .stDeployButton {
-        display: none !important;
-    }
-
-    /* Hide any Material Icons text that shows as broken */
-    span.material-symbols-rounded,
-    [class*="material-symbols"],
-    span[style*="Material"] {
-        font-size: 0 !important;
-        visibility: hidden !important;
-        width: 0 !important;
-        overflow: hidden !important;
-    }
-
-    /* Expander styling - clean simple design */
-    [data-testid="stExpander"] {
-        border: 1px solid #e5e7eb;
-        border-radius: 6px;
-        margin-bottom: 0.5rem;
-    }
-
-    [data-testid="stExpander"] summary {
-        padding: 0.6rem 0.75rem;
-        background: #f9fafb;
-        border-radius: 6px;
-        font-size: 0.85rem;
-        color: #374151;
-    }
-
-    /* AGGRESSIVELY hide ALL broken icon text in expander */
-    [data-testid="stExpander"] summary span,
-    [data-testid="stExpander"] details span,
-    [data-testid="stExpander"] [data-testid="stExpanderToggleIcon"],
-    .streamlit-expanderHeader span,
-    details[data-testid="stExpander"] summary span,
-    summary > span,
-    summary span[class*="cache"],
-    summary span[style*="vertical-align"] {
-        display: none !important;
-        font-size: 0 !important;
-        visibility: hidden !important;
-        width: 0 !important;
-        height: 0 !important;
-        overflow: hidden !important;
-        position: absolute !important;
-        left: -9999px !important;
-    }
-
-    /* Hide any div that contains icon before text */
-    [data-testid="stExpander"] summary > div:first-child {
-        display: none !important;
-    }
-
-    /* Force the markdown container with label to be visible */
-    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] {
-        display: block !important;
-        visibility: visible !important;
-    }
-
-    [data-testid="stExpander"] [data-testid="stMarkdownContainer"] p {
-        display: inline !important;
-        visibility: visible !important;
-        font-size: 0.85rem !important;
-        color: #374151 !important;
-    }
-
-    /* Add a simple text arrow before expander label */
-    [data-testid="stExpander"] summary::before {
-        content: "> ";
-        font-weight: bold;
-        color: #1a365d;
-        font-size: 0.85rem;
-    }
-
-    [data-testid="stExpander"][open] summary::before {
-        content: "v ";
-    }
-
-    /* Fallback: Hide icon by hiding content before the p tag */
-    [data-testid="stExpander"] summary [data-testid="stMarkdownContainer"]::before {
-        content: "";
-    }
-
-    /* Multiselect - force blue colors, no red */
-    [data-baseweb="tag"] {
-        background-color: #1a365d !important;
-        border-color: #1a365d !important;
-        color: #ffffff !important;
-    }
-
-    [data-baseweb="tag"] span,
-    [data-baseweb="tag"] * {
-        color: #ffffff !important;
-    }
-
-    /* Remove X button red color on tags */
-    [data-baseweb="tag"] svg {
-        fill: #ffffff !important;
-        color: #ffffff !important;
-    }
-
-    /* ========== FINAL OVERRIDE - Kill ALL red borders/rings ========== */
-    /* WILDCARD: Remove ALL box-shadows in number inputs */
-    .stNumberInput *,
-    .stNumberInput *::before,
-    .stNumberInput *::after,
-    .stSelectbox *,
-    .stSelectbox *::before,
-    .stSelectbox *::after {
-        box-shadow: none !important;
-        outline: none !important;
-    }
-
-    /* Set single border on outer wrapper */
-    .stNumberInput > div > div,
-    .stSelectbox > div > div {
-        border: 1px solid #d1d5db !important;
-        border-radius: 6px !important;
-        background: #ffffff !important;
-    }
-
-    .stNumberInput:focus-within > div > div,
-    .stSelectbox:focus-within > div > div {
-        border-color: #1a365d !important;
-    }
-
-    /* Remove inner borders */
-    .stNumberInput > div > div > div,
-    .stNumberInput > div > div > div > div,
-    .stSelectbox > div > div > div,
-    .stSelectbox > div > div > div > div {
-        border: none !important;
-    }
-
-    /* ========== FINAL: CONSISTENT STYLING FOR ALL INPUTS ========== */
-    /* Make number input look exactly like text input */
-
-    /* Remove ALL baseweb focus rings */
-    .stNumberInput div,
-    .stNumberInput input,
-    .stNumberInput span,
-    .stNumberInput button,
-    .stNumberInput div:focus,
-    .stNumberInput div:focus-within,
-    .stNumberInput div:focus-visible,
-    .stNumberInput input:focus,
-    .stNumberInput button:focus,
-    .stNumberInput button:active {
-        box-shadow: none !important;
-        outline: none !important;
-        -webkit-box-shadow: none !important;
-        border-color: transparent !important;
-    }
-
-    /* Outer container gets the visible border */
-    .stNumberInput > div > div {
-        border: 2px solid #d1d5db !important;
-        border-radius: 6px !important;
-        overflow: hidden !important;
-    }
-
-    /* Blue border on focus */
-    .stNumberInput:focus-within > div > div {
-        border-color: #1a365d !important;
-    }
-
-    /* Inner elements: no borders */
-    .stNumberInput > div > div * {
-        border: none !important;
-        box-shadow: none !important;
-    }
-
-    /* Stepper buttons (+/-) styling */
-    .stNumberInput [data-testid="stNumberInputStepUp"],
-    .stNumberInput [data-testid="stNumberInputStepDown"],
-    .stNumberInput button[aria-label] {
-        background: #f8fafc !important;
-        border: none !important;
-        color: #1a365d !important;
-    }
-
-    .stNumberInput [data-testid="stNumberInputStepUp"]:hover,
-    .stNumberInput [data-testid="stNumberInputStepDown"]:hover,
-    .stNumberInput button[aria-label]:hover {
-        background: #e2e8f0 !important;
-    }
-
-    .stNumberInput [data-testid="stNumberInputStepUp"]:focus,
-    .stNumberInput [data-testid="stNumberInputStepDown"]:focus,
-    .stNumberInput button[aria-label]:focus {
-        outline: none !important;
-        box-shadow: none !important;
-        background: #e2e8f0 !important;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); box-shadow: var(--shadow-sm);
+    }
+
+    /* ---------- Sidebar: calm light surface (from secondaryBackground) ---------- */
+    [data-testid="stSidebar"] { border-right: 1px solid var(--border); }
+    [data-testid="stSidebar"] .stButton > button { text-align: left; justify-content: flex-start; }
+    .rp-brand { display: flex; align-items: center; gap: .6rem; padding: .25rem 0 .75rem; }
+    .rp-brand h1 { font-size: 1.15rem; margin: 0; color: var(--brand); }
+    .rp-eyebrow { font-size: .72rem; font-weight: 650; letter-spacing: .08em;
+        text-transform: uppercase; color: var(--ink-soft); margin: .25rem 0 .35rem; }
+    .rp-nav-step {
+        border: 1px solid var(--border); border-radius: var(--radius-sm);
+        padding: .65rem .75rem; margin: .45rem 0; background: var(--surface);
+        color: var(--ink-soft); font-size: .86rem;
+    }
+    .rp-nav-step strong { color: var(--ink); font-weight: 650; }
+    .rp-nav-step.complete { border-color: #c8d8e8; background: #fbfdff; }
+    .rp-nav-step.current { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+    .rp-nav-step.pending, .rp-nav-step.locked { opacity: .72; }
+
+    /* ---------- Expanders & dataframes: consistent border/radius ---------- */
+    [data-testid="stExpander"] { border: 1px solid var(--border); border-radius: var(--radius); }
+    [data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+
+    /* ---------- Misc ---------- */
+    hr { margin: 0.9rem 0; border-color: var(--border); }
+    .stDeployButton, [data-testid="stDeployButton"],
+    [data-testid="stAppDeployButton"] { display: none; }
+
+    /* ---------- App masthead ---------- */
+    .rp-header { display: flex; align-items: center; gap: 1rem; padding: 0.25rem 0 1.25rem; }
+    .rp-header img { width: 48px; height: 48px; border-radius: 10px; }
+    .rp-header h1 { margin: 0; font-size: 1.6rem; color: var(--brand); }
+    .rp-header p { margin: 0; color: var(--ink-soft); font-size: 0.9rem; }
+
+    /* ---------- Workbench structure ---------- */
+    .rp-workbench-head {
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        padding: 1rem 1.15rem; margin: .25rem 0 1rem; box-shadow: var(--shadow-sm);
+    }
+    .rp-workbench-title { font-size: 1.05rem; font-weight: 700; color: var(--ink); margin: 0; }
+    .rp-workbench-meta { color: var(--ink-soft); font-size: .86rem; margin-top: .25rem; }
+    .rp-step-ribbon { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .55rem; margin: .75rem 0 1rem; }
+    .rp-step-chip {
+        min-height: 74px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+        background: var(--surface); padding: .55rem .65rem; box-shadow: var(--shadow-sm);
+    }
+    .rp-step-chip .num { font-size: .72rem; color: var(--ink-soft); font-weight: 650; }
+    .rp-step-chip .name { font-size: .84rem; line-height: 1.25; color: var(--ink); font-weight: 650; margin-top: .15rem; }
+    .rp-step-chip.complete { border-color: #bcd4d2; background: #f6fbfa; }
+    .rp-step-chip.current { border-color: var(--brand); background: var(--brand-soft); }
+    .rp-step-chip.locked, .rp-step-chip.pending { opacity: .62; }
+    .rp-task-card {
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface); padding: 1rem; margin-bottom: .85rem; box-shadow: var(--shadow-sm);
+    }
+    .rp-task-card h3 { margin: 0 0 .35rem; }
+    .rp-task-card p { color: var(--ink-soft); margin: .25rem 0 0; }
+    .rp-callout {
+        border: 1px solid #cfe0f5; border-radius: var(--radius);
+        background: #f3f7fd; color: var(--ink); padding: .85rem .95rem;
+        font-size: .9rem; margin: .75rem 0;
+    }
+    .rp-subtle-panel {
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface); padding: .9rem; margin: .65rem 0;
+    }
+    .rp-action-panel {
+        border: 1px solid var(--border); border-radius: var(--radius);
+        background: var(--surface); padding: 1rem; box-shadow: var(--shadow-sm);
+    }
+    .rp-action-panel h3 { margin-top: 0; }
+    .rp-action-note { color: var(--ink-soft); font-size: .86rem; line-height: 1.45; }
+    @media (max-width: 760px) {
+        .main .block-container { padding-top: 1rem; }
+        .rp-header { align-items: flex-start; }
+        .rp-step-ribbon { grid-template-columns: 1fr; }
+        .rp-step-chip { min-height: auto; }
     }
 </style>
 """, unsafe_allow_html=True)
-
-# JavaScript to remove red focus rings - must use components.html for JS execution
-import streamlit.components.v1 as components
-components.html("""
-<script>
-    // Access parent document (Streamlit app)
-    const doc = window.parent.document;
-
-    const removeRedStyles = () => {
-        // Remove ALL box-shadows and set border colors
-        doc.querySelectorAll('.stNumberInput *, .stSelectbox *').forEach(el => {
-            el.style.setProperty('box-shadow', 'none', 'important');
-            el.style.setProperty('outline', 'none', 'important');
-
-            // Check for red border colors and replace with grey/blue
-            const computed = window.parent.getComputedStyle(el);
-            if (computed.borderColor && computed.borderColor.includes('255')) {
-                el.style.setProperty('border-color', 'transparent', 'important');
-            }
-        });
-
-        // Specifically target number input wrapper to set proper border
-        doc.querySelectorAll('.stNumberInput > div > div').forEach(wrapper => {
-            const isFocused = wrapper.closest('.stNumberInput').querySelector(':focus');
-            if (isFocused) {
-                wrapper.style.setProperty('border', '2px solid #1a365d', 'important');
-            } else {
-                wrapper.style.setProperty('border', '2px solid #d1d5db', 'important');
-            }
-            wrapper.style.setProperty('border-radius', '6px', 'important');
-        });
-
-        // Remove box-shadow from any element with inline styles
-        doc.querySelectorAll('[style*="box-shadow"]').forEach(el => {
-            el.style.setProperty('box-shadow', 'none', 'important');
-        });
-
-        // Target +/- buttons specifically
-        doc.querySelectorAll('.stNumberInput button').forEach(btn => {
-            btn.style.setProperty('box-shadow', 'none', 'important');
-            btn.style.setProperty('outline', 'none', 'important');
-            btn.style.setProperty('border', 'none', 'important');
-        });
-    };
-
-    // Run immediately and on interval
-    removeRedStyles();
-    setInterval(removeRedStyles, 30);
-
-    // Observe style changes
-    const observer = new MutationObserver(removeRedStyles);
-    observer.observe(doc.body, { attributes: true, subtree: true, attributeFilter: ['style', 'class'] });
-</script>
-""", height=0)
 
 # Available platforms
 PLATFORMS = {
@@ -2488,11 +1530,141 @@ def save_project_output(config: dict, stage: str, data: dict):
 # CHAT DISPLAY
 # ============================================================================
 
+# Explicit chat avatars — bypass the Material icon font entirely so the
+# assistant avatar can never render as broken ligature text (e.g. "art").
+CHAT_AVATARS = {"assistant": "🧭", "user": "🧑‍🔬"}
+
+
 def display_chat():
     """Display chat messages."""
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
+        with st.chat_message(msg["role"], avatar=CHAT_AVATARS.get(msg["role"])):
             st.markdown(msg["content"])
+
+
+def collect_with_status(config, output_dir):
+    """Run collection inside a persistent st.status panel with live per-platform
+    progress (replaces an opaque spinner during a multi-minute database search)."""
+    with st.status("Collecting papers from databases…", expanded=True) as status:
+        def _cb(platform, query_name, count):
+            status.update(label=f"Searching {platform} — {count} records so far…")
+        result = run_collection(config, output_dir=output_dir, progress_callback=_cb)
+        for plat, cnt in result.get("platform_stats", {}).items():
+            status.write(f"• {plat}: {cnt} records")
+        status.update(
+            label=f"Collection complete — {result['total']} records found",
+            state="complete", expanded=False,
+        )
+    return result
+
+
+def stretch_width() -> dict:
+    """Use Streamlit's current width API while keeping older installs usable."""
+    if "width" in inspect.signature(st.button).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
+def dataframe_width() -> dict:
+    if "width" in inspect.signature(st.dataframe).parameters:
+        return {"width": "stretch"}
+    return {"use_container_width": True}
+
+
+def finalized_flags() -> list:
+    return [
+        st.session_state.step1_finalized,
+        st.session_state.step2_finalized,
+        st.session_state.step3_finalized,
+        st.session_state.get("step4_finalized", False),
+        st.session_state.get("step5_finalized", False),
+    ]
+
+
+def step_icon(status: str) -> str:
+    return {
+        "complete": ":material/check_circle:",
+        "current": ":material/radio_button_checked:",
+        "available": ":material/radio_button_unchecked:",
+        "locked": ":material/lock:",
+        "pending": ":material/radio_button_unchecked:",
+    }.get(status, ":material/radio_button_unchecked:")
+
+
+def render_static_step(state: dict):
+    status = state["status"]
+    label = f'{state["number"]}. {state["name"]}'
+    st.markdown(
+        f'<div class="rp-nav-step {status}"><strong>{label}</strong><br>'
+        f'<span>{state["description"]}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_sidebar_workflow():
+    st.markdown('<div class="rp-eyebrow">Workflow</div>', unsafe_allow_html=True)
+    current = st.session_state.step
+    for state in build_step_states(current, finalized_flags()):
+        is_current = state["status"] == "current"
+        if state["reachable"] and not is_current:
+            if st.button(
+                f'{state["number"]}.  {state["name"]}',
+                key=f"nav_step_{state['number']}",
+                icon=step_icon(state["status"]),
+                **stretch_width(),
+            ):
+                st.session_state.step = state["number"]
+                st.rerun()
+        else:
+            render_static_step(state)
+
+
+def render_workbench_header():
+    config = st.session_state.project_config or {}
+    current = st.session_state.step
+    if current <= 0:
+        title = "Start or resume a review"
+        meta = "Describe a research topic, or resume one of your saved projects."
+    else:
+        step = WORKFLOW_STEPS[current - 1]
+        project_name = config.get("project_name", "Untitled review")
+        title = f"Step {step.number}: {step.name}"
+        meta = f"{project_name} · {step.description}"
+
+    st.markdown(
+        f"""
+        <div class="rp-workbench-head">
+            <p class="rp-workbench-title">{title}</p>
+            <div class="rp-workbench-meta">{meta}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_step_ribbon():
+    states = build_step_states(st.session_state.step, finalized_flags())
+    cells = []
+    for state in states:
+        cells.append(
+            f"<div class='rp-step-chip {state['status']}'>"
+            f"<div class='num'>Step {state['number']} · {state['status'].title()}</div>"
+            f"<div class='name'>{state['name']}</div>"
+            "</div>"
+        )
+    st.markdown(f"<div class='rp-step-ribbon'>{''.join(cells)}</div>", unsafe_allow_html=True)
+
+
+def render_task_card(title: str, body: str):
+    st.markdown(
+        f"""
+        <div class="rp-task-card">
+            <h3>{title}</h3>
+            <p>{body}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ============================================================================
@@ -2503,81 +1675,76 @@ def display_chat():
 import base64
 from pathlib import Path as PathLib
 
+@st.cache_data(show_spinner=False)
 def get_base64_image(image_path):
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
+TAGLINE = "Systematic literature reviews, accelerated by AI."
 
 logo_path = PathLib(__file__).parent / "logo.png"
 if logo_path.exists():
     logo_b64 = get_base64_image(str(logo_path))
     st.markdown(f"""
-    <div class="logo-header">
+    <div class="rp-header">
         <img src="data:image/png;base64,{logo_b64}" alt="ReviewPilot">
         <div>
             <h1>ReviewPilot</h1>
-            <p>An LLM-driven scientific literature review assistant that helps users search, screen, summarize, and organize research information efficiently.</p>
+            <p>{TAGLINE}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 else:
-    st.markdown("""
-    <div class="logo-header">
+    st.markdown(f"""
+    <div class="rp-header">
         <div>
             <h1>ReviewPilot</h1>
-            <p>An LLM-driven scientific literature review assistant that helps users search, screen, summarize, and organize research information efficiently.</p>
+            <p>{TAGLINE}</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-# Sidebar with clean minimal styling
+# Canonical step names — referenced by the stepper, panel headers and chat copy.
+STEP_NAMES = [step.name for step in WORKFLOW_STEPS]
+
+# Sidebar: workflow navigation (the brand lives in the masthead, not here)
 with st.sidebar:
-    # Title only (no logo)
-    st.markdown('<div class="sidebar-title">ReviewPilot</div>', unsafe_allow_html=True)
+    render_sidebar_workflow()
+    cur_step = st.session_state.step
 
-    # 5-step workflow with simple text indicators
-    steps = [
-        ("1", "Search Setup", st.session_state.step1_finalized),
-        ("2", "Paper Screening", st.session_state.step2_finalized),
-        ("3", "Paper Collection", st.session_state.step3_finalized),
-        ("4", "Information Extraction", st.session_state.get('step4_finalized', False)),
-        ("5", "Categorization", st.session_state.get('step5_finalized', False))
-    ]
+    if cur_step > 0:
+        st.divider()
+        if st.button("New Project", icon=":material/add:", **stretch_width()):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            init_session_state()
+            st.rerun()
 
-    for i, (num, name, done) in enumerate(steps, 1):
-        current = st.session_state.step == i
-        # Use simple text prefix instead of special characters
-        if done:
-            prefix = "[Done]"
-            st.markdown(f"""<div class="step-item step-complete">{prefix} {num}. {name}</div>""", unsafe_allow_html=True)
-        elif current:
-            prefix = "[>]"
-            st.markdown(f"""<div class="step-item step-active">{prefix} {num}. {name}</div>""", unsafe_allow_html=True)
-        else:
-            prefix = "[ ]"
-            st.markdown(f"""<div class="step-item step-pending">{prefix} {num}. {name}</div>""", unsafe_allow_html=True)
-
-    st.divider()
-
-    if st.button("New Project", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        init_session_state()
-        st.rerun()
-
-    # Show current config in a cleaner format
+    # Current project at a glance
     if st.session_state.project_config:
         st.divider()
-        st.markdown("**Project Info**")
+        st.markdown('<div class="rp-eyebrow">Project</div>', unsafe_allow_html=True)
         config = st.session_state.project_config
-        st.caption(f"Project: {config.get('project_name', 'N/A')}")
+        st.caption(f"**{config.get('project_name', 'N/A')}**")
         st.caption(f"Topic: {config.get('primary_topic', 'N/A')}")
         st.caption(f"Domain: {config.get('domain', 'N/A')}")
 
+render_workbench_header()
+render_step_ribbon()
+
 # Main content area with two columns
-col_chat, col_control = st.columns([2, 1])
+col_chat, col_control = st.columns([1.65, 0.9])
 
 with col_chat:
-    st.markdown("**Chat**")
+    st.subheader("Assistant", anchor=False)
+    if st.session_state.step == 0:
+        st.caption("Describe a research topic to create a review plan, or resume an existing project from the right panel.")
+        render_task_card(
+            "A guided review workbench",
+            "ReviewPilot keeps the workflow explicit: search setup, screening, full-text retrieval, extraction, and categorization. The assistant helps refine decisions; the action panel controls irreversible or long-running steps.",
+        )
+    else:
+        st.caption("Use chat for refinements; use the action panel for long-running or state-changing steps.")
 
     # Chat container
     chat_container = st.container(height=500)
@@ -2585,8 +1752,14 @@ with col_chat:
     with chat_container:
         display_chat()
 
-    # Chat input
-    user_input = st.chat_input("Type your message...")
+    # Chat input — paused on Step 3 (full-text download has no chat role; the
+    # "Proceed to Extraction" button drives advancement there).
+    _chat_paused = (st.session_state.step == 3)
+    user_input = st.chat_input(
+        "Chat is paused during full-text download — use the buttons on the right"
+        if _chat_paused else "Message the assistant…",
+        disabled=_chat_paused,
+    )
 
     if user_input:
         add_message("user", user_input)
@@ -2798,11 +1971,10 @@ Tell me how to modify, or type **"done"** when satisfied."""
                     output_dir = Path("output") / config["project_name"]
                     output_dir.mkdir(parents=True, exist_ok=True)
 
-                    with st.spinner("Collecting papers from databases..."):
-                        result = run_collection(config, output_dir=output_dir)
-                        st.session_state.collected_papers = result["papers"]
-                        st.session_state.collection_total = result["total"]
-                        save_project_output(config, "collection", result)
+                    result = collect_with_status(config, output_dir)
+                    st.session_state.collected_papers = result["papers"]
+                    st.session_state.collection_total = result["total"]
+                    save_project_output(config, "collection", result)
 
                     msg = f"""**Collection Complete**
 
@@ -2812,7 +1984,7 @@ Tell me how to modify, or type **"done"** when satisfied."""
                         msg += f"  • {p}: {c}\n"
 
                     msg += f"""
-**Step 1 Complete!** Type "proceed" to continue to **Step 2: Paper Screening** (filtering & relevance check)."""
+**Step 1 complete.** Click **Proceed to Step 2** in the panel on the right to start screening."""
                     add_message("assistant", msg)
 
                     st.session_state.step1_finalized = True
@@ -2843,11 +2015,11 @@ Tell me how to modify, or type **"done"** when satisfied."""
             # Step 2 is done, waiting for user to proceed
             user_lower = user_input.lower().strip()
             if user_lower in ["proceed", "next", "continue", "yes", "go"]:
-                add_message("assistant", "Proceeding to **Step 3: Paper Collection**...")
+                add_message("assistant", "Proceeding to **Step 3: Full-Text Retrieval**...")
                 st.session_state.step = 3
                 st.rerun()
             else:
-                add_message("assistant", "Step 2 is complete. Type **\"proceed\"** to continue to Step 3: Paper Collection.")
+                add_message("assistant", "Step 2 is complete. Click **Proceed to Step 3** in the panel on the right.")
 
         elif st.session_state.step == 2 and not st.session_state.step2_finalized:
             # Handle Step 2 chat with tool_use intent detection
@@ -2902,7 +2074,7 @@ Would you like to modify anything?"""
 
 **What changed:** {instruction}
 
-Say **"show me the prompt"** to see the full updated prompt, or click **"Finalize Prompt"** when satisfied."""
+Say **"show me the prompt"** to see the full updated prompt, or click **Finalize Criteria** in the panel on the right when satisfied."""
 
             elif action == "answer_question":
                 response_text = args.get("response", "I'm here to help with the screening prompt. What would you like to know?")
@@ -2926,11 +2098,11 @@ Say **"show me the prompt"** to see the full updated prompt, or click **"Finaliz
                 st.rerun()
             else:
                 papers_with_pdf = len([p for p in st.session_state.relevant_papers if p.get("pdf_downloaded")])
-                add_message("assistant", f"PDF download complete ({papers_with_pdf} papers with PDFs). Type **\"proceed\"** to continue to Step 4: Information Extraction.")
+                add_message("assistant", f"PDF download complete ({papers_with_pdf} papers with PDFs). Click **Proceed to Extraction** in the panel on the right.")
 
         elif st.session_state.step == 3:
             # PDFs not yet downloaded
-            add_message("assistant", "Please click **Download PDFs** to start downloading papers. After download completes, type \"proceed\" to continue to Step 4.")
+            add_message("assistant", "Click **Download PDFs** in the panel on the right to start downloading papers.")
 
         elif st.session_state.step == 4 and not st.session_state.extraction_prompt_finalized:
             # Handle Step 4 chat with tool_use intent detection
@@ -3186,30 +2358,20 @@ Say "generate categories for [field_name]" to get started, or ask me which field
         st.rerun()
 
 with col_control:
-    st.markdown("**Controls**")
+    _cur = st.session_state.step
+    st.subheader("Get started" if _cur == 0 else f"Step {_cur} · {STEP_NAMES[_cur - 1]}", anchor=False)
 
     # ========== STEP 0: Project Selection ==========
     if st.session_state.step == 0:
-        st.markdown("**Welcome**")
-
         existing_projects = st.session_state.get('existing_projects', [])
-
-        # Option to start new project
-        st.markdown("**Start New Project**")
-        if st.button("New Project", type="primary", use_container_width=True):
-            st.session_state.project_selected = True
-            st.session_state.step = 1
-            st.rerun()
-        st.caption("Describe your research topic in chat to configure search")
 
         # Show existing projects if any
         if existing_projects:
-            st.divider()
-            st.markdown("**Resume/Review Existing**")
+            st.markdown("**Resume existing work**")
 
             # Project selection dropdown
             project_options = ["-- Select Project --"] + [
-                f"{p['name']} (Step {p['current_step']}, {p['modified']})"
+                f"{p['name']} ({project_stage_label(p['current_step'])}, {p['modified']})"
                 for p in existing_projects
             ]
 
@@ -3231,14 +2393,14 @@ with col_control:
                 config = selected_project.get('config', {})
                 topic = config.get('primary_topic', 'Unknown topic')
                 st.caption(f"Topic: {topic}")
-                st.caption(f"Progress: Step {current_step}/5")
+                st.caption(f"Progress: {project_stage_label(current_step)}")
 
                 # Resume options
-                st.markdown("**Resume from:**")
+                st.markdown("**Resume target**")
 
                 col_r1, col_r2 = st.columns(2)
                 with col_r1:
-                    if st.button("Continue", use_container_width=True):
+                    if st.button("Continue", type="primary", **stretch_width()):
                         load_existing_project(project_path)
                         add_message("assistant", f"**Resumed project:** {selected_project['name']}\n\nContinuing from Step {st.session_state.step}...")
                         st.rerun()
@@ -3247,27 +2409,35 @@ with col_control:
                     resume_step = st.selectbox(
                         "Go to step:",
                         options=[1, 2, 3, 4, 5],
-                        index=min(current_step - 1, 4),
+                        index=clamp_resume_step(current_step) - 1,
                         key="resume_step_select"
                     )
 
-                if st.button("Resume at Step", use_container_width=True):
+                if st.button("Resume selected step", **stretch_width()):
                     load_existing_project(project_path, resume_step=resume_step)
-                    step_names = ["Search Setup", "Paper Screening", "Paper Collection", "Information Extraction", "Categorization"]
-                    add_message("assistant", f"**Resumed project:** {selected_project['name']}\n\nResuming from **Step {resume_step}: {step_names[resume_step-1]}**")
+                    add_message("assistant", f"**Resumed project:** {selected_project['name']}\n\nResuming from **Step {resume_step}: {STEP_NAMES[resume_step-1]}**")
                     st.rerun()
 
                 st.divider()
 
                 # Review mode (read-only)
-                if st.button("Review Only", use_container_width=True):
+                if st.button("Review results", **stretch_width()):
                     load_existing_project(project_path, resume_step=5)
                     add_message("assistant", f"**Reviewing project:** {selected_project['name']}\n\nYou can view the analysis and results.")
                     st.rerun()
 
+            st.divider()
+
+        # Option to start new project
+        st.markdown("**Start a new review**")
+        if st.button("New Project", type="primary", icon=":material/add:", **stretch_width()):
+            st.session_state.project_selected = True
+            st.session_state.step = 1
+            st.rerun()
+        st.caption("Then describe your research topic in the Assistant to configure the search.")
+
     # ========== STEP 1: Search Setup ==========
     elif st.session_state.step == 1:
-        st.markdown("**Step 1: Search Setup**")
 
         if not st.session_state.project_config:
             st.info("Describe your research topic in the chat to generate search configuration.")
@@ -3309,14 +2479,13 @@ with col_control:
             if st.session_state.step1_finalized:
                 total = st.session_state.get('collection_total', 0)
                 st.success(f"Collection complete: {total} papers")
-                if st.button("Proceed to Step 2", type="primary", use_container_width=True):
+                if st.button("Proceed to Step 2", type="primary", **stretch_width()):
                     add_message("assistant", "Proceeding to **Step 2: Paper Screening**...")
                     st.session_state.step = 2
                     st.rerun()
 
     # ========== STEP 2: PRISMA Screening ==========
     elif st.session_state.step == 2:
-        st.markdown("**Step 2: Paper Screening**")
 
         config = st.session_state.project_config
         topic = config.get('primary_topic', 'the topic')
@@ -3358,16 +2527,15 @@ Now let's configure the relevance screening criteria."""
             with col_set:
                 st.caption(f"Max: {config.get('max_results', 'unlimited')}/platform")
 
-            if st.button("Start Collection", type="primary", use_container_width=True):
+            if st.button("Start Collection", type="primary", **stretch_width()):
                 add_message("assistant", "Starting paper collection from databases...")
 
                 output_dir.mkdir(parents=True, exist_ok=True)
 
-                with st.spinner("Collecting papers from databases..."):
-                    result = run_collection(config, output_dir=output_dir)
-                    st.session_state.collected_papers = result["papers"]
-                    st.session_state.collection_total = result["total"]
-                    save_project_output(config, "collection", result)
+                result = collect_with_status(config, output_dir)
+                st.session_state.collected_papers = result["papers"]
+                st.session_state.collection_total = result["total"]
+                save_project_output(config, "collection", result)
 
                 msg = f"""**Collection Complete**
 
@@ -3376,7 +2544,7 @@ Records identified from databases: **{result['total']}**
                 for p, c in result["platform_stats"].items():
                     msg += f"  • {p}: {c}\n"
 
-                msg += "\nClick **Apply Filters & Remove Duplicates** to continue."
+                msg += "\nDate filtering and de-duplication will run automatically."
                 add_message("assistant", msg)
 
                 st.session_state.collection_done = True
@@ -3497,7 +2665,7 @@ Click **"Finalize Criteria"** when satisfied."""
             st.divider()
 
             if not st.session_state.relevance_prompt_finalized:
-                if st.button("Finalize Criteria", type="primary", use_container_width=True):
+                if st.button("Finalize Criteria", type="primary", **stretch_width()):
                     st.session_state.relevance_prompt_finalized = True
                     add_message("assistant", "Screening criteria finalized! Ready to run relevance check.")
                     st.rerun()
@@ -3506,7 +2674,7 @@ Click **"Finalize Criteria"** when satisfied."""
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    if st.button("Run Screening", type="primary", use_container_width=True):
+                    if st.button("Run Screening", type="primary", **stretch_width()):
                         add_message("assistant", f"Screening {len(papers)} papers...")
 
                         progress = st.progress(0)
@@ -3614,7 +2782,7 @@ Click **"Finalize Criteria"** when satisfied."""
                         else:
                             msg += "• No exclusions\n"
 
-                        msg += "\n**Step 2 Complete!** Type \"proceed\" to continue to **Step 3: Paper Collection**."
+                        msg += "\n**Step 2 complete.** Click **Proceed to Step 3** in the panel on the right."
                         add_message("assistant", msg)
 
                         # Save to agent-level memory
@@ -3634,14 +2802,14 @@ Click **"Finalize Criteria"** when satisfied."""
                         st.rerun()
 
                 with col2:
-                    if st.button("Skip", use_container_width=True):
+                    if st.button("Skip", **stretch_width()):
                         # Assign paper IDs
                         for idx, paper in enumerate(papers, start=1):
                             paper["paper_id"] = f"P{idx:04d}"
                         st.session_state.relevant_papers = papers
                         result = {"relevant": papers, "irrelevant": [], "stats": {"total_checked": 0, "relevant_count": len(papers), "irrelevant_count": 0}}
                         save_project_output(config, "relevance", result)
-                        add_message("assistant", f"Skipped relevance check. All {len(papers)} papers included.\n\nMoving to **Step 3: Paper Collection**")
+                        add_message("assistant", f"Skipped relevance check. All {len(papers)} papers included.\n\nMoving to **Step 3: Full-Text Retrieval**")
                         st.session_state.step2_finalized = True
                         st.session_state.step = 3
                         st.rerun()
@@ -3651,14 +2819,13 @@ Click **"Finalize Criteria"** when satisfied."""
                 st.divider()
                 included_count = len(st.session_state.relevant_papers)
                 st.success(f"Screening complete: {included_count} papers included")
-                if st.button("Proceed to Step 3", type="primary", use_container_width=True):
-                    add_message("assistant", "Proceeding to **Step 3: Paper Collection**...")
+                if st.button("Proceed to Step 3", type="primary", **stretch_width()):
+                    add_message("assistant", "Proceeding to **Step 3: Full-Text Retrieval**...")
                     st.session_state.step = 3
                     st.rerun()
 
     # ========== STEP 3: Paper Collection ==========
     elif st.session_state.step == 3:
-        st.markdown("**Step 3: Paper Collection**")
 
         papers = st.session_state.relevant_papers
         config = st.session_state.project_config
@@ -3667,7 +2834,7 @@ Click **"Finalize Criteria"** when satisfied."""
 
         # Show intro message once
         if not st.session_state.step3_intro_shown:
-            add_message("assistant", f"""**Step 3: Paper Collection**
+            add_message("assistant", f"""**Step 3: Full-Text Retrieval**
 
 Ready to download PDF files for {len(papers)} included papers.
 
@@ -3696,7 +2863,7 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
             email = st.text_input("Email for API access", default_api_email(config),
                                   help="Required by Unpaywall and other APIs")
 
-            if st.button("Download PDFs", type="primary", use_container_width=True):
+            if st.button("Download PDFs", type="primary", **stretch_width()):
                 email = (email or "").strip()
                 if not is_valid_api_email(email):
                     st.error("Enter a real email address for Unpaywall/PubMed API access before downloading PDFs.")
@@ -3832,7 +2999,7 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                         msg += f"| {idx} | {title_short} | {fp['doi']} | `{fp['save_as']}` |\n"
                     msg += f"\nPlace files in: `{pdf_dir}`"
 
-                msg += "\n\n**Type \"proceed\" or click the button below to continue to Step 4: Information Extraction.**"
+                msg += "\n\n**Click Proceed to Extraction in the panel on the right to continue to Step 4.**"
                 add_message("assistant", msg)
                 st.rerun()
 
@@ -3854,11 +3021,11 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                         if stats.get('failed_papers'):
                             with st.expander("Failed Papers (for manual download)", expanded=False):
                                 failed_df = pd.DataFrame(stats['failed_papers'])
-                                st.dataframe(failed_df, use_container_width=True)
+                                st.dataframe(failed_df, **dataframe_width())
 
             st.divider()
 
-            if st.button("Proceed to Extraction", type="primary", use_container_width=True):
+            if st.button("Proceed to Extraction", type="primary", **stretch_width()):
                 add_message("assistant", "Moving to **Step 4: Information Extraction**")
                 st.session_state.step3_finalized = True
                 st.session_state.step = 4
@@ -3873,13 +3040,12 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
                     "Year": p.get("year", ""),
                     "PDF": "Yes" if p.get("pdf_downloaded") else "No"
                 } for p in papers[:20]])
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, **dataframe_width())
                 if len(papers) > 20:
                     st.caption(f"Showing 20 of {len(papers)}")
 
     # ========== STEP 4: Information Extraction ==========
     elif st.session_state.step == 4:
-        st.markdown("**Step 4: Information Extraction**")
 
         papers = st.session_state.relevant_papers
         config = st.session_state.project_config
@@ -3889,331 +3055,346 @@ Provide your email address (required for some APIs) and click **"Download PDFs"*
         output_dir = Path("output") / config["project_name"]
         extraction_dir = output_dir / "extraction"
 
-        # Initialize extraction schema if not set
-        if not st.session_state.extraction_schema:
-            with st.spinner("Generating extraction schema..."):
-                relevance_prompt = st.session_state.relevance_prompt or ""
-                sys_prompt, ext_prompt, schema = generate_extraction_prompt_and_schema(
-                    config.get("description", ""),
-                    topic,
-                    domain,
-                    relevance_prompt
-                )
-                st.session_state.extraction_schema = schema
-                st.session_state.extraction_system_prompt = sys_prompt
-                st.session_state.extraction_prompt_template = ext_prompt
-
-        # Show intro message once
-        if not st.session_state.get('step4_intro_shown'):
-            intro_msg = get_extraction_intro_message(topic, domain, st.session_state.extraction_schema)
-            add_message("assistant", intro_msg)
-            st.session_state.step4_intro_shown = True
-            st.rerun()
-
         # Metrics
         papers_with_pdf = [p for p in papers if p.get("pdf_downloaded")]
         col_m1, col_m2 = st.columns(2)
         col_m1.metric("Included Papers", len(papers))
         col_m2.metric("With PDFs", len(papers_with_pdf))
 
-        # Show schema in expander
-        with st.expander("Extraction Schema", expanded=False):
-            schema = st.session_state.extraction_schema or {}
-            for field in schema.get("fields", []):
-                st.markdown(f"**{field['name']}**: {field['description']}")
-                st.caption(f"_Example: {field['example']}_")
-            st.caption("Refine via chat")
+        schema_state = schema_workbench_state(
+            bool(st.session_state.extraction_schema),
+            st.session_state.extraction_prompt_finalized,
+        )
 
-        st.divider()
-
-        # Phase 1: Schema Finalization
-        if not st.session_state.extraction_prompt_finalized:
-            if st.button("Finalize Schema", type="primary", use_container_width=True):
-                st.session_state.extraction_prompt_finalized = True
-                # Save schema to file for later resume
-                schema_file = extraction_dir / "extraction_schema.json"
-                extraction_dir.mkdir(parents=True, exist_ok=True)
-                save_json(str(schema_file), st.session_state.extraction_schema)
-
-                # Save to agent-level memory
-                try:
-                    agent_mem = get_agent_memory()
-                    agent_mem.save_extraction_schema(
-                        config["project_name"],
-                        config.get("primary_topic", ""),
-                        config.get("domain", ""),
-                        st.session_state.extraction_schema
+        if schema_state["status"] == "missing":
+            render_task_card(
+                "Generate the extraction schema",
+                "ReviewPilot will draft structured fields from the search topic and screening criteria. This can call the configured LLM, so it is now an explicit action instead of an automatic page-load side effect.",
+            )
+            if st.button(schema_state["primary_action"], type="primary", **stretch_width()):
+                with st.status("Generating extraction schema…", expanded=True) as status:
+                    relevance_prompt = st.session_state.relevance_prompt or ""
+                    sys_prompt, ext_prompt, schema = generate_extraction_prompt_and_schema(
+                        config.get("description", ""),
+                        topic,
+                        domain,
+                        relevance_prompt,
                     )
-                except Exception:
-                    pass
-
-                add_message("assistant", "Extraction schema finalized! Ready to extract data from PDFs.")
+                    st.session_state.extraction_schema = schema
+                    st.session_state.extraction_system_prompt = sys_prompt
+                    st.session_state.extraction_prompt_template = ext_prompt
+                    status.update(label="Extraction schema drafted", state="complete", expanded=False)
+                intro_msg = get_extraction_intro_message(topic, domain, st.session_state.extraction_schema)
+                add_message("assistant", intro_msg)
+                st.session_state.step4_intro_shown = True
                 st.rerun()
-            st.info("Chat to refine schema, then click Finalize")
+            st.info("Generate a draft schema first, then refine it in chat before finalizing.")
 
         else:
-            # Phase 2: Run Extraction
-            if len(papers_with_pdf) == 0:
-                st.warning("No PDFs available. Go back to Step 3 to download PDFs.")
-            else:
-                extraction_model = st.selectbox(
-                    "Extraction Model",
-                    [app_llm_model()],
-                    index=0,
-                    help="Configured by REVIEWPILOT_LLM_MODEL"
-                )
+            # Show intro message once, but only after a schema exists.
+            if not st.session_state.get('step4_intro_shown'):
+                intro_msg = get_extraction_intro_message(topic, domain, st.session_state.extraction_schema)
+                add_message("assistant", intro_msg)
+                st.session_state.step4_intro_shown = True
+                st.rerun()
 
-                if st.button("Run Extraction", type="primary", use_container_width=True):
-                    add_message("assistant", f"""Starting information extraction for {len(papers_with_pdf)} papers...
-
-**Please be patient** - extraction typically takes 15-30 seconds per paper as each PDF must be read, processed, and analyzed by the LLM. For {len(papers_with_pdf)} papers, expect approximately {len(papers_with_pdf) * 20 // 60} to {len(papers_with_pdf) * 30 // 60 + 1} minutes total.
-
-Progress will be shown below, and results are saved incrementally (resume-friendly if interrupted).""")
-
-                    extraction_dir.mkdir(parents=True, exist_ok=True)
-
-                    output_jsonl = extraction_dir / "extraction_results.jsonl"
-                    output_xlsx = extraction_dir / "extraction_results.xlsx"
-
-                    # Load existing results for resume
-                    existing_results = []
-                    processed_ids = set()
-                    if output_jsonl.exists():
-                        existing_results = read_jsonl(str(output_jsonl))
-                        processed_ids = {r.get("paper_id") for r in existing_results}
-                        if processed_ids:
-                            st.info(f"Resuming: {len(processed_ids)} already processed")
-
-                    progress = st.progress(0)
-                    status = st.empty()
-                    results = existing_results.copy()
-
-                    schema = st.session_state.extraction_schema or {}
-                    metadata_fields = {'title', 'authors', 'year', 'doi', 'paper_id', 'pdf_path', 'source', 'url'}
-                    extraction_fields = [f for f in schema.get("fields", []) if f["name"] not in metadata_fields]
-                    field_names = [f["name"] for f in extraction_fields]
-                    xlsx_columns = ['paper_id', 'title', 'authors', 'year', 'doi', 'source', 'pdf_path', 'extraction_source', 'title_match', 'title_similarity'] + field_names
-
-                    try:
-                        import fitz
-                        pdf_available = True
-                    except ImportError:
-                        pdf_available = False
-                        st.error("PyMuPDF not installed. Run: pip install PyMuPDF")
-
-                    if pdf_available:
-                        from openai import OpenAI
-
-                        client = OpenAI(api_key=load_api_key(provider='openai'))
-                        system_prompt = st.session_state.get('extraction_system_prompt', '')
-
-                        extraction_prompt_base = f"""Extract the following information from this research paper.
-
-**Field Definitions:**
-"""
-                        for i, field in enumerate(extraction_fields, 1):
-                            extraction_prompt_base += f"""{i}. **{field['name']}**: {field['description']}
-   Example: "{field['example']}"
-
-"""
-                        extraction_prompt_base += """
-**Guidelines:**
-1. Be PRECISE - extract exact names, numbers, and terms
-2. Be CONCISE - keep each field under 50 words
-3. If information is NOT stated, write "None"
-4. Include actual numbers for metrics
-
-**Paper Content:**
-
-"""
-
-                        field_definitions = {}
-                        for field in extraction_fields:
-                            field_definitions[field["name"]] = (str, Field(description=field["description"]))
-
-                        DynamicPaperInfo = create_model("DynamicPaperInfo", **field_definitions)
-
-                        pending_papers = [p for p in papers_with_pdf if p.get("paper_id") not in processed_ids]
-
-                        for i, paper in enumerate(pending_papers):
-                            progress.progress((i + 1) / len(pending_papers))
-                            paper_id = paper.get("paper_id", f"P{i+1:04d}")
-                            title_display = paper.get("title", "")[:40]
-                            status.text(f"Extracting {i+1}/{len(pending_papers)}: {title_display}...")
-
-                            result_row = {
-                                "paper_id": paper_id,
-                                "title": paper.get("title", ""),
-                                "authors": paper.get("authors", ""),
-                                "year": paper.get("year", ""),
-                                "doi": paper.get("doi", ""),
-                                "source": paper.get("source", ""),
-                                "pdf_path": paper.get("pdf_path", ""),
-                                "title_match": "",  # New: whether PDF title matches expected
-                                "title_similarity": "",  # New: Jaccard similarity score
-                                "extraction_source": ""  # New: "pdf" or "web_search"
-                            }
-
-                            try:
-                                pdf_path = paper.get("pdf_path", "")
-                                expected_title = paper.get("title", "")
-
-                                if pdf_path and Path(pdf_path).exists():
-                                    pdf_text = read_pdf(pdf_path)
-
-                                    # Verify title match using multiple methods
-                                    pdf_title = extract_title_from_pdf_text(pdf_text)
-                                    match_status, similarity = check_title_match(expected_title, pdf_title)
-                                    result_row["title_similarity"] = f"{similarity:.2f}"
-                                    result_row["title_match"] = match_status
-                                    result_row["extraction_source"] = "pdf"
-
-                                    if pdf_text.startswith("Error"):
-                                        for field_name in field_names:
-                                            result_row[field_name] = pdf_text
-                                        results.append(result_row)
-                                        write_jsonl(str(output_jsonl), results)
-                                        write_xlsx(str(output_xlsx), results, xlsx_columns)
-                                        continue
-
-                                    if len(pdf_text) > 80000:
-                                        pdf_text = pdf_text[:80000] + "\n... [truncated]"
-
-                                    user_prompt = extraction_prompt_base + pdf_text
-
-                                    try:
-                                        response = client.beta.chat.completions.parse(
-                                            model=extraction_model,
-                                            messages=[
-                                                {"role": "system", "content": system_prompt},
-                                                {"role": "user", "content": [{"type": "text", "text": user_prompt}]}
-                                            ],
-                                            response_format=DynamicPaperInfo
-                                        )
-
-                                        if response.choices[0].message.parsed:
-                                            extracted = response.choices[0].message.parsed.model_dump()
-                                        else:
-                                            content = response.choices[0].message.content or "{}"
-                                            extracted = json.loads(content)
-
-                                        for field_name in field_names:
-                                            result_row[field_name] = extracted.get(field_name, "None")
-
-                                    except Exception:
-                                        # Fallback without structured outputs - use array format for newer models
-                                        response = client.chat.completions.create(
-                                            model=extraction_model,
-                                            messages=[
-                                                {"role": "system", "content": system_prompt + "\n\nReturn a JSON object."},
-                                                {"role": "user", "content": [{"type": "text", "text": user_prompt}]}
-                                            ]
-                                        )
-                                        resp_text = response.choices[0].message.content or "{}"
-                                        if "```json" in resp_text:
-                                            resp_text = resp_text.split("```json")[1].split("```")[0]
-                                        elif "```" in resp_text:
-                                            resp_text = resp_text.split("```")[1].split("```")[0]
-                                        extracted = json.loads(resp_text.strip())
-
-                                        for field_name in field_names:
-                                            result_row[field_name] = extracted.get(field_name, "None")
-                                else:
-                                    # PDF not available - use web search fallback
-                                    status.text(f"Extracting {i+1}/{len(pending_papers)}: {title_display}... (web search)")
-                                    result_row["extraction_source"] = "web_search"
-                                    result_row["title_match"] = "N/A"
-                                    result_row["title_similarity"] = "N/A"
-
-                                    web_extracted = extract_via_web_search(
-                                        paper, extraction_fields, topic, domain
-                                    )
-                                    for field_name in field_names:
-                                        result_row[field_name] = web_extracted.get(field_name, "Not available (no PDF)")
-
-                            except Exception as e:
-                                error_msg = str(e)[:200]
-                                for field_name in field_names:
-                                    result_row[field_name] = f"Error: {error_msg}"
-
-                            results.append(result_row)
-                            write_jsonl(str(output_jsonl), results)
-                            write_xlsx(str(output_xlsx), results, xlsx_columns)
-
-                        progress.empty()
-                        status.empty()
-
-                        st.session_state.extraction_results = results
-
-                        msg = f"""**Extraction Complete**
-
-**Results:**
-- Papers processed: {len(results)}
-- Fields extracted: {len(field_names)}
-
-**Output saved to:**
-- `{output_jsonl}`
-- `{output_xlsx}`
-
-Results saved in real-time (resume-friendly)."""
-                        add_message("assistant", msg)
-                        st.rerun()
+            # Show schema in expander
+            with st.expander("Extraction Schema", expanded=False):
+                schema = st.session_state.extraction_schema or {}
+                for field in schema.get("fields", []):
+                    st.markdown(f"**{field['name']}**: {field['description']}")
+                    st.caption(f"_Example: {field['example']}_")
+                st.caption("Refine via chat")
 
             st.divider()
 
-            # Show extraction results
-            if st.session_state.extraction_results:
-                st.markdown("**Extraction Results:**")
-                with st.expander("View Results", expanded=True):
-                    df = pd.DataFrame(st.session_state.extraction_results)
-                    st.dataframe(df, use_container_width=True, height=300)
+            # Phase 1: Schema Finalization
+            if not st.session_state.extraction_prompt_finalized:
+                if st.button("Finalize Schema", type="primary", **stretch_width()):
+                    st.session_state.extraction_prompt_finalized = True
+                    # Save schema to file for later resume
+                    schema_file = extraction_dir / "extraction_schema.json"
+                    extraction_dir.mkdir(parents=True, exist_ok=True)
+                    save_json(str(schema_file), st.session_state.extraction_schema)
 
-            if st.button("Proceed to Categorization", type="primary", use_container_width=True):
-                save_json(str(output_dir / "search_conditions.json"), config)
-
-                # Save successful extraction schema to memory for future use
-                try:
-                    memory = get_memory_manager(config)
-                    schema_data = st.session_state.extraction_schema
-                    if schema_data and "fields" in schema_data:
-                        # Convert schema to ExtractionSchema for memory
-                        import hashlib
-                        schema_id = hashlib.md5(f"{topic}_{domain}_{datetime.now().isoformat()}".encode()).hexdigest()[:12]
-                        fields = [
-                            ExtractionField(
-                                name=f["name"],
-                                description=f["description"],
-                                examples=[f.get("example", "")] if f.get("example") else []
-                            )
-                            for f in schema_data["fields"]
-                        ]
-                        extraction_schema = ExtractionSchema(
-                            id=schema_id,
-                            name=f"{topic} extraction schema",
-                            domain=domain,
-                            fields=fields,
-                            extraction_prompt=st.session_state.extraction_prompt or ""
+                    # Save to agent-level memory
+                    try:
+                        agent_mem = get_agent_memory()
+                        agent_mem.save_extraction_schema(
+                            config["project_name"],
+                            config.get("primary_topic", ""),
+                            config.get("domain", ""),
+                            st.session_state.extraction_schema
                         )
-                        success_rate = len(st.session_state.extraction_results) / len(papers) if papers else 0
-                        memory.learn_from_successful_extraction(extraction_schema, success_rate)
-                except Exception:
-                    pass  # Don't fail the workflow if memory save fails
+                    except Exception:
+                        pass
 
-                msg = f"""**Extraction Complete!**
+                    add_message("assistant", "Extraction schema finalized! Ready to extract data from PDFs.")
+                    st.rerun()
+                st.info("Chat to refine schema, then click Finalize")
 
-**Summary:**
-- Papers extracted: {len(st.session_state.extraction_results)}
-- Fields extracted: {len(schema.get('fields', []))}
+            else:
+                # Phase 2: Run Extraction
+                if len(papers_with_pdf) == 0:
+                    st.warning("No PDFs available. Go back to Step 3 to download PDFs.")
+                else:
+                    extraction_model = st.selectbox(
+                        "Extraction Model",
+                        [app_llm_model()],
+                        index=0,
+                        help="Configured by REVIEWPILOT_LLM_MODEL"
+                    )
+    
+                    if st.button("Run Extraction", type="primary", **stretch_width()):
+                        add_message("assistant", f"""Starting information extraction for {len(papers_with_pdf)} papers...
+    
+    **Please be patient** - extraction typically takes 15-30 seconds per paper as each PDF must be read, processed, and analyzed by the LLM. For {len(papers_with_pdf)} papers, expect approximately {len(papers_with_pdf) * 20 // 60} to {len(papers_with_pdf) * 30 // 60 + 1} minutes total.
+    
+    Progress will be shown below, and results are saved incrementally (resume-friendly if interrupted).""")
+    
+                        extraction_dir.mkdir(parents=True, exist_ok=True)
+    
+                        output_jsonl = extraction_dir / "extraction_results.jsonl"
+                        output_xlsx = extraction_dir / "extraction_results.xlsx"
+    
+                        # Load existing results for resume
+                        existing_results = []
+                        processed_ids = set()
+                        if output_jsonl.exists():
+                            existing_results = read_jsonl(str(output_jsonl))
+                            processed_ids = {r.get("paper_id") for r in existing_results}
+                            if processed_ids:
+                                st.info(f"Resuming: {len(processed_ids)} already processed")
+    
+                        progress = st.progress(0)
+                        status = st.empty()
+                        results = existing_results.copy()
+    
+                        schema = st.session_state.extraction_schema or {}
+                        metadata_fields = {'title', 'authors', 'year', 'doi', 'paper_id', 'pdf_path', 'source', 'url'}
+                        extraction_fields = [f for f in schema.get("fields", []) if f["name"] not in metadata_fields]
+                        field_names = [f["name"] for f in extraction_fields]
+                        xlsx_columns = ['paper_id', 'title', 'authors', 'year', 'doi', 'source', 'pdf_path', 'extraction_source', 'title_match', 'title_similarity'] + field_names
+    
+                        try:
+                            import fitz
+                            pdf_available = True
+                        except ImportError:
+                            pdf_available = False
+                            st.error("PyMuPDF not installed. Run: pip install PyMuPDF")
+    
+                        if pdf_available:
+                            from openai import OpenAI
+    
+                            client = OpenAI(api_key=load_api_key(provider='openai'))
+                            system_prompt = st.session_state.get('extraction_system_prompt', '')
+    
+                            extraction_prompt_base = f"""Extract the following information from this research paper.
+    
+    **Field Definitions:**
+    """
+                            for i, field in enumerate(extraction_fields, 1):
+                                extraction_prompt_base += f"""{i}. **{field['name']}**: {field['description']}
+       Example: "{field['example']}"
+    
+    """
+                            extraction_prompt_base += """
+    **Guidelines:**
+    1. Be PRECISE - extract exact names, numbers, and terms
+    2. Be CONCISE - keep each field under 50 words
+    3. If information is NOT stated, write "None"
+    4. Include actual numbers for metrics
+    
+    **Paper Content:**
+    
+    """
+    
+                            field_definitions = {}
+                            for field in extraction_fields:
+                                field_definitions[field["name"]] = (str, Field(description=field["description"]))
+    
+                            DynamicPaperInfo = create_model("DynamicPaperInfo", **field_definitions)
+    
+                            pending_papers = [p for p in papers_with_pdf if p.get("paper_id") not in processed_ids]
+    
+                            for i, paper in enumerate(pending_papers):
+                                progress.progress((i + 1) / len(pending_papers))
+                                paper_id = paper.get("paper_id", f"P{i+1:04d}")
+                                title_display = paper.get("title", "")[:40]
+                                status.text(f"Extracting {i+1}/{len(pending_papers)}: {title_display}...")
+    
+                                result_row = {
+                                    "paper_id": paper_id,
+                                    "title": paper.get("title", ""),
+                                    "authors": paper.get("authors", ""),
+                                    "year": paper.get("year", ""),
+                                    "doi": paper.get("doi", ""),
+                                    "source": paper.get("source", ""),
+                                    "pdf_path": paper.get("pdf_path", ""),
+                                    "title_match": "",  # New: whether PDF title matches expected
+                                    "title_similarity": "",  # New: Jaccard similarity score
+                                    "extraction_source": ""  # New: "pdf" or "web_search"
+                                }
+    
+                                try:
+                                    pdf_path = paper.get("pdf_path", "")
+                                    expected_title = paper.get("title", "")
+    
+                                    if pdf_path and Path(pdf_path).exists():
+                                        pdf_text = read_pdf(pdf_path)
+    
+                                        # Verify title match using multiple methods
+                                        pdf_title = extract_title_from_pdf_text(pdf_text)
+                                        match_status, similarity = check_title_match(expected_title, pdf_title)
+                                        result_row["title_similarity"] = f"{similarity:.2f}"
+                                        result_row["title_match"] = match_status
+                                        result_row["extraction_source"] = "pdf"
+    
+                                        if pdf_text.startswith("Error"):
+                                            for field_name in field_names:
+                                                result_row[field_name] = pdf_text
+                                            results.append(result_row)
+                                            write_jsonl(str(output_jsonl), results)
+                                            write_xlsx(str(output_xlsx), results, xlsx_columns)
+                                            continue
+    
+                                        if len(pdf_text) > 80000:
+                                            pdf_text = pdf_text[:80000] + "\n... [truncated]"
+    
+                                        user_prompt = extraction_prompt_base + pdf_text
+    
+                                        try:
+                                            response = client.beta.chat.completions.parse(
+                                                model=extraction_model,
+                                                messages=[
+                                                    {"role": "system", "content": system_prompt},
+                                                    {"role": "user", "content": [{"type": "text", "text": user_prompt}]}
+                                                ],
+                                                response_format=DynamicPaperInfo
+                                            )
+    
+                                            if response.choices[0].message.parsed:
+                                                extracted = response.choices[0].message.parsed.model_dump()
+                                            else:
+                                                content = response.choices[0].message.content or "{}"
+                                                extracted = json.loads(content)
+    
+                                            for field_name in field_names:
+                                                result_row[field_name] = extracted.get(field_name, "None")
+    
+                                        except Exception:
+                                            # Fallback without structured outputs - use array format for newer models
+                                            response = client.chat.completions.create(
+                                                model=extraction_model,
+                                                messages=[
+                                                    {"role": "system", "content": system_prompt + "\n\nReturn a JSON object."},
+                                                    {"role": "user", "content": [{"type": "text", "text": user_prompt}]}
+                                                ]
+                                            )
+                                            resp_text = response.choices[0].message.content or "{}"
+                                            if "```json" in resp_text:
+                                                resp_text = resp_text.split("```json")[1].split("```")[0]
+                                            elif "```" in resp_text:
+                                                resp_text = resp_text.split("```")[1].split("```")[0]
+                                            extracted = json.loads(resp_text.strip())
+    
+                                            for field_name in field_names:
+                                                result_row[field_name] = extracted.get(field_name, "None")
+                                    else:
+                                        # PDF not available - use web search fallback
+                                        status.text(f"Extracting {i+1}/{len(pending_papers)}: {title_display}... (web search)")
+                                        result_row["extraction_source"] = "web_search"
+                                        result_row["title_match"] = "N/A"
+                                        result_row["title_similarity"] = "N/A"
+    
+                                        web_extracted = extract_via_web_search(
+                                            paper, extraction_fields, topic, domain
+                                        )
+                                        for field_name in field_names:
+                                            result_row[field_name] = web_extracted.get(field_name, "Not available (no PDF)")
+    
+                                except Exception as e:
+                                    error_msg = str(e)[:200]
+                                    for field_name in field_names:
+                                        result_row[field_name] = f"Error: {error_msg}"
+    
+                                results.append(result_row)
+                                write_jsonl(str(output_jsonl), results)
+                                write_xlsx(str(output_xlsx), results, xlsx_columns)
+    
+                            progress.empty()
+                            status.empty()
+    
+                            st.session_state.extraction_results = results
+    
+                            msg = f"""**Extraction Complete**
+    
+    **Results:**
+    - Papers processed: {len(results)}
+    - Fields extracted: {len(field_names)}
+    
+    **Output saved to:**
+    - `{output_jsonl}`
+    - `{output_xlsx}`
+    
+    Results saved in real-time (resume-friendly)."""
+                            add_message("assistant", msg)
+                            st.rerun()
+    
+                st.divider()
+    
+                # Show extraction results
+                if st.session_state.extraction_results:
+                    st.markdown("**Extraction Results:**")
+                    with st.expander("View Results", expanded=True):
+                        df = pd.DataFrame(st.session_state.extraction_results)
+                        st.dataframe(df, height=300, **dataframe_width())
+    
+                if st.button("Proceed to Categorization", type="primary", **stretch_width()):
+                    save_json(str(output_dir / "search_conditions.json"), config)
+    
+                    # Save successful extraction schema to memory for future use
+                    try:
+                        memory = get_memory_manager(config)
+                        schema_data = st.session_state.extraction_schema
+                        if schema_data and "fields" in schema_data:
+                            # Convert schema to ExtractionSchema for memory
+                            import hashlib
+                            schema_id = hashlib.md5(f"{topic}_{domain}_{datetime.now().isoformat()}".encode()).hexdigest()[:12]
+                            fields = [
+                                ExtractionField(
+                                    name=f["name"],
+                                    description=f["description"],
+                                    examples=[f.get("example", "")] if f.get("example") else []
+                                )
+                                for f in schema_data["fields"]
+                            ]
+                            extraction_schema = ExtractionSchema(
+                                id=schema_id,
+                                name=f"{topic} extraction schema",
+                                domain=domain,
+                                fields=fields,
+                                extraction_prompt=st.session_state.extraction_prompt or ""
+                            )
+                            success_rate = len(st.session_state.extraction_results) / len(papers) if papers else 0
+                            memory.learn_from_successful_extraction(extraction_schema, success_rate)
+                    except Exception:
+                        pass  # Don't fail the workflow if memory save fails
+    
+                    msg = f"""**Extraction Complete!**
+    
+    **Summary:**
+    - Papers extracted: {len(st.session_state.extraction_results)}
+    - Fields extracted: {len(schema.get('fields', []))}
+    
+    **Output saved to:** `{output_dir}/extraction/`
+    
+    Moving to **Step 5: Categorization & Analysis** where you can categorize varied field values and view analysis."""
+                    add_message("assistant", msg)
+                    st.session_state.step4_finalized = True
+                    st.session_state.step = 5
+                    st.rerun()
 
-**Output saved to:** `{output_dir}/extraction/`
-
-Moving to **Step 5: Categorization & Analysis** where you can categorize varied field values and view analysis."""
-                add_message("assistant", msg)
-                st.session_state.step4_finalized = True
-                st.session_state.step = 5
-                st.rerun()
-
-        # Papers preview
         with st.expander("Papers Preview", expanded=False):
             if papers:
                 df = pd.DataFrame([{
@@ -4221,14 +3402,13 @@ Moving to **Step 5: Categorization & Analysis** where you can categorize varied 
                     "Title": p.get("title", "")[:40] + "...",
                     "PDF": "Yes" if p.get("pdf_downloaded") else "No"
                 } for p in papers[:15]])
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, **dataframe_width())
                 if len(papers) > 15:
                     st.caption(f"Showing 15 of {len(papers)}")
 
 
 # ========== STEP 5: Categorization & Analysis ==========
     elif st.session_state.step == 5:
-        st.markdown("**Step 5: Categorization & Analysis**")
 
         config = st.session_state.project_config
         output_dir = Path("output") / config["project_name"]
@@ -4334,7 +3514,7 @@ What would you like to do?"""
                             st.info("Categories suggested via chat. You can use these or generate new ones.")
                             with st.expander("Chat-suggested categories", expanded=True):
                                 st.markdown(chat_categories)
-                            if st.button("Use Chat Categories", type="primary", use_container_width=True):
+                            if st.button("Use Chat Categories", type="primary", **stretch_width()):
                                 # Parse categories from chat response
                                 import re
                                 lines = chat_categories.split('\n')
@@ -4359,7 +3539,7 @@ What would you like to do?"""
                             st.divider()
 
                         # Step 2: Generate categories using LLM
-                        if st.button("Generate Categories with AI", type="secondary", use_container_width=True):
+                        if st.button("Generate Categories with AI", type="secondary", **stretch_width()):
                             with st.spinner("Analyzing field values semantically..."):
                                 topic = config.get('primary_topic', 'research')
                                 domain = config.get('domain', 'general')
@@ -4472,14 +3652,14 @@ Return JSON:
 
                                 col_confirm, col_regen = st.columns(2)
                                 with col_confirm:
-                                    if st.button("✓ Confirm Categories", type="primary", use_container_width=True):
+                                    if st.button("✓ Confirm Categories", type="primary", **stretch_width()):
                                         st.session_state.categories_confirmed = True
                                         st.session_state.confirmed_categories = categories
                                         add_message("assistant", f"Categories confirmed! Ready to apply categorization to **{selected_field}** with {len(categories)} categories.")
                                         st.rerun()
 
                                 with col_regen:
-                                    if st.button("↻ Regenerate", use_container_width=True):
+                                    if st.button("↻ Regenerate", **stretch_width()):
                                         st.session_state.suggested_categories = []
                                         st.session_state.category_descriptions = {}
                                         st.session_state.categories_confirmed = False
@@ -4495,14 +3675,14 @@ Return JSON:
                                     st.write(f"  • {cat}")
 
                                 # Allow editing after confirmation
-                                if st.button("✎ Edit Categories", use_container_width=True):
+                                if st.button("✎ Edit Categories", **stretch_width()):
                                     st.session_state.categories_confirmed = False
                                     st.rerun()
 
                                 st.divider()
 
                                 # Step 4: Apply categorization using LLM
-                                if st.button("Apply Categorization", type="primary", use_container_width=True):
+                                if st.button("Apply Categorization", type="primary", **stretch_width()):
                                     categorization_dir.mkdir(parents=True, exist_ok=True)
                                     categorized_field = f"{selected_field}_category"
 
@@ -4597,7 +3777,7 @@ Results saved to `{categorization_dir}`""")
 
                 st.divider()
 
-                if st.button("Skip Categorization", use_container_width=True):
+                if st.button("Skip Categorization", **stretch_width()):
                     st.session_state.categorization_done = True
                     add_message("assistant", "Categorization skipped. You can proceed to analysis.")
                     st.rerun()
@@ -4627,9 +3807,9 @@ Results saved to `{categorization_dir}`""")
 
                 # Results table
                 st.markdown("**Full Results:**")
-                st.dataframe(df, use_container_width=True, height=300)
+                st.dataframe(df, height=300, **dataframe_width())
 
-                if st.button("Finalize Project", type="primary", use_container_width=True):
+                if st.button("Finalize Project", type="primary", **stretch_width()):
                     # Final save
                     save_json(str(output_dir / "search_conditions.json"), config)
 
@@ -4670,35 +3850,13 @@ if not st.session_state.messages:
     st.session_state.existing_projects = existing_projects
 
     if existing_projects:
-        welcome = """Welcome to **ReviewPilot**!
+        welcome = """Welcome to **ReviewPilot**.
 
-I'll guide you through a systematic literature review in 5 steps:
-
-| Step | Description |
-|------|-------------|
-| **1. Search Setup** | Define your research topic and search parameters |
-| **2. Paper Screening** | Collect papers, filter, and check relevance |
-| **3. Paper Collection** | Download full-text PDFs for included papers |
-| **4. Information Extraction** | Extract structured information from papers |
-| **5. Categorization** | Categorize and analyze extracted information |
-
-I found **existing projects** you can resume or review.
-
-**Choose an option in the control panel, or describe a new research topic to start fresh.**"""
+I found existing projects you can resume from the action panel. To start fresh, describe the review topic in one sentence."""
     else:
-        welcome = """Welcome to **ReviewPilot**!
+        welcome = """Welcome to **ReviewPilot**.
 
-I'll guide you through a systematic literature review in 5 steps:
-
-| Step | Description |
-|------|-------------|
-| **1. Search Setup** | Define your research topic and search parameters |
-| **2. Paper Screening** | Collect papers, filter, and check relevance |
-| **3. Paper Collection** | Download full-text PDFs for included papers |
-| **4. Information Extraction** | Extract structured information from papers |
-| **5. Categorization** | Categorize and analyze extracted information |
-
-**To get started, describe your research topic in the chat.**
+Describe your research topic in one sentence to generate the initial search setup.
 
 _Example: "Survey of using LLM for rare disease diagnosis"_"""
     add_message("assistant", welcome)

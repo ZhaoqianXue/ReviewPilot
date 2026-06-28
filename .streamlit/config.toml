@@ -1,6 +1,10 @@
 [theme]
+# ReviewPilot brand: navy primary on calm light surfaces.
+# This is the single source of truth for color & type — semantic colors
+# (st.error/warning/success) are left to Streamlit's native palette so that
+# pass/fail in the long-running pipeline is never ambiguous.
 primaryColor = "#1a365d"
 backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f8fafc"
+secondaryBackgroundColor = "#f6f8fb"
 textColor = "#1f2937"
 font = "sans serif"
