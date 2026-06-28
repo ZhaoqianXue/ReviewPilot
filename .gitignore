@@ -39,3 +39,6 @@ papers/
 .env
 venv/
 .venv/
+
+# Design reference: heavy regenerable artifact bundle (keep spec + source instead)
+design/reviewpilot-ui.bundle.html

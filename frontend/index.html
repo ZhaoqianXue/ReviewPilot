@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReviewPilot — Information Extraction</title>
+
+  <!-- Fonts: Newsreader (display), Hanken Grotesk (UI/body), IBM Plex Mono (numbers) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600&family=Newsreader:wght@300;400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Icons: Phosphor (regular + fill weights), drop-in for the design's `ph` / `ph-fill` classes -->
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/fill/style.css">
+
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: #f4f2ec;               /* warm canvas behind the rounded app card */
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      font-family: 'Hanken Grotesk', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    /* Custom scrollbars — matches the design's .rp-scroll */
+    .rp-scroll::-webkit-scrollbar { width: 8px; }
+    .rp-scroll::-webkit-scrollbar-thumb { background: #dfe4dd; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+    .rp-scroll::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
