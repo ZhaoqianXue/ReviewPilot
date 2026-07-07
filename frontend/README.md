@@ -1,56 +1,40 @@
-# ReviewPilot — faithful frontend reproduction
+# ReviewPilot frontend
 
-A pixel-faithful, **zero-build** reproduction of the "Direction C · Ledger" design
-(`design/reviewpilot-ui.bundle.html`), rebuilt as clean, editable source.
+This directory contains the optimized zero-build frontend used by the Starlette
+monolith in `web_app.py`.
 
 ```
 frontend/
-├── index.html   fonts (Google) + icons (Phosphor CDN) + reset/scrollbar CSS + mount point
-├── data.js      ALL demo data — the only file you swap to wire the real backend
-└── app.js       view-model derivation + template + state/click wiring (no framework)
+├── index.html   fonts, icons, reset CSS, and mount point
+├── app.js       real project UI, workflow actions, project creation, state refresh
+└── data.js      demo-only fallback for opening index.html directly
 ```
 
 ## Run it
 
-It's static — any of these work:
+Use the Python monolith from the repository root:
 
 ```bash
-# from the repo root
-python3 -m http.server 5599 --directory frontend
-# then open http://localhost:5599
+.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
 
-Or just double-click `frontend/index.html`. (Fonts + icons load from CDNs, so the
-first paint needs an internet connection; everything else is local.)
+Open http://127.0.0.1:5602.
+For frontend-only edits, keep the server running and refresh the page. For
+Python edits, `--reload` restarts the app automatically.
 
-## How it maps to the original
+## Data flow
 
-- The design's template DSL was expanded to vanilla JS: `<sc-for>` → `.map()`,
-  `<sc-if>` → ternary, `{{ x }}` → `${...}`, `style-hover` → JS hover listeners.
-- Every inline style is reproduced verbatim, so colors/spacing/type match exactly.
-- Fonts: Newsreader / Hanken Grotesk / IBM Plex Mono via Google Fonts.
-- Icons: Phosphor (`ph` / `ph-fill`) via `@phosphor-icons/web` CDN — same classes the design used.
-- Interactivity preserved: click the workflow stepper to switch steps; Schema fields ↔
-  Preview on paper tabs; chat auto-scrolls. Default state = Information Extraction · Schema fields.
+`web_app.py` injects `window.RP_DATA` from `output/{project}/` and serves
+`/static/app.js`. The static `data.js` file is not used by the migrated app; it is
+only a design/demo fallback for direct file viewing.
 
-## Wire it to the Python backend
+The frontend calls:
 
-`app.js` reads everything from `window.RP_DATA` (defined in `data.js`). Replace the
-static literals with a fetch from your backend, keeping the same shapes:
+- `POST /projects` to create a project.
+- `GET /projects/{project_id}/state` to refresh state.
+- `POST /projects/{project_id}/actions/{action}` to run workflow stages.
+- `GET /tasks/{task_id}` to poll background task status.
 
-```js
-// data.js
-const res = await fetch('/api/review/state');   // your Python endpoint
-window.RP_DATA = await res.json();
-```
-
-You'd expose ReviewPilot's existing pipeline (`searchers/`, `extract_info.py`, `main.py`)
-behind a tiny REST layer (FastAPI/Flask) returning `{ project, steps, fields, platforms,
-keywords, groups, retrieved, previewFields, messages, activityByStep, quietLabels,
-ctxLabels, history }`. No changes to `app.js` are needed.
-
-## Note on Streamlit
-
-This is a standalone frontend, not a Streamlit view — Streamlit can't reproduce this
-3-column + stepper layout faithfully. Treat this as the path to replacing/augmenting the
-Streamlit UI with a custom frontend, or as the exact visual contract to build against.
+The primary source of truth remains the existing output folder shape:
+`search_conditions.json`, `collected/`, `filtered/`, `pdfs/`, `extraction/`, and
+`categorization/`.

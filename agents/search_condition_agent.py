@@ -13,12 +13,15 @@ The agent:
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, date
+import json
 import re
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, SEARCH_CONDITION_MODEL
+from utils.llm import query_llm
 from utils.human_interaction import (
     ask_text, ask_confirm, ask_multiselect, ask_date, ask_number,
     print_header, print_subheader, print_summary, print_box, print_text
@@ -78,9 +81,10 @@ class SearchConditionAgent(BaseAgent):
     Agent that intelligently generates search conditions with iterative refinement.
     """
 
-    def __init__(self, output_dir: str = "output"):
+    def __init__(self, output_dir: str = "output", llm_query=None):
         self.output_dir = Path(output_dir)
         self.agent_name = "search_condition"
+        self.llm_query = llm_query or query_llm
         self.state = {}
         self.logger = None
 
@@ -91,9 +95,9 @@ class SearchConditionAgent(BaseAgent):
         """
         defaults = input_data or {}
 
-        # Check if we have complete config (from chat.py)
-        required_fields = ['project_name', 'search_terms', 'platforms', 'primary_topic', 'domain']
-        if all(defaults.get(f) for f in required_fields):
+        # Check if an external caller supplied a complete config.
+        required_fields = ['project_name', 'search_terms', 'platforms']
+        if all(defaults.get(f) for f in required_fields) and (defaults.get('primary_topic') or defaults.get('derive_search_terms')):
             return self._use_provided_config(defaults)
 
         # Interactive mode
@@ -156,7 +160,7 @@ class SearchConditionAgent(BaseAgent):
         # 6. Max results
         print("\n  How many results per platform?")
         print("  (Use 0 for unlimited, or limit to manage processing time)")
-        max_results = ask_number("Max results per platform", default=100, min_val=0)
+        max_results = ask_number("Max results per platform", default=DEFAULT_MAX_RESULTS_PER_PLATFORM, min_val=0)
 
         # 7. arXiv-specific query (if arxiv selected)
         arxiv_query = None
@@ -203,15 +207,23 @@ class SearchConditionAgent(BaseAgent):
     def _use_provided_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Use pre-configured settings without interactive prompts.
-        Called when chat.py provides complete configuration.
+        Called when an external workflow provides complete configuration.
         """
         project_name = config['project_name']
-        safe_name = self._sanitize_name(project_name)
-        project_path = self.output_dir / safe_name
+        project_path = Path(config.get("project_path") or (self.output_dir / self._sanitize_name(project_name)))
         project_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize base agent
         super().__init__(project_path, self.agent_name)
+
+        description = str(config.get('description') or config.get('research_description') or config.get('search_terms') or project_name)
+        derive_search_terms = bool(config.get('derive_search_terms')) or not str(config.get('search_terms') or '').strip()
+        if derive_search_terms:
+            return self._use_llm_derived_config(config, project_name, project_path, description)
+
+        concepts = config.get('extracted_concepts') if isinstance(config.get('extracted_concepts'), dict) else self._extract_concepts(description)
+        search_terms = str(config.get('search_terms') or '')
+        platforms = config.get('platforms') or self._suggest_platforms(concepts)
 
         # Build date range
         date_range = config.get('date_range', {})
@@ -221,19 +233,35 @@ class SearchConditionAgent(BaseAgent):
         else:
             start_date = config.get('date_range_start')
             end_date = config.get('date_range_end')
+        if derive_search_terms and not start_date and not end_date:
+            start_year, _end_year = self._suggest_date_range(concepts)
+            start_date = f"{start_year}-01-01"
+            end_date = ""
+
+        max_results = config.get('max_results', config.get('max_results_per_platform', DEFAULT_MAX_RESULTS_PER_PLATFORM)) or DEFAULT_MAX_RESULTS_PER_PLATFORM
+        source_limits = config.get('source_limits') if isinstance(config.get('source_limits'), dict) else {}
+        if not source_limits:
+            source_limits = {platform: max_results for platform in platforms}
 
         # Build search conditions
         search_conditions = {
+            **config,
             "project_name": project_name,
             "project_path": str(project_path),
-            "search_terms": config['search_terms'],
-            "platforms": config['platforms'],
+            "description": description,
+            "research_description": description,
+            "extracted_concepts": concepts,
+            "search_terms": search_terms,
+            "search_queries": [{"name": "main", "query": search_terms}],
+            "platforms": platforms,
             "date_range": {"start": start_date, "end": end_date},
-            "max_results_per_platform": config.get('max_results', 100) or 100,
-            "primary_topic": config.get('primary_topic', ''),
-            "domain": config.get('domain', ''),
+            "max_results": max_results,
+            "max_results_per_platform": max_results,
+            "source_limits": source_limits,
+            "primary_topic": config.get('primary_topic') or (concepts.get("primary_topics") or [""])[0],
+            "domain": config.get('domain') or ", ".join(concepts.get("domains") or []),
             "extraction_fields": config.get('extraction_fields', 'datasets used, methods, key findings, evaluation metrics'),
-            "arxiv_query": None
+            "arxiv_query": self._generate_arxiv_query(concepts) if "arxiv" in platforms else None
         }
 
         # Save conditions
@@ -244,15 +272,211 @@ class SearchConditionAgent(BaseAgent):
         # Show summary
         print_summary({
             "Project": project_name,
-            "Query": config['search_terms'][:60] + "...",
-            "Platforms": ", ".join(config['platforms']),
-            "Max results": config.get('max_results', 100) or "unlimited"
+            "Query": search_conditions['search_terms'][:60] + "...",
+            "Platforms": ", ".join(search_conditions['platforms']),
+            "Max results": search_conditions.get('max_results', DEFAULT_MAX_RESULTS_PER_PLATFORM) or "unlimited"
         }, title="Using Provided Configuration")
 
         self.state = {"completed": True, "conditions": search_conditions}
         self.save_state()
 
         return search_conditions
+
+    def _use_llm_derived_config(
+        self,
+        config: Dict[str, Any],
+        project_name: str,
+        project_path: Path,
+        description: str,
+    ) -> Dict[str, Any]:
+        """
+        Generate chat-derived search setup through a real LLM call.
+        No deterministic search-query fallback is allowed in this path.
+        """
+        model = str(config.get("model") or SEARCH_CONDITION_MODEL)
+        response_text, usage = self.llm_query(
+            text_prompt=self._llm_search_setup_prompt(config, project_name, description),
+            system_prompt=(
+                "You are ReviewPilot's SearchConditionAgent. Generate rigorous systematic-review "
+                "search setup JSON from the user's natural-language chat request. Return only valid JSON."
+            ),
+            model=model,
+            provider="openai",
+        )
+        llm_payload = self._parse_llm_search_setup(response_text)
+        search_conditions = self._normalize_llm_search_setup(
+            config=config,
+            project_name=project_name,
+            project_path=project_path,
+            description=description,
+            model=model,
+            llm_payload=llm_payload,
+            usage=usage or {},
+        )
+
+        conditions_file = project_path / "search_conditions.json"
+        save_json(str(conditions_file), search_conditions)
+        self.log(f"Search conditions saved: {conditions_file}")
+
+        self.state = {"completed": True, "conditions": search_conditions}
+        self.save_state()
+        return search_conditions
+
+    def _llm_search_setup_prompt(self, config: Dict[str, Any], project_name: str, description: str) -> str:
+        example_max_results = config.get('max_results') or config.get('max_results_per_platform') or DEFAULT_MAX_RESULTS_PER_PLATFORM
+        example_source_limits = config.get('source_limits') or {
+            "pubmed": DEFAULT_MAX_RESULTS_PER_PLATFORM,
+            "openalex": DEFAULT_MAX_RESULTS_PER_PLATFORM,
+        }
+        return f"""Generate Search Setup for ReviewPilot from this user chat request.
+
+Project name:
+{project_name}
+
+User research request:
+{description}
+
+Current canvas constraints supplied by the user interface:
+- Candidate platforms: {config.get('platforms') or []}
+- Source limits: {config.get('source_limits') or {}}
+- Max results: {config.get('max_results') or config.get('max_results_per_platform') or ''}
+- Date range: {config.get('date_range') or {}}
+
+Return ONLY valid JSON with this exact top-level shape:
+{{
+  "reply": "brief assistant message to the user",
+  "project_name": "short human-readable review title",
+  "research_description": "the user's research question in clear prose",
+  "search_terms": "Boolean query string",
+  "search_queries": [{{"name": "main", "query": "Boolean query string"}}],
+  "platforms": ["pubmed", "openalex"],
+  "date_range": {{"start": "YYYY-MM-DD or blank", "end": "YYYY-MM-DD or blank"}},
+  "max_results": {example_max_results},
+  "source_limits": {json.dumps(example_source_limits)},
+  "primary_topic": "main concept",
+  "domain": "research domain",
+  "extracted_concepts": {{
+    "primary_topics": ["..."],
+    "domains": ["..."],
+    "methods": ["..."]
+  }},
+  "keywords": ["keyword or phrase"]
+}}
+
+Rules:
+- Do not include explanatory text outside JSON.
+- Do not invent unsupported databases outside the candidate platforms unless the user request clearly requires them.
+- Preserve the user's intended domain and scope.
+- Preserve the current canvas source limits and max results exactly unless the user has explicitly changed them in the canvas.
+- Build a real Boolean query suitable for academic database search."""
+
+    def _parse_llm_search_setup(self, response_text: str) -> Dict[str, Any]:
+        try:
+            payload = json.loads(str(response_text or "").strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError("SearchConditionAgent LLM did not return valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("SearchConditionAgent LLM response must be a JSON object")
+        return payload
+
+    def _normalize_llm_search_setup(
+        self,
+        *,
+        config: Dict[str, Any],
+        project_name: str,
+        project_path: Path,
+        description: str,
+        model: str,
+        llm_payload: Dict[str, Any],
+        usage: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        required = [
+            "reply",
+            "project_name",
+            "research_description",
+            "search_terms",
+            "search_queries",
+            "platforms",
+            "date_range",
+            "max_results",
+            "source_limits",
+            "primary_topic",
+            "domain",
+            "extracted_concepts",
+        ]
+        missing = [key for key in required if not llm_payload.get(key)]
+        if missing:
+            raise ValueError(f"SearchConditionAgent LLM response missing required fields: {', '.join(missing)}")
+
+        platforms = llm_payload["platforms"]
+        if not isinstance(platforms, list) or not all(str(item).strip() for item in platforms):
+            raise ValueError("SearchConditionAgent LLM response must include a non-empty platforms list")
+        source_limits = llm_payload["source_limits"]
+        if not isinstance(source_limits, dict):
+            raise ValueError("SearchConditionAgent LLM response source_limits must be an object")
+        date_range = llm_payload["date_range"]
+        if not isinstance(date_range, dict):
+            raise ValueError("SearchConditionAgent LLM response date_range must be an object")
+        concepts = llm_payload["extracted_concepts"]
+        if not isinstance(concepts, dict):
+            raise ValueError("SearchConditionAgent LLM response extracted_concepts must be an object")
+        search_queries = llm_payload["search_queries"]
+        if not isinstance(search_queries, list) or not search_queries:
+            raise ValueError("SearchConditionAgent LLM response search_queries must be a non-empty list")
+
+        selected_platforms = [str(platform).strip().lower() for platform in platforms]
+        preserved_source_limits = self._preserved_source_limits(config, llm_payload, selected_platforms)
+        preserved_max_results = max(preserved_source_limits.values()) if preserved_source_limits else DEFAULT_MAX_RESULTS_PER_PLATFORM
+
+        return {
+            **config,
+            "project_name": str(llm_payload["project_name"]),
+            "project_path": str(project_path),
+            "description": description,
+            "research_description": str(llm_payload["research_description"]),
+            "extracted_concepts": concepts,
+            "search_terms": str(llm_payload["search_terms"]),
+            "search_queries": search_queries,
+            "platforms": selected_platforms,
+            "date_range": {
+                "start": str(date_range.get("start") or ""),
+                "end": str(date_range.get("end") or ""),
+            },
+            "max_results": preserved_max_results,
+            "max_results_per_platform": preserved_max_results,
+            "source_limits": preserved_source_limits,
+            "primary_topic": str(llm_payload["primary_topic"]),
+            "domain": str(llm_payload["domain"]),
+            "keywords": llm_payload.get("keywords") or [],
+            "lead_agent_reply": str(llm_payload["reply"]),
+            "llm_usage": usage,
+            "model": model,
+            "generated_by": "llm",
+            "arxiv_query": llm_payload.get("arxiv_query"),
+        }
+
+    def _preserved_source_limits(self, config: Dict[str, Any], llm_payload: Dict[str, Any], platforms: List[str]) -> Dict[str, int]:
+        configured_limits = config.get("source_limits") if isinstance(config.get("source_limits"), dict) else {}
+        llm_limits = llm_payload.get("source_limits") if isinstance(llm_payload.get("source_limits"), dict) else {}
+        default_limit = self._positive_int(
+            config.get("max_results") or config.get("max_results_per_platform"),
+            DEFAULT_MAX_RESULTS_PER_PLATFORM,
+        )
+        limits = {}
+        for platform in platforms:
+            if platform in configured_limits:
+                limits[platform] = self._positive_int(configured_limits.get(platform), default_limit)
+            else:
+                limits[platform] = self._positive_int(llm_limits.get(platform), default_limit)
+        return limits
+
+    @staticmethod
+    def _positive_int(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
 
     def _refine_search_query(self, initial_query: str, concepts: Dict, description: str) -> str:
         """
@@ -465,10 +689,10 @@ class SearchConditionAgent(BaseAgent):
 
         # Detect domains
         domain_patterns = [
+            (r"biomedicine|biomedical|bio-medical", "biomedical"),
             (r"healthcare|health\s*care", "healthcare"),
             (r"clinical|clinic", "clinical"),
             (r"medical|medicine", "medical"),
-            (r"biomedical|bio-medical", "biomedical"),
             (r"health(?!\s*care)", "health"),
             (r"ehr|electronic\s+health\s+record|electronic\s+medical\s+record", "EHR"),
             (r"radiology|imaging", "radiology"),

@@ -61,6 +61,7 @@ class CollectionAgent(BaseAgent):
         arxiv_categories = input_data.get("arxiv_categories")
         cs_venues = input_data.get("cs_venues")
         date_range = input_data.get("date_range", {})
+        source_limits = input_data.get("source_limits") if isinstance(input_data.get("source_limits"), dict) else {}
 
         # Check for arXiv-specific query
         arxiv_query = input_data.get("arxiv_search_terms", query)
@@ -76,16 +77,34 @@ class CollectionAgent(BaseAgent):
         print(f"  Query: {query[:60]}..." if len(query) > 60 else f"  Query: {query}")
         print()
 
+        platform_errors = {}
         try:
-            results = searcher.search(
-                query=query,
-                platforms=platforms,
-                max_results=max_results if max_results > 0 else None,
-                arxiv_query=arxiv_query if "arxiv" in platforms else None,
-                arxiv_categories=arxiv_categories,
-                cs_venues=cs_venues,
-                use_proxy=False
-            )
+            if source_limits:
+                results = {}
+                for platform in platforms:
+                    platform_limit = self._source_limit(source_limits, platform, max_results)
+                    platform_results = searcher.search(
+                        query=query,
+                        platforms=[platform],
+                        max_results=platform_limit if platform_limit > 0 else None,
+                        arxiv_query=arxiv_query if platform == "arxiv" else None,
+                        arxiv_categories=arxiv_categories,
+                        cs_venues=cs_venues,
+                        use_proxy=False
+                    )
+                    platform_errors.update(getattr(searcher, "last_errors", {}) or {})
+                    results.update(platform_results)
+            else:
+                results = searcher.search(
+                    query=query,
+                    platforms=platforms,
+                    max_results=max_results if max_results > 0 else None,
+                    arxiv_query=arxiv_query if "arxiv" in platforms else None,
+                    arxiv_categories=arxiv_categories,
+                    cs_venues=cs_venues,
+                    use_proxy=False
+                )
+                platform_errors.update(getattr(searcher, "last_errors", {}) or {})
         except Exception as e:
             self.log(f"Error during search: {e}", "error")
             raise
@@ -116,6 +135,8 @@ class CollectionAgent(BaseAgent):
             "max_results_per_platform": max_results,
             "date_range": date_range,
             "results": platform_stats,
+            "platform_stats": platform_stats,
+            "platform_errors": platform_errors,
             "total_papers": total_papers
         }
         save_json(str(output_dir / "summary.json"), summary)
@@ -132,6 +153,7 @@ class CollectionAgent(BaseAgent):
             "completed": True,
             "total_papers": total_papers,
             "platform_stats": platform_stats,
+            "platform_errors": platform_errors,
             "output_dir": str(output_dir)
         }
         self.save_state()
@@ -140,8 +162,16 @@ class CollectionAgent(BaseAgent):
             "collected_folder": str(output_dir),
             "total_papers": total_papers,
             "platform_stats": platform_stats,
+            "platform_errors": platform_errors,
             "summary": summary
         }
+
+    def _source_limit(self, source_limits: Dict[str, Any], platform: str, fallback: int) -> int:
+        try:
+            value = int(source_limits.get(platform, fallback))
+        except (TypeError, ValueError):
+            value = int(fallback or 0)
+        return value if value > 0 else 0
 
     def collect_single_platform(self, platform: str, query: str, max_results: int = 0) -> List[Dict]:
         """

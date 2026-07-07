@@ -1,0 +1,558 @@
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class FrontendContractTests(unittest.TestCase):
+    def test_workspace_interactions_do_not_navigate_to_project_pages(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("window.location.href = '/projects/new'", source)
+        self.assertNotIn("window.location.href = `/projects/${encodeURIComponent", source)
+        self.assertIn("fetchProjectState", source)
+
+    def test_search_setup_typing_is_dialog_based_not_canvas_based(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="rp-search-setup-form" style="border:1px solid #e5e7eb', source)
+        self.assertIn('id="rp-setup-dialog-form"', source)
+        self.assertIn('data-act="add-keyword"', source)
+
+    def test_new_review_opens_search_setup_canvas_without_auto_dialog(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("dialog: D.isNewProject ? 'setup' : ''", source)
+        self.assertIn("dialog: ''", source)
+        self.assertNotIn("setData(NEW_PROJECT_TEMPLATE);\n        state.dialog = 'setup';", source)
+        self.assertIn("setData(newProjectDataWithCurrentHistory(), true);\n        state.dialog = '';", source)
+
+    def test_new_review_uses_review_language_and_focuses_chat_topic_input(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn(">New Review</button>", source)
+        self.assertNotIn(">New review</button>", source)
+        self.assertNotIn(">New conversation</button>", source)
+        self.assertIn("chatInputFocus", source)
+        self.assertIn("state.chatInputFocus = true", source)
+        self.assertIn("focusResearchTopicInput(root)", source)
+        self.assertIn('data-ui="research-topic-input"', source)
+        self.assertIn("Describe your research topic...", source)
+
+    def test_sidebar_uses_historys_and_keeps_new_review_in_history(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        project_nav_item = source[source.index("function projectNavItem") : source.index("function workspaceHeader")]
+
+        self.assertIn("label: 'Historys'", source)
+        self.assertIn('data-ui="history-label"', source)
+        self.assertNotIn('data-ui="history-label" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase', source)
+        self.assertNotIn(">PROJECTS</div>", source)
+        self.assertIn("historyGroupsForView(D.history)", source)
+        self.assertIn("h.isNewProject ? `data-act=\"new-project\"`", project_nav_item)
+        self.assertIn("h.isNewProject", project_nav_item)
+        self.assertIn("title: 'Untitled review'", source)
+        self.assertIn("const icon = h.active ? 'ph-fill ph-chat-circle' : 'ph ph-chat-circle';", project_nav_item)
+        self.assertNotIn("ph-plus-circle", project_nav_item)
+        self.assertNotIn("title: D.project.title || 'Untitled review'", source)
+
+    def test_untitled_review_starts_from_chat_topic_input(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="rp-chat-form"', source)
+        self.assertIn('name="message"', source)
+        self.assertIn("handleChatSubmit", source)
+        self.assertIn("createProjectFromChat", source)
+        self.assertIn("Welcome to ReviewPilot", source)
+        self.assertIn("ReviewPilot helps you turn a research topic into a literature review.", source)
+        self.assertIn("${logo(56)}", source)
+        self.assertNotIn("rp-welcome-step-pills", source)
+        self.assertIn("STARTER_TOPICS", source)
+        self.assertIn('data-ui="starter-topic-buttons"', source)
+        self.assertIn("grid-template-columns:minmax(0,1fr)", source)
+        self.assertNotIn("grid-template-columns:repeat(3,minmax(0,1fr))", source)
+        self.assertIn('data-act="starter-topic"', source)
+        self.assertIn("I want to review how LLMs are used in biomedical research and clinical care.", source)
+        self.assertIn("I want to review how LLMs are changing human-computer interaction.", source)
+        self.assertIn("I want to review how LLMs support urban planning and smart cities.", source)
+        starter_topics = source[source.index("const STARTER_TOPICS") : source.index("let D = normalizeData")]
+        self.assertNotIn("'LLM for Biomedical'", starter_topics)
+        self.assertNotIn("'LLM for HCI'", starter_topics)
+        self.assertNotIn("'LLM for Urban'", starter_topics)
+        self.assertIn("const pending = handleChatSubmit(topic);", source)
+        self.assertIn("Categorization & Analysis", source)
+        self.assertIn("final Categorization & Analysis report", source)
+        self.assertIn("To get started, describe your research topic in the chat.", source)
+        self.assertIn("white-space:pre-line", source)
+        self.assertNotIn("ReviewPilot turns your topic into a five-step review, from search setup to final Categorization & Analysis.", source)
+        self.assertNotIn("lead agent", source.lower())
+        self.assertNotIn("specialist agents", source)
+        self.assertNotIn('Example: "Survey of using LLM for rare disease diagnosis"', source)
+        self.assertNotIn("I'll guide you through a systematic literature review in 5 steps, ending with a final Categorization & Analysis report.", source)
+        self.assertNotIn("Final output: grouped evidence and exportable results.", source)
+        self.assertNotIn("Project question still needs to be entered in the setup dialog.", source)
+
+    def test_new_review_chat_creates_project_through_backend_agent(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        chat_submit = source[source.index("function handleChatSubmit") : source.index("function computeVals")]
+
+        self.assertIn("async function createProjectFromChat(message)", source)
+        self.assertIn("async function sendProjectChat(message)", source)
+        self.assertIn("derive_search_terms: true", source)
+        self.assertIn("await createProjectFromChat(message)", chat_submit)
+        self.assertIn("await sendProjectChat(message)", chat_submit)
+        self.assertNotIn("draftSearchSetupFromTopic(message)", chat_submit)
+        self.assertNotIn("I drafted a Search Setup from your topic.", source)
+        self.assertNotIn("live project chat actions are not wired", source)
+        self.assertNotIn("I captured that.", source)
+
+    def test_chat_drafted_search_setup_reuses_the_existing_canvas(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("Drafted from your chat topic", source)
+        self.assertNotIn("Use canvas clicks for sources and keywords", source)
+        self.assertNotIn("Project details", source)
+        self.assertNotIn("function setupCanvasControls", source)
+        self.assertIn(">Research question</div>", source)
+        self.assertIn(">Keywords</div>", source)
+        self.assertIn(">Sources</div>", source)
+
+    def test_chat_input_submits_with_enter_like_assistant_clients(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("root.addEventListener('keydown'", source)
+        self.assertIn("e.key !== 'Enter'", source)
+        self.assertIn("handleChatSubmit(input ? input.value : '')", source)
+
+    def test_chat_input_quick_start_uses_the_three_review_topics(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        assistant_panel = source[source.index("function assistantPanel") : source.index("function setupDialog")]
+        click_router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
+        focus_router = source[source.index("root.addEventListener('focusin'") : source.index("root.addEventListener('input'")]
+
+        self.assertIn("quickStartOpen: false", source)
+        self.assertIn("quickStartOpen: state.quickStartOpen", source)
+        self.assertIn("function chatQuickStartPopover", source)
+        self.assertIn('data-ui="chat-quick-start"', source)
+        self.assertIn('data-ui="assistant-chat-input-area"', assistant_panel)
+        self.assertIn('data-act="chat-quick-start"', source)
+        self.assertIn("STARTER_TOPICS", source)
+        self.assertIn("root.addEventListener('focusin'", source)
+        self.assertIn("[data-ui=\"research-topic-input\"]", focus_router)
+        self.assertIn("state.quickStartOpen = true", focus_router)
+        self.assertIn("setTimeout(paint, 0)", focus_router)
+        self.assertIn("act === 'chat-quick-start'", click_router)
+        self.assertIn("const topic = t.getAttribute('data-topic') || '';", click_router)
+        self.assertIn("const pending = handleChatSubmit(topic);", click_router)
+        self.assertIn("state.quickStartOpen = false", click_router)
+        self.assertIn("I want to review how LLMs are used in biomedical research and clinical care.", source)
+        self.assertIn("I want to review how LLMs are changing human-computer interaction.", source)
+        self.assertIn("I want to review how LLMs support urban planning and smart cities.", source)
+
+    def test_chat_waiting_state_renders_thinking_bubble_and_preserves_history(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("chatPending: false", source)
+        self.assertIn("state.chatPending = true", source)
+        self.assertIn("state.chatPending = false", source)
+        self.assertIn("function thinkingBubble", source)
+        self.assertIn('data-ui="thinking-bubble"', source)
+        self.assertIn(">Thinking</span>", source)
+        self.assertIn("@keyframes rp-thinking-bounce", source)
+        self.assertIn("preservedChatMessages", source)
+        self.assertIn("function mergeConversationMessages", source)
+        self.assertIn("state.preservedChatMessages = D.messages.slice();", source)
+
+    def test_workflow_action_buttons_render_on_canvas_not_chat_thread(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        assistant_panel = source[source.index("function assistantPanel") : source.index("function setupDialog")]
+        render_main = source[source.index('<main class="rp-main"') : source.index("${assistantPanel(v)}")]
+
+        self.assertNotIn('data-act="action"', assistant_panel)
+        self.assertNotIn("showQuietAction", assistant_panel)
+        self.assertIn("function canvasActionButton", source)
+        self.assertIn("${canvasActionButton(v)}", render_main)
+
+    def test_stage_activity_renders_as_conversation_messages_not_fixed_panel(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        assistant_panel = source[source.index("function assistantPanel") : source.index("function setupDialog")]
+        render_main = source[source.index('<main class="rp-main"') : source.index("${assistantPanel(v)}")]
+        activity_message = source[source.index("function activityMessage(m)") : source.index("function assistantMessageHtml")]
+
+        self.assertIn("function activityMessagesForVisibleSteps", source)
+        self.assertIn("function conversationMessagesWithActivity", source)
+        self.assertIn("role: 'activity'", source)
+        self.assertIn("isActivity: true", source)
+        self.assertIn("emittedActivitySteps.has(step)", source)
+        self.assertIn("const emitActivitiesBefore = (step) =>", source)
+        self.assertIn("message.step >= step", source)
+        self.assertIn("if (step > 1 && activitiesByStep.has(step)", source)
+        self.assertIn("if (step === 1 && nextStep !== step", source)
+        self.assertIn("highestSeenStep = Math.max(highestSeenStep, step)", source)
+        self.assertIn("${v.chat.map(chatMessage).join('')}", assistant_panel)
+        self.assertNotIn("${activityPanel(v)}", assistant_panel)
+        self.assertNotIn("${activityPanel(v)}", render_main)
+        self.assertIn('data-ui="assistant-activity-message"', activity_message)
+        self.assertIn('data-ui="assistant-activity-card"', activity_message)
+        self.assertIn("Activity · ${m.activityTitle}", activity_message)
+        self.assertIn("msg.includes('waiting for')", source)
+        self.assertNotIn("data-act=", activity_message)
+
+    def test_workspace_refresh_restores_last_tab_state(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("WORKSPACE_SNAPSHOT_KEY", source)
+        self.assertIn("sessionStorage.getItem(WORKSPACE_SNAPSHOT_KEY)", source)
+        self.assertIn("sessionStorage.setItem(WORKSPACE_SNAPSHOT_KEY", source)
+        self.assertIn("restoreWorkspaceSnapshot();", source)
+        self.assertIn("writeWorkspaceSnapshot();", source)
+        self.assertIn("data: D", source)
+        self.assertIn("step: state.step", source)
+        self.assertIn("tab: state.tab", source)
+        self.assertIn("activeProjectId: state.activeProjectId", source)
+        self.assertIn("setupDraft: state.setupDraft", source)
+
+    def test_refresh_migrates_stale_new_review_welcome_without_dropping_state(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("OLD_NEW_REVIEW_WELCOME", source)
+        self.assertIn("DOUBLE_ESCAPED_NEW_REVIEW_WELCOME_FRAGMENT", source)
+        self.assertIn("function migrateWorkspaceSnapshotData(data)", source)
+        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);", source)
+        self.assertIn("if (shouldRestoreSnapshotData) {", source)
+        self.assertIn("D = migrateWorkspaceSnapshotData(snapshot.data);", source)
+        self.assertIn("firstText.includes(DOUBLE_ESCAPED_NEW_REVIEW_WELCOME_FRAGMENT)", source)
+        self.assertIn("NEW_PROJECT_TEMPLATE.messages[0].text", source)
+
+    def test_workspace_refresh_restores_current_snapshot_but_deep_links_stay_authoritative(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        restore = source[source.index("function restoreWorkspaceSnapshot") : source.index("function writeWorkspaceSnapshot")]
+        route_guard = source[source.index("function shouldRestoreSnapshotDataForRoute") : source.index("function writeWorkspaceSnapshot")]
+
+        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);", restore)
+        self.assertIn("const isWorkspaceRoute = path === '' || path === '/' || path === '/workspace';", route_guard)
+        self.assertIn("if (isWorkspaceRoute) return true;", route_guard)
+        self.assertIn("return D.isNewProject && !!snapshot.data?.isNewProject;", route_guard)
+        self.assertIn("state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);", restore)
+        self.assertIn("state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';", restore)
+        self.assertIn("if ((shouldRestoreSnapshotData || sameProject) && ui.setupDraft)", restore)
+
+    def test_refresh_migrates_stale_four_step_snapshot_to_current_five_step_workflow(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const templateSteps = NEW_PROJECT_TEMPLATE.steps || [];", source)
+        self.assertIn("templateSteps.length > migrated.steps.length", source)
+        self.assertIn("const existingStepsByKey = new Map(migrated.steps.map((step) => [step.key, step]));", source)
+        self.assertIn("migrated.steps = templateSteps.map((step) => ({", source)
+        self.assertIn("migrated.activityByStep = { ...NEW_PROJECT_TEMPLATE.activityByStep, ...migrated.activityByStep };", source)
+        self.assertIn("migrated.ctxLabels = { ...NEW_PROJECT_TEMPLATE.ctxLabels, ...migrated.ctxLabels };", source)
+
+    def test_welcome_renderer_pads_stale_four_row_markdown_with_final_report_step(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const mergedRows = fallbackRows.map((fallback) => rows.find((row) => row.n === fallback.n) || fallback);", source)
+        self.assertIn("const steps = mergedRows", source)
+        self.assertIn("Generate the final Categorization & Analysis report", source)
+        self.assertNotIn("Generate the final Categorization & Analysis report with semantic groups", source)
+
+    def test_welcome_canvas_does_not_duplicate_workflow_chips(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        welcome_canvas = source[source.index("function searchCanvas(v)") : source.index("return `<div style=\"border:1px solid #e5e7eb")]
+
+        self.assertNotIn("rp-welcome-step-pills", source)
+        self.assertNotIn("flex-wrap:nowrap", welcome_canvas)
+        self.assertNotIn("max-width:760px", welcome_canvas)
+        self.assertNotIn("white-space:nowrap", welcome_canvas)
+
+    def test_new_review_template_is_not_double_escaped(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function setData(data, alreadyEscaped = false)", source)
+        self.assertIn("const nextData = normalizeData(alreadyEscaped ? data : escapeData(data || {}));", source)
+        self.assertIn("D = nextData;", source)
+        self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", source)
+
+    def test_new_review_uses_fixed_demo_history_template(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        new_project_click = source[source.index("else if (act === 'new-project')") : source.index("else if (act === 'project')")]
+        new_project_data = source[source.index("function newProjectDataWithCurrentHistory") : source.index("function sourceChecklist")]
+
+        self.assertIn("function newProjectDataWithCurrentHistory()", source)
+        self.assertIn("return normalizeData(JSON.parse(JSON.stringify(NEW_PROJECT_TEMPLATE)));", new_project_data)
+        self.assertNotIn("function inactiveProjectItemsFromHistory", source)
+        self.assertNotIn("if (!D.isNewProject && D.project.id)", source)
+        self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", new_project_click)
+        self.assertNotIn("setData(NEW_PROJECT_TEMPLATE, true);", new_project_click)
+
+    def test_assistant_welcome_renders_as_native_ui_not_raw_markdown(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function assistantMessageHtml(text)", source)
+        self.assertIn("function prototypeWelcomeHtml(text)", source)
+        self.assertIn("| Step | Description |", source)
+        self.assertIn("prototype-welcome-steps", source)
+        self.assertIn("${assistantMessageHtml(m.text)}", source)
+        self.assertNotIn("Categorization queued", source)
+
+    def test_workspace_shell_uses_full_browser_viewport(self):
+        app_source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        html_source = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertNotIn("width:1280px", app_source)
+        self.assertNotIn("height:860px", app_source)
+        self.assertIn("width:100vw;height:100vh", app_source)
+        self.assertNotIn("padding: 24px", html_source)
+        self.assertIn("#app { width: 100vw; height: 100vh; }", html_source)
+
+    def test_search_setup_keywords_are_card_grid_controls(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-ui="keyword-card-grid"', source)
+        self.assertIn('<div data-ui="keyword-card"', source)
+        self.assertNotIn('<span data-ui="keyword-card"', source)
+        self.assertNotIn('data-ui="keyword-card-plus"', source)
+        self.assertIn('data-ui="keyword-card-remove"', source)
+        self.assertIn('data-act="remove-keyword"', source)
+        self.assertIn("ph ph-x", source)
+        self.assertIn('data-ui="keyword-add-card"', source)
+        self.assertIn("gap:7px", source)
+        self.assertIn("border:1px dashed #cfe0f5", source)
+        self.assertIn("border:1px solid #cfe0f5", source)
+        self.assertIn("background:#eaf0f7", source)
+        self.assertIn("font-size:11.5px", source)
+        self.assertIn("Add keyword", source)
+        self.assertNotIn('<i class="ph ph-pencil-simple" style="font-size:13px;"></i>Edit', source)
+
+    def test_search_setup_sources_are_checkbox_controls_not_counts(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function sourceChecklist(sources, sourceLimits, fallbackMaxResults)", source)
+        self.assertIn('data-ui="source-checklist"', source)
+        self.assertIn('data-ui="source-row"', source)
+        self.assertIn("grid-template-columns:minmax(0,1fr) auto", source)
+        self.assertIn('role="checkbox"', source)
+        self.assertIn('aria-checked="${source.selected ? \'true\' : \'false\'}"', source)
+        self.assertIn('data-act="toggle-source"', source)
+        self.assertIn('data-ui="source-check-circle"', source)
+        self.assertIn("border-radius:999px;padding:7px 11px", source)
+        self.assertIn("width:14px;height:14px;border-radius:999px", source)
+        self.assertIn('data-source-limit="${source.key}"', source)
+        self.assertNotIn('data-draft-field="max_results" type="number"', source)
+        self.assertIn("Max results/platform", source)
+        self.assertIn("${source.selected ? '' : 'disabled'}", source)
+        self.assertIn("${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results)}", source)
+        self.assertNotIn("width:14px;height:14px;border-radius:4px", source)
+        self.assertNotIn("${v.platforms.map(sourceRow).join('')}\n      </div>`;\n  }\n\n  function keywordGrid", source)
+
+    def test_search_setup_date_range_is_a_standalone_canvas_block(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function dateRangeCard(setupDraft)", source)
+        self.assertIn('data-ui="date-range-card"', source)
+        self.assertIn(">Date range</div>", source)
+        self.assertIn('data-ui="date-range-summary"', source)
+        self.assertIn('data-ui="date-range-inputs"', source)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", source)
+        self.assertIn('data-ui="date-range-field"', source)
+        self.assertIn('data-ui="date-range-note"', source)
+        self.assertIn('data-draft-field="date_start"', source)
+        self.assertIn('data-draft-field="date_end"', source)
+        self.assertIn("${dateRangeCard(v.setupDraft)}", source)
+
+    def test_search_setup_sources_and_date_range_are_side_by_side(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        search_canvas = source[source.index("function searchCanvas(v)") : source.index("function keywordGrid")]
+
+        self.assertIn('data-ui="search-setup-controls"', search_canvas)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", search_canvas)
+        self.assertIn("align-items:stretch", search_canvas)
+        self.assertIn('data-ui="sources-card"', search_canvas)
+        self.assertIn("height:100%;box-sizing:border-box", search_canvas)
+        self.assertLess(search_canvas.index('data-ui="sources-card"'), search_canvas.index("${dateRangeCard(v.setupDraft)}"))
+
+    def test_search_setup_canvas_inputs_update_the_setup_draft(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function updateSetupDraftField(field, value)", source)
+        self.assertIn("function updateSourceLimit(source, value)", source)
+        self.assertIn("const sourceLimit = e.target.getAttribute('data-source-limit');", source)
+        self.assertIn("updateSourceLimit(sourceLimit, e.target.value);", source)
+        self.assertIn("root.addEventListener('input'", source)
+        self.assertIn("const draftField = e.target.getAttribute('data-draft-field');", source)
+        self.assertIn("updateSetupDraftField(draftField, e.target.value);", source)
+        self.assertNotIn("function syncMaxResultsInputs", source)
+
+    def test_run_collection_persists_canvas_setup_draft_before_action(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function setupPayloadFromDraft(overrides = {})", source)
+        self.assertIn("async function saveDraftSetup(projectId)", source)
+        self.assertIn("if (action === 'collect') await saveDraftSetup(projectId);", source)
+        self.assertIn("source_limits: sourceLimits", source)
+        self.assertIn("date_start: unescapePayloadValue(state.setupDraft.date_start)", source)
+        self.assertIn("date_end: unescapePayloadValue(state.setupDraft.date_end)", source)
+        self.assertIn("function unescapePayloadValue(value)", source)
+        self.assertIn("unescapePayloadValue(state.setupDraft.search_terms)", source)
+        self.assertLess(
+            source.index("if (action === 'collect') await saveDraftSetup(projectId);"),
+            source.index("const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`"),
+        )
+
+    def test_max_results_per_platform_defaults_to_ten_in_frontend_payload(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const DEFAULT_MAX_RESULTS_PER_PLATFORM = '10';", source)
+        self.assertIn("const fallbackMaxResults = String(setup.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
+        self.assertIn("return String(sourceLimits[source] || fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
+        self.assertIn("function maxResultsFromSourceLimits(sourceLimits, fallbackMaxResults = DEFAULT_MAX_RESULTS_PER_PLATFORM)", source)
+        self.assertIn("[source]: state.setupDraft.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM", source)
+        self.assertIn("dialogInput('Max/source', 'max_results', d.max_results, DEFAULT_MAX_RESULTS_PER_PLATFORM", source)
+        self.assertNotIn("setup.max_results || '50'", source)
+        self.assertNotIn("fallbackMaxResults = '50'", source)
+
+    def test_workflow_actions_render_immediate_running_state(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        action_branch = source[source.index("else if (act === 'action')") : source.index("root.addEventListener('input'")]
+        canvas_action = source[source.index("function canvasActionButton(v)") : source.index("function screeningCanvas(v)")]
+
+        self.assertIn("actionPending: ''", source)
+        self.assertIn("state.actionPending = actionName;", action_branch)
+        self.assertIn("paint();", action_branch)
+        self.assertIn("state.actionPending = '';", action_branch)
+        self.assertIn("data-ui=\"canvas-action-spinner\"", canvas_action)
+        self.assertIn("data-ui=\"canvas-action-button\"", canvas_action)
+        self.assertIn("Running", canvas_action)
+        self.assertIn("disabled", canvas_action)
+
+    def test_retrieval_canvas_does_not_label_queued_papers_as_retrieved(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        retrieval_canvas = source[source.index("function retrievalCanvas(v)") : source.index("function extractionCanvas(v)")]
+
+        self.assertIn("Included papers queued for retrieval", retrieval_canvas)
+        self.assertIn("v.retrievalSummary.retrieved > 0", retrieval_canvas)
+
+    def test_canvas_action_errors_render_on_main_workspace(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        render_main = source[source.index('<main class="rp-main"') : source.index("${assistantPanel(v)}")]
+
+        self.assertIn("function actionErrorBanner(v)", source)
+        self.assertIn("${actionErrorBanner(v)}", render_main)
+        self.assertIn('data-ui="canvas-action-error"', source)
+
+    def test_workflow_task_polling_allows_long_running_external_actions(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        wait_for_task = source[source.index("async function waitForTask") : source.index("function appendMessage")]
+
+        self.assertIn("const TASK_POLL_INTERVAL_MS = 1000;", source)
+        self.assertIn("const TASK_MAX_POLLS = 1800;", source)
+        self.assertIn("i < TASK_MAX_POLLS", wait_for_task)
+        self.assertIn("TASK_POLL_INTERVAL_MS", wait_for_task)
+        self.assertIn("Task did not finish within 30 minutes", wait_for_task)
+        self.assertNotIn("i < 120", wait_for_task)
+        self.assertNotIn("Task timed out", wait_for_task)
+
+    def test_future_workflow_steps_are_not_clickable(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function workflowProgressIndex(steps)", source)
+        self.assertIn("canView: i <= progressIndex", source)
+        self.assertIn('data-disabled="true" aria-disabled="true"', source)
+        self.assertIn('const actionAttrs = s.canView ? `data-act="step"', source)
+        self.assertIn("if (t.getAttribute('data-disabled') === 'true') return;", source)
+
+    def test_workflow_stepper_hides_stage_sub_counts(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        step_item = source[source.index("function stepItem(s)") : source.index("function searchCanvas(v)")]
+
+        self.assertIn("${s.label}", step_item)
+        self.assertNotIn("${s.sub}", step_item)
+        self.assertNotIn("font-size:10px;color:#9aa39b;margin-top:3px", step_item)
+
+    def test_categorization_canvas_replicates_prototype_step_five_flow(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        categorize_canvas = source[source.index("function categorizeCanvas(v)") : source.index("function activityMessage(m)")]
+
+        self.assertIn("Papers Extracted", categorize_canvas)
+        self.assertIn("Select Field to Categorize", categorize_canvas)
+        self.assertIn("Sample Values", categorize_canvas)
+        self.assertIn("Categorization Mode", categorize_canvas)
+        self.assertIn("Generate Categories with AI", categorize_canvas)
+        self.assertIn("Generated Categories", categorize_canvas)
+        self.assertIn("Confirm Categories", categorize_canvas)
+        self.assertIn("Apply Categorization", categorize_canvas)
+        self.assertIn("Skip Categorization", categorize_canvas)
+        self.assertIn("Analysis Summary", categorize_canvas)
+        self.assertIn("Category Briefs", categorize_canvas)
+        self.assertIn("Representative papers", categorize_canvas)
+        self.assertIn("Full Results", categorize_canvas)
+        self.assertIn("Finalize Project", categorize_canvas)
+        self.assertIn("function categorizationSetupPanel", source)
+        self.assertIn("function categorizationAnalysisSummary", source)
+        self.assertIn("function categoryBriefsPanel", source)
+        self.assertIn("function categoryBriefPaper", source)
+        self.assertIn("<details", source)
+        self.assertIn("Evidence", source)
+        self.assertIn("function distributionChart", source)
+        self.assertIn("function fullResultsTable", source)
+        self.assertIn("v.categorizationWorkflow", source)
+        self.assertIn("v.categorizationAnalysis", source)
+        self.assertNotIn("Evidence Matrix", categorize_canvas)
+        self.assertNotIn("Export Package", categorize_canvas)
+
+    def test_platform_collection_errors_render_as_source_warnings(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        source_row = source[source.index("const sourceRow") : source.index("const buttonStyle")]
+
+        self.assertIn("platformIssues", source)
+        self.assertIn("platformIssueByLabel", source)
+        self.assertIn('data-ui="source-warning"', source)
+        self.assertIn("Platform issue", source_row)
+        self.assertIn("${issue.message}", source_row)
+        self.assertIn("v.platforms.map(sourceRow)", source)
+
+    def test_categorization_flow_uses_readable_labels_and_responsive_layout(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function workspaceResponsiveStyle()", source)
+        self.assertIn("@media (max-width: 760px)", source)
+        self.assertIn('class="rp-shell"', source)
+        self.assertIn('class="rp-sidebar"', source)
+        self.assertIn('class="rp-main"', source)
+        self.assertIn('class="rp-assistant"', source)
+        self.assertIn(".rp-sidebar { display:none !important; }", source)
+        self.assertIn(".rp-assistant { width:100% !important;", source)
+        self.assertIn("function evidenceFieldLabel(name)", source)
+        self.assertIn("function categorizationMetrics(workflow)", source)
+        self.assertIn("function fullResultsTable(table)", source)
+        self.assertIn("max-height:300px", source)
+        self.assertIn("${evidenceFieldLabel(column)}", source)
+        self.assertIn("Methodology", source)
+        self.assertIn("Task / Application", source)
+
+    def test_completed_final_workflow_step_does_not_render_a_right_tail(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        compute_vals = source[source.index("steps: steps.map") : source.index("stepTitle: cur.label")]
+
+        self.assertIn("noRight: i === arr.length - 1", compute_vals)
+        self.assertIn("rightNavy: i < arr.length - 1 && s.status === 'done'", compute_vals)
+        self.assertNotIn("rightNavy: s.status === 'done'", compute_vals)
+
+    def test_canvas_actions_show_elapsed_running_state(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("actionStartedAt: 0", source)
+        self.assertIn("function formatElapsed(ms)", source)
+        self.assertIn("let actionTicker = null;", source)
+        self.assertIn("state.actionStartedAt = Date.now();", source)
+        self.assertIn("setInterval(paint, 1000)", source)
+        self.assertIn("clearInterval(actionTicker)", source)
+        self.assertIn("v.canvasActionElapsedLabel", source)
+
+    def test_development_command_uses_reload(self):
+        for path in ["README.md", "QUICKSTART.md", "frontend/README.md"]:
+            source = (ROOT / path).read_text(encoding="utf-8")
+            self.assertIn("uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

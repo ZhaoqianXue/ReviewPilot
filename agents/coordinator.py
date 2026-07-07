@@ -19,6 +19,7 @@ from agents.collection_agent import CollectionAgent
 from agents.filtering_agent import FilteringAgent
 from agents.download_agent import DownloadAgent
 from agents.extraction_agent import ExtractionAgent
+from reviewpilot_core.model_policy import FILTERING_MODEL
 from utils.jsonl_handler import save_json, load_json
 from utils.human_interaction import (
     print_header, print_summary, ask_confirm, pause
@@ -82,7 +83,7 @@ class PipelineCoordinator:
         resume_from: Optional[str] = None,
         config_file: Optional[str] = None,
         config_data: Optional[Dict[str, Any]] = None,
-        model: str = "gpt-5-mini",
+        model: str = FILTERING_MODEL,
         auto_approve: bool = False
     ) -> Dict[str, Any]:
         """

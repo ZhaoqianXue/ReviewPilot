@@ -29,6 +29,7 @@ colorama>=0.4.6        # Colored terminal output
 openpyxl>=3.1.0        # Excel xlsx support
 
 # Web Interface
-streamlit>=1.30.0      # Web UI
+starlette>=0.37.0      # Monolith web app shell for the optimized frontend
+uvicorn>=0.30.0        # ASGI server for web_app.py
 playwright>=1.49.0     # Optional browser fallback for PDF downloads
 curl_cffi>=0.7.0       # Optional TLS-fingerprint transport for bot-blocked PDF endpoints

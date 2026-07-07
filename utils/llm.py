@@ -55,6 +55,8 @@ MODEL_COSTS = {
     "o3": (2.0, 8.0),
     "o3-mini": (1.1, 4.4),
     "o4-mini": (4.0, 16.0),
+    "gpt-5.4": (1.75, 14.0),
+    "gpt-5.4-mini": (0.25, 2.0),
     "gpt-5.2": (1.75, 14.0),
     "gpt-5.1": (1.25, 10.0),
     "gpt-5.4-nano": (0.05, 0.4),
@@ -268,24 +270,18 @@ def query_openai(
     api_key = load_api_key(provider='openai')
     client = OpenAI(api_key=api_key)
 
-    # Generic JSON mode. Callers that need a strict Pydantic schema should use
-    # the OpenAI client directly with their own response_format.
-    response_format_param = {"type": "json_object"}
+    request_params = {
+        "model": model,
+        "messages": messages_payload,
+    }
+    if _messages_request_json(messages_payload):
+        request_params["response_format"] = {"type": "json_object"}
 
     # o3 models don't support temperature parameter
     if any(m in model for m in ["o3", "o3-mini", "o4-mini"]):
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages_payload,
-            response_format=response_format_param
-        )
+        response = client.chat.completions.create(**request_params)
     else:
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages_payload,
-            temperature=config.TEMPERATURE,
-            response_format=response_format_param
-        )
+        response = client.chat.completions.create(**request_params, temperature=config.TEMPERATURE)
 
     usage_info = {
         'input_tokens': response.usage.prompt_tokens if response.usage else 0,
@@ -294,6 +290,17 @@ def query_openai(
     }
 
     return response.choices[0].message.content, usage_info
+
+
+def _messages_request_json(messages_payload: List[Dict[str, Any]]) -> bool:
+    def content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return " ".join(str(item.get("text") or "") if isinstance(item, dict) else str(item) for item in content)
+        return str(content or "")
+
+    return any("json" in content_text(message.get("content")).lower() for message in messages_payload)
 
 def query_claude(
     system_prompt: str,
@@ -542,7 +549,7 @@ def query_llm_with_web_search(
 
     Args:
         prompt: The prompt to send to the model
-        model: Model identifier (default: gpt-5-mini)
+        model: Model identifier (defaults to REVIEWPILOT_LLM_MODEL or config.MODEL)
 
     Returns:
         Tuple of (response_text, usage_info_dict)

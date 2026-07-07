@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core.model_policy import FILTERING_MODEL
 from utils.jsonl_handler import (
     read_jsonl, write_jsonl, append_jsonl, save_json, load_json, JSONLWriter
 )
@@ -41,7 +42,7 @@ class FilteringAgent(BaseAgent):
     4. LLM-based relevance checking
     """
 
-    def __init__(self, project_path: Path, model: str = "gpt-5-mini"):
+    def __init__(self, project_path: Path, model: str = FILTERING_MODEL):
         """
         Initialize the filtering agent.
 
@@ -119,9 +120,13 @@ class FilteringAgent(BaseAgent):
             after_relevance_count = after_similarity_count
             print("  Skipping relevance check.")
 
-        # Save filtered papers
+        # Save stage artifacts
         output_file = output_dir / "filtered_papers.jsonl"
+        included_file = output_dir / "included_papers.jsonl"
+        excluded_file = output_dir / "excluded_papers.jsonl"
         write_jsonl(str(output_file), papers)
+        write_jsonl(str(included_file), papers)
+        write_jsonl(str(excluded_file), irrelevant)
         self.log(f"Saved {len(papers)} filtered papers to {output_file}")
 
         # Save statistics
@@ -138,9 +143,19 @@ class FilteringAgent(BaseAgent):
                 "by_similarity": after_exact_count - after_similarity_count,
                 "by_relevance": after_similarity_count - after_relevance_count
             },
-            "final_count": len(papers)
+            "final_count": len(papers),
+            "total_screened": after_similarity_count,
+            "included_count": len(papers),
+            "excluded_count": len(irrelevant)
+        }
+        screening_stats = {
+            **stats,
+            "total_screened": after_similarity_count,
+            "included_count": len(papers),
+            "excluded_count": len(irrelevant)
         }
         save_json(str(output_dir / "filtering_stats.json"), stats)
+        save_json(str(output_dir / "screening_stats.json"), screening_stats)
 
         # Show summary
         print_summary({
@@ -163,7 +178,11 @@ class FilteringAgent(BaseAgent):
 
         return {
             "filtered_file": str(output_file),
+            "included_file": str(included_file),
+            "excluded_file": str(excluded_file),
             "filtered_count": len(papers),
+            "included_count": len(papers),
+            "excluded_count": len(irrelevant),
             "stats": stats
         }
 

@@ -28,7 +28,8 @@ class PaperDownloader:
             "attempted": 0,
             "successful": 0,
             "failed": 0,
-            "skipped": 0
+            "skipped": 0,
+            "failed_papers": []
         }
 
     def download_from_csv(self, csv_file: str):
@@ -113,11 +114,11 @@ class PaperDownloader:
             })
             response.raise_for_status()
 
-            # Check if we got a PDF
-            content_type = response.headers.get('Content-Type', '')
-            if 'pdf' not in content_type.lower() and len(response.content) < 1000:
+            # Publisher landing pages often return HTML with HTTP 200; require
+            # an actual PDF header before counting the download as successful.
+            if not self._looks_like_pdf(response.content):
                 print(f"✗ Not a PDF or access denied")
-                self.stats["failed"] += 1
+                self._record_failure(paper, "invalid_pdf_content")
                 return
 
             # Save the file
@@ -129,7 +130,20 @@ class PaperDownloader:
 
         except requests.exceptions.RequestException as e:
             print(f"✗ {str(e)[:50]}")
-            self.stats["failed"] += 1
+            self._record_failure(paper, "request_failed")
+
+    def _looks_like_pdf(self, content: bytes) -> bool:
+        return bytes(content or b"").lstrip().startswith(b"%PDF-")
+
+    def _record_failure(self, paper: Dict, failure_class: str):
+        self.stats["failed"] += 1
+        self.stats.setdefault("failed_papers", []).append({
+            "id": paper.get("id", ""),
+            "title": paper.get("title", ""),
+            "doi": paper.get("doi", ""),
+            "url": paper.get("url", ""),
+            "failure_class": failure_class,
+        })
 
     def _get_download_url(self, paper: Dict) -> Optional[str]:
         """Determine the download URL for a paper."""

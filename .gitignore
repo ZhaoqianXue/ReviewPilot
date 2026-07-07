@@ -16,6 +16,11 @@ output/
 data/
 writing/
 agent_skill/
+
+# Local handoff snapshot from the original project owner.
+# Kept on this machine for historical comparison only; do not commit or push.
+ReviewPilot_prototype/
+
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
 .benchmark_step3_download/

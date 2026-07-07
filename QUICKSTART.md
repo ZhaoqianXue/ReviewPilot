@@ -1,4 +1,4 @@
-# Quick Start Guide - Data Scholar
+# Quick Start Guide - ReviewPilot
 
 ## Setup
 
@@ -11,8 +11,8 @@ pip install -r requirements.txt
 ### 2. Configure API Keys
 
 ```bash
-cp config.example.py config.py
-cp secrets.example.txt secrets.txt
+# Create local config.py and secrets.txt if they are not already present.
+# Both files are ignored by Git.
 ```
 
 Edit `secrets.txt`:
@@ -25,48 +25,22 @@ Edit `config.py`:
 EMAIL = "your-email@example.com"  # Required for PubMed/OpenAlex
 ```
 
-### 3. Run
+### 3. Run the optimized frontend
 
 ```bash
-python3 chat.py
+.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
+
+Open http://127.0.0.1:5602.
+Keep this process running while developing. Refresh the browser after frontend
+changes; Python backend changes restart automatically because of `--reload`.
 
 ## Usage
 
-```
-What are you researching? Survey of using LLM for rare disease diagnosis
-
-🤖 Generating configuration...
-
-======================================================================
-  Generated Search Configuration
-======================================================================
-📁 Project: llm-rare-disease
-🔍 Search Query: (LLM OR "large language model") AND "rare disease"
-📌 Topic: Large Language Models
-🌍 Domain: rare disease
-📚 Platforms: pubmed, arxiv, openalex
-📅 Date: 2020-01-01 to present
-======================================================================
-
-💬 Feedback Loop
-──────────────────────────────────────────────────────────────────────
-Tell me what to change, or type 'yes' to proceed.
-Examples:
-  • 'add diagnosis to the query'
-  • 'only papers from 2023'
-  • 'include arxiv'
-──────────────────────────────────────────────────────────────────────
-
-💬 Feedback: add diagnosis and treatment
-🤖 Processing... [Updates query]
-
-💬 Feedback: yes
-🚀 Starting pipeline...
-
-✅ Complete!
-📁 Results: output/llm-rare-disease/
-```
+1. Click **New conversation**.
+2. Enter the project name, research question, search terms, platforms, and optional date range.
+3. Open the project and run each workflow action from the right-hand ReviewPilot panel.
+4. Results are written under `output/{project_name}/`.
 
 ## Output
 
@@ -74,15 +48,15 @@ Examples:
 output/{project_name}/
 ├── collected/          # Raw papers from all platforms
 ├── filtered/           # Relevant papers after filtering
-├── papers/             # Downloaded PDFs
-└── extracted/          # Extracted information
+├── pdfs/               # Downloaded PDFs and download report
+├── extraction/         # Schema, prompt, and extracted information
+└── categorization/     # Category mapping and categorized rows
 ```
 
-## Resume Interrupted Search
+## Prototype Reference
 
-```bash
-python3 cli.py run --resume filtering --project your-project
-```
+The old Streamlit and CLI interfaces live only in local `ReviewPilot_prototype/`
+for historical comparison. The active migrated UI is served by `web_app.py`.
 
 ## Tips
 

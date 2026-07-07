@@ -12,18 +12,30 @@ import itertools
 import re
 from typing import List, Dict, Optional
 
+try:
+    import config
+except ImportError:
+    config = None
+
+
+class OpenAlexSearchError(RuntimeError):
+    """Raised when OpenAlex returns a platform-level API error."""
+
 
 class OpenAlexSearcher:
     BASE_URL = "https://api.openalex.org/works"
 
-    def __init__(self, email: Optional[str] = None):
+    def __init__(self, email: Optional[str] = None, api_key: Optional[str] = None):
         """
         Initialize OpenAlex searcher.
 
         Args:
             email: Optional email for polite pool (faster rate limits)
+            api_key: Optional OpenAlex API key for authenticated search
         """
         self.email = email
+        self.api_key = api_key or os.getenv("OPENALEX_API_KEY") or (getattr(config, "OPENALEX_API_KEY", None) if config else None)
+        self.last_error = ""
 
     def search(self, query: str, max_results: int = 100,
                output_file: Optional[str] = None) -> List[Dict]:
@@ -71,9 +83,16 @@ class OpenAlexSearcher:
 
                 if self.email:
                     params["mailto"] = self.email
+                if self.api_key:
+                    params["api_key"] = self.api_key
 
                 try:
-                    response = requests.get(self.BASE_URL, params=params, timeout=60)
+                    response = requests.get(
+                        self.BASE_URL,
+                        params=params,
+                        timeout=60,
+                        headers={"User-Agent": f"ReviewPilot/0.1 (mailto:{self.email})" if self.email else "ReviewPilot/0.1"},
+                    )
                     response.raise_for_status()
                     data = response.json()
 
@@ -112,24 +131,57 @@ class OpenAlexSearcher:
                     time.sleep(5)
                     continue
                 except requests.exceptions.HTTPError as e:
-                    print(f"  OpenAlex API error: {e}")
+                    self.last_error = self._http_error_message(e)
+                    print(f"  OpenAlex API error: {self.last_error}")
+                    if not articles and self._is_platform_unavailable_error(self.last_error):
+                        raise OpenAlexSearchError(self.last_error)
                     break
                 except requests.exceptions.ConnectionError:
-                    print(f"  Connection error at {len(articles)} articles, retrying in 5s...")
+                    self.last_error = f"Connection error at {len(articles)} articles"
+                    print(f"  {self.last_error}, retrying in 5s...")
                     time.sleep(5)
                     continue
 
             if len(articles) >= max_results:
                 break
 
+        if not articles and self.last_error:
+            raise OpenAlexSearchError(self.last_error)
         return articles[:max_results]
 
+    def _is_platform_unavailable_error(self, message: str) -> bool:
+        normalized = str(message or "").lower()
+        return (
+            "rate-limit" in normalized
+            or "rate limited" in normalized
+            or "temporarily unavailable" in normalized
+            or "please use a free api key" in normalized
+        )
+
+    def _http_error_message(self, exc: requests.exceptions.HTTPError) -> str:
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                payload = response.json()
+                message = payload.get("message") or payload.get("error")
+                if message:
+                    return str(message)
+            except ValueError:
+                text = getattr(response, "text", "")
+                if text:
+                    return text[:300]
+        return str(exc)
+
     def _build_query_param_sets(self, query: str) -> List[Dict[str, str]]:
+        search_text = self._clean_query_text(query)
+        param_sets = [{"search": search_text}] if search_text else [{"search": query}]
         groups = self._parse_boolean_groups(query)
         if len(groups) >= 2:
-            param_sets = []
             # OpenAlex title_and_abstract.search does not support arbitrary
-            # nested Boolean syntax. Try focused AND-combinations and dedupe.
+            # nested Boolean syntax. Start with one broad search request, then
+            # fall back to focused AND-combinations only when that does not
+            # fill the requested quota. This avoids request fan-out against
+            # the anonymous search rate limit.
             trimmed_groups = [group[:8] for group in groups[:3] if group]
             for combo in itertools.product(*trimmed_groups):
                 filter_value = ",".join(
@@ -141,11 +193,7 @@ class OpenAlexSearcher:
                     param_sets.append({"filter": filter_value})
                 if len(param_sets) >= 120:
                     break
-            if param_sets:
-                return param_sets
-
-        search_text = self._clean_query_text(query)
-        return [{"search": search_text}] if search_text else [{"search": query}]
+        return param_sets
 
     def _parse_boolean_groups(self, query: str) -> List[List[str]]:
         groups = []
@@ -263,7 +311,7 @@ class OpenAlexSearcher:
 
 
 def search(query: str, max_results: int = 100, email: Optional[str] = None,
-           output_file: Optional[str] = None) -> List[Dict]:
+           output_file: Optional[str] = None, api_key: Optional[str] = None) -> List[Dict]:
     """
     Convenience function to search OpenAlex.
 
@@ -272,11 +320,12 @@ def search(query: str, max_results: int = 100, email: Optional[str] = None,
         max_results: Maximum results to return
         email: Optional email for polite pool
         output_file: Optional path to save results incrementally (JSONL format)
+        api_key: Optional OpenAlex API key
 
     Returns:
         List of article dictionaries
     """
-    searcher = OpenAlexSearcher(email=email)
+    searcher = OpenAlexSearcher(email=email, api_key=api_key)
     return searcher.search(query, max_results, output_file=output_file)
 
 

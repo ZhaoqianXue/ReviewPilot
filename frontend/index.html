@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ReviewPilot — Information Extraction</title>
+  <title>ReviewPilot</title>
 
   <!-- Fonts: Newsreader (display), Hanken Grotesk (UI/body), IBM Plex Mono (numbers) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,18 +16,16 @@
 
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; }
+    html, body { margin: 0; width: 100%; height: 100%; }
     body {
-      background: #f4f2ec;               /* warm canvas behind the rounded app card */
+      background: #fffefc;
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
+      overflow: hidden;
       font-family: 'Hanken Grotesk', system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
+    #app { width: 100vw; height: 100vh; }
     /* Custom scrollbars — matches the design's .rp-scroll */
     .rp-scroll::-webkit-scrollbar { width: 8px; }
     .rp-scroll::-webkit-scrollbar-thumb { background: #dfe4dd; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }

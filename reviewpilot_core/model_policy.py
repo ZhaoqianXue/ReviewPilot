@@ -1,0 +1,15 @@
+"""Model defaults for ReviewPilot agent roles."""
+
+LEAD_AGENT_DEV_MODEL = "gpt-5.4-mini"
+LEAD_AGENT_PRODUCTION_MODEL = "gpt-5.4"
+DEFAULT_MAX_RESULTS_PER_PLATFORM = 10
+SEARCH_CONDITION_MODEL = "gpt-5.4-mini"
+PROMPT_MODEL = "gpt-5.4-mini"
+COLLECTION_MODEL = "gpt-5.4-mini"
+FILTERING_MODEL = "gpt-5.4-mini"
+DOWNLOAD_MODEL = "gpt-5.4-mini"
+EXTRACTION_MODEL = "gpt-5.4-mini"
+CATEGORIZATION_MODEL = "gpt-5.4-mini"
+SUBSCRIBED_PAPER_FALLBACK_MODEL = "gpt-5.4-mini"
+ESCALATION_MODEL = "gpt-5.4"
+HARD_REASONING_ESCALATION_MODEL = "gpt-5.5"

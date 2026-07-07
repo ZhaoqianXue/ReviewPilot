@@ -10,11 +10,13 @@ Uses structured templates with Task, Input, and Instruction components.
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+import json
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core.model_policy import PROMPT_MODEL
 from utils.human_interaction import (
     ask_text, ask_confirm, print_header, print_subheader, print_box, print_text
 )
@@ -29,8 +31,10 @@ class PromptAgent(BaseAgent):
     based on user's research requirements.
     """
 
-    def __init__(self, project_path: Path):
+    def __init__(self, project_path: Path, model: str = PROMPT_MODEL, llm_query=None):
         super().__init__(project_path, "prompt")
+        self.model = model
+        self.llm_query = llm_query
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Generate prompts based on search conditions."""
@@ -47,7 +51,7 @@ class PromptAgent(BaseAgent):
         """
         Generate relevance checking prompt based on search conditions.
 
-        If primary_topic and domain are already provided (from chat.py),
+        If primary_topic and domain are already provided by the caller,
         auto-generates the prompt without asking questions.
 
         Otherwise asks user for:
@@ -57,7 +61,7 @@ class PromptAgent(BaseAgent):
         """
         search_terms = search_conditions.get("search_terms", "")
 
-        # Check if we already have primary_topic and domain (from chat.py)
+        # Check if primary_topic and domain were already supplied.
         primary_topic = search_conditions.get("primary_topic", "")
         domain = search_conditions.get("domain", "")
 
@@ -291,6 +295,7 @@ Your response (True/False):"""
         If auto_approve is set, uses extraction_fields from config or defaults.
         """
         auto_approve = input_data.get("auto_approve", False)
+        llm_query = input_data.get("llm_query") or self.llm_query
 
         if auto_approve:
             # Use fields from config or defaults
@@ -346,12 +351,30 @@ Your response (True/False):"""
         extraction_prompt["generated_at"] = datetime.now().isoformat()
         extraction_prompt["extraction_fields"] = extraction_fields
         extraction_prompt["output_structured"] = structured
+        schema, source, usage = self._generate_extraction_schema(input_data, extraction_prompt, llm_query)
+        system_prompt, stage_prompt = self._build_extraction_stage_prompt(input_data, schema)
+        extraction_prompt["schema"] = schema
+        extraction_prompt["source"] = source
+        extraction_prompt["usage"] = usage
 
         # Save prompt to prompts folder
         prompts_dir = self.ensure_directory("prompts")
         output_file = prompts_dir / "extraction_prompt.json"
         save_json(str(output_file), extraction_prompt)
         self.log(f"Extraction prompt saved to: {output_file}")
+
+        extraction_dir = self.ensure_directory("extraction")
+        save_json(str(extraction_dir / "extraction_schema.json"), schema)
+        save_json(
+            str(extraction_dir / "extraction_prompt.json"),
+            {
+                "system_prompt": system_prompt,
+                "extraction_prompt": stage_prompt,
+                "schema": schema,
+                "source": source,
+                "usage": usage,
+            },
+        )
 
         # Save state
         self.state["extraction_prompt"] = extraction_prompt
@@ -423,3 +446,104 @@ Your response:"""
             "output_format": "json" if structured else "markdown",
             "fields": fields
         }
+
+    def _generate_extraction_schema(self, input_data: Dict[str, Any], extraction_prompt: Dict[str, Any], llm_query) -> tuple[Dict[str, Any], str, Dict[str, Any]]:
+        query = llm_query or self._default_llm_query
+        response, usage = query(
+            text_prompt=self._schema_generation_prompt(input_data, extraction_prompt),
+            system_prompt="You design JSON extraction schemas for systematic literature reviews. Return only valid JSON.",
+            model=self.model,
+            provider="openai",
+        )
+        schema = self._normalize_schema(self._extract_json(str(response)))
+        if not schema["fields"]:
+            raise ValueError("PromptAgent LLM response did not include extraction schema fields")
+        return schema, "llm", usage or {}
+
+    def _schema_generation_prompt(self, input_data: Dict[str, Any], extraction_prompt: Dict[str, Any]) -> str:
+        included = input_data.get("included_papers") or []
+        sample_lines = []
+        for paper in included[:3]:
+            title = paper.get("title") or "Untitled"
+            abstract = str(paper.get("abstract") or "")[:500]
+            sample_lines.append(f"- {title}: {abstract}")
+        relevance_prompt = self._prompt_text(input_data.get("relevance_prompt") or {})
+        return f"""Design an extraction schema for a systematic review.
+
+Research question:
+{input_data.get("description") or input_data.get("search_terms") or input_data.get("project_name") or "Not specified"}
+
+Primary topic: {input_data.get("primary_topic") or input_data.get("project_name") or "the review topic"}
+Domain: {input_data.get("domain") or "the target domain"}
+
+Requested extraction fields:
+{extraction_prompt.get("extraction_fields") or ", ".join(extraction_prompt.get("fields") or [])}
+
+Screening/relevance context:
+{relevance_prompt[:1500] if relevance_prompt else "No relevance prompt is available."}
+
+Included paper examples:
+{chr(10).join(sample_lines) if sample_lines else "No included paper examples are available."}
+
+Return ONLY valid JSON:
+{{
+  "fields": [
+    {{
+      "name": "snake_case_name",
+      "type": "Text",
+      "description": "What to extract from the full text",
+      "required": false,
+      "example": "Example value"
+    }}
+  ]
+}}
+
+Generate 8-12 fields when the request is broad. Preserve user-requested concepts. Do not include metadata fields like title, authors, year, doi, source, or url."""
+
+    def _build_extraction_stage_prompt(self, input_data: Dict[str, Any], schema: Dict[str, Any]) -> tuple[str, str]:
+        topic = input_data.get("primary_topic") or input_data.get("project_name") or "the review topic"
+        domain = input_data.get("domain") or "the target domain"
+        relevance_prompt = self._prompt_text(input_data.get("relevance_prompt") or {})
+        system_prompt = f"""You are an expert researcher extracting structured information from papers about {topic} in {domain}.
+Use the same inclusion criteria as screening:
+{relevance_prompt[:1500] if relevance_prompt else "Standard topic/domain relevance criteria."}"""
+        field_lines = [
+            f"{index}. {field['name']}: {field['description']} Example: {field.get('example', '')}"
+            for index, field in enumerate(schema["fields"], start=1)
+        ]
+        return system_prompt, "Extract information from the paper using these fields:\n\n" + "\n".join(field_lines)
+
+    def _normalize_schema(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        fields = []
+        for item in raw.get("fields") or []:
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            fields.append(
+                {
+                    "name": name,
+                    "type": str(item.get("type") or "Text"),
+                    "description": str(item.get("description") or item.get("example") or ""),
+                    "required": bool(item.get("required", False)),
+                    "example": str(item.get("example") or ""),
+                }
+            )
+        return {"fields": fields}
+
+    def _extract_json(self, text: str) -> Dict[str, Any]:
+        stripped = text.strip()
+        if "```json" in stripped:
+            stripped = stripped.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in stripped:
+            stripped = stripped.split("```", 1)[1].split("```", 1)[0]
+        return json.loads(stripped)
+
+    def _prompt_text(self, prompt: Dict[str, Any]) -> str:
+        if not isinstance(prompt, dict):
+            return str(prompt or "")
+        return "\n".join(str(prompt.get(key) or "") for key in ("task", "instruction", "user_prompt_template") if prompt.get(key))
+
+    def _default_llm_query(self, *args, **kwargs):
+        from utils.llm import query_llm
+
+        return query_llm(*args, **kwargs)

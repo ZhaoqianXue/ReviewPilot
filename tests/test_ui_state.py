@@ -27,7 +27,9 @@ class UiStateTests(unittest.TestCase):
         )
         self.assertEqual([step["reachable"] for step in states], [True, True, True, True, False])
 
-    def test_completed_project_is_labeled_without_exposing_step_six(self):
+    def test_categorization_is_the_fifth_user_facing_step_before_completion(self):
+        self.assertEqual(WORKFLOW_STEPS[4].name, "Categorization & Analysis")
+        self.assertEqual(project_stage_label(5), "Step 5 of 5")
         self.assertEqual(project_stage_label(6), "Complete")
         self.assertEqual(clamp_resume_step(6), 5)
 

@@ -95,7 +95,9 @@ class AcademicSearcher:
             "wos": self._get_config_value("WOS_API_KEY", "wos_api_key"),
             "scopus": self._get_config_value("SCOPUS_API_KEY", "scopus_api_key"),
             "pubmed": self._get_config_value("PUBMED_API_KEY", "pubmed_api_key"),
+            "openalex": self._get_config_value("OPENALEX_API_KEY", "openalex_api_key"),
         }
+        self.last_errors = {}
 
         self.email = self._get_config_value("EMAIL", "email") or os.getenv("RESEARCHER_EMAIL", "researcher@example.com")
 
@@ -141,6 +143,7 @@ class AcademicSearcher:
             os.makedirs(output_folder, exist_ok=True)
 
         results = {}
+        self.last_errors = {}
 
         for platform in platforms:
             if platform not in PLATFORMS:
@@ -190,6 +193,7 @@ class AcademicSearcher:
                         query,
                         max_results=max_results,
                         email=self.email,
+                        api_key=self.api_keys.get("openalex"),
                         output_file=output_file
                     )
 
@@ -224,6 +228,7 @@ class AcademicSearcher:
 
             except Exception as e:
                 print(f"  Error searching {platform}: {e}")
+                self.last_errors[platform] = str(e)
                 results[platform] = []
 
         return results

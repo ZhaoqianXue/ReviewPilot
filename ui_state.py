@@ -1,4 +1,4 @@
-"""Pure UI state helpers for ReviewPilot's Streamlit workflow."""
+"""Pure workflow state helpers for ReviewPilot UI projections."""
 
 from __future__ import annotations
 
@@ -18,12 +18,12 @@ WORKFLOW_STEPS = [
     WorkflowStep(2, "Paper Screening", "Filter by date, remove duplicates, and apply relevance criteria.", "Run screening"),
     WorkflowStep(3, "Full-Text Retrieval", "Download open-access PDFs and prepare manual follow-up lists.", "Download PDFs"),
     WorkflowStep(4, "Information Extraction", "Review schema fields and extract structured evidence from PDFs.", "Finalize schema"),
-    WorkflowStep(5, "Categorization", "Group extracted values into analysis-ready categories.", "Apply categorization"),
+    WorkflowStep(5, "Categorization & Analysis", "Group extracted evidence into semantic categories and review final results.", "Apply categorization"),
 ]
 
 
 def clamp_resume_step(step: int | None) -> int:
-    """Return a user-facing workflow step in the supported 1-5 range."""
+    """Return a user-facing workflow step in the supported core-step range."""
     try:
         value = int(step or 1)
     except (TypeError, ValueError):

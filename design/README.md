@@ -25,6 +25,6 @@ Target UI: **Direction C · Ledger**. Three files, three jobs:
 > Reproduce the layout, colors, fonts, and components, then wire the real data in.
 
 ## Reality check
-ReviewPilot is a Streamlit app. Streamlit cannot reproduce this custom 3-column +
-horizontal-stepper layout pixel-for-pixel. Use these files to (a) restyle within Streamlit's
-limits, or (b) build a small custom HTML/React frontend wired to the Python backend.
+ReviewPilot now uses a small custom frontend served by `web_app.py`. These files
+remain the visual reference for maintaining the optimized 3-column + horizontal
+stepper layout while keeping it wired to the Python backend.

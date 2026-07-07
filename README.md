@@ -1,11 +1,12 @@
-# Data Scholar
+# ReviewPilot
 
-A multi-agent system for searching, filtering, downloading, and extracting information from academic papers across multiple platforms.
+A local monolith web app for searching, filtering, downloading, extracting, and categorizing academic papers across multiple platforms.
 
 ## Features
 
 - **Multi-platform search**: PubMed, OpenAlex, arXiv, Scopus, Web of Science, Google Scholar, CS Conferences
-- **Human-in-the-loop**: Interactive prompts guide you through the entire workflow
+- **New frontend web app**: Starlette serves the optimized ReviewPilot frontend and calls the Python pipeline directly
+- **Human-in-the-loop**: Project configuration and workflow actions are exposed through the web app
 - **LLM-powered filtering**: Relevance checking using GPT-5/Claude/Gemini
 - **Automated extraction**: Extract structured information from PDFs
 - **Resume capability**: Continue from any pipeline stage
@@ -14,15 +15,15 @@ A multi-agent system for searching, filtering, downloading, and extracting infor
 ## Project Structure
 
 ```
-data-scholar/
-├── cli.py                      # Main entry point
-├── main.py                     # Legacy search interface
-├── config.example.py           # Configuration template
-├── secrets.example.txt         # API keys template
+ReviewPilot/
+├── web_app.py                  # Starlette monolith entrypoint
+├── reviewpilot_core/           # Project state projection and workflow actions
+├── frontend/                   # Optimized zero-build frontend
+├── main.py                     # Academic search adapter used by workflow actions
 ├── requirements.txt
 ├── README.md
 │
-├── agents/                     # Multi-agent system
+├── agents/                     # Pipeline agents retained for backend workflows
 │   ├── base_agent.py
 │   ├── coordinator.py          # Pipeline orchestrator
 │   ├── search_condition_agent.py   # Asks user for search params
@@ -43,7 +44,7 @@ data-scholar/
 │
 └── utils/
     ├── llm.py                  # LLM API interface
-    ├── downloader.py           # PDF downloader
+    ├── pdf_downloader.py       # PDF downloader
     ├── jsonl_handler.py
     └── human_interaction.py
 ```
@@ -61,45 +62,22 @@ pip install -r requirements.txt
 ### 2. Configure API keys
 
 ```bash
-cp config.example.py config.py
-cp secrets.example.txt secrets.txt
-
-# Edit with your API keys
-nano secrets.txt
-nano config.py
+# Create local config.py and secrets.txt if they are not already present.
+# These files are ignored by Git.
 ```
 
-### 3. Run
+### 3. Run the web app
 
 ```bash
-python3 chat.py
+.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
 
-Describe your research → AI generates config → Give feedback → Run!
+Open http://127.0.0.1:5602, create a review project, then run collection, screening, PDF download, schema generation, extraction, and categorization from the optimized frontend.
+With `--reload`, Python backend edits restart the local server automatically.
+Frontend static edits under `frontend/` are picked up by a browser refresh.
 
-**Example:**
-```
-What are you researching? I am doing a survey of using LLM for rare disease
-
-🤖 Generating configuration...
-
-======================================================================
-  Generated Search Configuration
-======================================================================
-📁 Project: llm-rare-disease
-🔍 Search Query: (LLM OR "large language model") AND "rare disease"
-📌 Topic: Large Language Models
-🌍 Domain: rare disease
-📚 Platforms: pubmed, arxiv, openalex
-📅 Date: 2020-01-01 to present
-======================================================================
-
-💬 Feedback: add diagnosis to the query
-🤖 Processing... [Updates configuration]
-
-💬 Feedback: yes
-🚀 Starting pipeline...
-```
+The old Streamlit and CLI entrypoints are kept only in `ReviewPilot_prototype/`
+for historical comparison.
 
 ## Configuration
 
@@ -109,7 +87,7 @@ What are you researching? I am doing a survey of using LLM for rare disease
 EMAIL = "your-email@example.com"      # Required for PubMed/OpenAlex
 PUBMED_API_KEY = None                 # Optional
 SCOPUS_API_KEY = None                 # Optional
-MODEL = "gpt-5-mini"                  # Default LLM
+MODEL = "gpt-5.4-mini"                # Default development LLM
 ```
 
 ### secrets.txt (LLM API keys)
@@ -122,31 +100,18 @@ claude_key, sk-ant-your-anthropic-key
 ## Usage
 
 ```bash
-# Main interface - AI-assisted with feedback
-python3 chat.py
-
-# Resume interrupted search
-python3 cli.py run --resume filtering --project your-project
-
-# Check project status
-python3 cli.py status --project my_project
-
-# Run individual stages
-python cli.py search
-python cli.py filter
-python cli.py download
-python cli.py extract
+# Main web interface
+.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
 
 ## Pipeline Workflow
 
-1. **Search Conditions** → Agent asks for search terms, platforms, dates
-2. **Relevance Prompt** → Agent generates prompt, asks for approval
-3. **Collection** → Searches all platforms, saves to JSONL
-4. **Filtering** → Deduplicates, checks relevance with LLM
-5. **Extraction Prompt** → Agent asks what info to extract
-6. **Download** → Downloads PDFs from URLs
-7. **Extraction** → Extracts info from PDFs using LLM
+1. **Project Setup** → New frontend writes `output/{project}/search_conditions.json`
+2. **Collection** → Searches configured platforms and saves JSONL outputs
+3. **Screening** → Deduplicates and checks relevance with LLM criteria
+4. **Full-Text Retrieval** → Downloads PDFs for included papers
+5. **Information Extraction** → Generates a schema and extracts structured JSONL from PDFs or metadata fallback
+6. **Categorization** → Groups extracted results with LLM-generated semantic categories for final analysis
 
 ## Output Structure
 
@@ -162,19 +127,26 @@ output/{project_name}/
 │   └── summary.json
 ├── filtered/
 │   └── filtered_papers.jsonl
-├── papers/
-│   └── row{N}_{source}_{year}_{title}.pdf
-├── extracted/
-│   └── extracted_data.jsonl
-└── logs/
-    └── pipeline_state.json
+├── pdfs/
+│   └── download_report.json
+├── extraction/
+│   ├── extraction_schema.json
+│   ├── extraction_prompt.json
+│   └── extraction_results.jsonl
+└── categorization/
+    ├── categorization_mapping.json
+    └── categorized_results.jsonl
 ```
+
+## Local Prototype Snapshot
+
+`ReviewPilot_prototype/` may exist in local workspaces as the original handoff snapshot from the project owner. It is for historical comparison, regression investigation, and recovery of pre-migration behavior only. It is intentionally ignored by Git, marked read-only locally, and must not be edited as the active codebase or pushed with product changes.
 
 ## Supported LLM Models
 
 | Provider | Models |
 |----------|--------|
-| OpenAI | gpt-5-mini, gpt-5.1, gpt-5.2, gpt-4.1, o3, o4-mini |
+| OpenAI | gpt-5.4-mini, gpt-5.4, gpt-5.5, gpt-5-mini, gpt-5.1, gpt-5.2, gpt-4.1, o3, o4-mini |
 | Anthropic | claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5 |
 | Google | gemini-2.5-pro, gemini-2.5-flash, gemini-3-pro |
 | Together | Llama-4, Qwen-2.5, QwQ-32B |
