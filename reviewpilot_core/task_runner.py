@@ -39,7 +39,11 @@ class TaskRunner:
                 "result": None,
                 "error": None,
             }
-            future = self._executor.submit(self._run, task_id, func)
+            try:
+                future = self._executor.submit(self._run, task_id, func)
+            except Exception:
+                del self._tasks[task_id]
+                raise
             self._futures[task_id] = future
         return task_id
 

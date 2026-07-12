@@ -504,7 +504,7 @@ class WebAppTests(unittest.TestCase):
 
                 def blocking_collect():
                     started.set()
-                    release.wait(timeout=2)
+                    release.wait()
 
                 first_id = web_app.task_runner.submit("demo", "collect", blocking_collect)
                 self.assertTrue(started.wait(timeout=1))

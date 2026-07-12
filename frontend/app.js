@@ -398,8 +398,10 @@
       : { method: 'POST' };
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `Action failed: ${res.status}`);
+      const body = await res.json().catch(() => null);
+      const detail = body && typeof body.detail === 'string' && body.detail.trim()
+        ? body.detail : `Action failed: ${res.status}`;
+      throw new Error(detail);
     }
     const task = await res.json();
     await waitForTask(task.task_id);
