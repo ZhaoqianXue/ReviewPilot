@@ -980,6 +980,27 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(result.next_actions, ["confirm_categories", "apply_categorization"])
         self.assertEqual(chat_rows[-1]["text"], result.reply)
 
+    def test_category_suggestion_reply_uses_singular_and_neutral_count_wording(self):
+        lead_agent = LeadAgent(Path("unused"))
+
+        singular = lead_agent._stage_reply(
+            "categorization",
+            {"field": "methods", "categories": 1},
+            action="suggest-categories",
+        )
+
+        self.assertIn("Generated 1 category suggestion for methods.", singular)
+        self.assertNotIn("1 category suggestions", singular)
+        for malformed_count in (True, "nine"):
+            with self.subTest(categories=malformed_count):
+                reply = lead_agent._stage_reply(
+                    "categorization",
+                    {"field": "methods", "categories": malformed_count},
+                    action="suggest-categories",
+                )
+                self.assertIn("Generated category suggestions for methods.", reply)
+                self.assertNotIn(str(malformed_count), reply)
+
     def test_categorize_advances_to_final_user_facing_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
