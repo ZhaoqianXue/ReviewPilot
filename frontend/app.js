@@ -45,8 +45,24 @@ function shouldPaintUnboundClick({ insideForm, insideChatInputArea, shouldCloseQ
   return !insideForm && !insideChatInputArea && shouldCloseQuickStart;
 }
 
+function applySubmittedMaxToSourceLimits(setupDraft, previousMaxResults, submittedMaxResults) {
+  const draft = { ...setupDraft };
+  if (submittedMaxResults === undefined) return draft;
+  const comparable = (value) => {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? String(numericValue) : String(value ?? '').trim();
+  };
+  if (comparable(submittedMaxResults) === comparable(previousMaxResults)) return draft;
+  const maximum = String(submittedMaxResults);
+  draft.max_results = maximum;
+  draft.source_limits = Object.fromEntries(
+    (draft.platforms || []).map((source) => [source, maximum])
+  );
+  return draft;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits };
 }
 
 /* ReviewPilot workspace UI.
@@ -1424,7 +1440,9 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
 
   function updateDraftFromForm(form) {
     const payload = Object.fromEntries(new FormData(form).entries());
-    state.setupDraft = { ...state.setupDraft, ...payload };
+    const previousMaxResults = state.setupDraft.max_results;
+    const mergedDraft = { ...state.setupDraft, ...payload };
+    state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);
     if (payload.search_terms && !state.setupDraft.keywords.includes(payload.search_terms)) {
       state.setupDraft.keywords = [payload.search_terms, ...state.setupDraft.keywords].slice(0, 8);
     }

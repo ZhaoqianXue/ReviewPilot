@@ -7,6 +7,41 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_dialog_maximum_updates_only_selected_source_limits_when_changed(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { applySubmittedMaxToSourceLimits } = require('./frontend/app.js');
+
+const newProject = applySubmittedMaxToSourceLimits({
+  platforms: ['pubmed', 'openalex', 'arxiv'],
+  max_results: '5',
+  source_limits: { pubmed: '10', openalex: '10', arxiv: '10' },
+}, '10', '5');
+assert.deepEqual(newProject.source_limits, { pubmed: '5', openalex: '5', arxiv: '5' });
+assert.equal(newProject.max_results, '5');
+
+const differentiated = applySubmittedMaxToSourceLimits({
+  platforms: ['pubmed', 'openalex', 'arxiv'],
+  max_results: '75',
+  source_limits: { pubmed: '10', openalex: '25', arxiv: '75' },
+}, 75, '75');
+assert.deepEqual(differentiated.source_limits, { pubmed: '10', openalex: '25', arxiv: '75' });
+assert.equal(differentiated.max_results, '75');
+
+const flattened = applySubmittedMaxToSourceLimits({
+  platforms: ['pubmed', 'arxiv'],
+  max_results: '20',
+  source_limits: { pubmed: '10', openalex: '25', arxiv: '75' },
+}, '75', 20);
+assert.deepEqual(flattened.source_limits, { pubmed: '20', arxiv: '20' });
+assert.equal(flattened.max_results, '20');
+assert.equal(Object.hasOwn(flattened.source_limits, 'openalex'), false);
+"""
+        result = subprocess.run(
+            ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unbound_click_paint_decision_preserves_form_submission(self):
         script = r"""
 const assert = require('node:assert/strict');

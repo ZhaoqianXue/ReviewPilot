@@ -6,6 +6,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_search_setup_dialog_propagates_changed_maximum_after_capturing_previous_value(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        update = source[source.index("function updateDraftFromForm") : source.index("function updateSetupDraftField")]
+
+        previous_capture = "const previousMaxResults = state.setupDraft.max_results;"
+        payload_merge = "const mergedDraft = { ...state.setupDraft, ...payload };"
+        helper_call = "state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);"
+        self.assertIn(previous_capture, update)
+        self.assertIn(payload_merge, update)
+        self.assertIn(helper_call, update)
+        self.assertLess(update.index(previous_capture), update.index(payload_merge))
+        self.assertLess(update.index(payload_merge), update.index(helper_call))
+
     def test_unbound_click_branch_uses_form_safe_paint_decision(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         click_router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
