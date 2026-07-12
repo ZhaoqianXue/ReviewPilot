@@ -448,6 +448,7 @@ class FrontendContractTests(unittest.TestCase):
         set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
         monitor = source[source.index("function monitorActiveTask") : source.index("async function postAction")]
         post_action = source[source.index("async function postAction") : source.index("async function createProject")]
+        mount_tail = source[source.index("    paintWorkspace = paint;") : source.index("  if (document.readyState")]
 
         # Interleaving 1: server-null beats a stale snapshot task.
         self.assertIn("activeTask: null", snapshot)
@@ -476,9 +477,15 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("if (activeTaskMonitor.key === key) return;", monitor)
         self.assertIn("activeTaskMonitor.key === key", monitor)
         self.assertIn("D.activeTask?.task_id === taskId", monitor)
+        self.assertIn("const activeTaskPolls = new Map();", source)
+        self.assertIn("if (activeTaskPolls.has(key)) return activeTaskPolls.get(key);", monitor)
+        self.assertIn("activeTaskPolls.set(key, poll);", monitor)
+        self.assertIn("await waitForActiveTaskOnce(taskId, key);", monitor)
+        self.assertEqual(monitor.count("waitForTask(taskId)"), 1)
         self.assertIn("monitorActiveTask();", post_action)
         self.assertEqual(source.count("function monitorActiveTask()"), 1)
         self.assertNotIn("resumeActiveTask", source)
+        self.assertLess(mount_tail.index("paint();"), mount_tail.index("monitorActiveTask();"))
 
     def test_retrieval_canvas_does_not_label_queued_papers_as_retrieved(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")

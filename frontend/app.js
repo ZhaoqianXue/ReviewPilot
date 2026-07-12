@@ -42,6 +42,7 @@
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
+  const activeTaskPolls = new Map();
   let paintWorkspace = () => {};
 
   restoreWorkspaceSnapshot();
@@ -424,6 +425,15 @@
     void monitorOwnedTask(taskId, projectId, key, generation);
   }
 
+  function waitForActiveTaskOnce(taskId, key) {
+    if (activeTaskPolls.has(key)) return activeTaskPolls.get(key);
+    const poll = waitForTask(taskId).finally(() => {
+      if (activeTaskPolls.get(key) === poll) activeTaskPolls.delete(key);
+    });
+    activeTaskPolls.set(key, poll);
+    return poll;
+  }
+
   async function monitorOwnedTask(taskId, projectId, key, generation) {
     const ownsTask = () => (
       activeTaskMonitor.key === key
@@ -432,7 +442,7 @@
       && D.activeTask?.task_id === taskId
     );
     try {
-      await waitForTask(taskId);
+      await waitForActiveTaskOnce(taskId, key);
       const refreshedData = await fetchProjectState(projectId);
       if (!ownsTask()) return;
       setData(refreshedData, false, { preserveView: true });
@@ -1640,8 +1650,8 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     });
 
     paintWorkspace = paint;
-    monitorActiveTask();
     paint();
+    monitorActiveTask();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
