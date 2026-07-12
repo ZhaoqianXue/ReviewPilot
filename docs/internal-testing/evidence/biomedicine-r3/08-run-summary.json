@@ -1,0 +1,80 @@
+{
+  "project_id": "inner-beta-biomedicine-r3",
+  "tested_commit": "4ea0b6ba2e6d5ecfd2dc254828e6f1a7f8d41ff5",
+  "persisted_projection": {
+    "platforms": [
+      "pubmed",
+      "arxiv",
+      "openalex"
+    ],
+    "max_results": 5,
+    "max_results_per_platform": 5,
+    "source_limits": {
+      "pubmed": 5,
+      "arxiv": 5,
+      "openalex": 5
+    },
+    "date_range": {
+      "start": "2023-01-01",
+      "end": ""
+    }
+  },
+  "duplicate_collect": {
+    "http_status": 409,
+    "active_task_id": "4fcdfba2d13e43c88ca93090a90b86d3",
+    "second_task_created": false
+  },
+  "tasks": [
+    {
+      "action": "collect",
+      "task_id": "4fcdfba2d13e43c88ca93090a90b86d3",
+      "status": "completed",
+      "created_at": "2026-07-12T20:33:59.302+00:00",
+      "updated_at": "2026-07-12T20:34:25.042+00:00",
+      "counts": {
+        "pubmed": 5,
+        "arxiv": 5,
+        "openalex": 5,
+        "total": 15
+      }
+    },
+    {
+      "action": "screen",
+      "task_id": "04e659d13d344c448891b0bec7842b82",
+      "status": "completed",
+      "created_at": "2026-07-12T20:35:09.131+00:00",
+      "updated_at": "2026-07-12T20:35:46.417+00:00",
+      "counts": {
+        "initial": 15,
+        "after_exact_dedup": 14,
+        "included": 1,
+        "excluded": 13
+      },
+      "refresh_resumed_same_task": true
+    },
+    {
+      "action": "download-pdfs",
+      "task_id": "2e59ed9d15fd4e2f8f3b1be4edb517ff",
+      "status": "completed",
+      "created_at": "2026-07-12T20:36:27.254+00:00",
+      "updated_at": "2026-07-12T20:36:53.644+00:00",
+      "counts": {
+        "attempted": 1,
+        "success": 1,
+        "failed": 0
+      }
+    },
+    {
+      "action": "generate-schema",
+      "task_id": "5a1cdda9d3f64ee4a84c507306ec8f9c",
+      "status": "completed",
+      "created_at": "2026-07-12T20:37:29.298+00:00",
+      "updated_at": "2026-07-12T20:37:37.522+00:00",
+      "counts": {
+        "fields": 10
+      },
+      "assistant_reply": "Prompt extraction completed successfully: a schema was generated from the LLM with 10 fields for biomedicine/health AI review analysis. Next canvas action: Categorization & Analysis.",
+      "ui_required_next_action": "Finalize Schema"
+    }
+  ]
+}
