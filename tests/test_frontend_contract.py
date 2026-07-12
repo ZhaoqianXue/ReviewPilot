@@ -6,6 +6,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_new_review_fallbacks_and_visible_sources_use_frozen_platform_order(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        setup_draft = source[source.index("function setupDraftFromData") : source.index("function sourceLimitValue")]
+        normalize_limits = source[source.index("function normalizeSourceLimits") : source.index("function selectedSourceLimits")]
+        compute_vals = source[source.index("function computeVals") : source.index("const retrievalPct", source.index("function computeVals"))]
+
+        frozen_order = "['pubmed', 'arxiv', 'openalex']"
+        self.assertIn(frozen_order, setup_draft)
+        self.assertNotIn("['pubmed', 'openalex', 'arxiv']", setup_draft)
+        self.assertIn(frozen_order, normalize_limits)
+        self.assertNotIn("['pubmed', 'openalex', 'arxiv']", normalize_limits)
+        self.assertIn(f"const draftSources = {frozen_order}.map", compute_vals)
+
     def test_search_setup_dialog_propagates_changed_maximum_after_capturing_previous_value(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         update = source[source.index("function updateDraftFromForm") : source.index("function updateSetupDraftField")]

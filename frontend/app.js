@@ -351,7 +351,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function setupDraftFromData(data) {
     const sourceNames = data.platforms.map((p) => platformKey(p[0]));
     const setup = data.setup || {};
-    const selectedPlatforms = (setup.platforms && setup.platforms.length) ? setup.platforms : (sourceNames.length ? sourceNames : ['pubmed', 'openalex', 'arxiv']);
+    const selectedPlatforms = (setup.platforms && setup.platforms.length) ? setup.platforms : (sourceNames.length ? sourceNames : ['pubmed', 'arxiv', 'openalex']);
     const fallbackMaxResults = String(setup.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM);
     return {
       project_name: setup.project_name || (data.isNewProject ? '' : (data.project.title || '')),
@@ -377,7 +377,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function normalizeSourceLimits(sourceLimits, sources, fallbackMaxResults) {
     const limits = {};
-    const sourceList = (sources && sources.length) ? sources : ['pubmed', 'openalex', 'arxiv'];
+    const sourceList = (sources && sources.length) ? sources : ['pubmed', 'arxiv', 'openalex'];
     sourceList.forEach((source) => {
       limits[source] = sourceLimitValue(sourceLimits || {}, source, fallbackMaxResults);
     });
@@ -708,7 +708,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       pct: Math.round(((Number(p[1]) || 0) / MAX) * 100),
       issue: platformIssueByLabel.get(String(p[0]).toLowerCase()) || null,
     }));
-    const draftSources = ['pubmed', 'openalex', 'arxiv'].map((key) => ({
+    const draftSources = ['pubmed', 'arxiv', 'openalex'].map((key) => ({
       key,
       label: platformLabel(key),
       selected: state.setupDraft.platforms.includes(key),

@@ -54,8 +54,10 @@ class StateProjectionTests(unittest.TestCase):
         self.assertNotIn("What are you researching?", data["messages"][0]["text"])
         self.assertNotIn("Define the research question", data["messages"][0]["text"])
         self.assertEqual(data["setup"]["max_results"], 10)
+        self.assertEqual(data["setup"]["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(list(data["setup"]["source_limits"]), ["pubmed", "arxiv", "openalex"])
         self.assertEqual(data["setup"]["source_limits"], {"pubmed": 10, "openalex": 10, "arxiv": 10})
-        self.assertEqual(data["platforms"], [["PubMed", 0], ["Openalex", 0], ["arXiv", 0]])
+        self.assertEqual(data["platforms"], [["PubMed", 0], ["arXiv", 0], ["Openalex", 0]])
         self.assertEqual(data["history"][0]["label"], "Historys")
         self.assertEqual(
             data["history"][0]["items"][0],

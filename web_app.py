@@ -301,9 +301,9 @@ def _normalize_platforms(value) -> list[str]:
     elif isinstance(value, list):
         items = value
     else:
-        items = ["pubmed", "openalex", "arxiv"]
+        items = ["pubmed", "arxiv", "openalex"]
     platforms = [str(item).strip().lower() for item in items if str(item).strip()]
-    return platforms or ["pubmed", "openalex", "arxiv"]
+    return platforms or ["pubmed", "arxiv", "openalex"]
 
 
 def _normalize_source_limits(value, platforms: list[str], default: int) -> dict[str, int]:

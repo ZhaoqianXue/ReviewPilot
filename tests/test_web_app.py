@@ -199,6 +199,41 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(config["max_results"], 10)
         self.assertEqual(config["source_limits"], {"pubmed": 10, "openalex": 10, "arxiv": 10})
 
+    def test_create_project_defaults_to_frozen_platform_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+
+            create_project(
+                output_root,
+                {
+                    "project_name": "Default Source Order Review",
+                    "description": "Review LLMs in clinical care",
+                },
+            )
+
+            config = json.loads((output_root / "default-source-order-review" / "search_conditions.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(config["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(list(config["source_limits"]), ["pubmed", "arxiv", "openalex"])
+
+    def test_create_project_preserves_explicit_platform_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+
+            create_project(
+                output_root,
+                {
+                    "project_name": "Explicit Source Order Review",
+                    "description": "Review LLMs in clinical care",
+                    "platforms": ["openalex", "pubmed", "arxiv"],
+                },
+            )
+
+            config = json.loads((output_root / "explicit-source-order-review" / "search_conditions.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(config["platforms"], ["openalex", "pubmed", "arxiv"])
+        self.assertEqual(list(config["source_limits"]), ["openalex", "pubmed", "arxiv"])
+
     def test_create_project_routes_search_setup_through_lead_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
