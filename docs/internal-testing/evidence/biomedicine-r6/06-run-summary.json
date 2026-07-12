@@ -1,0 +1,31 @@
+{
+  "scenario": "biomedicine",
+  "project_id": "inner-beta-biomedicine-r6",
+  "tested_commit": "0ebec46b335773ab52663c753a7b9c786c72b23c",
+  "configuration_projection": "pass",
+  "duplicate_collection": {
+    "http_status": 409,
+    "existing_task_id": "ec061523c2e947a28c2f6ce4eb9501c4"
+  },
+  "tasks": [
+    {"action": "collect", "task_id": "ec061523c2e947a28c2f6ce4eb9501c4", "status": "completed", "seconds": 19.300, "counts": {"pubmed": 5, "arxiv": 5, "openalex": 5, "total": 15}},
+    {"action": "screen", "task_id": "85b4ea17ff06406e8a101d46429f3b6b", "status": "completed", "seconds": 27.704, "counts": {"screened_after_deduplication": 14, "included": 1, "excluded": 13}, "refresh_resumed_same_task": true},
+    {"action": "download-pdfs", "task_id": "f1bea6c3f09b43c3b2a4f0148c06c75b", "status": "completed", "seconds": 41.862, "counts": {"success": 1, "failed": 0}},
+    {"action": "generate-schema", "task_id": "f95d450ece21488d92dbc6003284aa0f", "status": "completed", "seconds": 5.807, "counts": {"fields": 10}, "next_actions": ["finalize_schema"]},
+    {"action": "finalize-schema", "task_id": "5bdef407dcc54e619e485ab626bd5a2d", "status": "completed", "seconds": 0.030, "next_actions": ["run_extraction"]},
+    {"action": "run-extraction", "task_id": "718c847daf1e4e63a1271d84bc09afd3", "status": "completed", "seconds": 9.035, "counts": {"processed": 1, "errors": 0}, "user_visible_absolute_path": false},
+    {"action": "suggest-categories", "task_id": "b12008e1ac8b4386879efd1287dee347", "status": "completed", "seconds": 3.832, "counts": {"categories": 8}, "next_actions": ["confirm_categories", "apply_categorization"]},
+    {"action": "categorize", "task_id": "563e1fc5d32b4c378790d44477865c0f", "status": "completed", "seconds": 3.793, "counts": {"categories": 8, "rows": 1}, "next_actions": []}
+  ],
+  "export_package": [
+    {"label": "Search setup", "exists": true},
+    {"label": "Relevance prompt", "exists": true},
+    {"label": "Included papers", "exists": true},
+    {"label": "Download report", "exists": true},
+    {"label": "Extraction results", "exists": true},
+    {"label": "Categorization mapping", "exists": true},
+    {"label": "Categorized results", "exists": true}
+  ],
+  "external_failures": [],
+  "finding": "All export artifacts exist in state, but the final canvas renders no export controls or download links."
+}
