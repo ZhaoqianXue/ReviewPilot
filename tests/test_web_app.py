@@ -445,8 +445,8 @@ class WebAppTests(unittest.TestCase):
                 def __init__(self, output_root):
                     self.output_root = output_root
 
-                def handle_message(self, project_id, message=None, action=None):
-                    calls.append((self.output_root, project_id, message))
+                def handle_message(self, project_id, message=None, action=None, context_step=None):
+                    calls.append((self.output_root, project_id, message, context_step))
                     chat_dir = Path(self.output_root) / project_id / "chat"
                     chat_dir.mkdir(parents=True, exist_ok=True)
                     with (chat_dir / "messages.jsonl").open("a", encoding="utf-8") as handle:
@@ -464,12 +464,12 @@ class WebAppTests(unittest.TestCase):
             web_app.OUTPUT_ROOT = output_root
             client = TestClient(web_app.create_app())
             with patch.object(web_app, "LeadAgent", FakeLeadAgent):
-                response = client.post("/projects/demo/chat", json={"message": "What next?"})
+                response = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
         web_app.OUTPUT_ROOT = old_output_root
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reply"], "LLM project reply.")
-        self.assertEqual(calls, [(output_root, "demo", "What next?")])
+        self.assertEqual(calls, [(output_root, "demo", "What next?", "extraction")])
         self.assertEqual(response.json()["lead_agent"]["stage"], "search_conditions")
         self.assertEqual(response.json()["state"]["messages"][-1]["text"], "LLM project reply.")
 
@@ -665,7 +665,7 @@ class WebAppTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                actions = ["collect", "screen", "generate-schema", "download-pdfs", "run-extraction", "categorize"]
+                actions = ["collect", "screen", "generate-schema", "finalize-schema", "download-pdfs", "run-extraction", "categorize"]
                 stages = []
                 statuses = []
 
@@ -714,6 +714,7 @@ class WebAppTests(unittest.TestCase):
             [
                 "collection",
                 "filtering",
+                "prompt_extraction",
                 "prompt_extraction",
                 "download",
                 "extraction",
@@ -876,7 +877,7 @@ class WebAppTests(unittest.TestCase):
                     )
                     project_id = response.json()["id"]
                     stages = []
-                    for action in ["collect", "screen", "generate-schema", "download-pdfs", "run-extraction", "categorize"]:
+                    for action in ["collect", "screen", "generate-schema", "finalize-schema", "download-pdfs", "run-extraction", "categorize"]:
                         task_id = web_app.submit_project_action(output_root, project_id, action, llm_query=fake_llm)
                         task = web_app.task_runner.wait(task_id, timeout=5)
                         self.assertEqual(task["status"], "completed", task.get("error"))
@@ -892,7 +893,7 @@ class WebAppTests(unittest.TestCase):
             else:
                 __import__("sys").modules["main"] = previous_main
 
-        self.assertEqual(stages, ["collection", "filtering", "prompt_extraction", "download", "extraction", "categorization"])
+        self.assertEqual(stages, ["collection", "filtering", "prompt_extraction", "prompt_extraction", "download", "extraction", "categorization"])
         self.assertEqual(state["steps"][-1]["status"], "done")
         self.assertEqual(state["categorizationSummary"]["groups"], 2)
         self.assertEqual(state["retrievalSummary"]["unavailable"], 1)

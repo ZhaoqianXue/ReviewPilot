@@ -141,7 +141,10 @@ async def project_chat(request):
         message = str(payload.get("message") or "").strip()
         if not message:
             raise ValueError("message is required")
-        result = LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message)
+        context_step = str(payload.get("step") or "").strip()
+        if context_step not in {"search", "screening", "retrieval", "extraction", "categorize"}:
+            context_step = None
+        result = LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"reply": result.reply, "lead_agent": result.to_dict(), "state": build_rp_data(OUTPUT_ROOT, project_id)})
@@ -315,7 +318,7 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"collect", "screen", "download-pdfs", "generate-schema", "run-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"collect", "screen", "download-pdfs", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 

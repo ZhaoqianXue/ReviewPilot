@@ -8,8 +8,9 @@ from pathlib import Path
 import re
 from typing import Any
 
-from ui_state import project_stage_label
+from ui_state import project_stage_label, schema_workbench_state
 
+from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
 
@@ -176,7 +177,7 @@ def build_rp_data(output_root: Path | str, project_id: str) -> dict:
     screening_stats = _unescape_strings(read_json(path / "filtered" / "screening_stats.json", {}) or {})
     included = _unescape_strings(read_jsonl(path / "filtered" / "included_papers.jsonl"))
     download_report = _unescape_strings(read_json(path / "pdfs" / "download_report.json", {}) or {})
-    schema = _unescape_strings(read_json(path / "extraction" / "extraction_schema.json", {}) or {})
+    schema = _unescape_strings(load_schema_draft(path))
     extraction_rows = _unescape_strings(read_jsonl(path / "extraction" / "extraction_results.jsonl", limit=200))
     extraction_results = extraction_rows[:1]
     categorization = _unescape_strings(read_json(path / "categorization" / "categorization_mapping.json", {}) or {})
@@ -186,6 +187,7 @@ def build_rp_data(output_root: Path | str, project_id: str) -> dict:
     current_step = _current_step(path)
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
+    schema_finalized = is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary)
 
     return {
@@ -202,6 +204,7 @@ def build_rp_data(output_root: Path | str, project_id: str) -> dict:
         "steps": _steps(path, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
         "optionalCapabilities": [],
         "fields": fields,
+        "schemaWorkbench": schema_workbench_state(has_schema=bool(fields), schema_finalized=schema_finalized),
         "platforms": platform_stats,
         "platformIssues": _platform_issues(collected_summary.get("platform_errors") or {}),
         "keywords": _keywords(config),

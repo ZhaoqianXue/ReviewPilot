@@ -1,9 +1,42 @@
 import unittest
+from threading import Event, Lock
+from time import sleep
 
 from reviewpilot_core.task_runner import TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_same_project_tasks_run_serially(self):
+        runner = TaskRunner(max_workers=2)
+        first_started = Event()
+        release_first = Event()
+        events = []
+        events_lock = Lock()
+
+        def record(value):
+            with events_lock:
+                events.append(value)
+
+        def first():
+            record("first-start")
+            first_started.set()
+            release_first.wait(timeout=2)
+            record("first-end")
+
+        def second():
+            record("second-start")
+
+        first_id = runner.submit("demo", "first", first)
+        self.assertTrue(first_started.wait(timeout=1))
+        second_id = runner.submit("demo", "second", second)
+        sleep(0.05)
+        self.assertNotIn("second-start", events)
+        release_first.set()
+        runner.wait(first_id, timeout=2)
+        runner.wait(second_id, timeout=2)
+
+        self.assertEqual(events, ["first-start", "first-end", "second-start"])
+
     def test_submit_records_completed_task_result(self):
         runner = TaskRunner(max_workers=1)
 

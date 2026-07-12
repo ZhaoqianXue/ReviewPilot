@@ -185,6 +185,7 @@
       setup: data.setup || {},
       steps: data.steps || [],
       fields: data.fields || [],
+      schemaWorkbench: data.schemaWorkbench || { status: 'missing', primary_action: 'Generate Schema', can_finalize: false },
       optionalCapabilities: data.optionalCapabilities || [],
       platforms: data.platforms || [],
       platformIssues: data.platformIssues || [],
@@ -340,7 +341,10 @@
     return labels[key] || key.replace(/[_-]/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
-  function setData(data, alreadyEscaped = false) {
+  function setData(data, alreadyEscaped = false, { preserveView = false } = {}) {
+    const previousProjectId = D.project.id || '';
+    const previousStep = state.step;
+    const previousTab = state.tab;
     const nextData = normalizeData(alreadyEscaped ? data : escapeData(data || {}));
     if (state.preservedChatMessages.length) {
       nextData.messages = mergeConversationMessages(state.preservedChatMessages, nextData.messages);
@@ -349,8 +353,10 @@
     D = nextData;
     MAX = maxPlatformValue(D.platforms);
     state.activeProjectId = D.project.id || '';
-    state.step = initialStep(D);
-    state.tab = 'fields';
+    const sameProject = !!previousProjectId && previousProjectId === D.project.id;
+    const stepKeys = new Set(D.steps.map((step) => step.key));
+    state.step = preserveView && sameProject && stepKeys.has(previousStep) ? previousStep : initialStep(D);
+    state.tab = preserveView && sameProject && ['fields', 'preview'].includes(previousTab) ? previousTab : 'fields';
     state.actionError = '';
     state.setupDraft = setupDraftFromData(D);
     state.catDraft = categorizationDraftFromData(D);
@@ -394,7 +400,7 @@
     if (!res.ok) throw new Error(`Action failed: ${res.status}`);
     const task = await res.json();
     await waitForTask(task.task_id);
-    setData(await fetchProjectState(projectId));
+    setData(await fetchProjectState(projectId), false, { preserveView: true });
   }
 
   async function createProject(form) {
@@ -436,14 +442,14 @@
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, step: state.step }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `Project chat failed: ${res.status}`);
     }
     const payload = await res.json();
-    setData(payload.state || await fetchProjectState(projectId));
+    setData(payload.state || await fetchProjectState(projectId), false, { preserveView: true });
   }
 
   async function updateProjectSetup(form) {
@@ -480,7 +486,8 @@
   }
 
   function appendMessage(role, text) {
-    D.messages = [...D.messages, { step: 1, role, text: esc(text) }];
+    const currentStep = D.steps.find((step) => step.key === state.step);
+    D.messages = [...D.messages, { step: currentStep ? currentStep.n : 1, role, text: esc(text) }];
   }
 
   async function handleChatSubmit(text) {
@@ -588,6 +595,7 @@
       isCategorize: step === 'categorize',
       isNewProject: D.isNewProject,
       allFields,
+      schemaWorkbench: D.schemaWorkbench,
       platforms,
       platformIssues: D.platformIssues,
       draftSources,
@@ -604,7 +612,7 @@
       notFieldsTab: state.tab !== 'fields',
       isPreviewTab: state.tab === 'preview',
       notPreviewTab: state.tab !== 'preview',
-      showCanvasAction: !D.isNewProject && step !== 'categorize' && !!D.quietLabels[step],
+      showCanvasAction: !D.isNewProject && step !== 'categorize' && step !== 'extraction' && !!D.quietLabels[step],
       canvasActionLabel: D.quietLabels[step] || '',
       canvasActionName: D.quietActions[step] || '',
       canvasActionPending,
@@ -857,7 +865,6 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
             <span style="display:inline-flex;align-items:center;gap:5px;"><i class="ph ph-calendar-blank" style="font-size:13px;color:#9aa39b;"></i>${v.project.date}</span>
           </div>
         </div>
-        <button data-act="open-setup" title="Edit search setup" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-sliders-horizontal" style="font-size:16px;"></i></button>
       </div>
       <div class="rp-stepper" style="display:flex;align-items:flex-start;padding:14px 20px 12px;">
         ${v.steps.map((s) => stepItem(s)).join('')}
@@ -990,14 +997,25 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
   }
 
   function extractionCanvas(v) {
+    const wb = v.schemaWorkbench || { status: 'missing' };
+    const statusLabel = wb.status === 'finalized' ? 'Finalized schema' : (wb.status === 'draft' ? 'Draft schema' : 'No schema');
+    const statusColor = wb.status === 'finalized' ? '#1a365d' : (wb.status === 'draft' ? '#6b746c' : '#9aa39b');
+    const schemaActionDisabled = state.actionPending ? 'disabled' : '';
+    const schemaActionPendingStyle = state.actionPending ? ';opacity:.72;cursor:wait;' : '';
+    const schemaActions = v.isNewProject ? '' : (
+      wb.status === 'finalized'
+        ? `<button data-act="action" data-action="edit-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-pencil-simple" style="font-size:14px;"></i>Edit Schema</button><button data-act="action" data-action="run-extraction" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-play-circle" style="font-size:13px;"></i>Run Extraction</button>`
+        : `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button><button data-act="action" data-action="finalize-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Finalize Schema</button>`
+    );
     return `<div style="display:flex;align-items:center;gap:4px;border-bottom:1px solid #eef0ee;margin-bottom:2px;">
         ${v.isFieldsTab ? `<span style="font-size:13px;color:#1a365d;padding:9px 12px;border-bottom:2px solid #1a365d;margin-bottom:-1px;cursor:pointer;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></span>` : ''}
         ${v.notFieldsTab ? `<span data-act="tab" data-tab="fields" style="font-size:13px;color:#6b746c;padding:9px 12px;cursor:pointer;transition:color .12s ease;" data-hover="color:#1a365d;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></span>` : ''}
         ${v.isPreviewTab ? '<span style="font-size:13px;color:#1a365d;padding:9px 12px;border-bottom:2px solid #1a365d;margin-bottom:-1px;cursor:pointer;">Preview on paper</span>' : ''}
         ${v.notPreviewTab ? '<span data-act="tab" data-tab="preview" style="font-size:13px;color:#6b746c;padding:9px 12px;cursor:pointer;transition:color .12s ease;" data-hover="color:#1a365d;">Preview on paper</span>' : ''}
-        ${!v.isNewProject ? `<button data-act="action" data-action="generate-schema" style="margin-left:auto;${buttonStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button>` : ''}
+        ${!v.isNewProject ? `<span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:${statusColor};background:#f4f6f3;border:1px solid #e5e7eb;border-radius:999px;padding:5px 8px;">${statusLabel}</span><span style="display:flex;gap:8px;margin-left:8px;">${schemaActions}</span>` : ''}
       </div>
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
+      ${!v.isNewProject && wb.status === 'draft' ? `<div style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:9px;padding:10px 11px;margin:12px 0;color:#1a365d;font-size:12px;line-height:1.45;">Refine this draft through chat, then finalize the schema before running extraction.</div>` : ''}
       ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}`;
   }
 

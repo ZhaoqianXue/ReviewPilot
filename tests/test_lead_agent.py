@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from agents.lead_agent import LeadAgent
+from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
 from reviewpilot_core.project_store import read_jsonl
 
 
@@ -129,6 +130,243 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.reply, "Unified Lead Agent reply.")
         self.assertEqual(result.next_actions, ["edit_search", "run_collection"])
+
+    def test_generic_project_chat_persists_visible_workflow_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            project_dir.mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps({"project_name": "Demo", "description": "Review LLMs", "search_terms": "LLM", "platforms": ["openalex"]}),
+                encoding="utf-8",
+            )
+
+            def fake_llm_query(**_kwargs):
+                return (json.dumps({"reply": "Analysis answer."}), {})
+
+            LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
+                project_id="demo",
+                message="Summarize progress",
+                context_step="categorize",
+            )
+            chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
+
+        self.assertEqual([row["step"] for row in chat_rows], [5, 5])
+
+    def test_extraction_schema_chat_adds_field_to_draft_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "pdfs").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "Demo",
+                        "description": "Review LLM systems in medicine",
+                        "primary_topic": "LLMs",
+                        "domain": "medicine",
+                        "search_terms": "LLM AND medicine",
+                        "platforms": ["openalex"],
+                        "model": "gpt-5.4-mini",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}), encoding="utf-8")
+            (project_dir / "extraction" / "extraction_schema_draft.json").write_text(
+                json.dumps({"fields": [{"name": "methods", "type": "Text", "description": "Methods", "required": False, "example": "RCT"}]}),
+                encoding="utf-8",
+            )
+
+            def fake_llm_query(*, text_prompt, system_prompt, model, provider):
+                self.assertIn("Return ONLY valid JSON for a schema command", system_prompt)
+                return (
+                    json.dumps(
+                        {
+                            "action": "add_field",
+                            "args": {
+                                "name": "sample_size",
+                                "description": "Number of participants or records",
+                                "example": "128 patients",
+                            },
+                        }
+                    ),
+                    {},
+                )
+
+            result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
+                project_id="demo",
+                message="Add a field for sample size",
+            )
+            draft = json.loads((project_dir / "extraction" / "extraction_schema_draft.json").read_text(encoding="utf-8"))
+            chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
+
+        self.assertEqual(result.stage, "prompt_extraction")
+        self.assertEqual(result.data["action"], "add_field")
+        self.assertEqual([field["name"] for field in draft["fields"]], ["methods", "sample_size"])
+        self.assertIn("sample_size", result.reply)
+        self.assertEqual([row["role"] for row in chat_rows], ["u", "a"])
+
+    def test_extraction_schema_chat_answers_step_four_questions_without_mutating_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "Demo",
+                        "description": "Review LLM systems in medicine",
+                        "search_terms": "LLM AND medicine",
+                        "platforms": ["openalex"],
+                        "model": "gpt-5.4-mini",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / "extraction" / "extraction_schema_draft.json").write_text(
+                json.dumps({"fields": [{"name": "methods", "type": "Text", "description": "Methods", "required": False, "example": "RCT"}]}),
+                encoding="utf-8",
+            )
+
+            def fake_llm_query(*, text_prompt, system_prompt, model, provider):
+                return (json.dumps({"action": "answer_question", "args": {"response": "Finalize the schema before extraction."}}), {})
+
+            result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
+                project_id="demo",
+                message="How does extraction work?",
+            )
+            draft = json.loads((project_dir / "extraction" / "extraction_schema_draft.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.data["action"], "answer_question")
+        self.assertEqual(result.reply, "Finalize the schema before extraction.")
+        self.assertEqual([field["name"] for field in draft["fields"]], ["methods"])
+
+    def test_step_four_chat_blocks_mutation_of_finalized_legacy_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            extraction_dir = project_dir / "extraction"
+            extraction_dir.mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "Demo",
+                        "description": "Review LLM systems in medicine",
+                        "search_terms": "LLM AND medicine",
+                        "platforms": ["openalex"],
+                        "model": "gpt-5.4-mini",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            original_schema = {"fields": [{"name": "methods", "type": "Text", "description": "Methods"}]}
+            (extraction_dir / "extraction_schema.json").write_text(json.dumps(original_schema), encoding="utf-8")
+            (extraction_dir / "extraction_results.jsonl").write_text(
+                json.dumps({"paper_id": "P1", "methods": "Survey"}) + "\n",
+                encoding="utf-8",
+            )
+
+            def fake_llm_query(*, text_prompt, system_prompt, model, provider):
+                return (
+                    json.dumps(
+                        {
+                            "action": "add_field",
+                            "args": {"name": "sample_size", "description": "Number of participants"},
+                        }
+                    ),
+                    {},
+                )
+
+            result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
+                project_id="demo",
+                message="Add sample size",
+                context_step="extraction",
+            )
+            schema = json.loads((extraction_dir / "extraction_schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result.stage, "prompt_extraction")
+        self.assertEqual(result.data["status"], "schema_locked")
+        self.assertIn("Edit Schema", result.reply)
+        self.assertEqual(schema, original_schema)
+        self.assertFalse((extraction_dir / "extraction_schema_draft.json").exists())
+
+    def test_run_extraction_requires_finalized_schema_after_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "pdfs").mkdir(parents=True)
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps({"project_name": "Demo", "description": "Review LLMs", "platforms": ["openalex"], "search_terms": "LLM"}),
+                encoding="utf-8",
+            )
+            (project_dir / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}), encoding="utf-8")
+            (project_dir / "extraction" / "extraction_schema_draft.json").write_text(
+                json.dumps({"fields": [{"name": "key_findings", "description": "Findings"}]}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                LeadAgent(output_root).handle_message(project_id="demo", action="run-extraction")
+
+        self.assertIn("requires finalized extraction schema", str(ctx.exception))
+
+    def test_generate_schema_requires_edit_when_schema_is_finalized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "filtered").mkdir(parents=True)
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps({"project_name": "Demo", "description": "Review LLMs", "platforms": ["openalex"], "search_terms": "LLM"}),
+                encoding="utf-8",
+            )
+            (project_dir / "filtered" / "included_papers.jsonl").write_text("", encoding="utf-8")
+            (project_dir / "filtered" / "screening_stats.json").write_text(json.dumps({"included_count": 0}), encoding="utf-8")
+            save_schema_draft(project_dir, {"fields": [{"name": "methods", "description": "Methods"}]})
+            finalize_schema(project_dir)
+            marker_before = (project_dir / "extraction" / "schema_finalized.json").read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "Edit Schema"):
+                LeadAgent(output_root).handle_message(project_id="demo", action="generate-schema")
+
+            marker_after = (project_dir / "extraction" / "schema_finalized.json").read_text(encoding="utf-8")
+
+        self.assertEqual(marker_after, marker_before)
+
+    def test_schema_chat_show_prompt_returns_prompt_content_and_finalize_updates_next_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "prompts").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps({"project_name": "Demo", "description": "Review LLMs", "search_terms": "LLM", "platforms": ["openalex"]}),
+                encoding="utf-8",
+            )
+            save_schema_draft(project_dir, {"fields": [{"name": "methods", "description": "Methods"}]})
+            (project_dir / "prompts" / "extraction_prompt.json").write_text(
+                json.dumps({"system_prompt": "Extract faithfully.", "user_prompt_template": "Return methods from {paper_text}."}),
+                encoding="utf-8",
+            )
+            commands = iter(
+                [
+                    {"action": "show_prompt", "args": {}},
+                    {"action": "finalize_extraction", "args": {}},
+                ]
+            )
+
+            def fake_llm_query(**_kwargs):
+                return (json.dumps(next(commands)), {})
+
+            agent = LeadAgent(output_root, llm_query=fake_llm_query)
+            shown = agent.handle_message(project_id="demo", message="Show prompt", context_step="extraction")
+            finalized = agent.handle_message(project_id="demo", message="Finalize", context_step="extraction")
+
+        self.assertIn("Extract faithfully.", shown.reply)
+        self.assertIn("Return methods", shown.reply)
+        self.assertEqual(finalized.next_actions, ["edit_schema", "run_extraction"])
 
     def test_handle_collect_action_generates_relevance_prompt_before_collection_and_verifies_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -469,7 +707,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertIn("filtering -> Full-Text Retrieval", seen_prompts[0])
         self.assertIn("extraction -> Categorization & Analysis", seen_prompts[0])
 
-    def test_run_extraction_auto_generates_prompt_after_download(self):
+    def test_run_extraction_uses_finalized_schema_after_download(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
@@ -488,6 +726,8 @@ class LeadAgentTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (project_dir / "pdfs" / "download_report.json").write_text(json.dumps({"success": 0, "failed": 1}), encoding="utf-8")
+            save_schema_draft(project_dir, {"fields": [{"name": "key_findings", "type": "Text", "description": "Findings"}]})
+            finalize_schema(project_dir)
             calls = []
 
             class FakeWorkflowAdapter:
@@ -502,18 +742,6 @@ class LeadAgentTests(unittest.TestCase):
                 def run(self, action, output_root, project_id, llm_query=None, input_data=None):
                     calls.append(action)
                     project = Path(output_root) / project_id
-                    if action == "generate-schema":
-                        (project / "prompts").mkdir(parents=True)
-                        (project / "extraction").mkdir(parents=True)
-                        (project / "prompts" / "extraction_prompt.json").write_text(
-                            json.dumps({"prompt_type": "extraction", "extraction_prompt": "Extract data."}),
-                            encoding="utf-8",
-                        )
-                        (project / "extraction" / "extraction_schema.json").write_text(
-                            json.dumps({"fields": [{"name": "key_findings", "description": "Findings"}]}),
-                            encoding="utf-8",
-                        )
-                        return {"status": "schema_generated"}
                     if action == "run-extraction":
                         (project / "extraction").mkdir(parents=True, exist_ok=True)
                         (project / "extraction" / "extraction_results.jsonl").write_text(
@@ -531,7 +759,7 @@ class LeadAgentTests(unittest.TestCase):
                 action="run-extraction",
             )
 
-        self.assertEqual(calls, ["generate-schema", "run-extraction"])
+        self.assertEqual(calls, ["run-extraction"])
         self.assertEqual(result.stage, "extraction")
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):

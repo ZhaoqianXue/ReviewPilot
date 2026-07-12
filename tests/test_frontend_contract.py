@@ -13,6 +13,13 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("window.location.href = `/projects/${encodeURIComponent", source)
         self.assertIn("fetchProjectState", source)
 
+    def test_workspace_header_does_not_expose_search_setup_button(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        workspace_header = source[source.index("function workspaceHeader(v)") : source.index("function stepItem(s)")]
+
+        self.assertNotIn('data-act="open-setup"', workspace_header)
+        self.assertNotIn('title="Edit search setup"', workspace_header)
+
     def test_search_setup_typing_is_dialog_based_not_canvas_based(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
@@ -267,7 +274,7 @@ class FrontendContractTests(unittest.TestCase):
     def test_new_review_template_is_not_double_escaped(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("function setData(data, alreadyEscaped = false)", source)
+        self.assertIn("function setData(data, alreadyEscaped = false, { preserveView = false } = {})", source)
         self.assertIn("const nextData = normalizeData(alreadyEscaped ? data : escapeData(data || {}));", source)
         self.assertIn("D = nextData;", source)
         self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", source)
@@ -430,6 +437,43 @@ class FrontendContractTests(unittest.TestCase):
 
         self.assertIn("Included papers queued for retrieval", retrieval_canvas)
         self.assertIn("v.retrievalSummary.retrieved > 0", retrieval_canvas)
+
+    def test_extraction_canvas_has_schema_finalize_and_edit_gates(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        extraction_canvas = source[source.index("function extractionCanvas(v)") : source.index("function fieldsTable(v)")]
+
+        self.assertIn("schemaWorkbench", source)
+        self.assertIn("Draft schema", extraction_canvas)
+        self.assertIn("Finalized schema", extraction_canvas)
+        self.assertIn('data-action="finalize-schema"', extraction_canvas)
+        self.assertIn('data-action="edit-schema"', extraction_canvas)
+        self.assertIn('data-action="run-extraction"', extraction_canvas)
+        self.assertIn("Finalize Schema", extraction_canvas)
+        self.assertIn("Edit Schema", extraction_canvas)
+        self.assertIn("Run Extraction", extraction_canvas)
+        self.assertIn("schemaActionDisabled", extraction_canvas)
+        self.assertIn("schemaActionPendingStyle", extraction_canvas)
+
+    def test_same_project_chat_and_actions_preserve_visible_step_and_tab(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
+        post_action = source[source.index("async function postAction") : source.index("async function createProject")]
+        send_chat = source[source.index("async function sendProjectChat") : source.index("async function updateProjectSetup")]
+
+        self.assertIn("preserveView", set_data)
+        self.assertIn("previousStep", set_data)
+        self.assertIn("previousTab", set_data)
+        self.assertIn("{ preserveView: true }", post_action)
+        self.assertIn("{ preserveView: true }", send_chat)
+        self.assertIn("JSON.stringify({ message, step: state.step })", send_chat)
+
+    def test_optimistic_chat_message_uses_visible_workflow_step(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        append_message = source[source.index("function appendMessage") : source.index("async function handleChatSubmit")]
+
+        self.assertIn("state.step", append_message)
+        self.assertIn("currentStep", append_message)
+        self.assertNotIn("{ step: 1, role", append_message)
 
     def test_canvas_action_errors_render_on_main_workspace(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
