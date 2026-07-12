@@ -1,0 +1,19 @@
+{
+  "project_name": "inner-beta-biomedicine-r2",
+  "platforms": [
+    "pubmed",
+    "openalex",
+    "arxiv"
+  ],
+  "max_results": 10,
+  "max_results_per_platform": 10,
+  "source_limits": {
+    "pubmed": 10,
+    "openalex": 10,
+    "arxiv": 10
+  },
+  "date_range": {
+    "start": "2023-01-01",
+    "end": ""
+  }
+}
