@@ -56,7 +56,7 @@ class CollectionAgent(BaseAgent):
 
         # Extract search parameters
         query = input_data.get("search_terms", "")
-        platforms = input_data.get("platforms", ["pubmed", "openalex", "arxiv"])
+        platforms = input_data.get("platforms", ["pubmed", "arxiv", "openalex"])
         max_results = input_data.get("max_results_per_platform", 0)
         arxiv_categories = input_data.get("arxiv_categories")
         cs_venues = input_data.get("cs_venues")

@@ -10,6 +10,58 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 
 
 class CollectionAgentTests(unittest.TestCase):
+    def test_run_defaults_to_frozen_platform_search_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            calls = []
+
+            class FakeSearcher:
+                def search(self, **kwargs):
+                    calls.append(kwargs)
+                    return {}
+
+            previous_main = sys.modules.get("main")
+            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
+            try:
+                CollectionAgent(project_dir).run({"search_terms": "AI"})
+            finally:
+                if previous_main is None:
+                    sys.modules.pop("main", None)
+                else:
+                    sys.modules["main"] = previous_main
+
+            summary = read_json(project_dir / "collected" / "summary.json")
+
+        self.assertEqual(calls[0]["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(summary["platforms"], ["pubmed", "arxiv", "openalex"])
+
+    def test_run_preserves_explicit_platform_search_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            calls = []
+
+            class FakeSearcher:
+                def search(self, **kwargs):
+                    calls.append(kwargs)
+                    return {}
+
+            previous_main = sys.modules.get("main")
+            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
+            try:
+                CollectionAgent(project_dir).run(
+                    {"search_terms": "AI", "platforms": ["openalex", "pubmed", "arxiv"]}
+                )
+            finally:
+                if previous_main is None:
+                    sys.modules.pop("main", None)
+                else:
+                    sys.modules["main"] = previous_main
+
+            summary = read_json(project_dir / "collected" / "summary.json")
+
+        self.assertEqual(calls[0]["platforms"], ["openalex", "pubmed", "arxiv"])
+        self.assertEqual(summary["platforms"], ["openalex", "pubmed", "arxiv"])
+
     def test_run_writes_collected_outputs_with_platform_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
