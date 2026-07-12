@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .atomic_files import atomic_write_json
+
 
 def schema_paths(project_path: Path | str) -> dict[str, Path]:
     project = Path(project_path)
@@ -232,5 +234,4 @@ def _has_jsonl_object(path: Path) -> bool:
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(path, data)

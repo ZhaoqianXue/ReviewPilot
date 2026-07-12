@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +13,7 @@ from agents.extraction_agent import ExtractionAgent
 from agents.filtering_agent import FilteringAgent
 from agents.prompt_agent import PromptAgent
 from agents.search_condition_agent import SearchConditionAgent
+from .atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from .categorization_analysis import CategorizationAnalysis
 from .project_store import count_jsonl, read_json, read_jsonl
 from .model_policy import (
@@ -141,7 +141,6 @@ class CollectionAgentContract:
 
     def _write_offline_collection(self, project_path: Path, input_data: dict[str, Any]) -> dict[str, Any]:
         collected_dir = project_path / "collected"
-        collected_dir.mkdir(parents=True, exist_ok=True)
         summary = {
             "collected_at": "",
             "query": input_data.get("search_terms", ""),
@@ -151,7 +150,7 @@ class CollectionAgentContract:
             "platform_stats": {},
             "total_papers": 0,
         }
-        (collected_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(collected_dir / "summary.json", summary, indent=None)
         return {"status": "collection_done", "total": 0, "platform_stats": {}, "collected_folder": str(collected_dir)}
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -163,7 +162,7 @@ class CollectionAgentContract:
         total = int(result.get("total") or result.get("total_papers") or summary.get("total_papers") or 0)
         if summary_path.exists() and isinstance(summary, dict) and "platform_stats" not in summary:
             summary["platform_stats"] = platform_stats
-            summary_path.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+            atomic_write_json(summary_path, summary, indent=None)
         return {
             **result,
             "status": "collection_done",
@@ -236,14 +235,8 @@ class FilteringAgentContract:
             "excluded_count": excluded_count,
         }
         if not (filtered_dir / "filtering_stats.json").exists():
-            (filtered_dir / "filtering_stats.json").write_text(
-                json.dumps(raw_stats or screening_stats, ensure_ascii=False),
-                encoding="utf-8",
-            )
-        (filtered_dir / "screening_stats.json").write_text(
-            json.dumps(screening_stats, ensure_ascii=False),
-            encoding="utf-8",
-        )
+            atomic_write_json(filtered_dir / "filtering_stats.json", raw_stats or screening_stats, indent=None)
+        atomic_write_json(filtered_dir / "screening_stats.json", screening_stats, indent=None)
         return {
             **result,
             "status": "screening_done",
@@ -257,14 +250,12 @@ class FilteringAgentContract:
             return
         for candidate in candidates:
             if candidate.exists():
-                target.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
+                atomic_write_text(target, candidate.read_text(encoding="utf-8"))
                 return
-        target.write_text("", encoding="utf-8")
+        atomic_write_text(target, "")
 
     def _write_jsonl(self, path: Path, rows: list[dict]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
-        path.write_text(text, encoding="utf-8")
+        atomic_write_jsonl(path, rows)
 
 
 @dataclass(frozen=True)

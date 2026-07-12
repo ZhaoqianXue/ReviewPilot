@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .project_store import read_jsonl
 
 
@@ -127,11 +128,7 @@ class CategorizationAnalysis:
 
     def _write_outputs(self, field: str, categories: list[str], descriptions: dict[str, str], rows: list[dict], *, mode: str) -> None:
         categorization_dir = self.project_path / "categorization"
-        categorization_dir.mkdir(parents=True, exist_ok=True)
-        (categorization_dir / "categorized_results.jsonl").write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
-            encoding="utf-8",
-        )
+        atomic_write_jsonl(categorization_dir / "categorized_results.jsonl", rows)
         mapping = {
             "field": field,
             "mode": mode,
@@ -141,11 +138,10 @@ class CategorizationAnalysis:
             "mapping": {row.get("title") or row.get("paper_id") or f"row_{index}": row.get("category", "") for index, row in enumerate(rows)},
             "categorized_at": datetime.now().isoformat(),
         }
-        (categorization_dir / "categorization_mapping.json").write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(categorization_dir / "categorization_mapping.json", mapping, indent=None)
 
     def _write_suggestions(self, field: str, mode: str, categories: list[str], descriptions: dict[str, str], sample_values: list[str]) -> None:
         categorization_dir = self.project_path / "categorization"
-        categorization_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "field": field,
             "mode": mode,
@@ -155,7 +151,7 @@ class CategorizationAnalysis:
             "sample_values": sample_values,
             "suggested_at": datetime.now().isoformat(),
         }
-        (categorization_dir / "suggested_categories.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        atomic_write_json(categorization_dir / "suggested_categories.json", payload, indent=None)
 
 
 def _generate_suggestions(rows: list[dict], field: str, mode: str, llm_query: Callable) -> tuple[list[str], dict[str, str]]:

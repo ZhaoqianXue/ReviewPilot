@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Iterator, Optional
 from datetime import datetime
 
+from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
+
 
 def read_jsonl(file_path: str) -> List[Dict[str, Any]]:
     """
@@ -73,15 +75,9 @@ def write_jsonl(file_path: str, records: List[Dict[str, Any]], overwrite: bool =
     """
     path = Path(file_path)
 
-    # Create parent directories if needed
-    path.parent.mkdir(parents=True, exist_ok=True)
-
     if not overwrite and path.exists():
         raise FileExistsError(f"File already exists: {file_path}")
-
-    with open(path, 'w', encoding='utf-8') as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+    atomic_write_jsonl(path, records)
 
 
 def append_jsonl(file_path: str, record: Dict[str, Any], flush: bool = True):
@@ -173,11 +169,7 @@ def save_json(file_path: str, data: Any, indent: int = 2):
         data: Data to save (dict, list, etc.)
         indent: Indentation level for pretty printing
     """
-    path = Path(file_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=indent)
+    atomic_write_json(file_path, data, indent=indent)
 
 
 def load_json(file_path: str) -> Any:

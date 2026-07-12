@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core.atomic_files import atomic_output_path
 from reviewpilot_core.model_policy import EXTRACTION_MODEL
 from utils.jsonl_handler import read_jsonl, append_jsonl, save_json
 from utils.human_interaction import print_header, print_summary, show_progress
@@ -130,93 +131,90 @@ class ExtractionAgent(BaseAgent):
 
         # Process PDFs
         output_file = output_dir / "extraction_results.jsonl"
-        output_file.write_text("", encoding="utf-8")
         processed = 0
         errors = 0
         pending_web_search_fallback = 0
         web_search_fallback = 0
         total_cost = 0.0
 
-        for i, paper_meta in enumerate(papers, start=1):
-            show_progress(i, len(papers), prefix="  Extracting")
+        with atomic_output_path(output_file) as pending_output:
+            for i, paper_meta in enumerate(papers, start=1):
+                show_progress(i, len(papers), prefix="  Extracting")
 
-            if paper_meta.get("web_search_fallback_pending") and not paper_meta.get("pdf_downloaded"):
-                try:
-                    result, cost = self._extract_with_web_search_fallback(
-                        paper=paper_meta,
-                        row_number=i,
-                        extraction_prompt=extraction_prompt,
-                        web_search_query=active_web_search_query,
-                    )
-                    append_jsonl(str(output_file), result)
-                    processed += 1
-                    web_search_fallback += 1
-                    total_cost += cost
-                except Exception as e:
-                    self.log(f"Web-search fallback failed for row {i}: {e}", "error")
-                    append_jsonl(str(output_file), self._web_search_error_record(paper_meta, i, str(e)))
-                    errors += 1
-                    pending_web_search_fallback += 1
-                continue
-
-            pdf_file = self._pdf_for_paper(i, paper_meta, pdf_folder, pdf_files)
-            if pdf_file is None:
-                append_jsonl(str(output_file), self._error_record(paper_meta, i, "PDF file not found"))
-                errors += 1
-                continue
-
-            try:
-                # Read PDF
-                pdf_text = active_pdf_reader(pdf_file) if active_pdf_reader else self._read_pdf(pdf_file)
-
-                if not pdf_text:
-                    self.log(f"Could not extract text from {pdf_file.name}", "warning")
-                    errors += 1
-                    append_jsonl(str(output_file), self._error_record(paper_meta, i, "Could not extract text from PDF", pdf_file))
+                if paper_meta.get("web_search_fallback_pending") and not paper_meta.get("pdf_downloaded"):
+                    try:
+                        result, cost = self._extract_with_web_search_fallback(
+                            paper=paper_meta,
+                            row_number=i,
+                            extraction_prompt=extraction_prompt,
+                            web_search_query=active_web_search_query,
+                        )
+                        append_jsonl(str(pending_output), result)
+                        processed += 1
+                        web_search_fallback += 1
+                        total_cost += cost
+                    except Exception as e:
+                        self.log(f"Web-search fallback failed for row {i}: {e}", "error")
+                        append_jsonl(str(pending_output), self._web_search_error_record(paper_meta, i, str(e)))
+                        errors += 1
+                        pending_web_search_fallback += 1
                     continue
 
-                # Extract information
-                extracted, cost = self._extract_with_llm(
-                    pdf_text, system_prompt, user_template, active_llm_query
-                )
-                total_cost += cost
-                extracted_data = self._parse_extracted_data(extracted)
+                pdf_file = self._pdf_for_paper(i, paper_meta, pdf_folder, pdf_files)
+                if pdf_file is None:
+                    append_jsonl(str(pending_output), self._error_record(paper_meta, i, "PDF file not found"))
+                    errors += 1
+                    continue
 
-                # Build result record
-                result = {
-                    "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
-                    "source": paper_meta.get("source", "unknown") if paper_meta else "unknown",
-                    "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
-                    "pdf_file": pdf_file.name,
-                    "row_number": i,
-                    "extracted_at": datetime.now().isoformat(),
-                    "extraction_model": self.model,
-                    "extraction_cost_usd": cost,
-                    "extracted_data": extracted_data,
-                    "extraction_source": "pdf",
-                    "extraction_status": "success",
-                    **extracted_data,
-                }
+                try:
+                    # Read PDF
+                    pdf_text = active_pdf_reader(pdf_file) if active_pdf_reader else self._read_pdf(pdf_file)
 
-                # Write immediately
-                append_jsonl(str(output_file), result)
-                processed += 1
+                    if not pdf_text:
+                        self.log(f"Could not extract text from {pdf_file.name}", "warning")
+                        errors += 1
+                        append_jsonl(str(pending_output), self._error_record(paper_meta, i, "Could not extract text from PDF", pdf_file))
+                        continue
 
-            except Exception as e:
-                self.log(f"Error processing {pdf_file.name}: {e}", "error")
-                errors += 1
+                    # Extract information
+                    extracted, cost = self._extract_with_llm(
+                        pdf_text, system_prompt, user_template, active_llm_query
+                    )
+                    total_cost += cost
+                    extracted_data = self._parse_extracted_data(extracted)
 
-                # Write error record
-                error_result = {
-                    "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
-                    "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
-                    "pdf_file": pdf_file.name,
-                    "row_number": i,
-                    "extracted_at": datetime.now().isoformat(),
-                    "extraction_status": "error",
-                    "error_message": str(e)
-                }
-                append_jsonl(str(output_file), error_result)
+                    # Build result record
+                    result = {
+                        "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
+                        "source": paper_meta.get("source", "unknown") if paper_meta else "unknown",
+                        "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
+                        "pdf_file": pdf_file.name,
+                        "row_number": i,
+                        "extracted_at": datetime.now().isoformat(),
+                        "extraction_model": self.model,
+                        "extraction_cost_usd": cost,
+                        "extracted_data": extracted_data,
+                        "extraction_source": "pdf",
+                        "extraction_status": "success",
+                        **extracted_data,
+                    }
+
+                    append_jsonl(str(pending_output), result)
+                    processed += 1
+
+                except Exception as e:
+                    self.log(f"Error processing {pdf_file.name}: {e}", "error")
+                    errors += 1
+                    error_result = {
+                        "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
+                        "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
+                        "pdf_file": pdf_file.name,
+                        "row_number": i,
+                        "extracted_at": datetime.now().isoformat(),
+                        "extraction_status": "error",
+                        "error_message": str(e)
+                    }
+                    append_jsonl(str(pending_output), error_result)
 
         print()  # New line after progress
 

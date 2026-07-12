@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agents.extraction_agent import ExtractionAgent
 from reviewpilot_core.model_policy import EXTRACTION_MODEL
@@ -9,6 +10,34 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 
 
 class ExtractionAgentTests(unittest.TestCase):
+    def test_escaping_writer_failure_preserves_previous_extraction_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            filtered_dir = project_dir / "filtered"
+            filtered_dir.mkdir(parents=True)
+            included_file = filtered_dir / "included_papers.jsonl"
+            included_file.write_text(
+                json.dumps({"id": "missing", "title": "Missing PDF", "pdf_downloaded": True}) + "\n",
+                encoding="utf-8",
+            )
+            output_file = project_dir / "extraction" / "extraction_results.jsonl"
+            output_file.parent.mkdir(parents=True)
+            previous = json.dumps({"paper_id": "previous", "extraction_status": "success"}) + "\n"
+            output_file.write_text(previous, encoding="utf-8")
+
+            with patch("agents.extraction_agent.append_jsonl", side_effect=RuntimeError("writer failed")):
+                with self.assertRaisesRegex(RuntimeError, "writer failed"):
+                    ExtractionAgent(project_dir, llm_query=lambda **kwargs: ("{}", {})).run(
+                        {
+                            "filtered_file": str(included_file),
+                            "download_folder": str(project_dir / "pdfs"),
+                            "extraction_prompt": {},
+                        }
+                    )
+
+            self.assertEqual(output_file.read_text(encoding="utf-8"), previous)
+            self.assertEqual(list(output_file.parent.glob(".*.tmp")), [])
+
     def test_direct_openai_extraction_uses_max_completion_tokens_for_gpt5_models(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
