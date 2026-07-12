@@ -29,7 +29,7 @@ from utils.llm import query_llm
 
 
 _ABSOLUTE_PATH_MARKER = re.compile(
-    r"(?i:\bfile:(?=/{1,3}|[A-Za-z]:[\\/]))|(?<![:/])//(?=[^/])|(?<![\w./])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
+    r"(?i:\bfile:(?=/{1,3}|[A-Za-z]:[\\/]))|(?<![:/])/{2,}(?=[^/])|(?<![\w./])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
 )
 
 
@@ -616,8 +616,11 @@ Return ONLY valid JSON:
         }.get(stage)
         if next_action:
             reply += f" Next action: {next_action}."
-        if stage == "download" and count("failed") and result.get("web_search_fallback_candidates"):
-            reply += " ExtractionAgent will use web-search fallback for eligible unavailable papers."
+        if stage == "download":
+            download_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+            fallback_candidates = result.get("web_search_fallback_candidates") or download_stats.get("web_search_fallback_candidates")
+            if count("failed") and fallback_candidates:
+                reply += " ExtractionAgent will use web-search fallback for eligible unavailable papers."
         if stage == "categorization":
             reply += " No next canvas action is required."
         return reply

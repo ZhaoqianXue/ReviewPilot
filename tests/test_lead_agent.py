@@ -1009,6 +1009,8 @@ class LeadAgentTests(unittest.TestCase):
             "Saved to file:///Users/private-user/out.json",
             "Saved to file://server/share/private-user/out.json",
             "Saved to //server/share/private-user/out.json",
+            "Saved to ///Users/private-user/out.json",
+            "Saved to ////server/share/private-user/out.json",
             r"Saved to C:\Users\Alice Smith\out.json) with 99 processed!",
             r"Saved to \\server\share\private-user\out.json! tail-secret",
         ]
@@ -1035,6 +1037,8 @@ class LeadAgentTests(unittest.TestCase):
             "file_unix": "file:///Users/private-user/out.json",
             "file_network": "file://server/share/private-user/out.json",
             "network": "//server/share/private-user/out.json",
+            "repeated_root": "///Users/private-user/out.json",
+            "repeated_network_root": "////server/share/private-user/out.json",
             "web": "https://example.org/review/results",
             "plain_file_label": "file: ready for review",
         }
@@ -1045,6 +1049,8 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(sanitized["file_unix"], "project artifact")
         self.assertEqual(sanitized["file_network"], "project artifact")
         self.assertEqual(sanitized["network"], "project artifact")
+        self.assertEqual(sanitized["repeated_root"], "project artifact")
+        self.assertEqual(sanitized["repeated_network_root"], "project artifact")
         self.assertEqual(sanitized["web"], values["web"])
         self.assertEqual(sanitized["plain_file_label"], values["plain_file_label"])
 
@@ -1062,7 +1068,12 @@ class LeadAgentTests(unittest.TestCase):
             ),
             (
                 "download",
-                {"status": "download_done", "success": 2, "failed": 1, "web_search_fallback_candidates": [{"title": "A"}]},
+                {
+                    "status": "download_done",
+                    "success": 2,
+                    "failed": 1,
+                    "stats": {"web_search_fallback_candidates": [{"title": "A"}]},
+                },
                 "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. ExtractionAgent will use web-search fallback for eligible unavailable papers.",
             ),
             (
