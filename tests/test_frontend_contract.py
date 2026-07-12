@@ -6,6 +6,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_unbound_click_branch_uses_form_safe_paint_decision(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        click_router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
+        unbound_branch = click_router[click_router.index("if (!t)") : click_router.index("const act =")]
+
+        self.assertIn("const quickStartWasOpen = state.quickStartOpen;", click_router)
+        self.assertIn("e.target.closest('form')", click_router)
+        self.assertIn("const shouldCloseQuickStart = quickStartWasOpen && !insideChatInputArea;", click_router)
+        self.assertIn("shouldPaintUnboundClick({ insideForm, insideChatInputArea, shouldCloseQuickStart })", unbound_branch)
+        self.assertNotIn("if (!insideChatInputArea) paint()", unbound_branch)
+
     def test_workspace_interactions_do_not_navigate_to_project_pages(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 

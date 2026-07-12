@@ -41,8 +41,12 @@ function createProjectNavigationOwnership(initialProjectId = '') {
   };
 }
 
+function shouldPaintUnboundClick({ insideForm, insideChatInputArea, shouldCloseQuickStart }) {
+  return !insideForm && !insideChatInputArea && shouldCloseQuickStart;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick };
 }
 
 /* ReviewPilot workspace UI.
@@ -1526,11 +1530,14 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     }
 
     root.addEventListener('click', (e) => {
-      const insideChatInputArea = e.target.closest('[data-ui="assistant-chat-input-area"]');
-      if (state.quickStartOpen && !insideChatInputArea) state.quickStartOpen = false;
+      const quickStartWasOpen = state.quickStartOpen;
+      const insideChatInputArea = Boolean(e.target.closest('[data-ui="assistant-chat-input-area"]'));
+      const insideForm = Boolean(e.target.closest('form'));
+      const shouldCloseQuickStart = quickStartWasOpen && !insideChatInputArea;
+      if (shouldCloseQuickStart) state.quickStartOpen = false;
       const t = e.target.closest('[data-act]');
       if (!t) {
-        if (!insideChatInputArea) paint();
+        if (shouldPaintUnboundClick({ insideForm, insideChatInputArea, shouldCloseQuickStart })) paint();
         return;
       }
       const act = t.getAttribute('data-act');

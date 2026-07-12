@@ -7,6 +7,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_unbound_click_paint_decision_preserves_form_submission(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { shouldPaintUnboundClick } = require('./frontend/app.js');
+
+assert.equal(shouldPaintUnboundClick({ insideForm: true, insideChatInputArea: false, shouldCloseQuickStart: false }), false);
+assert.equal(shouldPaintUnboundClick({ insideForm: true, insideChatInputArea: true, shouldCloseQuickStart: true }), false);
+assert.equal(shouldPaintUnboundClick({ insideForm: false, insideChatInputArea: false, shouldCloseQuickStart: true }), true);
+assert.equal(shouldPaintUnboundClick({ insideForm: false, insideChatInputArea: false, shouldCloseQuickStart: false }), false);
+"""
+        result = subprocess.run(
+            ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_active_task_ownership_interleavings(self):
         script = r"""
 const assert = require('node:assert/strict');
