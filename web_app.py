@@ -45,10 +45,16 @@ FRONTEND_DIR = ROOT / "frontend"
 task_runner = TaskRunner()
 
 
+def build_project_state(output_root: Path | str, project_id: str) -> dict:
+    state = build_rp_data(Path(output_root), project_id)
+    state["activeTask"] = task_runner.active_for_project(project_id)
+    return state
+
+
 def render_workspace_html(output_root: Path | str = OUTPUT_ROOT, project_id: str | None = None) -> str:
     projects = list_projects(Path(output_root))
     active_project_id = project_id or (projects[0]["id"] if projects else "")
-    state = build_rp_data(Path(output_root), active_project_id) if active_project_id else build_new_project_data(Path(output_root))
+    state = build_project_state(output_root, active_project_id) if active_project_id else build_new_project_data(Path(output_root))
     return _render_html_with_state(state, build_new_project_data(Path(output_root)))
 
 
@@ -101,7 +107,7 @@ async def project_state(request):
     project_id = request.path_params["project_id"]
     if not known_project(OUTPUT_ROOT, project_id):
         raise HTTPException(status_code=404)
-    return JSONResponse(build_rp_data(OUTPUT_ROOT, project_id))
+    return JSONResponse(build_project_state(OUTPUT_ROOT, project_id))
 
 
 async def project_action(request):

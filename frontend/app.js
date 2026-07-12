@@ -22,6 +22,7 @@
   let D = normalizeData(escapeData(window.RP_DATA || {}));
   const NEW_PROJECT_TEMPLATE = normalizeData(escapeData(RAW_NEW_PROJECT));
   let MAX = maxPlatformValue(D.platforms);
+  const initialActionStartedAt = Date.parse(D.activeTask?.created_at || '');
 
   const state = {
     step: initialStep(D),
@@ -34,8 +35,8 @@
     chatInputFocus: false,
     chatPending: false,
     quickStartOpen: false,
-    actionPending: '',
-    actionStartedAt: 0,
+    actionPending: D.activeTask?.action || '',
+    actionStartedAt: D.activeTask ? (Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt) : 0,
     preservedChatMessages: [],
     catDraft: categorizationDraftFromData(D),
   };
@@ -122,6 +123,7 @@
 
   function shouldRestoreSnapshotDataForRoute(snapshot) {
     if (!snapshot || !snapshot.data) return false;
+    if (D.activeTask) return false;
     const path = window.location && window.location.pathname ? window.location.pathname : '';
     const isWorkspaceRoute = path === '' || path === '/' || path === '/workspace';
     if (isWorkspaceRoute) return true;
@@ -180,6 +182,7 @@
   function normalizeData(data) {
     return {
       isNewProject: !!data.isNewProject,
+      activeTask: data.activeTask || null,
       project: data.project || { id: '', title: 'ReviewPilot', status: 'No project', model: '', date: '' },
       researchQuestion: data.researchQuestion || '',
       setup: data.setup || {},
@@ -1379,6 +1382,22 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       }
     }
 
+    async function resumeActiveTask() {
+      if (!D.activeTask || !D.activeTask.task_id) return;
+      const projectId = D.activeTask.project_id || state.activeProjectId || D.project.id;
+      try {
+        await waitForTask(D.activeTask.task_id);
+        setData(await fetchProjectState(projectId), false, { preserveView: true });
+      } catch (err) {
+        state.actionError = err.message || String(err);
+      } finally {
+        state.actionPending = '';
+        state.actionStartedAt = 0;
+        D.activeTask = null;
+        paint();
+      }
+    }
+
     async function submitChatForm(form) {
       const input = form.querySelector('input[name="message"]');
       const pending = handleChatSubmit(input ? input.value : '');
@@ -1565,6 +1584,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     });
 
     paint();
+    resumeActiveTask();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);

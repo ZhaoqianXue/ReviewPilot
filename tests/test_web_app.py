@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -525,6 +526,51 @@ class WebAppTests(unittest.TestCase):
             release.set()
             if 'first_id' in locals():
                 web_app.task_runner.wait(first_id, timeout=2)
+            web_app.OUTPUT_ROOT = old_output_root
+            web_app.task_runner = old_task_runner
+
+    def test_running_task_is_exposed_in_project_state_and_workspace_html(self):
+        old_output_root = web_app.OUTPUT_ROOT
+        old_task_runner = web_app.task_runner
+        release = Event()
+        started = Event()
+        task_id = None
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_root = Path(tmp)
+                project_dir = output_root / "demo"
+                project_dir.mkdir(parents=True)
+                (project_dir / "search_conditions.json").write_text(
+                    json.dumps({"project_name": "demo"}), encoding="utf-8"
+                )
+                web_app.OUTPUT_ROOT = output_root
+                web_app.task_runner = TaskRunner(max_workers=1)
+
+                def blocking_collect():
+                    started.set()
+                    release.wait()
+
+                task_id = web_app.task_runner.submit("demo", "collect", blocking_collect)
+                self.assertTrue(started.wait(timeout=1))
+
+                response = TestClient(web_app.create_app()).get("/projects/demo/state")
+                embedded = re.search(r"window\.RP_DATA = (.*?); window\.RP_NEW_PROJECT_DATA", render_workspace_html(output_root, "demo"))
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(
+                    {key: response.json()["activeTask"][key] for key in ("task_id", "action", "status")},
+                    {"task_id": task_id, "action": "collect", "status": "running"},
+                )
+                self.assertIsNotNone(embedded)
+                self.assertEqual(json.loads(embedded.group(1))["activeTask"], response.json()["activeTask"])
+
+                release.set()
+                web_app.task_runner.wait(task_id, timeout=2)
+                self.assertIsNone(TestClient(web_app.create_app()).get("/projects/demo/state").json()["activeTask"])
+        finally:
+            release.set()
+            if task_id and web_app.task_runner.get(task_id) and web_app.task_runner.get(task_id)["status"] == "running":
+                web_app.task_runner.wait(task_id, timeout=2)
             web_app.OUTPUT_ROOT = old_output_root
             web_app.task_runner = old_task_runner
 

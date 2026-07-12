@@ -431,7 +431,7 @@ class FrontendContractTests(unittest.TestCase):
         action_branch = source[source.index("else if (act === 'action')") : source.index("root.addEventListener('input'")]
         canvas_action = source[source.index("function canvasActionButton(v)") : source.index("function screeningCanvas(v)")]
 
-        self.assertIn("actionPending: ''", source)
+        self.assertIn("actionPending: D.activeTask?.action || ''", source)
         self.assertIn("state.actionPending = actionName;", action_branch)
         self.assertIn("paint();", action_branch)
         self.assertIn("state.actionPending = '';", action_branch)
@@ -439,6 +439,30 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("data-ui=\"canvas-action-button\"", canvas_action)
         self.assertIn("Running", canvas_action)
         self.assertIn("disabled", canvas_action)
+
+    def test_refresh_resumes_server_active_task_without_submitting_again(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        normalize = source[source.index("function normalizeData") : source.index("function emptyCategorizationWorkflow")]
+        route_guard = source[source.index("function shouldRestoreSnapshotDataForRoute") : source.index("function writeWorkspaceSnapshot")]
+        resume = source[source.index("async function resumeActiveTask") : source.index("async function submitChatForm")]
+        mount_tail = source[source.rindex("    paint();") : source.index("  if (document.readyState")]
+
+        self.assertIn("activeTask: data.activeTask || null", normalize)
+        self.assertIn("actionPending: D.activeTask?.action || ''", source)
+        self.assertIn("Date.parse(D.activeTask?.created_at || '')", source)
+        self.assertIn("Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt", source)
+        self.assertIn("if (D.activeTask) return false;", route_guard)
+        self.assertIn("await waitForTask(D.activeTask.task_id);", resume)
+        self.assertIn("setData(await fetchProjectState(projectId), false, { preserveView: true });", resume)
+        self.assertIn("state.actionError = err.message || String(err);", resume)
+        self.assertIn("state.actionPending = '';", resume)
+        self.assertIn("state.actionStartedAt = 0;", resume)
+        self.assertIn("D.activeTask = null;", resume)
+        self.assertIn("paint();", resume)
+        self.assertNotIn("postAction(", resume)
+        self.assertEqual(source.count("async function resumeActiveTask()"), 1)
+        self.assertEqual(source.count("resumeActiveTask();"), 1)
+        self.assertLess(mount_tail.index("paint();"), mount_tail.index("resumeActiveTask();"))
 
     def test_retrieval_canvas_does_not_label_queued_papers_as_retrieved(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -593,7 +617,7 @@ class FrontendContractTests(unittest.TestCase):
     def test_canvas_actions_show_elapsed_running_state(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("actionStartedAt: 0", source)
+        self.assertIn("actionStartedAt: D.activeTask ?", source)
         self.assertIn("function formatElapsed(ms)", source)
         self.assertIn("let actionTicker = null;", source)
         self.assertIn("state.actionStartedAt = Date.now();", source)
