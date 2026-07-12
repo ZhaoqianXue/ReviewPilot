@@ -53,8 +53,8 @@ class SearchConditionAgentTests(unittest.TestCase):
                     "project_path": str(output_root / "llm-chat-review"),
                     "description": "Review LLM systems in biomedicine",
                     "search_terms": "Review LLM systems in biomedicine",
-                    "platforms": ["pubmed", "openalex", "arxiv"],
-                    "source_limits": {"pubmed": 50, "openalex": 50, "arxiv": 50},
+                    "platforms": ["pubmed", "arxiv", "openalex"],
+                    "source_limits": {"pubmed": 50, "arxiv": 50, "openalex": 50},
                     "max_results": 50,
                     "derive_search_terms": True,
                     "model": "gpt-5.4-mini",
@@ -67,7 +67,9 @@ class SearchConditionAgentTests(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "gpt-5.4-mini")
         self.assertEqual(result["project_name"], "LLM Biomedicine Review")
         self.assertEqual(result["search_terms"], "LLM_JSON_QUERY")
-        self.assertEqual(result["platforms"], ["pubmed", "openalex"])
+        self.assertEqual(result["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(written["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertIn('"platforms": ["pubmed", "arxiv", "openalex"],', calls[0]["text_prompt"])
         self.assertEqual(result["date_range"], {"start": "2021-01-01", "end": ""})
         self.assertEqual(result["lead_agent_reply"], "I generated a search setup from the chat request.")
         self.assertEqual(written["search_terms"], "LLM_JSON_QUERY")
@@ -86,10 +88,10 @@ class SearchConditionAgentTests(unittest.TestCase):
                             "research_description": "Review LLM systems in care delivery",
                             "search_terms": "LLM_JSON_QUERY",
                             "search_queries": [{"name": "main", "query": "LLM_JSON_QUERY"}],
-                            "platforms": ["pubmed", "openalex"],
+                            "platforms": ["dblp", "openalex", "pubmed"],
                             "date_range": {"start": "2021-01-01", "end": ""},
                             "max_results": 50,
-                            "source_limits": {"pubmed": 50, "openalex": 50},
+                            "source_limits": {"dblp": 50, "openalex": 50, "pubmed": 50},
                             "primary_topic": "LLM systems",
                             "domain": "care delivery",
                             "extracted_concepts": {
@@ -109,8 +111,8 @@ class SearchConditionAgentTests(unittest.TestCase):
                     "project_path": str(output_root / "llm-chat-review"),
                     "description": "Review LLM systems in care delivery",
                     "search_terms": "Review LLM systems in care delivery",
-                    "platforms": ["pubmed", "openalex", "arxiv"],
-                    "source_limits": {"pubmed": 10, "openalex": 10, "arxiv": 10},
+                    "platforms": ["pubmed", "arxiv", "openalex"],
+                    "source_limits": {"pubmed": 10, "arxiv": 20, "openalex": 30},
                     "max_results": 10,
                     "derive_search_terms": True,
                     "model": "gpt-5.4-mini",
@@ -119,11 +121,12 @@ class SearchConditionAgentTests(unittest.TestCase):
 
             written = json.loads((output_root / "llm-chat-review" / "search_conditions.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(result["platforms"], ["pubmed", "openalex"])
-        self.assertEqual(result["max_results"], 10)
-        self.assertEqual(result["max_results_per_platform"], 10)
-        self.assertEqual(result["source_limits"], {"pubmed": 10, "openalex": 10})
-        self.assertEqual(written["source_limits"], {"pubmed": 10, "openalex": 10})
+        self.assertEqual(result["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(result["max_results"], 30)
+        self.assertEqual(result["max_results_per_platform"], 30)
+        self.assertEqual(result["source_limits"], {"pubmed": 10, "arxiv": 20, "openalex": 30})
+        self.assertEqual(written["platforms"], ["pubmed", "arxiv", "openalex"])
+        self.assertEqual(written["source_limits"], {"pubmed": 10, "arxiv": 20, "openalex": 30})
 
     def test_derive_search_terms_fails_loudly_when_llm_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

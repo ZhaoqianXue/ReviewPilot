@@ -502,7 +502,7 @@ Environment variables:
         if cfg and hasattr(cfg, 'FOCUS_PLATFORMS'):
             platforms = cfg.FOCUS_PLATFORMS
         else:
-            platforms = ["openalex", "arxiv", "pubmed"]
+            platforms = ["pubmed", "arxiv", "openalex"]
 
     # Load search scope from config or args
     search_scope = args.search_scope

@@ -324,8 +324,10 @@ class SearchConditionAgent(BaseAgent):
 
     def _llm_search_setup_prompt(self, config: Dict[str, Any], project_name: str, description: str) -> str:
         example_max_results = config.get('max_results') or config.get('max_results_per_platform') or DEFAULT_MAX_RESULTS_PER_PLATFORM
+        example_platforms = config.get('platforms') or ["pubmed", "arxiv", "openalex"]
         example_source_limits = config.get('source_limits') or {
             "pubmed": DEFAULT_MAX_RESULTS_PER_PLATFORM,
+            "arxiv": DEFAULT_MAX_RESULTS_PER_PLATFORM,
             "openalex": DEFAULT_MAX_RESULTS_PER_PLATFORM,
         }
         return f"""Generate Search Setup for ReviewPilot from this user chat request.
@@ -349,7 +351,7 @@ Return ONLY valid JSON with this exact top-level shape:
   "research_description": "the user's research question in clear prose",
   "search_terms": "Boolean query string",
   "search_queries": [{{"name": "main", "query": "Boolean query string"}}],
-  "platforms": ["pubmed", "openalex"],
+  "platforms": {json.dumps(example_platforms)},
   "date_range": {{"start": "YYYY-MM-DD or blank", "end": "YYYY-MM-DD or blank"}},
   "max_results": {example_max_results},
   "source_limits": {json.dumps(example_source_limits)},
@@ -365,7 +367,7 @@ Return ONLY valid JSON with this exact top-level shape:
 
 Rules:
 - Do not include explanatory text outside JSON.
-- Do not invent unsupported databases outside the candidate platforms unless the user request clearly requires them.
+- Return the candidate platforms exactly as supplied, in the same order; do not add, drop, or reorder them.
 - Preserve the user's intended domain and scope.
 - Preserve the current canvas source limits and max results exactly unless the user has explicitly changed them in the canvas.
 - Build a real Boolean query suitable for academic database search."""
@@ -424,7 +426,9 @@ Rules:
         if not isinstance(search_queries, list) or not search_queries:
             raise ValueError("SearchConditionAgent LLM response search_queries must be a non-empty list")
 
-        selected_platforms = [str(platform).strip().lower() for platform in platforms]
+        configured_platforms = config.get("platforms")
+        platform_source = configured_platforms if isinstance(configured_platforms, list) and configured_platforms else platforms
+        selected_platforms = [str(platform).strip().lower() for platform in platform_source]
         preserved_source_limits = self._preserved_source_limits(config, llm_payload, selected_platforms)
         preserved_max_results = max(preserved_source_limits.values()) if preserved_source_limits else DEFAULT_MAX_RESULTS_PER_PLATFORM
 
