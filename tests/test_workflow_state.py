@@ -157,6 +157,11 @@ class WorkflowStateTests(unittest.TestCase):
             "extraction": lambda p: (_write_valid_legacy(p, "retrieval"), _write_jsonl(p / "extraction" / "extraction_results.jsonl", [{}])),
             "categorization_mapping": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": [], "categories": ["A"]})),
             "categorization_categories": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {}, "categories": [1]})),
+            "categorization_empty_key": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {"": "A"}, "categories": ["A"]})),
+            "categorization_object_value": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {"Paper": {"name": "A"}}, "categories": ["A"]})),
+            "categorization_malformed_list": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {"Paper": ["A", 2]}, "categories": ["A"]})),
+            "categorization_empty_list": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {"Paper": []}, "categories": ["A"]})),
+            "categorization_unknown_category": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {"Paper": ["Unknown"]}, "categories": ["A"]})),
         }
         for label, arrange in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
@@ -165,6 +170,29 @@ class WorkflowStateTests(unittest.TestCase):
                 state = migrate_legacy_workflow_state(project)
                 stage = label.split("_", 1)[0]
                 self.assertNotEqual(state["stages"][stage]["status"], "completed")
+
+    def test_migration_accepts_real_r7_multiple_category_mapping_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            _write_valid_legacy(project, "extraction")
+            _write_json(
+                project / "categorization" / "categorization_mapping.json",
+                {
+                    "field": "methods",
+                    "mode": "multiple",
+                    "categories": ["Narrative Literature Review", "Systematic Search Across Scholarly Sources"],
+                    "mapping": {
+                        "Opportunities and challenges for ChatGPT and large language models in biomedicine and health": [
+                            "Narrative Literature Review",
+                            "Systematic Search Across Scholarly Sources",
+                        ]
+                    },
+                },
+            )
+
+            state = migrate_legacy_workflow_state(project)
+
+        self.assertEqual(state["stages"]["categorization"]["status"], "completed")
 
     def test_migration_accepts_empty_rows_only_with_coherent_zero_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -184,25 +212,38 @@ class WorkflowStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             _write_valid_legacy(project, "collection")
-            starter_finished = Event()
+            starter_attempted = Event()
+            starter_entered = Event()
             original_write = workflow_state._write
+            actual_lock = workflow_state._project_lock(project)
+
+            class ObservedProjectLock:
+                def __enter__(self):
+                    if current_thread().name == "starter":
+                        starter_attempted.set()
+                    actual_lock.acquire()
+                    if current_thread().name == "starter":
+                        starter_entered.set()
+                    return self
+
+                def __exit__(self, *_args):
+                    actual_lock.release()
 
             def ordered_write(path, state):
                 if current_thread().name == "migrator" and state["stages"]["collection"]["status"] == "completed":
-                    starter_finished.wait(timeout=0.1)
+                    starter_attempted.wait()
+                    self.assertFalse(starter_entered.is_set())
                 original_write(path, state)
-                if state["stages"]["collection"]["status"] == "running":
-                    starter_finished.set()
 
-            with patch("reviewpilot_core.workflow_state._write", side_effect=ordered_write):
+            with patch("reviewpilot_core.workflow_state._project_lock", return_value=ObservedProjectLock()), patch(
+                "reviewpilot_core.workflow_state._write", side_effect=ordered_write
+            ):
                 migrator = Thread(name="migrator", target=load_workflow_state, args=(project,))
                 starter = Thread(name="starter", target=start_action, args=(project, "collect"))
                 migrator.start()
                 starter.start()
-                migrator.join(timeout=2)
-                starter.join(timeout=2)
-                self.assertFalse(migrator.is_alive())
-                self.assertFalse(starter.is_alive())
+                migrator.join()
+                starter.join()
 
             state = load_workflow_state(project)
         self.assertEqual(state["stages"]["collection"]["status"], "running")

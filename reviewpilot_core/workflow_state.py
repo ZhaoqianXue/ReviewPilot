@@ -237,7 +237,19 @@ def _valid_categorization(path: Path) -> bool:
     data = _json_object(path)
     if data is None or not isinstance(data.get("mapping"), dict) or not isinstance(data.get("categories"), list):
         return False
-    return all(isinstance(category, str) and bool(category.strip()) for category in data["categories"])
+    categories = data["categories"]
+    if not all(isinstance(category, str) and bool(category.strip()) for category in categories):
+        return False
+    allowed = set(categories)
+    for paper, assigned in data["mapping"].items():
+        if not isinstance(paper, str) or not paper.strip():
+            return False
+        values = [assigned] if isinstance(assigned, str) else assigned
+        if not isinstance(values, list) or not values:
+            return False
+        if not all(isinstance(value, str) and bool(value.strip()) and value in allowed for value in values):
+            return False
+    return True
 
 
 def _json_object(path: Path) -> dict[str, Any] | None:
