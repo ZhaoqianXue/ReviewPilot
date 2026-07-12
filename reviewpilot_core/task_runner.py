@@ -23,7 +23,7 @@ class TaskRunner:
         self._futures: dict[str, Future] = {}
         self._registry_lock = Lock()
 
-    def submit(self, project_id: str, action: str, func) -> str:
+    def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None) -> str:
         with self._registry_lock:
             active_task = self._active_for_project_unlocked(project_id)
             if active_task is not None:
@@ -40,10 +40,16 @@ class TaskRunner:
                 "result": None,
                 "error": None,
             }
+            prepared = False
             try:
+                if prepare is not None:
+                    prepare()
+                    prepared = True
                 future = self._executor.submit(self._run, task_id, func)
             except Exception:
                 del self._tasks[task_id]
+                if prepared and rollback is not None:
+                    rollback()
                 raise
             self._futures[task_id] = future
         return task_id

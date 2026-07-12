@@ -6,6 +6,29 @@ from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_submit_prepares_registered_task_before_worker_can_start(self):
+        runner = TaskRunner(max_workers=1)
+        events = []
+        try:
+            task_id = runner.submit("demo", "collect", lambda: events.append("work"), prepare=lambda: events.append("prepare"))
+            runner.wait(task_id, timeout=2)
+        finally:
+            runner.shutdown()
+
+        self.assertEqual(events, ["prepare", "work"])
+
+    def test_submit_rolls_back_preparation_when_executor_rejects(self):
+        runner = TaskRunner(max_workers=1)
+        events = []
+        runner._executor.submit = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("rejected"))
+        try:
+            with self.assertRaisesRegex(RuntimeError, "rejected"):
+                runner.submit("demo", "collect", lambda: None, prepare=lambda: events.append("prepare"), rollback=lambda: events.append("rollback"))
+        finally:
+            runner.shutdown(wait=False)
+
+        self.assertEqual(events, ["prepare", "rollback"])
+
     def test_shutdown_is_public_and_rejects_new_tasks(self):
         runner = TaskRunner(max_workers=1)
         runner.shutdown()

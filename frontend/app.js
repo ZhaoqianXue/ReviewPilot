@@ -264,6 +264,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       project: data.project || { id: '', title: 'ReviewPilot', status: 'No project', model: '', date: '' },
       researchQuestion: data.researchQuestion || '',
       setup: data.setup || {},
+      stageState: data.stageState || {},
       steps: data.steps || [],
       fields: data.fields || [],
       schemaWorkbench: data.schemaWorkbench || { status: 'missing', primary_action: 'Generate Schema', can_finalize: false },

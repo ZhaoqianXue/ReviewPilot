@@ -6,6 +6,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_normalized_refresh_state_retains_server_owned_stage_state(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("stageState: data.stageState || {},", source)
+
     def test_new_review_fallbacks_and_visible_sources_use_frozen_platform_order(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         setup_draft = source[source.index("function setupDraftFromData") : source.index("function sourceLimitValue")]

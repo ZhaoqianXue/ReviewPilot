@@ -38,6 +38,7 @@ from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
+from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, save_workflow_state, start_action
 
 
 OUTPUT_ROOT = ROOT / "output"
@@ -46,8 +47,9 @@ task_runner = TaskRunner()
 
 
 def build_project_state(output_root: Path | str, project_id: str) -> dict:
-    state = build_rp_data(Path(output_root), project_id)
-    state["activeTask"] = task_runner.active_for_project(project_id)
+    active_task = task_runner.active_for_project(project_id)
+    state = build_rp_data(Path(output_root), project_id, active_action=active_task["action"] if active_task else None)
+    state["activeTask"] = active_task
     return state
 
 
@@ -240,6 +242,7 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
     config = _setup_config(payload)
     project_id = _unique_project_id(Path(output_root), _slugify(config["project_name"]))
     search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+    initialize_workflow_state(Path(output_root) / project_id)
     return {"id": project_id, "title": search_conditions["project_name"], "path": search_conditions["project_path"]}
 
 
@@ -349,16 +352,40 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
+    project_path = Path(output_root) / project_id
+    previous_state: list[dict] = []
+
+    def prepare_action():
+        previous_state.append(load_workflow_state(project_path))
+        start_action(project_path, action)
+
+    def rollback_action():
+        if previous_state:
+            save_workflow_state(project_path, previous_state[0])
+
     def run_action():
-        agent = LeadAgent(Path(output_root), llm_query=llm_query)
-        if input_data is None:
-            return agent.handle_message(project_id=project_id, action=action).to_dict()
-        return agent.handle_message(project_id=project_id, action=action, input_data=input_data).to_dict()
+        try:
+            agent = LeadAgent(Path(output_root), llm_query=llm_query)
+            if input_data is None:
+                result = agent.handle_message(project_id=project_id, action=action).to_dict()
+            else:
+                result = agent.handle_message(project_id=project_id, action=action, input_data=input_data).to_dict()
+        except Exception as exc:
+            fail_action(project_path, action, exc)
+            raise
+        try:
+            complete_action(project_path, action, result.get("data") if isinstance(result.get("data"), dict) else result)
+        except Exception as exc:
+            fail_action(project_path, action, exc)
+            raise
+        return result
 
     return task_runner.submit(
         project_id,
         action,
         run_action,
+        prepare=prepare_action,
+        rollback=rollback_action,
     )
 
 

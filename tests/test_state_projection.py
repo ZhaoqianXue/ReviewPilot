@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from reviewpilot_core.state_projection import build_new_project_data, build_rp_data, list_projects
+from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -19,7 +20,40 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     )
 
 
+def write_legacy_stage_chain(project: Path, through: str) -> None:
+    order = ["collection", "screening", "retrieval", "extraction", "categorization"]
+    if order.index(through) >= 0:
+        write_json(project / "collected" / "summary.json", {"total_papers": 1, "platform_stats": {"pubmed": 1}})
+    if order.index(through) >= 1:
+        write_jsonl(project / "filtered" / "included_papers.jsonl", [{"title": "Legacy paper"}])
+    if order.index(through) >= 2:
+        write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 0})
+    if order.index(through) >= 3:
+        write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"title": "Legacy paper"}])
+    if order.index(through) >= 4:
+        write_json(project / "categorization" / "categorization_mapping.json", {"mapping": {}})
+
+
 class StateProjectionTests(unittest.TestCase):
+    def test_existing_ledger_is_sole_stage_truth_despite_artifact_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "ledger-project"
+            write_json(project_dir / "search_conditions.json", {"project_name": "ledger-project"})
+            initialize_workflow_state(project_dir)
+            write_json(project_dir / "categorization" / "categorization_mapping.json", {"mapping": {"A": "x"}})
+
+            before = build_rp_data(output_root, "ledger-project")
+            start_action(project_dir, "collect")
+            complete_action(project_dir, "collect", {"total_papers": 3})
+            (project_dir / "categorization" / "categorization_mapping.json").unlink()
+            after = build_rp_data(output_root, "ledger-project")
+
+        self.assertEqual(before["stageState"]["collection"]["status"], "ready")
+        self.assertEqual(before["steps"][-1]["status"], "todo")
+        self.assertEqual(after["stageState"]["collection"]["status"], "completed")
+        self.assertEqual(after["steps"][0]["status"], "done")
+
     def test_new_project_state_exposes_five_user_workflow_steps(self):
         with tempfile.TemporaryDirectory() as tmp:
             data = build_new_project_data(Path(tmp))
@@ -352,6 +386,7 @@ class StateProjectionTests(unittest.TestCase):
             output_root = Path(tmp)
             project_dir = output_root / "extracted-project"
             write_json(project_dir / "search_conditions.json", {"project_name": "extracted-project"})
+            write_legacy_stage_chain(project_dir, "extraction")
             write_json(
                 project_dir / "extraction" / "extraction_schema.json",
                 {
@@ -368,7 +403,7 @@ class StateProjectionTests(unittest.TestCase):
 
             data = build_rp_data(output_root, "extracted-project")
 
-        self.assertEqual([step["status"] for step in data["steps"]], ["todo", "todo", "todo", "done", "active"])
+        self.assertEqual([step["status"] for step in data["steps"]], ["done", "done", "done", "done", "active"])
         self.assertEqual(data["project"]["status"], "Active · Step 5 of 5")
         self.assertIn("Extraction is complete. Choose a field to categorize for final analysis.", [message["text"] for message in data["messages"]])
         self.assertEqual(data["fields"][0], ["sample_size", "Number", "Participants", True])
@@ -382,6 +417,7 @@ class StateProjectionTests(unittest.TestCase):
             output_root = Path(tmp)
             project_dir = output_root / "download-attempted"
             write_json(project_dir / "search_conditions.json", {"project_name": "download-attempted"})
+            write_legacy_stage_chain(project_dir, "retrieval")
             write_jsonl(project_dir / "filtered" / "included_papers.jsonl", [{"title": "Paper A"}])
             write_json(project_dir / "pdfs" / "download_report.json", {"success": 0, "failed": 1})
 
@@ -395,6 +431,7 @@ class StateProjectionTests(unittest.TestCase):
             output_root = Path(tmp)
             project_dir = output_root / "categorized"
             write_json(project_dir / "search_conditions.json", {"project_name": "categorized"})
+            write_legacy_stage_chain(project_dir, "categorization")
             write_json(
                 project_dir / "categorization" / "categorization_mapping.json",
                 {

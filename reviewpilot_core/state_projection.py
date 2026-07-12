@@ -14,6 +14,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
+from .workflow_state import STAGE_NAMES, new_workflow_state, reconcile_orphaned_running
 
 
 NEW_REVIEW_WELCOME = """Welcome to **ReviewPilot**!
@@ -150,6 +151,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
             "date_start": "",
             "date_end": "",
         },
+        "stageState": new_workflow_state()["stages"],
         "steps": [
             {"n": 1, "key": "search", "label": "Search Setup", "status": "active", "sub": "3 sources", "desc": ""},
             {"n": 2, "key": "screening", "label": "Paper Screening", "status": "todo", "sub": "0 / 0", "desc": ""},
@@ -201,7 +203,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
     }
 
 
-def build_rp_data(output_root: Path | str, project_id: str) -> dict:
+def build_rp_data(output_root: Path | str, project_id: str, active_action: str | None = None) -> dict:
     root = Path(output_root)
     path = project_dir(root, project_id)
     config = _unescape_strings(read_json(path / "search_conditions.json", {}) or {})
@@ -217,7 +219,8 @@ def build_rp_data(output_root: Path | str, project_id: str) -> dict:
     categorization_suggestions = _unescape_strings(read_json(path / "categorization" / "suggested_categories.json", {}) or {})
     categorized_rows = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl", limit=200))
 
-    current_step = _current_step(path)
+    workflow_state = reconcile_orphaned_running(path, active_action=active_action)
+    current_step = _current_step(workflow_state)
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
     schema_finalized = is_schema_finalized(path)
@@ -234,7 +237,8 @@ def build_rp_data(output_root: Path | str, project_id: str) -> dict:
         },
         "researchQuestion": _research_question(config),
         "setup": _setup(config),
-        "steps": _steps(path, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
+        "stageState": workflow_state["stages"],
+        "steps": _steps(path, workflow_state, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
         "optionalCapabilities": [],
         "fields": fields,
         "schemaWorkbench": schema_workbench_state(has_schema=bool(fields), schema_finalized=schema_finalized),
@@ -279,36 +283,18 @@ def _unescape_strings(value: Any) -> Any:
     return value
 
 
-def _current_step(path: Path) -> int:
-    if (path / "categorization" / "categorization_mapping.json").exists():
-        return 5
-    if (path / "extraction" / "extraction_results.jsonl").exists():
-        return 5
-    if (path / "pdfs" / "download_report.json").exists() or ((path / "pdfs").exists() and list((path / "pdfs").glob("*.pdf"))):
-        return 4
-    if (path / "filtered" / "included_papers.jsonl").exists():
-        return 3
-    if (path / "collected" / "summary.json").exists() or (path / "collected").exists():
-        return 2
-    return 1
-
-
-def _is_done(path: Path, key: str) -> bool:
-    if key == "search":
-        return (path / "collected" / "summary.json").exists() or (path / "collected").exists()
-    if key == "screening":
-        return (path / "filtered" / "included_papers.jsonl").exists()
-    if key == "retrieval":
-        return (path / "pdfs" / "download_report.json").exists() or ((path / "pdfs").exists() and bool(list((path / "pdfs").glob("*.pdf"))))
-    if key == "extraction":
-        return (path / "extraction" / "extraction_results.jsonl").exists()
-    if key == "categorize":
-        return (path / "categorization" / "categorization_mapping.json").exists()
-    return False
+def _current_step(workflow_state: dict) -> int:
+    stages = workflow_state["stages"]
+    exceptional = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"running", "partial", "failed"}]
+    if exceptional:
+        return exceptional[-1]
+    completed = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] == "completed"]
+    return min((max(completed) + 1) if completed else 1, len(STAGE_NAMES))
 
 
 def _steps(
     path: Path,
+    workflow_state: dict,
     current_step: int,
     config: dict,
     collected_summary: dict,
@@ -327,7 +313,8 @@ def _steps(
     }
     steps = []
     for index, (key, label, fallback_sub) in enumerate(STEP_DEFS, start=1):
-        if _is_done(path, key):
+        stage_name = STAGE_NAMES[index - 1]
+        if workflow_state["stages"][stage_name]["status"] == "completed":
             status = "done"
         elif index == current_step:
             status = "active"

@@ -24,6 +24,7 @@ from reviewpilot_core.extraction_schema import (
 from reviewpilot_core.model_policy import LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.sub_agent_contracts import default_sub_agent_contracts
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
+from reviewpilot_core.workflow_state import load_workflow_state
 from utils.jsonl_handler import append_jsonl
 from utils.llm import query_llm
 
@@ -650,6 +651,16 @@ Return ONLY valid JSON:
         return prompt_path
 
     def _require_completed_stage(self, project_path: Path, action: str, required_stage: str) -> None:
+        ledger_stage = {
+            "collection": "collection",
+            "filtering": "screening",
+            "download": "retrieval",
+            "extraction": "extraction",
+            "categorization": "categorization",
+        }.get(required_stage)
+        state = load_workflow_state(project_path)
+        if ledger_stage is None or state["stages"][ledger_stage]["status"] != "completed":
+            raise ValueError(f"Action '{action}' requires completed stage '{required_stage}'")
         try:
             self._verify_stage_artifacts(project_path, required_stage)
         except ValueError as exc:

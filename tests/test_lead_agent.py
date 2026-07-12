@@ -7,9 +7,29 @@ from agents.lead_agent import LeadAgent
 from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
 from reviewpilot_core.project_store import read_jsonl
 from reviewpilot_core.state_projection import build_rp_data
+from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
+
+
+def ledger_through(project: Path, stage: str) -> None:
+    initialize_workflow_state(project)
+    actions = ["collect", "screen", "download-pdfs", "run-extraction", "categorize"]
+    stages = ["collection", "screening", "retrieval", "extraction", "categorization"]
+    for action in actions[: stages.index(stage) + 1]:
+        start_action(project, action)
+        complete_action(project, action, {})
 
 
 class LeadAgentTests(unittest.TestCase):
+    def test_completed_stage_requirement_uses_ledger_before_artifact_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            (project / "collected").mkdir(parents=True)
+            (project / "collected" / "summary.json").write_text(json.dumps({"total_papers": 3, "platform_stats": {"pubmed": 3}}), encoding="utf-8")
+            initialize_workflow_state(project)
+
+            with self.assertRaisesRegex(ValueError, "requires completed stage"):
+                LeadAgent(Path(tmp))._require_completed_stage(project, "screen", "collection")
+
     def test_save_search_setup_delegates_to_search_condition_contract_and_verifies_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -297,6 +317,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "retrieval")
             (project_dir / "pdfs").mkdir(parents=True)
             (project_dir / "extraction").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
@@ -318,6 +339,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "screening")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "extraction").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
@@ -518,6 +540,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "screening")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps(
@@ -573,6 +596,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "screening")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps(
@@ -671,6 +695,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "screening")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps({"project_name": "Demo", "description": "Review LLMs", "platforms": ["openalex"], "search_terms": "LLM"}),
@@ -717,6 +742,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "screening")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps({"project_name": "Demo", "description": "Review LLMs", "platforms": ["openalex"], "search_terms": "LLM"}),
@@ -810,6 +836,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "retrieval")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "pdfs").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
@@ -865,6 +892,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "retrieval")
             (project_dir / "filtered").mkdir(parents=True)
             (project_dir / "pdfs").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
@@ -1167,6 +1195,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "extraction")
             (project_dir / "extraction").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps(
@@ -1247,6 +1276,7 @@ class LeadAgentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
+            ledger_through(project_dir, "extraction")
             (project_dir / "extraction").mkdir(parents=True)
             (project_dir / "search_conditions.json").write_text(
                 json.dumps(

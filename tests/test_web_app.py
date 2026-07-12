@@ -16,6 +16,84 @@ from web_app import create_project, render_index_html, render_workspace_html
 
 
 class WebAppTests(unittest.TestCase):
+    def test_create_project_initializes_workflow_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project = create_project(output_root, {"project_name": "Ledger", "description": "Review ledgers"})
+            ledger = json.loads((output_root / project["id"] / "workflow_state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(ledger["stages"]["collection"]["status"], "ready")
+        self.assertEqual(ledger["stages"]["screening"]["status"], "not_started")
+
+    def test_action_lifecycle_persists_running_completed_and_failed(self):
+        old_runner = web_app.task_runner
+        release = Event()
+        started = Event()
+        try:
+            web_app.task_runner = TaskRunner(max_workers=1)
+            with tempfile.TemporaryDirectory() as tmp:
+                output_root = Path(tmp)
+                project_dir = output_root / "demo"
+                project_dir.mkdir()
+                (project_dir / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+                from reviewpilot_core.workflow_state import initialize_workflow_state
+                initialize_workflow_state(project_dir)
+
+                class FakeResult:
+                    def to_dict(self):
+                        return {"stage": "collection", "status": "completed", "data": {"total_papers": 9}}
+
+                class FakeLeadAgent:
+                    def __init__(self, output_root, llm_query=None):
+                        pass
+                    def handle_message(self, **kwargs):
+                        started.set()
+                        release.wait()
+                        return FakeResult()
+
+                with patch.object(web_app, "LeadAgent", FakeLeadAgent):
+                    task_id = web_app.submit_project_action(output_root, "demo", "collect")
+                    self.assertTrue(started.wait(1))
+                    running = json.loads((project_dir / "workflow_state.json").read_text(encoding="utf-8"))
+                    self.assertEqual(running["stages"]["collection"]["status"], "running")
+                    projected = web_app.build_project_state(output_root, "demo")
+                    self.assertEqual(projected["stageState"]["collection"]["status"], "running")
+                    self.assertEqual(projected["steps"][0]["status"], "active")
+                    release.set()
+                    self.assertEqual(web_app.task_runner.wait(task_id, 2)["status"], "completed")
+                completed = json.loads((project_dir / "workflow_state.json").read_text(encoding="utf-8"))
+                self.assertEqual(completed["stages"]["collection"]["counts"], {"total_papers": 9})
+
+                class FailingLeadAgent(FakeLeadAgent):
+                    def handle_message(self, **kwargs):
+                        raise RuntimeError("private failure /Users/name/file")
+
+                with patch.object(web_app, "LeadAgent", FailingLeadAgent):
+                    failed_id = web_app.submit_project_action(output_root, "demo", "screen")
+                    self.assertEqual(web_app.task_runner.wait(failed_id, 2)["status"], "failed")
+                failed = json.loads((project_dir / "workflow_state.json").read_text(encoding="utf-8"))
+                self.assertEqual(failed["stages"]["screening"]["status"], "failed")
+                self.assertNotIn("Users", failed["stages"]["screening"]["error"])
+        finally:
+            release.set()
+            web_app.task_runner.shutdown()
+            web_app.task_runner = old_runner
+
+    def test_project_state_reconciles_orphan_running_but_not_matching_active_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            project_dir.mkdir()
+            (project_dir / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+            from reviewpilot_core.workflow_state import initialize_workflow_state, start_action
+            initialize_workflow_state(project_dir)
+            start_action(project_dir, "collect")
+
+            state = web_app.build_project_state(output_root, "demo")
+
+        self.assertEqual(state["stageState"]["collection"]["status"], "failed")
+        self.assertIn("restart", state["stageState"]["collection"]["error"])
+
     def test_project_exports_download_only_existing_allow_listed_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -817,6 +895,11 @@ class WebAppTests(unittest.TestCase):
                 json.dumps({"included_count": 0, "excluded_count": 0}),
                 encoding="utf-8",
             )
+            from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
+            initialize_workflow_state(project_dir)
+            for completed_action in ("collect", "screen"):
+                start_action(project_dir, completed_action)
+                complete_action(project_dir, completed_action, {})
 
             def fake_llm(*args, **kwargs):
                 if "Design an extraction schema" in kwargs.get("text_prompt", ""):

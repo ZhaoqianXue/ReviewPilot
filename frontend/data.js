@@ -7,6 +7,7 @@ window.RP_DATA = {
   isNewProject: false,
   project: { title: 'ReviewPilot', status: 'No project', model: '', date: '' },
   researchQuestion: '',
+  stageState: {},
   steps: [],
   fields: [],
   platforms: [],
