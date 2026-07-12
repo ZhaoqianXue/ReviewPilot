@@ -442,7 +442,7 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
         data.setdefault("sub_agent", contract.agent_name)
         data.setdefault("contract_stage", contract.stage)
         data.setdefault("model", contract.model)
-        reply = self._stage_reply(stage, result)
+        reply = self._stage_reply(stage, result, action=action)
         append_jsonl(
             str(project_path / "chat" / "messages.jsonl"),
             {
@@ -461,7 +461,7 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
             status="completed",
             reply=reply,
             artifacts=artifacts,
-            next_actions=self._next_actions(stage),
+            next_actions=self._next_actions(stage, action=action),
             data=data,
         )
 
@@ -478,7 +478,18 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
             "categorization": 5,
         }.get(stage, 1)
 
-    def _stage_reply(self, stage: str, result: dict[str, Any]) -> str:
+    def _stage_reply(self, stage: str, result: dict[str, Any], action: str | None = None) -> str:
+        if action == "suggest-categories":
+            field = str(result.get("field") or "selected field")
+            category_count = result.get("categories")
+            if isinstance(category_count, int) and not isinstance(category_count, bool):
+                suggestion_text = f"{category_count} category {'suggestion' if category_count == 1 else 'suggestions'}"
+            else:
+                suggestion_text = "category suggestions"
+            return (
+                f"Generated {suggestion_text} for {field}. "
+                "Review them, select Confirm Categories, then select Apply Categorization."
+            )
         if stage == "prompt_extraction":
             field_count = result.get("field_count")
             count_text = ""
@@ -651,7 +662,9 @@ Return ONLY valid JSON:
         except ValueError:
             return []
 
-    def _next_actions(self, stage: str) -> list[str]:
+    def _next_actions(self, stage: str, action: str | None = None) -> list[str]:
+        if action == "suggest-categories":
+            return ["confirm_categories", "apply_categorization"]
         return {
             "search_conditions": ["edit_search", "run_collection"],
             "prompt_relevance": ["run_collection"],

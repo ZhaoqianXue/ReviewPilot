@@ -921,6 +921,65 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(result.data["sub_agent"], "CollectionAgent")
         self.assertEqual(result.data["contract_stage"], "collection")
 
+    def test_suggest_categories_routes_to_review_confirmation_and_application_without_second_llm_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps(
+                    {
+                        "project_name": "Demo",
+                        "description": "Review LLM systems in biomedicine",
+                        "search_terms": "LLM AND biomedicine",
+                        "platforms": ["openalex"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project_dir / "extraction" / "extraction_results.jsonl").write_text(
+                json.dumps({"title": "Paper A", "methods": "Clinical benchmark"}) + "\n",
+                encoding="utf-8",
+            )
+            llm_calls = []
+
+            def fake_llm_query(*args, **kwargs):
+                llm_calls.append(kwargs.get("text_prompt", ""))
+                if 'Analyze these values from the "methods" field' not in kwargs.get("text_prompt", ""):
+                    raise AssertionError("Category suggestion routing must not call a second LLM")
+                return (
+                    json.dumps(
+                        {
+                            "categories": ["Clinical studies", "Benchmark studies"],
+                            "category_descriptions": {
+                                "Clinical studies": "Clinical applications",
+                                "Benchmark studies": "Benchmark evaluations",
+                            },
+                        }
+                    ),
+                    {},
+                )
+
+            result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
+                project_id="demo",
+                action="suggest-categories",
+                input_data={"field": "methods", "mode": "multiple"},
+            )
+            chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
+
+        self.assertEqual(len(llm_calls), 1)
+        self.assertEqual(
+            result.reply,
+            "Generated 2 category suggestions for methods. Review them, select Confirm Categories, then select Apply Categorization.",
+        )
+        self.assertIn("review", result.reply.lower())
+        self.assertIn("Confirm Categories", result.reply)
+        self.assertIn("Apply Categorization", result.reply)
+        self.assertNotIn("completed", result.reply.lower())
+        self.assertNotIn("no next", result.reply.lower())
+        self.assertEqual(result.next_actions, ["confirm_categories", "apply_categorization"])
+        self.assertEqual(chat_rows[-1]["text"], result.reply)
+
     def test_categorize_advances_to_final_user_facing_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -956,7 +1015,7 @@ class LeadAgentTests(unittest.TestCase):
                     )
                 if "Categorize this paper" in kwargs.get("text_prompt", ""):
                     return ("Clinical Decision Support", {})
-                return (json.dumps({"reply": "Categorization & Analysis is ready."}), {})
+                return (json.dumps({"reply": "Categorization completed."}), {})
 
             result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
                 project_id="demo",
@@ -968,6 +1027,8 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(result.data["contract_stage"], "categorization")
         self.assertEqual(result.data["sub_agent"], "LeadAgentCategorization")
         self.assertEqual(result.data["status"], "categorization_done")
+        self.assertEqual(result.reply, "Categorization completed.")
+        self.assertEqual(result.next_actions, [])
         self.assertIn("Clinical Decision Support", mapping["categories"])
 
 
