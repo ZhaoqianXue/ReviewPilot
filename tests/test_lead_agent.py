@@ -933,8 +933,9 @@ class LeadAgentTests(unittest.TestCase):
                         {
                             "reply": (
                                 "Extraction completed: 3 processed and 1 failed. "
-                                f'Results are at "{unix_path_with_spaces}". '
-                                f"Backup: {windows_path_with_spaces}; network copy: {unc_path}.\n"
+                                f"Unix output: {unix_path_with_spaces}, with 11 records retained. "
+                                f"Windows backup: {windows_path_with_spaces}, with 2 warnings. "
+                                f"Network copy: {unc_path}, with outcome complete.\n"
                                 f"Generated copy: /home/other-user/private/out.json. Next action: Categorization & Analysis."
                             )
                         }
@@ -981,8 +982,19 @@ class LeadAgentTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", result.reply)
         self.assertIn("Next action: Categorization & Analysis", result.reply)
         self.assertEqual(chat_rows[-1]["text"], result.reply)
-        self.assertNotIn("private-user", json.dumps(projected["activityByStep"]))
-        self.assertNotIn("Alice Smith", json.dumps(projected["activityByStep"]))
+        self.assertIn("11 records retained", result.reply)
+        self.assertIn("2 warnings", result.reply)
+        self.assertIn("outcome complete", result.reply)
+        self.assertEqual(result.reply.count("project artifact, with"), 3)
+        self.assertIn("11 records retained", chat_rows[-1]["text"])
+        self.assertIn("2 warnings", chat_rows[-1]["text"])
+        projected_activity = json.dumps(projected["activityByStep"])
+        self.assertNotIn("private-user", projected_activity)
+        self.assertNotIn("Alice Smith", projected_activity)
+        self.assertIn("11 records retained", projected_activity)
+        self.assertIn("2 warnings", projected_activity)
+        self.assertIn("outcome complete", projected_activity)
+        self.assertIn("Next action: Categorization & Analysis", projected_activity)
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
