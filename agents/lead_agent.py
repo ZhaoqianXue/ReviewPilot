@@ -28,10 +28,11 @@ from utils.jsonl_handler import append_jsonl
 from utils.llm import query_llm
 
 
-_UNIX_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/])/(?:[^/\s\"'<>|]+/)*[^/\s\"'<>|,;:!?)]+")
-_WINDOWS_ABSOLUTE_PATH = re.compile(
-    r"(?<![\w])(?:[A-Za-z]:[\\/](?:[^\\/\s\"'<>|]+[\\/])*[^\\/\s\"'<>|,;:!?)]*)"
-)
+_PATH_END = r"(?=(?:[.;](?:\s|$)|\r?\n|$))"
+_QUOTED_ABSOLUTE_PATH = re.compile(r'''(?P<quote>["'])(?:/|[A-Za-z]:[\\/]|\\\\)[^\r\n]*?(?P=quote)''')
+_UNC_ABSOLUTE_PATH = re.compile(r"(?<![\\\w])\\\\[^\r\n\"']*?" + _PATH_END)
+_WINDOWS_ABSOLUTE_PATH = re.compile(r"(?<![\w])[A-Za-z]:[\\/][^\r\n\"']*?" + _PATH_END)
+_UNIX_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/])/(?!/)[^\r\n\"']*?" + _PATH_END)
 
 
 @dataclass(frozen=True)
@@ -546,6 +547,8 @@ Return ONLY valid JSON:
 
     def _sanitize_reply(self, reply: str) -> str:
         text = str(reply)
+        text = _QUOTED_ABSOLUTE_PATH.sub("project artifact", text)
+        text = _UNC_ABSOLUTE_PATH.sub("project artifact", text)
         text = _WINDOWS_ABSOLUTE_PATH.sub("project artifact", text)
         return _UNIX_ABSOLUTE_PATH.sub("project artifact", text)
 

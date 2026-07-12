@@ -887,12 +887,22 @@ class LeadAgentTests(unittest.TestCase):
             finalize_schema(project_dir)
             unix_path = "/Users/private-user/ReviewPilot/output/demo/extraction/results.jsonl"
             windows_path = r"C:\Users\private-user\ReviewPilot\output\demo\report.json"
+            unix_path_with_spaces = "/Users/private-user/Review Pilot/out.json"
+            windows_path_with_spaces = r"C:\Users\Alice Smith\ReviewPilot\out.json"
+            unc_path = r"\\server\share\private-user\out.json"
             workflow_result = {
                 "status": "extraction_done",
                 "processed": 3,
                 "failed": 1,
                 "output_path": unix_path,
-                "details": {"artifacts": [{"report_file": windows_path}]},
+                "details": {
+                    "artifacts": [
+                        {"report_file": windows_path},
+                        {"quoted_report": unix_path_with_spaces},
+                        {"spaced_report": windows_path_with_spaces},
+                        {"network_report": unc_path},
+                    ]
+                },
             }
             seen_prompts = []
 
@@ -922,8 +932,10 @@ class LeadAgentTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": (
-                                "Extraction completed: 3 processed and 1 failed. Results are at "
-                                f"{unix_path}; backup: {windows_path}; generated copy: /home/other-user/private/out.json."
+                                "Extraction completed: 3 processed and 1 failed. "
+                                f'Results are at "{unix_path_with_spaces}". '
+                                f"Backup: {windows_path_with_spaces}; network copy: {unc_path}.\n"
+                                f"Generated copy: /home/other-user/private/out.json. Next action: Categorization & Analysis."
                             )
                         }
                     ),
@@ -942,10 +954,15 @@ class LeadAgentTests(unittest.TestCase):
         self.assertNotIn("private-user", seen_prompts[0])
         self.assertNotIn("/Users/", seen_prompts[0])
         self.assertNotIn("C:\\Users\\", seen_prompts[0])
+        self.assertNotIn("Alice Smith", seen_prompts[0])
+        self.assertNotIn("\\\\server\\share", seen_prompts[0])
         self.assertIn('"processed": 3', seen_prompts[0])
         self.assertIn('"failed": 1', seen_prompts[0])
         self.assertEqual(result.data["output_path"], unix_path)
         self.assertEqual(result.data["details"]["artifacts"][0]["report_file"], windows_path)
+        self.assertEqual(result.data["details"]["artifacts"][1]["quoted_report"], unix_path_with_spaces)
+        self.assertEqual(result.data["details"]["artifacts"][2]["spaced_report"], windows_path_with_spaces)
+        self.assertEqual(result.data["details"]["artifacts"][3]["network_report"], unc_path)
         self.assertEqual(
             result.artifacts,
             [
@@ -956,11 +973,16 @@ class LeadAgentTests(unittest.TestCase):
         self.assertIn("3 processed and 1 failed", result.reply)
         self.assertIn("project artifact", result.reply)
         self.assertNotIn("private-user", result.reply)
+        self.assertNotIn("Alice Smith", result.reply)
+        self.assertNotIn("Review Pilot", result.reply)
+        self.assertNotIn("\\\\server\\share", result.reply)
         self.assertNotIn("other-user", result.reply)
         self.assertNotIn("/Users/", result.reply)
         self.assertNotIn("C:\\Users\\", result.reply)
+        self.assertIn("Next action: Categorization & Analysis", result.reply)
         self.assertEqual(chat_rows[-1]["text"], result.reply)
         self.assertNotIn("private-user", json.dumps(projected["activityByStep"]))
+        self.assertNotIn("Alice Smith", json.dumps(projected["activityByStep"]))
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
