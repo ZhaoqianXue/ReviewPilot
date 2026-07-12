@@ -2,12 +2,39 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
 from reviewpilot_core.categorization_analysis import CategorizationAnalysis, _assign_category, _recommended_category_field
 from reviewpilot_core.project_store import read_jsonl
 
 
 class CategorizationAnalysisTests(unittest.TestCase):
+    def test_formal_categorization_outputs_use_shared_atomic_writers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            analysis = CategorizationAnalysis(project_dir)
+            rows = [{"title": "Paper A", "category": "Clinical"}]
+
+            with (
+                patch("reviewpilot_core.categorization_analysis.atomic_write_jsonl", wraps=atomic_write_jsonl) as jsonl_writer,
+                patch("reviewpilot_core.categorization_analysis.atomic_write_json", wraps=atomic_write_json) as json_writer,
+            ):
+                analysis._write_outputs("key_findings", ["Clinical"], {}, rows, mode="single")
+                analysis._write_suggestions("key_findings", "single", ["Clinical"], {}, ["Finding"])
+
+            self.assertEqual(
+                [call.args[0] for call in jsonl_writer.call_args_list],
+                [project_dir / "categorization" / "categorized_results.jsonl"],
+            )
+            self.assertEqual(
+                {call.args[0] for call in json_writer.call_args_list},
+                {
+                    project_dir / "categorization" / "categorization_mapping.json",
+                    project_dir / "categorization" / "suggested_categories.json",
+                },
+            )
+
     def test_recommended_category_field_ignores_metadata_rows(self):
         field = _recommended_category_field(
             [

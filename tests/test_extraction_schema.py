@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from reviewpilot_core.atomic_files import atomic_write_json
 from reviewpilot_core.extraction_schema import (
     add_schema_field,
     finalize_schema,
@@ -15,6 +17,19 @@ from reviewpilot_core.extraction_schema import (
 
 
 class ExtractionSchemaTests(unittest.TestCase):
+    def test_schema_artifacts_use_shared_atomic_json_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp)
+            expected = {
+                project_dir / "extraction" / "extraction_schema_draft.json",
+                project_dir / "extraction" / "extraction_schema.json",
+            }
+
+            with patch("reviewpilot_core.extraction_schema.atomic_write_json", wraps=atomic_write_json) as writer:
+                save_schema_draft(project_dir, {"fields": [{"name": "methods"}]})
+
+            self.assertEqual({call.args[0] for call in writer.call_args_list}, expected)
+
     def test_legacy_schema_with_completed_extraction_is_finalized(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp)

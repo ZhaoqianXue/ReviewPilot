@@ -2,7 +2,9 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
+from unittest.mock import patch
 
+from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from reviewpilot_core.model_policy import (
     CATEGORIZATION_MODEL,
     COLLECTION_MODEL,
@@ -26,6 +28,36 @@ from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 
 
 class WorkflowActionAdapterTests(unittest.TestCase):
+    def test_sub_agent_normalization_outputs_use_shared_atomic_writers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            filtered_dir = project_dir / "filtered"
+            filtered_dir.mkdir(parents=True)
+
+            with (
+                patch("reviewpilot_core.sub_agent_contracts.atomic_write_json", wraps=atomic_write_json) as json_writer,
+                patch("reviewpilot_core.sub_agent_contracts.atomic_write_jsonl", wraps=atomic_write_jsonl) as jsonl_writer,
+                patch("reviewpilot_core.sub_agent_contracts.atomic_write_text", wraps=atomic_write_text) as text_writer,
+            ):
+                CollectionAgentContract()._write_offline_collection(project_dir, {})
+                FilteringAgentContract()._normalize_result(
+                    project_dir,
+                    {"stats": {"initial_count": 0}},
+                )
+
+            json_paths = {call.args[0] for call in json_writer.call_args_list}
+            self.assertIn(project_dir / "collected" / "summary.json", json_paths)
+            self.assertIn(filtered_dir / "filtering_stats.json", json_paths)
+            self.assertIn(filtered_dir / "screening_stats.json", json_paths)
+            self.assertEqual(
+                [call.args[0] for call in jsonl_writer.call_args_list],
+                [filtered_dir / "filtered_papers.jsonl"],
+            )
+            self.assertEqual(
+                {call.args[0] for call in text_writer.call_args_list},
+                {filtered_dir / "included_papers.jsonl", filtered_dir / "excluded_papers.jsonl"},
+            )
+
     def test_default_adapter_exposes_sub_agent_contract_metadata(self):
         adapter = WorkflowActionAdapter()
 
