@@ -29,7 +29,7 @@ from utils.llm import query_llm
 
 
 _ABSOLUTE_PATH_MARKER = re.compile(
-    r"(?<![\w.:/])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
+    r"(?i:\bfile:(?=/{1,3}|[A-Za-z]:[\\/]))|(?<![:/])//(?=[^/])|(?<![\w./])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
 )
 
 
@@ -550,6 +550,50 @@ Return ONLY valid JSON:
         return _ABSOLUTE_PATH_MARKER.search(str(value)) is not None
 
     def _safe_stage_reply(self, stage: str, result: dict[str, Any]) -> str:
+        def count(*keys: str) -> int | None:
+            for key in keys:
+                value = result.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    return value
+            return None
+
+        details: list[str] = []
+        if stage == "collection":
+            total = count("total", "total_papers")
+            if total is not None:
+                details.append(f"{total} {'paper' if total == 1 else 'papers'} collected")
+        elif stage == "filtering":
+            included = count("included", "included_count")
+            excluded = count("excluded", "excluded_count")
+            if included is not None:
+                details.append(f"{included} included")
+            if excluded is not None:
+                details.append(f"{excluded} excluded")
+        elif stage == "download":
+            success = count("success")
+            failed = count("failed")
+            if success is not None:
+                details.append(f"{success} available")
+            if failed is not None:
+                details.append(f"{failed} failed")
+        elif stage == "extraction":
+            processed = count("processed")
+            errors = count("errors")
+            failed = count("failed") if errors is None else None
+            if processed is not None:
+                details.append(f"{processed} processed")
+            if errors is not None:
+                details.append(f"{errors} {'error' if errors == 1 else 'errors'}")
+            elif failed is not None:
+                details.append(f"{failed} failed")
+        elif stage == "categorization":
+            categories = count("categories")
+            rows = count("rows")
+            if categories is not None:
+                details.append(f"{categories} {'category' if categories == 1 else 'categories'}")
+            if rows is not None:
+                details.append(f"{rows} {'row' if rows == 1 else 'rows'} categorized")
+
         stage_name = {
             "collection": "Collection",
             "filtering": "Paper Screening",
@@ -557,24 +601,9 @@ Return ONLY valid JSON:
             "extraction": "Information Extraction",
             "categorization": "Categorization & Analysis",
         }.get(stage, stage.replace("_", " ").title())
-        count_labels = (
-            ("total", "collected"),
-            ("total_papers", "papers collected"),
-            ("processed", "processed"),
-            ("success", "available"),
-            ("failed", "failed"),
-            ("included_count", "included"),
-            ("excluded_count", "excluded"),
-            ("errors", "errors"),
-        )
-        counts = [
-            f"{result[key]} {label}"
-            for key, label in count_labels
-            if isinstance(result.get(key), int) and not isinstance(result.get(key), bool)
-        ]
         reply = f"{stage_name} completed"
-        if counts:
-            reply += f": {', '.join(counts)}"
+        if details:
+            reply += f": {', '.join(details)}"
         reply += "."
         outcome = result.get("outcome")
         if isinstance(outcome, str) and re.fullmatch(r"[A-Za-z0-9 _-]{1,80}", outcome):
@@ -587,6 +616,10 @@ Return ONLY valid JSON:
         }.get(stage)
         if next_action:
             reply += f" Next action: {next_action}."
+        if stage == "download" and count("failed") and result.get("web_search_fallback_candidates"):
+            reply += " ExtractionAgent will use web-search fallback for eligible unavailable papers."
+        if stage == "categorization":
+            reply += " No next canvas action is required."
         return reply
 
     def _load_search_conditions(self, project_path: Path) -> dict[str, Any]:

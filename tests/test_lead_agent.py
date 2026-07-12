@@ -1005,6 +1005,10 @@ class LeadAgentTests(unittest.TestCase):
     def test_unsafe_stage_reply_shapes_all_fall_back_to_structured_summary(self):
         unsafe_replies = [
             "Saved to /Users/private-user/out,final.json with no delimiter 99 processed",
+            "Saved:/Users/private-user/out.json with no separating space",
+            "Saved to file:///Users/private-user/out.json",
+            "Saved to file://server/share/private-user/out.json",
+            "Saved to //server/share/private-user/out.json",
             r"Saved to C:\Users\Alice Smith\out.json) with 99 processed!",
             r"Saved to \\server\share\private-user\out.json! tail-secret",
         ]
@@ -1023,6 +1027,69 @@ class LeadAgentTests(unittest.TestCase):
                     reply,
                     "Information Extraction completed: 3 processed, 1 failed. Next action: Categorization & Analysis.",
                 )
+
+    def test_prompt_sanitization_catches_colon_and_file_uri_path_forms_without_hiding_web_urls(self):
+        agent = LeadAgent(Path("unused"))
+        values = {
+            "colon": "Saved:/Users/private-user/out.json",
+            "file_unix": "file:///Users/private-user/out.json",
+            "file_network": "file://server/share/private-user/out.json",
+            "network": "//server/share/private-user/out.json",
+            "web": "https://example.org/review/results",
+            "plain_file_label": "file: ready for review",
+        }
+
+        sanitized = agent._sanitize_prompt_value(values)
+
+        self.assertEqual(sanitized["colon"], "project artifact")
+        self.assertEqual(sanitized["file_unix"], "project artifact")
+        self.assertEqual(sanitized["file_network"], "project artifact")
+        self.assertEqual(sanitized["network"], "project artifact")
+        self.assertEqual(sanitized["web"], values["web"])
+        self.assertEqual(sanitized["plain_file_label"], values["plain_file_label"])
+
+    def test_unsafe_stage_fallback_uses_supported_contract_keys_and_stage_guidance(self):
+        cases = [
+            (
+                "collection",
+                {"status": "collection_done", "total": 4, "total_papers": 4},
+                "Collection completed: 4 papers collected. Next action: Paper Screening.",
+            ),
+            (
+                "filtering",
+                {"status": "screening_done", "included": 3, "excluded": 1},
+                "Paper Screening completed: 3 included, 1 excluded. Next action: Full-Text Retrieval.",
+            ),
+            (
+                "download",
+                {"status": "download_done", "success": 2, "failed": 1, "web_search_fallback_candidates": [{"title": "A"}]},
+                "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. ExtractionAgent will use web-search fallback for eligible unavailable papers.",
+            ),
+            (
+                "extraction",
+                {"status": "extraction_done", "processed": 3, "errors": 1},
+                "Information Extraction completed: 3 processed, 1 error. Next action: Categorization & Analysis.",
+            ),
+            (
+                "extraction",
+                {"status": "extraction_done", "processed": 3, "errors": 2},
+                "Information Extraction completed: 3 processed, 2 errors. Next action: Categorization & Analysis.",
+            ),
+            (
+                "categorization",
+                {"status": "categorization_done", "categories": 2, "rows": 5},
+                "Categorization & Analysis completed: 2 categories, 5 rows categorized. No next canvas action is required.",
+            ),
+        ]
+
+        for stage, result, expected in cases:
+            with self.subTest(stage=stage, result=result):
+                def fake_llm_query(**_kwargs):
+                    return (json.dumps({"reply": "Unsafe file:///Users/private-user/result.json tail"}), {})
+
+                reply = LeadAgent(Path("unused"), llm_query=fake_llm_query)._stage_reply(stage, result)
+
+                self.assertEqual(reply, expected)
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
