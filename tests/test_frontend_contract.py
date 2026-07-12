@@ -448,6 +448,7 @@ class FrontendContractTests(unittest.TestCase):
         set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
         monitor = source[source.index("function monitorActiveTask") : source.index("async function postAction")]
         post_action = source[source.index("async function postAction") : source.index("async function createProject")]
+        send_chat = source[source.index("async function sendProjectChat") : source.index("async function updateProjectSetup")]
         mount_tail = source[source.index("    paintWorkspace = paint;") : source.index("  if (document.readyState")]
 
         # Interleaving 1: server-null beats a stale snapshot task.
@@ -464,24 +465,23 @@ class FrontendContractTests(unittest.TestCase):
 
         # Interleaving 3: navigation A->B invalidates resume and submit continuations.
         self.assertIn("const generation = ++activeTaskMonitor.generation;", monitor)
-        self.assertIn("activeTaskMonitor.generation === generation", monitor)
-        self.assertIn("state.activeProjectId === projectId && D.project.id === projectId", monitor)
+        self.assertIn("ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation, taskId)", monitor)
         self.assertIn("const projectId = state.activeProjectId || D.project.id;", post_action)
         self.assertIn("if (!isCurrentProject()) return;", post_action)
         self.assertNotIn("await waitForTask", post_action)
         self.assertNotIn("setData(await fetchProjectState", post_action)
+        self.assertIn("const generation = activeTaskMonitor.generation;", send_chat)
+        self.assertIn("ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation)", send_chat)
 
         # Interleaving 4: task-id replacement supersedes the old monitor and dedupes the new one.
         self.assertIn("const key = `${projectId}:${taskId}`;", monitor)
         self.assertIn("syncActionState(activeTask);", monitor)
         self.assertIn("if (activeTaskMonitor.key === key) return;", monitor)
         self.assertIn("activeTaskMonitor.key === key", monitor)
-        self.assertIn("D.activeTask?.task_id === taskId", monitor)
-        self.assertIn("const activeTaskPolls = new Map();", source)
-        self.assertIn("if (activeTaskPolls.has(key)) return activeTaskPolls.get(key);", monitor)
-        self.assertIn("activeTaskPolls.set(key, poll);", monitor)
+        self.assertIn("const activeTaskPolls = createTaskPollRegistry(waitForTask);", source)
+        self.assertIn("return activeTaskPolls.waitOnce(taskId, key);", monitor)
         self.assertIn("await waitForActiveTaskOnce(taskId, key);", monitor)
-        self.assertEqual(monitor.count("waitForTask(taskId)"), 1)
+        self.assertEqual(monitor.count("waitForTask(taskId)"), 0)
         self.assertIn("monitorActiveTask();", post_action)
         self.assertEqual(source.count("function monitorActiveTask()"), 1)
         self.assertNotIn("resumeActiveTask", source)

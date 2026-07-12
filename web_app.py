@@ -155,7 +155,7 @@ async def project_chat(request):
         result = LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return JSONResponse({"reply": result.reply, "lead_agent": result.to_dict(), "state": build_rp_data(OUTPUT_ROOT, project_id)})
+    return JSONResponse({"reply": result.reply, "lead_agent": result.to_dict(), "state": build_project_state(OUTPUT_ROOT, project_id)})
 
 
 async def update_project_setup_api(request):

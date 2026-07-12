@@ -63,6 +63,9 @@ class TaskRunner:
             task = self._active_for_project_unlocked(project_id)
             return dict(task) if task else None
 
+    def shutdown(self, wait: bool = True) -> None:
+        self._executor.shutdown(wait=wait)
+
     def _active_for_project_unlocked(self, project_id: str) -> dict | None:
         return next(
             (

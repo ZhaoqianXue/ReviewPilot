@@ -1,10 +1,39 @@
+function snapshotDataForStorage(data) {
+  return { ...data, activeTask: null };
+}
+
+function createTaskPollRegistry(waitForTaskFn) {
+  const polls = new Map();
+  return {
+    waitOnce(taskId, key) {
+      if (polls.has(key)) return polls.get(key);
+      const poll = waitForTaskFn(taskId).finally(() => {
+        if (polls.get(key) === poll) polls.delete(key);
+      });
+      polls.set(key, poll);
+      return poll;
+    },
+  };
+}
+
+function ownsProjectGeneration(state, data, monitor, projectId, generation, taskId = null) {
+  return state.activeProjectId === projectId
+    && data.project.id === projectId
+    && monitor.generation === generation
+    && (!taskId || data.activeTask?.task_id === taskId);
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration };
+}
+
 /* ReviewPilot workspace UI.
  *
  * Single-page workspace: project selection, new review setup, and workflow
  * actions update in-place under /workspace. Text entry belongs in dialogs or
  * the assistant panel; the main canvas is reserved for click-based controls.
  */
-(function () {
+if (typeof window !== 'undefined') (function () {
   'use strict';
 
   const WORKSPACE_SNAPSHOT_KEY = 'reviewpilot.workspace.snapshot.v3';
@@ -42,7 +71,7 @@
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
-  const activeTaskPolls = new Map();
+  const activeTaskPolls = createTaskPollRegistry(waitForTask);
   let paintWorkspace = () => {};
 
   restoreWorkspaceSnapshot();
@@ -136,7 +165,7 @@
   }
 
   function snapshotData(data) {
-    return { ...data, activeTask: null };
+    return snapshotDataForStorage(data);
   }
 
   function writeWorkspaceSnapshot() {
@@ -426,23 +455,17 @@
   }
 
   function waitForActiveTaskOnce(taskId, key) {
-    if (activeTaskPolls.has(key)) return activeTaskPolls.get(key);
-    const poll = waitForTask(taskId).finally(() => {
-      if (activeTaskPolls.get(key) === poll) activeTaskPolls.delete(key);
-    });
-    activeTaskPolls.set(key, poll);
-    return poll;
+    return activeTaskPolls.waitOnce(taskId, key);
   }
 
   async function monitorOwnedTask(taskId, projectId, key, generation) {
     const ownsTask = () => (
       activeTaskMonitor.key === key
-      && activeTaskMonitor.generation === generation
-      && state.activeProjectId === projectId && D.project.id === projectId
-      && D.activeTask?.task_id === taskId
+      && ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation, taskId)
     );
     try {
       await waitForActiveTaskOnce(taskId, key);
+      if (!ownsTask()) return;
       const refreshedData = await fetchProjectState(projectId);
       if (!ownsTask()) return;
       setData(refreshedData, false, { preserveView: true });
@@ -535,6 +558,7 @@
   async function sendProjectChat(message) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId) throw new Error('Project chat requires an active project.');
+    const generation = activeTaskMonitor.generation;
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -545,6 +569,7 @@
       throw new Error(body.detail || `Project chat failed: ${res.status}`);
     }
     const payload = await res.json();
+    if (!ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation)) return;
     setData(payload.state || await fetchProjectState(projectId), false, { preserveView: true });
   }
 

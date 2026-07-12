@@ -433,6 +433,9 @@ class WebAppTests(unittest.TestCase):
 
     def test_project_chat_routes_message_through_lead_agent(self):
         old_output_root = web_app.OUTPUT_ROOT
+        old_task_runner = web_app.task_runner
+        release = Event()
+        task_id = None
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
@@ -464,15 +467,22 @@ class WebAppTests(unittest.TestCase):
                     return Result()
 
             web_app.OUTPUT_ROOT = output_root
+            web_app.task_runner = TaskRunner(max_workers=1)
+            task_id = web_app.task_runner.submit("demo", "collect", release.wait)
             client = TestClient(web_app.create_app())
             with patch.object(web_app, "LeadAgent", FakeLeadAgent):
                 response = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
         web_app.OUTPUT_ROOT = old_output_root
+        release.set()
+        web_app.task_runner.wait(task_id, timeout=2)
+        web_app.task_runner.shutdown()
+        web_app.task_runner = old_task_runner
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reply"], "LLM project reply.")
         self.assertEqual(calls, [(output_root, "demo", "What next?", "extraction")])
         self.assertEqual(response.json()["lead_agent"]["stage"], "search_conditions")
+        self.assertEqual(response.json()["state"]["activeTask"]["task_id"], task_id)
         self.assertEqual(response.json()["state"]["messages"][-1]["text"], "LLM project reply.")
 
     def test_run_action_rejects_unknown_action(self):
@@ -574,7 +584,7 @@ class WebAppTests(unittest.TestCase):
             if task_id and web_app.task_runner.get(task_id) and web_app.task_runner.get(task_id)["status"] == "running":
                 web_app.task_runner.wait(task_id, timeout=2)
             if temporary_task_runner is not None:
-                temporary_task_runner._executor.shutdown(wait=True)
+                temporary_task_runner.shutdown()
             web_app.OUTPUT_ROOT = old_output_root
             web_app.task_runner = old_task_runner
 

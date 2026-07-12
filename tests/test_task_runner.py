@@ -6,6 +6,13 @@ from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_shutdown_is_public_and_rejects_new_tasks(self):
+        runner = TaskRunner(max_workers=1)
+        runner.shutdown()
+
+        with self.assertRaises(RuntimeError):
+            runner.submit("demo", "collect", lambda: None)
+
     def test_task_timestamps_are_browser_parseable_utc_with_milliseconds(self):
         runner = TaskRunner(max_workers=1)
         task_id = runner.submit("demo", "collect", lambda: None)
