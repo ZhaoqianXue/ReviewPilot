@@ -16,6 +16,38 @@ from web_app import create_project, render_index_html, render_workspace_html
 
 
 class WebAppTests(unittest.TestCase):
+    def test_submit_rejects_schema_actions_before_ledger_prerequisites_without_entering_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project = output_root / "demo"
+            (project / "extraction").mkdir(parents=True)
+            (project / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+            (project / "extraction" / "extraction_schema.json").write_text(json.dumps({"fields": [{"name": "x"}]}), encoding="utf-8")
+            from reviewpilot_core.workflow_state import initialize_workflow_state
+            initialize_workflow_state(project)
+
+            for action in ("finalize-schema", "edit-schema"):
+                with self.subTest(action=action), self.assertRaisesRegex(ValueError, "requires completed stage 'screening'"):
+                    web_app.submit_project_action(output_root, "demo", action)
+            ledger = json.loads((project / "workflow_state.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(ledger["stages"]["extraction"]["status"], "not_started")
+        self.assertEqual(ledger["stages"]["extraction"]["attempt"], 0)
+
+    def test_task_status_endpoint_does_not_expose_exception_paths(self):
+        old_runner = web_app.task_runner
+        try:
+            web_app.task_runner = TaskRunner(max_workers=1)
+            task_id = web_app.task_runner.submit("demo", "collect", lambda: (_ for _ in ()).throw(RuntimeError("/Users/alice/private.txt")))
+            web_app.task_runner.wait(task_id, timeout=2)
+            payload = TestClient(web_app.create_app()).get(f"/tasks/{task_id}").json()
+        finally:
+            web_app.task_runner.shutdown()
+            web_app.task_runner = old_runner
+
+        self.assertNotIn("/Users", payload["error"])
+        self.assertIn("RuntimeError", payload["error"])
+
     def test_create_project_initializes_workflow_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -831,6 +863,11 @@ class WebAppTests(unittest.TestCase):
                 project_dir = output_root / "demo"
                 project_dir.mkdir(parents=True)
                 (project_dir / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+                from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
+                initialize_workflow_state(project_dir)
+                for completed_action in ("collect", "screen", "download-pdfs", "run-extraction"):
+                    start_action(project_dir, completed_action)
+                    complete_action(project_dir, completed_action, {})
                 calls = []
 
                 class FakeLeadAgentResult:

@@ -2,8 +2,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Event, Thread, current_thread
 from unittest.mock import patch
 
+import reviewpilot_core.workflow_state as workflow_state
 from reviewpilot_core.workflow_state import (
     ACTION_STAGES,
     STAGE_NAMES,
@@ -14,6 +16,27 @@ from reviewpilot_core.workflow_state import (
     migrate_legacy_workflow_state,
     start_action,
 )
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def _write_valid_legacy(project: Path, through: str) -> None:
+    order = ["collection", "screening", "retrieval", "extraction"]
+    _write_json(project / "collected" / "summary.json", {"total_papers": 1, "platform_stats": {"pubmed": 1}})
+    if order.index(through) >= 1:
+        _write_jsonl(project / "filtered" / "included_papers.jsonl", [{"title": "Paper A"}])
+    if order.index(through) >= 2:
+        _write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 0})
+    if order.index(through) >= 3:
+        _write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"paper_id": "p1"}])
 
 
 class WorkflowStateTests(unittest.TestCase):
@@ -43,6 +66,9 @@ class WorkflowStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             initialize_workflow_state(project)
+            for prerequisite_action in ("collect", "screen"):
+                start_action(project, prerequisite_action)
+                complete_action(project, prerequisite_action, {})
             start_action(project, "generate-schema")
             state = complete_action(project, "generate-schema", {"field_count": 7})
             self.assertEqual(state["stages"]["extraction"]["status"], "ready")
@@ -122,6 +148,82 @@ class WorkflowStateTests(unittest.TestCase):
 
         self.assertEqual(state["stages"]["collection"]["status"], "ready")
         self.assertTrue(all(state["stages"][name]["status"] == "not_started" for name in STAGE_NAMES[1:]))
+
+    def test_migration_rejects_semantically_invalid_artifacts_for_each_stage(self):
+        cases = {
+            "collection": lambda p: _write_json(p / "collected" / "summary.json", {"total_papers": "3", "platform_stats": {"pubmed": -1}}),
+            "screening": lambda p: (_write_valid_legacy(p, "collection"), _write_jsonl(p / "filtered" / "included_papers.jsonl", [{}])),
+            "retrieval": lambda p: (_write_valid_legacy(p, "screening"), _write_json(p / "pdfs" / "download_report.json", {"success": "1", "failed": 0})),
+            "extraction": lambda p: (_write_valid_legacy(p, "retrieval"), _write_jsonl(p / "extraction" / "extraction_results.jsonl", [{}])),
+            "categorization_mapping": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": [], "categories": ["A"]})),
+            "categorization_categories": lambda p: (_write_valid_legacy(p, "extraction"), _write_json(p / "categorization" / "categorization_mapping.json", {"mapping": {}, "categories": [1]})),
+        }
+        for label, arrange in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                arrange(project)
+                state = migrate_legacy_workflow_state(project)
+                stage = label.split("_", 1)[0]
+                self.assertNotEqual(state["stages"][stage]["status"], "completed")
+
+    def test_migration_accepts_empty_rows_only_with_coherent_zero_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            _write_json(project / "collected" / "summary.json", {"total_papers": 0, "platform_stats": {"pubmed": 0}})
+            _write_jsonl(project / "filtered" / "included_papers.jsonl", [])
+            _write_json(project / "filtered" / "screening_stats.json", {"total_screened": 0, "included_count": 0, "excluded_count": 0})
+            _write_json(project / "pdfs" / "download_report.json", {"success": 0, "failed": 0})
+            _write_jsonl(project / "extraction" / "extraction_results.jsonl", [])
+            _write_json(project / "extraction" / "extraction_stats.json", {"processed": 0, "errors": 0})
+
+            state = migrate_legacy_workflow_state(project)
+
+        self.assertEqual([state["stages"][name]["status"] for name in STAGE_NAMES], ["completed", "completed", "completed", "completed", "ready"])
+
+    def test_first_migration_and_action_start_are_serialized_without_lost_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            _write_valid_legacy(project, "collection")
+            starter_finished = Event()
+            original_write = workflow_state._write
+
+            def ordered_write(path, state):
+                if current_thread().name == "migrator" and state["stages"]["collection"]["status"] == "completed":
+                    starter_finished.wait(timeout=0.1)
+                original_write(path, state)
+                if state["stages"]["collection"]["status"] == "running":
+                    starter_finished.set()
+
+            with patch("reviewpilot_core.workflow_state._write", side_effect=ordered_write):
+                migrator = Thread(name="migrator", target=load_workflow_state, args=(project,))
+                starter = Thread(name="starter", target=start_action, args=(project, "collect"))
+                migrator.start()
+                starter.start()
+                migrator.join(timeout=2)
+                starter.join(timeout=2)
+                self.assertFalse(migrator.is_alive())
+                self.assertFalse(starter.is_alive())
+
+            state = load_workflow_state(project)
+        self.assertEqual(state["stages"]["collection"]["status"], "running")
+        self.assertEqual(state["stages"]["collection"]["attempt"], 1)
+
+    def test_loader_validates_all_stage_metadata_types(self):
+        invalid_values = {
+            "updated_at": 123,
+            "error": ["bad"],
+            "counts": {"processed": "3"},
+            "stale": 1,
+            "last_valid": {"status": "completed", "counts": {"processed": "3"}},
+        }
+        for field, value in invalid_values.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                state = initialize_workflow_state(project)
+                state["stages"]["collection"][field] = value
+                (project / "workflow_state.json").write_text(json.dumps(state), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    load_workflow_state(project)
 
 
 if __name__ == "__main__":

@@ -173,7 +173,7 @@ class TaskRunnerTests(unittest.TestCase):
         task = runner.wait(task_id, timeout=2)
 
         self.assertEqual(task["status"], "failed")
-        self.assertIn("broken", task["error"])
+        self.assertEqual(task["error"], "Task failed (RuntimeError).")
         retry_id = runner.submit("demo", "retry", lambda: "recovered")
         self.assertEqual(runner.wait(retry_id, timeout=2)["result"], "recovered")
 

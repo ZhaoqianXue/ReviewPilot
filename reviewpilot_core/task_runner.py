@@ -89,7 +89,7 @@ class TaskRunner:
             with self._registry_lock:
                 task = self._tasks[task_id]
                 task["status"] = "failed"
-                task["error"] = str(exc)
+                task["error"] = f"Task failed ({exc.__class__.__name__})."
                 task["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         else:
             with self._registry_lock:
