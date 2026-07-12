@@ -21,6 +21,8 @@ Create one Markdown report per scenario and rerun. Capture all of the following:
 - Start and end timestamp with timezone for the overall run and each workflow task.
 - Browser name and browser viewport in CSS pixels.
 - Runtime project id, project output path, task id, task status, and the observed terminal state.
+- Input identity: scenario key; catalog revision as the SHA-256 of the executed `scenarios.json`; source revision as the historical source SHA-256 from the provenance table; actual `search_terms` query; platforms/sources; date range; and per-source limits. After saving setup, compare every catalog payload field against the persisted artifact and record the explicit field-by-field conclusion: **saved `search_conditions.json` equals the catalog** or list every mismatch.
+- Relevant tested Git commit SHA for the application code exercised by the run. If fixes are applied, record both the failing run SHA and each rerun SHA.
 - Per-stage counts for inputs, successes, failures, and output records, including collection counts by source.
 - Every external error, classified as authentication, rate limit, timeout/network, source availability/access, malformed response, or unknown. Preserve the safe message and affected stage/item without including request headers or tokens.
 - Screenshot paths for the initial setup, each terminal workflow state, visible errors or partial results, final review, and export result.
