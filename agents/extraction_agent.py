@@ -149,15 +149,17 @@ class ExtractionAgent(BaseAgent):
                             extraction_prompt=extraction_prompt,
                             web_search_query=active_web_search_query,
                         )
+                    except Exception as e:
+                        self.log(f"Web-search fallback failed for row {i}: {e}", "error")
+                        result = self._web_search_error_record(paper_meta, i, str(e))
+                        append_jsonl(str(pending_output), result)
+                        errors += 1
+                        pending_web_search_fallback += 1
+                    else:
                         append_jsonl(str(pending_output), result)
                         processed += 1
                         web_search_fallback += 1
                         total_cost += cost
-                    except Exception as e:
-                        self.log(f"Web-search fallback failed for row {i}: {e}", "error")
-                        append_jsonl(str(pending_output), self._web_search_error_record(paper_meta, i, str(e)))
-                        errors += 1
-                        pending_web_search_fallback += 1
                     continue
 
                 pdf_file = self._pdf_for_paper(i, paper_meta, pdf_folder, pdf_files)
@@ -172,40 +174,31 @@ class ExtractionAgent(BaseAgent):
 
                     if not pdf_text:
                         self.log(f"Could not extract text from {pdf_file.name}", "warning")
-                        errors += 1
-                        append_jsonl(str(pending_output), self._error_record(paper_meta, i, "Could not extract text from PDF", pdf_file))
-                        continue
-
-                    # Extract information
-                    extracted, cost = self._extract_with_llm(
-                        pdf_text, system_prompt, user_template, active_llm_query
-                    )
-                    total_cost += cost
-                    extracted_data = self._parse_extracted_data(extracted)
-
-                    # Build result record
-                    result = {
-                        "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
-                        "source": paper_meta.get("source", "unknown") if paper_meta else "unknown",
-                        "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
-                        "pdf_file": pdf_file.name,
-                        "row_number": i,
-                        "extracted_at": datetime.now().isoformat(),
-                        "extraction_model": self.model,
-                        "extraction_cost_usd": cost,
-                        "extracted_data": extracted_data,
-                        "extraction_source": "pdf",
-                        "extraction_status": "success",
-                        **extracted_data,
-                    }
-
-                    append_jsonl(str(pending_output), result)
-                    processed += 1
+                        result = self._error_record(paper_meta, i, "Could not extract text from PDF", pdf_file)
+                    else:
+                        extracted, cost = self._extract_with_llm(
+                            pdf_text, system_prompt, user_template, active_llm_query
+                        )
+                        total_cost += cost
+                        extracted_data = self._parse_extracted_data(extracted)
+                        result = {
+                            "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
+                            "source": paper_meta.get("source", "unknown") if paper_meta else "unknown",
+                            "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
+                            "pdf_file": pdf_file.name,
+                            "row_number": i,
+                            "extracted_at": datetime.now().isoformat(),
+                            "extraction_model": self.model,
+                            "extraction_cost_usd": cost,
+                            "extracted_data": extracted_data,
+                            "extraction_source": "pdf",
+                            "extraction_status": "success",
+                            **extracted_data,
+                        }
 
                 except Exception as e:
                     self.log(f"Error processing {pdf_file.name}: {e}", "error")
-                    errors += 1
-                    error_result = {
+                    result = {
                         "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
                         "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
                         "pdf_file": pdf_file.name,
@@ -214,7 +207,11 @@ class ExtractionAgent(BaseAgent):
                         "extraction_status": "error",
                         "error_message": str(e)
                     }
-                    append_jsonl(str(pending_output), error_result)
+                append_jsonl(str(pending_output), result)
+                if result["extraction_status"] == "success":
+                    processed += 1
+                else:
+                    errors += 1
 
         print()  # New line after progress
 

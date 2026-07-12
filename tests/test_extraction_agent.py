@@ -10,33 +10,52 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 
 
 class ExtractionAgentTests(unittest.TestCase):
-    def test_escaping_writer_failure_preserves_previous_extraction_results(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-            filtered_dir = project_dir / "filtered"
-            filtered_dir.mkdir(parents=True)
-            included_file = filtered_dir / "included_papers.jsonl"
-            included_file.write_text(
-                json.dumps({"id": "missing", "title": "Missing PDF", "pdf_downloaded": True}) + "\n",
-                encoding="utf-8",
-            )
-            output_file = project_dir / "extraction" / "extraction_results.jsonl"
-            output_file.parent.mkdir(parents=True)
-            previous = json.dumps({"paper_id": "previous", "extraction_status": "success"}) + "\n"
-            output_file.write_text(previous, encoding="utf-8")
-
-            with patch("agents.extraction_agent.append_jsonl", side_effect=RuntimeError("writer failed")):
-                with self.assertRaisesRegex(RuntimeError, "writer failed"):
-                    ExtractionAgent(project_dir, llm_query=lambda **kwargs: ("{}", {})).run(
-                        {
-                            "filtered_file": str(included_file),
-                            "download_folder": str(project_dir / "pdfs"),
-                            "extraction_prompt": {},
-                        }
+    def test_one_shot_writer_failure_rolls_back_pdf_and_web_results(self):
+        for source in ("pdf", "web"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                filtered_dir = project_dir / "filtered"
+                filtered_dir.mkdir(parents=True)
+                paper = {"id": source, "title": f"{source} paper", "pdf_downloaded": source == "pdf"}
+                pdf_reader = None
+                web_search_query = None
+                if source == "pdf":
+                    pdf_path = project_dir / "pdfs" / "row1.pdf"
+                    pdf_path.parent.mkdir(parents=True)
+                    pdf_path.write_bytes(b"%PDF-1.4\n")
+                    paper["pdf_path"] = str(pdf_path)
+                    pdf_reader = lambda path: "valid paper text"
+                else:
+                    paper["web_search_fallback_pending"] = True
+                    web_search_query = lambda **kwargs: (
+                        {"key_findings": "found", "source_urls": ["https://example.test/paper"]},
+                        {},
                     )
+                included_file = filtered_dir / "included_papers.jsonl"
+                included_file.write_text(json.dumps(paper) + "\n", encoding="utf-8")
+                output_file = project_dir / "extraction" / "extraction_results.jsonl"
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                previous = b'{"paper_id":"previous","extraction_status":"success"}\n'
+                output_file.write_bytes(previous)
+                agent = ExtractionAgent(
+                    project_dir,
+                    llm_query=lambda **kwargs: (json.dumps({"key_findings": "found"}), {}),
+                    pdf_reader=pdf_reader,
+                    web_search_query=web_search_query,
+                )
 
-            self.assertEqual(output_file.read_text(encoding="utf-8"), previous)
-            self.assertEqual(list(output_file.parent.glob(".*.tmp")), [])
+                with patch("agents.extraction_agent.append_jsonl", side_effect=[OSError("disk full"), None]):
+                    with self.assertRaisesRegex(OSError, "disk full"):
+                        agent.run(
+                            {
+                                "filtered_file": str(included_file),
+                                "download_folder": str(project_dir / "pdfs"),
+                                "extraction_prompt": {},
+                            }
+                        )
+
+                self.assertEqual(output_file.read_bytes(), previous)
+                self.assertEqual(list(output_file.parent.glob(".*.tmp")), [])
 
     def test_direct_openai_extraction_uses_max_completion_tokens_for_gpt5_models(self):
         with tempfile.TemporaryDirectory() as tmp:
