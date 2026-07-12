@@ -481,7 +481,9 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
     def _stage_reply(self, stage: str, result: dict[str, Any]) -> str:
         if stage == "prompt_extraction":
             field_count = result.get("field_count")
-            count_text = f" with {field_count} fields" if isinstance(field_count, int) and not isinstance(field_count, bool) else ""
+            count_text = ""
+            if isinstance(field_count, int) and not isinstance(field_count, bool):
+                count_text = f" with {field_count} {'field' if field_count == 1 else 'fields'}"
             return f"Draft extraction schema generated{count_text}. Review it, then select Finalize Schema before running Information Extraction."
         llm_query = self.llm_query or query_llm
         response_text, _usage = llm_query(

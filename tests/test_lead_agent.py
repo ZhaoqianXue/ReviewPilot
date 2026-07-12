@@ -627,6 +627,12 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(chat_rows[-1]["text"], result.reply)
         self.assertEqual(chat_rows[-1]["stage"], "prompt_extraction")
 
+    def test_generate_schema_reply_uses_singular_field_count(self):
+        reply = LeadAgent(Path("unused"))._stage_reply("prompt_extraction", {"field_count": 1})
+
+        self.assertIn("with 1 field.", reply)
+        self.assertNotIn("1 fields", reply)
+
     def test_finalize_schema_routes_to_information_extraction(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -651,9 +657,14 @@ class LeadAgentTests(unittest.TestCase):
             )
 
             result = LeadAgent(output_root).handle_message(project_id="demo", action="finalize-schema")
+            marker_exists = (project_dir / "extraction" / "schema_finalized.json").exists()
+            chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
 
         self.assertEqual(result.next_actions, ["run_extraction"])
         self.assertIn("Information Extraction", result.reply)
+        self.assertTrue(marker_exists)
+        self.assertEqual(chat_rows[-1]["text"], result.reply)
+        self.assertEqual(chat_rows[-1]["stage"], "prompt_extraction")
 
     def test_download_action_requires_filtering_not_prompt_extraction(self):
         with tempfile.TemporaryDirectory() as tmp:
