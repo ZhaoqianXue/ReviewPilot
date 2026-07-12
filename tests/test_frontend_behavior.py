@@ -10,7 +10,7 @@ class FrontendBehaviorTests(unittest.TestCase):
     def test_active_task_ownership_interleavings(self):
         script = r"""
 const assert = require('node:assert/strict');
-const { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration } = require('./frontend/app.js');
+const { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership } = require('./frontend/app.js');
 
 assert.equal(snapshotDataForStorage({ activeTask: { task_id: 'stale' } }).activeTask, null);
 
@@ -34,11 +34,25 @@ state.activeProjectId = 'A';
 const second = registry.waitOnce('task-a', 'A:task-a');
 assert.equal(first, second);
 assert.equal(waits, 1);
+const navigation = createProjectNavigationOwnership('A');
+const delayedChat = navigation.capture('A');
+navigation.adoptProject('B');
+assert.equal(navigation.owns(delayedChat), false);
+navigation.adoptProject('A');
+const sameProjectChat = navigation.capture('A');
+navigation.adoptProject('A'); // task completion calls setData for A
+assert.equal(navigation.owns(sameProjectChat), true);
+
 release({ status: 'completed' });
-Promise.all([first, second]).then(() => process.exit(0));
+Promise.all([first, second]).then(async () => {
+  const third = registry.waitOnce('task-a', 'A:task-a');
+  assert.equal(waits, 2);
+  release({ status: 'completed' });
+  await third;
+  process.exit(0);
+});
 """
         result = subprocess.run(
             ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-

@@ -469,14 +469,16 @@ class WebAppTests(unittest.TestCase):
             web_app.OUTPUT_ROOT = output_root
             web_app.task_runner = TaskRunner(max_workers=1)
             task_id = web_app.task_runner.submit("demo", "collect", release.wait)
-            client = TestClient(web_app.create_app())
-            with patch.object(web_app, "LeadAgent", FakeLeadAgent):
-                response = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
-        web_app.OUTPUT_ROOT = old_output_root
-        release.set()
-        web_app.task_runner.wait(task_id, timeout=2)
-        web_app.task_runner.shutdown()
-        web_app.task_runner = old_task_runner
+            try:
+                client = TestClient(web_app.create_app())
+                with patch.object(web_app, "LeadAgent", FakeLeadAgent):
+                    response = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
+            finally:
+                release.set()
+                web_app.task_runner.wait(task_id, timeout=2)
+                web_app.task_runner.shutdown()
+                web_app.OUTPUT_ROOT = old_output_root
+                web_app.task_runner = old_task_runner
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["reply"], "LLM project reply.")

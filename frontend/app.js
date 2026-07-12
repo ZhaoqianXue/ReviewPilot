@@ -23,8 +23,26 @@ function ownsProjectGeneration(state, data, monitor, projectId, generation, task
     && (!taskId || data.activeTask?.task_id === taskId);
 }
 
+function createProjectNavigationOwnership(initialProjectId = '') {
+  let projectId = initialProjectId;
+  let generation = 0;
+  return {
+    adoptProject(nextProjectId) {
+      if (nextProjectId === projectId) return;
+      projectId = nextProjectId;
+      generation += 1;
+    },
+    capture(capturedProjectId) {
+      return { projectId: capturedProjectId, generation };
+    },
+    owns(ownership) {
+      return ownership.projectId === projectId && ownership.generation === generation;
+    },
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership };
 }
 
 /* ReviewPilot workspace UI.
@@ -33,7 +51,7 @@ if (typeof module !== 'undefined' && module.exports) {
  * actions update in-place under /workspace. Text entry belongs in dialogs or
  * the assistant panel; the main canvas is reserved for click-based controls.
  */
-if (typeof window !== 'undefined') (function () {
+if (typeof window !== 'undefined' && typeof document !== 'undefined') (function () {
   'use strict';
 
   const WORKSPACE_SNAPSHOT_KEY = 'reviewpilot.workspace.snapshot.v3';
@@ -51,6 +69,7 @@ if (typeof window !== 'undefined') (function () {
   let D = normalizeData(escapeData(window.RP_DATA || {}));
   const NEW_PROJECT_TEMPLATE = normalizeData(escapeData(RAW_NEW_PROJECT));
   let MAX = maxPlatformValue(D.platforms);
+  const projectNavigation = createProjectNavigationOwnership(D.project.id || '');
   const initialActionStartedAt = Date.parse(D.activeTask?.created_at || '');
 
   const state = {
@@ -75,6 +94,7 @@ if (typeof window !== 'undefined') (function () {
   let paintWorkspace = () => {};
 
   restoreWorkspaceSnapshot();
+  projectNavigation.adoptProject(D.project.id || '');
 
   function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -398,6 +418,7 @@ if (typeof window !== 'undefined') (function () {
       state.preservedChatMessages = [];
     }
     D = nextData;
+    projectNavigation.adoptProject(D.project.id || '');
     MAX = maxPlatformValue(D.platforms);
     state.activeProjectId = D.project.id || '';
     syncActionState(D.activeTask);
@@ -558,7 +579,7 @@ if (typeof window !== 'undefined') (function () {
   async function sendProjectChat(message) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId) throw new Error('Project chat requires an active project.');
-    const generation = activeTaskMonitor.generation;
+    const ownership = projectNavigation.capture(projectId);
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -569,7 +590,7 @@ if (typeof window !== 'undefined') (function () {
       throw new Error(body.detail || `Project chat failed: ${res.status}`);
     }
     const payload = await res.json();
-    if (!ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation)) return;
+    if (!projectNavigation.owns(ownership)) return;
     setData(payload.state || await fetchProjectState(projectId), false, { preserveView: true });
   }
 

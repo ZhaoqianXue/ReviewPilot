@@ -470,8 +470,11 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("if (!isCurrentProject()) return;", post_action)
         self.assertNotIn("await waitForTask", post_action)
         self.assertNotIn("setData(await fetchProjectState", post_action)
-        self.assertIn("const generation = activeTaskMonitor.generation;", send_chat)
-        self.assertIn("ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation)", send_chat)
+        self.assertIn("const ownership = projectNavigation.capture(projectId);", send_chat)
+        self.assertIn("if (!projectNavigation.owns(ownership)) return;", send_chat)
+        self.assertNotIn("activeTaskMonitor.generation", send_chat)
+        self.assertIn("projectNavigation.adoptProject(D.project.id || '');", set_data)
+        self.assertIn("restoreWorkspaceSnapshot();\n  projectNavigation.adoptProject(D.project.id || '');", source)
 
         # Interleaving 4: task-id replacement supersedes the old monitor and dedupes the new one.
         self.assertIn("const key = `${projectId}:${taskId}`;", monitor)
@@ -486,6 +489,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertEqual(source.count("function monitorActiveTask()"), 1)
         self.assertNotIn("resumeActiveTask", source)
         self.assertLess(mount_tail.index("paint();"), mount_tail.index("monitorActiveTask();"))
+        self.assertIn("typeof window !== 'undefined' && typeof document !== 'undefined'", source)
 
     def test_retrieval_canvas_does_not_label_queued_papers_as_retrieved(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
