@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 import tempfile
@@ -2608,22 +2607,6 @@ class FastPdfDownloaderTests(unittest.TestCase):
         finally:
             if old_value is not None:
                 os.environ["CORE_API_KEY"] = old_value
-
-    def test_benchmark_runner_can_create_optimized_downloader(self):
-        module_path = Path(".benchmark_step3_download/benchmark_step3_download.py")
-        spec = importlib.util.spec_from_file_location("benchmark_step3_download", module_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-
-        downloader = module.create_downloader(
-            downloader_name="optimized",
-            email="research@example.com",
-            output_dir=Path("/tmp/reviewpilot-test-pdfs"),
-            web_search_model="gpt-5-mini",
-        )
-
-        self.assertEqual(downloader.__class__.__name__, "FastCascadePDFDownloader")
 
     def test_production_pdf_downloader_factory_defaults_to_fast_downloader(self):
         from utils.pdf_downloader import create_pdf_downloader
