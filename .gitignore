@@ -44,6 +44,7 @@ papers/
 .env
 venv/
 .venv/
+.venv-native/
 .worktrees/
 
 # Design reference: heavy regenerable artifact bundle (keep spec + source instead)

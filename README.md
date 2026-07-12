@@ -55,8 +55,21 @@ ReviewPilot/
 
 ### 1. Install dependencies
 
+On Apple Silicon, bootstrap a native ARM64 development environment:
+
 ```bash
-pip install -r requirements.txt
+PYTHON_BIN=python3 scripts/bootstrap_native_env.sh
+file .venv-native/bin/python
+.venv-native/bin/python -c 'import platform; print(platform.machine())'
+```
+
+Both architecture checks should report `arm64`. The bootstrap refuses to create the environment when the selected Python interpreter is not ARM64.
+
+On other platforms, use a conventional virtual environment and install the development requirements:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
 ### 2. Configure API keys
@@ -67,6 +80,14 @@ pip install -r requirements.txt
 ```
 
 ### 3. Run the web app
+
+On Apple Silicon:
+
+```bash
+.venv-native/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
+```
+
+On other platforms:
 
 ```bash
 .venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
@@ -101,7 +122,7 @@ claude_key, sk-ant-your-anthropic-key
 
 ```bash
 # Main web interface
-.venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
+.venv-native/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
 
 ## Pipeline Workflow
