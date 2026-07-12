@@ -64,6 +64,7 @@ file .venv-native/bin/python
 ```
 
 Both architecture checks should report `arm64`. The bootstrap refuses to create the environment when the selected Python interpreter is not ARM64.
+If `.venv-native` already exists, the bootstrap leaves it untouched and exits. Remove or rename that directory intentionally before rebuilding it.
 
 On other platforms, use a conventional virtual environment and install the development requirements:
 
@@ -120,10 +121,7 @@ claude_key, sk-ant-your-anthropic-key
 
 ## Usage
 
-```bash
-# Main web interface
-.venv-native/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
-```
+Use the platform-specific web app command in Quick Start: `.venv-native/bin/uvicorn` on Apple Silicon or `.venv/bin/uvicorn` on other platforms.
 
 ## Pipeline Workflow
 
