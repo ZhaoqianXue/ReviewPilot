@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "scenarios": {
+    "biomedicine": {
+      "snapshot": "biomedicine.json",
+      "snapshot_sha256": "35443b4bb71fece437b44c83a9b0cb8b4657bf3de0f05dda3ddb064a30650e8c",
+      "source_path": "output/llm-biomedicine-survey/search_conditions.json",
+      "source_sha256": "83c2277ba55cb6eecbbac3830421da93bc5305066037042e7b4b23caebe2da36"
+    },
+    "hci": {
+      "snapshot": "hci.json",
+      "snapshot_sha256": "1b23c037ff795f66057b781b9859ec2c63658f375016c1ffbc6fd9395e2575b7",
+      "source_path": "output/llm-for-human-computer-interaction-survey/search_conditions.json",
+      "source_sha256": "36dd295f83c713fd5ddd533ad0bf8372708690223c2e4d7135315f7dbea235b7"
+    },
+    "spatial_authoring": {
+      "snapshot": "spatial_authoring.json",
+      "snapshot_sha256": "48a24e945f9efbcb76ce2f53d64fedaea6f7243c1d66e3dec3eecd3fa27f51d4",
+      "source_path": "output/ai-assisted-3d-spatial-authoring-vr-ar-mr/search_conditions.json",
+      "source_sha256": "9858dbcb5940bc54bb969fb240ede7ece6b3779f1a854150956636575fe8ff01"
+    }
+  }
+}

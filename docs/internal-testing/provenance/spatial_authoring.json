@@ -1,0 +1,27 @@
+{
+  "scenario": "spatial_authoring",
+  "original_source": {
+    "path": "output/ai-assisted-3d-spatial-authoring-vr-ar-mr/search_conditions.json",
+    "sha256": "9858dbcb5940bc54bb969fb240ede7ece6b3779f1a854150956636575fe8ff01"
+  },
+  "authoritative_fields": {
+    "project_name": "ai-assisted-3d-spatial-authoring-vr-ar-mr",
+    "description": "I want to do a survey in terms of interactive AI-assisted 3D design and spatial authoring tools in VR, AR, or mixed reality. give me search terms.",
+    "primary_topic": "Interactive AI-assisted 3D design and spatial authoring tools in VR/AR/MR",
+    "domain": "Human-computer interaction (HCI), immersive computing, and AI-assisted creative tools",
+    "search_terms": "(\"AI-assisted\" OR \"AI assisted\" OR \"interactive AI\" OR \"intelligent assistant\" OR \"conversational AI\" OR \"generative AI\" OR \"AI co-creation\" OR \"large language model\" OR LLM OR \"foundation model\") AND (\"3D design\" OR \"3D modeling\" OR \"spatial authoring\" OR \"spatial creation\" OR \"3D scene\" OR \"virtual environment\" OR VR OR \"virtual reality\" OR AR OR \"augmented reality\" OR MR OR \"mixed reality\" OR \"extended reality\" OR XR)",
+    "platforms": ["pubmed", "arxiv", "openalex"]
+  },
+  "inner_beta_payload": {
+    "project_name": "inner-beta-spatial-authoring",
+    "description": "I want to do a survey in terms of interactive AI-assisted 3D design and spatial authoring tools in VR, AR, or mixed reality. give me search terms.",
+    "primary_topic": "Interactive AI-assisted 3D design and spatial authoring tools in VR/AR/MR",
+    "domain": "Human-computer interaction (HCI), immersive computing, and AI-assisted creative tools",
+    "search_terms": "(\"AI-assisted\" OR \"AI assisted\" OR \"interactive AI\" OR \"intelligent assistant\" OR \"conversational AI\" OR \"generative AI\" OR \"AI co-creation\" OR \"large language model\" OR LLM OR \"foundation model\") AND (\"3D design\" OR \"3D modeling\" OR \"spatial authoring\" OR \"spatial creation\" OR \"3D scene\" OR \"virtual environment\" OR VR OR \"virtual reality\" OR AR OR \"augmented reality\" OR MR OR \"mixed reality\" OR \"extended reality\" OR XR)",
+    "platforms": ["pubmed", "arxiv", "openalex"],
+    "source_limits": {"pubmed": 5, "arxiv": 5, "openalex": 5},
+    "max_results": 5,
+    "date_start": "2020-01-01",
+    "date_end": ""
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "scenario": "biomedicine",
+  "original_source": {
+    "path": "output/llm-biomedicine-survey/search_conditions.json",
+    "sha256": "83c2277ba55cb6eecbbac3830421da93bc5305066037042e7b4b23caebe2da36"
+  },
+  "authoritative_fields": {
+    "project_name": "llm-biomedicine-survey",
+    "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+    "primary_topic": "Survey of large language models (LLMs) for biomedicine",
+    "domain": "Biomedical informatics and health AI",
+    "search_terms": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+    "platforms": ["pubmed", "arxiv", "openalex"]
+  },
+  "inner_beta_payload": {
+    "project_name": "inner-beta-biomedicine",
+    "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+    "primary_topic": "Survey of large language models (LLMs) for biomedicine",
+    "domain": "Biomedical informatics and health AI",
+    "search_terms": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+    "platforms": ["pubmed", "arxiv", "openalex"],
+    "source_limits": {"pubmed": 5, "arxiv": 5, "openalex": 5},
+    "max_results": 5,
+    "date_start": "2023-01-01",
+    "date_end": ""
+  }
+}
