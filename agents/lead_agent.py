@@ -479,6 +479,10 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
         }.get(stage, 1)
 
     def _stage_reply(self, stage: str, result: dict[str, Any]) -> str:
+        if stage == "prompt_extraction":
+            field_count = result.get("field_count")
+            count_text = f" with {field_count} fields" if isinstance(field_count, int) and not isinstance(field_count, bool) else ""
+            return f"Draft extraction schema generated{count_text}. Review it, then select Finalize Schema before running Information Extraction."
         llm_query = self.llm_query or query_llm
         response_text, _usage = llm_query(
             text_prompt=f"""A ReviewPilot canvas action completed.
@@ -651,7 +655,7 @@ Return ONLY valid JSON:
             "prompt_relevance": ["run_collection"],
             "collection": ["run_screening"],
             "filtering": ["download_pdfs", "generate_schema"],
-            "prompt_extraction": ["download_pdfs"],
+            "prompt_extraction": ["finalize_schema"],
             "download": ["run_extraction"],
             "extraction": ["apply_categorization"],
             "categorization": [],

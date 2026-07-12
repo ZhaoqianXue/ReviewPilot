@@ -781,7 +781,11 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(task["result"]["stage"], "prompt_extraction")
         self.assertEqual(task["result"]["status"], "completed")
         self.assertEqual(task["result"]["data"]["status"], "schema_generated")
-        self.assertEqual(task["result"]["reply"], "LLM schema action reply.")
+        self.assertEqual(
+            task["result"]["reply"],
+            "Draft extraction schema generated with 3 fields. Review it, then select Finalize Schema before running Information Extraction.",
+        )
+        self.assertEqual(task["result"]["next_actions"], ["finalize_schema"])
 
     def test_run_action_supports_remaining_contract_actions_offline(self):
         old_offline = os.environ.get("REVIEWPILOT_OFFLINE_ACTIONS")
