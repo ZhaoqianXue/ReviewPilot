@@ -1,0 +1,119 @@
+{
+  "project_id": "inner-beta-biomedicine-r4",
+  "tested_commit": "ab37dc6cb5ba85b1116065e79a9b40484923e859",
+  "persisted_projection": {
+    "platforms": [
+      "pubmed",
+      "arxiv",
+      "openalex"
+    ],
+    "max_results": 5,
+    "max_results_per_platform": 5,
+    "source_limits": {
+      "pubmed": 5,
+      "arxiv": 5,
+      "openalex": 5
+    }
+  },
+  "duplicate_collect": {
+    "http_status": 409,
+    "active_task_id": "7c5625fe73764d58af4d7195ee2fa97f",
+    "second_task_created": false
+  },
+  "tasks": [
+    {
+      "action": "collect",
+      "task_id": "7c5625fe73764d58af4d7195ee2fa97f",
+      "status": "completed",
+      "created_at": "2026-07-12T20:52:35.918+00:00",
+      "updated_at": "2026-07-12T20:52:55.707+00:00",
+      "counts": {
+        "pubmed": 5,
+        "arxiv": 5,
+        "openalex": 5,
+        "total": 15
+      }
+    },
+    {
+      "action": "screen",
+      "task_id": "bf152ba976cc433bbbc46a152903ceae",
+      "status": "completed",
+      "created_at": "2026-07-12T20:53:26.024+00:00",
+      "updated_at": "2026-07-12T20:54:04.822+00:00",
+      "counts": {
+        "initial": 15,
+        "after_exact_dedup": 14,
+        "included": 1,
+        "excluded": 13
+      },
+      "refresh_resumed_same_task": true
+    },
+    {
+      "action": "download-pdfs",
+      "task_id": "f0aadf1300e247b0905acabbda64c6e4",
+      "status": "completed",
+      "created_at": "2026-07-12T20:54:28.590+00:00",
+      "updated_at": "2026-07-12T20:54:54.631+00:00",
+      "counts": {
+        "attempted": 1,
+        "success": 1,
+        "failed": 0
+      }
+    },
+    {
+      "action": "generate-schema",
+      "task_id": "dd92dc45d00b45c58efdeddceeede007",
+      "status": "completed",
+      "created_at": "2026-07-12T20:55:15.327+00:00",
+      "updated_at": "2026-07-12T20:55:21.093+00:00",
+      "counts": {
+        "fields": 10
+      },
+      "next_actions": [
+        "finalize_schema"
+      ]
+    },
+    {
+      "action": "finalize-schema",
+      "task_id": "4c192aff21aa4a8db69f670e259d0c57",
+      "status": "completed",
+      "created_at": "2026-07-12T20:55:58.038+00:00",
+      "updated_at": "2026-07-12T20:55:58.049+00:00",
+      "counts": {
+        "fields": 10
+      },
+      "next_actions": [
+        "run_extraction"
+      ]
+    },
+    {
+      "action": "run-extraction",
+      "task_id": "2e0aef9c91a14425a62f85a2556bbadc",
+      "status": "completed",
+      "created_at": "2026-07-12T20:56:14.493+00:00",
+      "updated_at": "2026-07-12T20:56:46.979+00:00",
+      "counts": {
+        "processed": 1,
+        "errors": 0,
+        "web_search_fallback": 0
+      },
+      "cost_usd": 0.00566625
+    },
+    {
+      "action": "suggest-categories",
+      "task_id": "354dc793d8f048e4befc78099e43cdb8",
+      "status": "completed",
+      "created_at": "2026-07-12T20:57:38.629+00:00",
+      "updated_at": "2026-07-12T20:57:46.108+00:00",
+      "counts": {
+        "suggested_categories": 9
+      },
+      "assistant_reply": "Categorization completed for methods: 9 categories were suggested. No next canvas action is required.",
+      "ui_required_next_actions": [
+        "Confirm Categories",
+        "Apply Categorization"
+      ],
+      "next_actions": []
+    }
+  ]
+}
