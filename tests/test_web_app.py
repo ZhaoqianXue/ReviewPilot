@@ -16,6 +16,54 @@ from web_app import create_project, render_index_html, render_workspace_html
 
 
 class WebAppTests(unittest.TestCase):
+    def test_project_exports_download_only_existing_allow_listed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "prompts").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text('{"project_name":"demo"}', encoding="utf-8")
+            (project_dir / "prompts" / "relevance_prompt.json").write_text('{"task":"screen"}', encoding="utf-8")
+            with patch.object(web_app, "OUTPUT_ROOT", output_root):
+                client = TestClient(web_app.create_app())
+                response = client.get("/projects/demo/exports/search-setup")
+                prompt = client.get("/projects/demo/exports/relevance-prompt")
+                unknown = client.get("/projects/demo/exports/unknown")
+                missing = client.get("/projects/demo/exports/included-papers")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/json")
+        self.assertIn('attachment; filename="search_conditions.json"', response.headers["content-disposition"])
+        self.assertEqual(prompt.status_code, 200)
+        self.assertEqual(unknown.status_code, 404)
+        self.assertEqual(missing.status_code, 404)
+        self.assertNotIn(str(output_root), unknown.text + missing.text)
+
+    def test_project_exports_reject_other_projects_traversal_and_non_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            demo = output_root / "demo"
+            other = output_root / "other"
+            demo.mkdir()
+            other.mkdir()
+            (demo / "search_conditions.json").write_text('{"project_name":"demo"}', encoding="utf-8")
+            (other / "search_conditions.json").write_text('{"project_name":"other"}', encoding="utf-8")
+            (demo / "filtered" / "included_papers.jsonl").mkdir(parents=True)
+            (other / "secret.jsonl").write_text('{"secret":true}', encoding="utf-8")
+            (output_root / "alias").symlink_to(other, target_is_directory=True)
+            (demo / "extraction").mkdir()
+            (demo / "extraction" / "extraction_results.jsonl").symlink_to(other / "secret.jsonl")
+            with patch.object(web_app, "OUTPUT_ROOT", output_root):
+                client = TestClient(web_app.create_app())
+                other_project = client.get("/projects/missing/exports/search-setup")
+                traversal = client.get("/projects/demo/exports/..%2Fsearch-setup")
+                directory = client.get("/projects/demo/exports/included-papers")
+                escaped_symlink = client.get("/projects/demo/exports/extraction-results")
+                aliased_project = client.get("/projects/alias/exports/search-setup")
+        self.assertEqual(other_project.status_code, 404)
+        self.assertEqual(traversal.status_code, 404)
+        self.assertEqual(directory.status_code, 404)
+        self.assertEqual(escaped_symlink.status_code, 404)
+        self.assertEqual(aliased_project.status_code, 404)
+
     def test_render_workspace_injects_active_and_new_project_states(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)

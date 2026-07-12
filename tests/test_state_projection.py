@@ -566,6 +566,24 @@ class StateProjectionTests(unittest.TestCase):
                 "Categorized results",
             ],
         )
+        self.assertEqual(
+            [item["key"] for item in data["exportPackage"]],
+            [
+                "search-setup",
+                "relevance-prompt",
+                "included-papers",
+                "download-report",
+                "extraction-results",
+                "categorization-mapping",
+                "categorized-results",
+            ],
+        )
+        self.assertEqual(
+            data["exportPackage"][0]["downloadUrl"],
+            "/projects/final-report/exports/search-setup",
+        )
+        self.assertNotIn("path", data["exportPackage"][0])
+        self.assertTrue(all(item["exists"] for item in data["exportPackage"]))
 
     def test_categorization_workflow_projects_prototype_step_five_content(self):
         with tempfile.TemporaryDirectory() as tmp:

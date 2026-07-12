@@ -1278,8 +1278,18 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       ${workflow.done ? categoryBriefsPanel(v.categorizationAnalysis) : ''}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
+      ${exportPackageSection(v.exportPackage)}
       <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
       ${v.catDraft.finalized ? `<div style="margin-top:10px;font-size:12px;color:#1a365d;text-align:right;">Project Complete!</div>` : ''}
+    </section>`;
+  }
+
+  function exportPackageSection(exportPackage) {
+    const items = (exportPackage || []).filter((item) => item.exists);
+    if (!items.length) return '';
+    return `<section aria-label="Export Package" style="border-top:1px solid #eef0ee;margin-top:18px;padding-top:14px;">
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Export Package</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${items.map((item) => `<a href="${item.downloadUrl}" download style="${buttonStyle};text-decoration:none;"><i class="ph ph-download-simple" style="font-size:13px;"></i>${item.label}</a>`).join('')}</div>
     </section>`;
   }
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -36,7 +36,7 @@ _prefer_local_package_imports()
 
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
-from reviewpilot_core.state_projection import build_new_project_data, build_rp_data, list_projects
+from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
@@ -182,6 +182,24 @@ async def projects(request):
     return JSONResponse({"projects": list_projects(OUTPUT_ROOT)})
 
 
+async def project_export(request):
+    project_id = request.path_params["project_id"]
+    export_key = request.path_params["export_key"]
+    artifact = EXPORT_ARTIFACTS.get(export_key)
+    if not artifact or not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(status_code=404)
+    _label, relative_path, media_type = artifact
+    artifact_path = export_artifact_path(Path(OUTPUT_ROOT) / project_id, export_key)
+    if artifact_path is None:
+        raise HTTPException(status_code=404)
+    return FileResponse(
+        artifact_path,
+        media_type=media_type,
+        filename=relative_path.name,
+        content_disposition_type="attachment",
+    )
+
+
 async def create_project_api(request):
     try:
         payload = await request.json()
@@ -202,6 +220,7 @@ def create_app() -> Starlette:
             Route("/projects/new", new_project_page, methods=["GET"]),
             Route("/projects/{project_id}", project_page, methods=["GET"]),
             Route("/projects/{project_id}/state", project_state, methods=["GET"]),
+            Route("/projects/{project_id}/exports/{export_key}", project_export, methods=["GET"]),
             Route("/projects/{project_id}/chat", project_chat, methods=["POST"]),
             Route("/projects/{project_id}/setup", update_project_setup_api, methods=["PUT"]),
             Route("/projects/{project_id}/actions/{action}", project_action, methods=["POST"]),

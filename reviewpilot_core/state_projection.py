@@ -7,6 +7,7 @@ from html import unescape
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import quote
 
 from ui_state import project_stage_label, schema_workbench_state
 
@@ -73,6 +74,30 @@ METADATA_FIELDS = {
     "url",
     "abstract",
 }
+
+EXPORT_ARTIFACTS = {
+    "search-setup": ("Search setup", Path("search_conditions.json"), "application/json"),
+    "relevance-prompt": ("Relevance prompt", Path("prompts/relevance_prompt.json"), "application/json"),
+    "included-papers": ("Included papers", Path("filtered/included_papers.jsonl"), "application/x-ndjson"),
+    "download-report": ("Download report", Path("pdfs/download_report.json"), "application/json"),
+    "extraction-results": ("Extraction results", Path("extraction/extraction_results.jsonl"), "application/x-ndjson"),
+    "categorization-mapping": ("Categorization mapping", Path("categorization/categorization_mapping.json"), "application/json"),
+    "categorized-results": ("Categorized results", Path("categorization/categorized_results.jsonl"), "application/x-ndjson"),
+}
+
+
+def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
+    artifact = EXPORT_ARTIFACTS.get(export_key)
+    if not artifact or project_path.is_symlink():
+        return None
+    try:
+        project_root = project_path.resolve(strict=True)
+        candidate = (project_path / artifact[1]).resolve(strict=True)
+    except OSError:
+        return None
+    if not candidate.is_relative_to(project_root) or not candidate.is_file():
+        return None
+    return candidate
 
 
 def list_projects(output_root: Path | str = Path("output")) -> list[dict]:
@@ -908,16 +933,16 @@ def _paper_mapped_category(categorization: dict, row: dict) -> str:
 
 
 def _export_package(path: Path) -> list[dict[str, Any]]:
-    items = [
-        ("Search setup", path / "search_conditions.json"),
-        ("Relevance prompt", path / "prompts" / "relevance_prompt.json"),
-        ("Included papers", path / "filtered" / "included_papers.jsonl"),
-        ("Download report", path / "pdfs" / "download_report.json"),
-        ("Extraction results", path / "extraction" / "extraction_results.jsonl"),
-        ("Categorization mapping", path / "categorization" / "categorization_mapping.json"),
-        ("Categorized results", path / "categorization" / "categorized_results.jsonl"),
+    project_id = quote(path.name, safe="")
+    return [
+        {
+            "key": key,
+            "label": label,
+            "downloadUrl": f"/projects/{project_id}/exports/{key}",
+            "exists": export_artifact_path(path, key) is not None,
+        }
+        for key, (label, _relative_path, _media_type) in EXPORT_ARTIFACTS.items()
     ]
-    return [{"label": label, "path": str(item_path), "exists": item_path.exists()} for label, item_path in items]
 
 
 def _quiet_labels(path: Path) -> dict[str, str]:

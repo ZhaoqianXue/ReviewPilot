@@ -638,7 +638,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("v.categorizationWorkflow", source)
         self.assertIn("v.categorizationAnalysis", source)
         self.assertNotIn("Evidence Matrix", categorize_canvas)
-        self.assertNotIn("Export Package", categorize_canvas)
+        self.assertIn("Export Package", categorize_canvas)
 
     def test_platform_collection_errors_render_as_source_warnings(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -677,6 +677,19 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("noRight: i === arr.length - 1", compute_vals)
         self.assertIn("rightNavy: i < arr.length - 1 && s.status === 'done'", compute_vals)
         self.assertNotIn("rightNavy: s.status === 'done'", compute_vals)
+
+    def test_completed_analysis_renders_accessible_existing_export_links_without_paths(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        summary = source[source.index("function categorizationAnalysisSummary") : source.index("function categoryBriefsPanel")]
+        export_section = source[source.index("function exportPackageSection") : source.index("function categoryBriefsPanel")]
+
+        self.assertIn("${exportPackageSection(v.exportPackage)}", summary)
+        self.assertIn("Export Package", export_section)
+        self.assertIn('aria-label="Export Package"', export_section)
+        self.assertIn(".filter((item) => item.exists)", export_section)
+        self.assertIn('href="${item.downloadUrl}"', export_section)
+        self.assertIn("download", export_section)
+        self.assertNotIn("item.path", export_section)
 
     def test_canvas_actions_show_elapsed_running_state(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
