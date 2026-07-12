@@ -90,9 +90,17 @@ def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
     artifact = EXPORT_ARTIFACTS.get(export_key)
     if not artifact or project_path.is_symlink():
         return None
+    # Inner-beta is a single-user local app. Reject every link component immediately
+    # before resolution; descriptor-level no-follow serving would require replacing
+    # FileResponse and is disproportionate to this deployment's TOCTOU risk.
+    candidate = project_path
+    for part in artifact[1].parts:
+        candidate /= part
+        if candidate.is_symlink():
+            return None
     try:
         project_root = project_path.resolve(strict=True)
-        candidate = (project_path / artifact[1]).resolve(strict=True)
+        candidate = candidate.resolve(strict=True)
     except OSError:
         return None
     if not candidate.is_relative_to(project_root) or not candidate.is_file():
