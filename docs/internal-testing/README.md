@@ -4,7 +4,7 @@ This directory freezes the reproducible inputs and evidence requirements for the
 
 ## Scenario provenance
 
-The catalog preserves the exact `search_terms`, description, primary topic, and domain from these authoritative historical artifacts. Limits and dates are the bounded inner-beta execution settings approved in the design.
+The catalog preserves the exact `search_terms`, description, primary topic, and domain from these authoritative historical artifacts. Limits are bounded, while dates are lower-bounded and open-ended where `date_end` is empty, as approved in the design.
 
 | Scenario | Historical source path | SHA-256 |
 | --- | --- | --- |
