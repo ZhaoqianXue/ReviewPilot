@@ -117,15 +117,11 @@ class ExtractionAgent(BaseAgent):
 
         pdf_files = sorted(pdf_folder.glob("*.pdf"))
         print(f"  Found {len(pdf_files)} PDFs to process\n")
-        needs_web_search_client = any(
-            paper.get("web_search_fallback_pending") and not paper.get("pdf_downloaded")
-            for paper in papers
-        ) and active_web_search_query is None
         needs_pdf_llm_client = active_llm_query is None and any(
             not (paper.get("web_search_fallback_pending") and not paper.get("pdf_downloaded"))
             for paper in papers
         )
-        if needs_web_search_client or needs_pdf_llm_client:
+        if needs_pdf_llm_client:
             self._init_client()
 
         # Get prompts

@@ -261,6 +261,59 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
         self.assertEqual(rows[0]["source_urls"], ["https://example.org/paper"])
 
+    def test_run_does_not_eagerly_initialize_client_for_overridden_web_search_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            (project_dir / "filtered").mkdir(parents=True)
+            included_file = project_dir / "filtered" / "included_papers.jsonl"
+            included_file.write_text(
+                json.dumps(
+                    {
+                        "id": "fallback-only",
+                        "title": "Fallback Only Paper",
+                        "pdf_downloaded": False,
+                        "web_search_fallback_pending": True,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            extraction_prompt = {
+                "system_prompt": "Extract structured paper data.",
+                "user_prompt_template": "Extract fields from this paper:\n{paper_text}",
+                "schema": {"fields": [{"name": "key_findings", "description": "Findings"}]},
+            }
+            agent = ExtractionAgent(project_dir, llm_query=lambda **kwargs: ("{}", {"total_tokens": 0}))
+            agent._query_web_search_extraction = lambda paper, prompt: (
+                json.dumps(
+                    {
+                        "key_findings": "Recovered without credentials",
+                        "source_urls": ["https://example.org/fallback-only"],
+                        "confidence": "medium",
+                    }
+                ),
+                {"total_tokens": 4},
+            )
+
+            def fail_client_initialization():
+                raise AssertionError("fallback override must not initialize the OpenAI client")
+
+            agent._init_client = fail_client_initialization
+            result = agent.run(
+                {
+                    "filtered_file": str(included_file),
+                    "download_folder": str(project_dir / "pdfs"),
+                    "extraction_prompt": extraction_prompt,
+                }
+            )
+            rows = read_jsonl(project_dir / "extraction" / "extraction_results.jsonl")
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["web_search_fallback"], 1)
+        self.assertEqual(rows[0]["extraction_status"], "success")
+        self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
+        self.assertEqual(rows[0]["key_findings"], "Recovered without credentials")
+
     def test_web_search_fallback_uses_paper_metadata_url_when_response_has_no_sources(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
