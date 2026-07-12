@@ -41,6 +41,8 @@
     catDraft: categorizationDraftFromData(D),
   };
   let actionTicker = null;
+  let activeTaskMonitor = { key: '', generation: 0 };
+  let paintWorkspace = () => {};
 
   restoreWorkspaceSnapshot();
 
@@ -88,8 +90,10 @@
     const snapshot = readWorkspaceSnapshot();
     if (!snapshot) return;
     const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);
+    const authoritativeActiveTask = D.activeTask;
     if (shouldRestoreSnapshotData) {
       D = migrateWorkspaceSnapshotData(snapshot.data);
+      D.activeTask = authoritativeActiveTask;
     }
     MAX = maxPlatformValue(D.platforms);
 
@@ -130,12 +134,16 @@
     return D.isNewProject && !!snapshot.data?.isNewProject;
   }
 
+  function snapshotData(data) {
+    return { ...data, activeTask: null };
+  }
+
   function writeWorkspaceSnapshot() {
     try {
       sessionStorage.setItem(WORKSPACE_SNAPSHOT_KEY, JSON.stringify({
         version: 1,
         savedAt: Date.now(),
-        data: D,
+        data: snapshotData(D),
         ui: {
           step: state.step,
           tab: state.tab,
@@ -363,6 +371,7 @@
     MAX = maxPlatformValue(D.platforms);
     state.activeProjectId = D.project.id || '';
     syncActionState(D.activeTask);
+    monitorActiveTask();
     const sameProject = !!previousProjectId && previousProjectId === D.project.id;
     const stepKeys = new Set(D.steps.map((step) => step.key));
     state.step = preserveView && sameProject && stepKeys.has(previousStep) ? previousStep : initialStep(D);
@@ -399,23 +408,85 @@
     setData(await fetchProjectState(projectId));
   }
 
+  function monitorActiveTask() {
+    const activeTask = D.activeTask;
+    if (!activeTask || !activeTask.task_id) {
+      activeTaskMonitor = { key: '', generation: activeTaskMonitor.generation + 1 };
+      return;
+    }
+    const taskId = activeTask.task_id;
+    const projectId = activeTask.project_id || state.activeProjectId || D.project.id;
+    const key = `${projectId}:${taskId}`;
+    syncActionState(activeTask);
+    if (activeTaskMonitor.key === key) return;
+    const generation = ++activeTaskMonitor.generation;
+    activeTaskMonitor.key = key;
+    void monitorOwnedTask(taskId, projectId, key, generation);
+  }
+
+  async function monitorOwnedTask(taskId, projectId, key, generation) {
+    const ownsTask = () => (
+      activeTaskMonitor.key === key
+      && activeTaskMonitor.generation === generation
+      && state.activeProjectId === projectId && D.project.id === projectId
+      && D.activeTask?.task_id === taskId
+    );
+    try {
+      await waitForTask(taskId);
+      const refreshedData = await fetchProjectState(projectId);
+      if (!ownsTask()) return;
+      setData(refreshedData, false, { preserveView: true });
+      paintWorkspace();
+    } catch (err) {
+      if (!ownsTask()) return;
+      state.actionError = err.message || String(err);
+    } finally {
+      if (!ownsTask()) return;
+      D.activeTask = null;
+      syncActionState(null);
+      activeTaskMonitor = { key: '', generation: activeTaskMonitor.generation + 1 };
+      paintWorkspace();
+    }
+  }
+
   async function postAction(action, payload = null) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId || D.isNewProject) return;
-    if (action === 'collect') await saveDraftSetup(projectId);
-    const options = payload
-      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-      : { method: 'POST' };
-    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      const detail = body && typeof body.detail === 'string' && body.detail.trim()
-        ? body.detail : `Action failed: ${res.status}`;
-      throw new Error(detail);
+    const generation = activeTaskMonitor.generation;
+    const isCurrentProject = () => (
+      state.activeProjectId === projectId && D.project.id === projectId
+      && activeTaskMonitor.generation === generation && !D.activeTask
+    );
+    try {
+      if (action === 'collect') await saveDraftSetup(projectId);
+      const options = payload
+        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+        : { method: 'POST' };
+      const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const detail = body && typeof body.detail === 'string' && body.detail.trim()
+          ? body.detail : `Action failed: ${res.status}`;
+        throw new Error(detail);
+      }
+      const task = await res.json();
+      if (!isCurrentProject()) return;
+      D.activeTask = {
+        task_id: task.task_id,
+        project_id: projectId,
+        action,
+        status: task.status || 'running',
+        created_at: new Date().toISOString(),
+      };
+      monitorActiveTask();
+    } catch (err) {
+      if (isCurrentProject()) {
+        state.actionError = err.message || String(err);
+        syncActionState(null);
+        paintWorkspace();
+      }
+      throw err;
     }
-    const task = await res.json();
-    await waitForTask(task.task_id);
-    setData(await fetchProjectState(projectId), false, { preserveView: true });
   }
 
   async function createProject(form) {
@@ -1389,29 +1460,6 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       }
     }
 
-    async function resumeActiveTask() {
-      if (!D.activeTask || !D.activeTask.task_id) return;
-      const taskId = D.activeTask.task_id;
-      const projectId = D.activeTask.project_id || state.activeProjectId || D.project.id;
-      const isCurrentProject = () => state.activeProjectId === projectId && D.project.id === projectId;
-      try {
-        await waitForTask(taskId);
-        const refreshedData = await fetchProjectState(projectId);
-        if (isCurrentProject()) {
-          setData(refreshedData, false, { preserveView: true });
-          paint();
-        }
-      } catch (err) {
-        if (isCurrentProject()) state.actionError = err.message || String(err);
-      } finally {
-        if (!isCurrentProject() || D.activeTask?.task_id !== taskId) return;
-        state.actionPending = '';
-        state.actionStartedAt = 0;
-        D.activeTask = null;
-        paint();
-      }
-    }
-
     async function submitChatForm(form) {
       const input = form.querySelector('input[name="message"]');
       const pending = handleChatSubmit(input ? input.value : '');
@@ -1496,13 +1544,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         state.actionStartedAt = Date.now();
         state.actionError = '';
         paint();
-        postAction(actionName, payload)
-          .catch((err) => { state.actionError = err.message || String(err); })
-          .finally(() => {
-            state.actionPending = '';
-            state.actionStartedAt = 0;
-            paint();
-          });
+        postAction(actionName, payload).catch(() => {});
         return;
       }
       paint();
@@ -1597,8 +1639,9 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       });
     });
 
+    paintWorkspace = paint;
+    monitorActiveTask();
     paint();
-    resumeActiveTask();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);

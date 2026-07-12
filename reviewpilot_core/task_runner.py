@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock
 from uuid import uuid4
 
@@ -29,13 +29,14 @@ class TaskRunner:
             if active_task is not None:
                 raise TaskConflictError(active_task)
             task_id = uuid4().hex
+            now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
             self._tasks[task_id] = {
                 "task_id": task_id,
                 "project_id": project_id,
                 "action": action,
                 "status": "running",
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
+                "created_at": now,
+                "updated_at": now,
                 "result": None,
                 "error": None,
             }
@@ -80,10 +81,10 @@ class TaskRunner:
                 task = self._tasks[task_id]
                 task["status"] = "failed"
                 task["error"] = str(exc)
-                task["updated_at"] = datetime.now().isoformat()
+                task["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         else:
             with self._registry_lock:
                 task = self._tasks[task_id]
                 task["status"] = "completed"
                 task["result"] = result
-                task["updated_at"] = datetime.now().isoformat()
+                task["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")

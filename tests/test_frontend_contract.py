@@ -213,7 +213,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("sessionStorage.setItem(WORKSPACE_SNAPSHOT_KEY", source)
         self.assertIn("restoreWorkspaceSnapshot();", source)
         self.assertIn("writeWorkspaceSnapshot();", source)
-        self.assertIn("data: D", source)
+        self.assertIn("data: snapshotData(D)", source)
         self.assertIn("step: state.step", source)
         self.assertIn("tab: state.tab", source)
         self.assertIn("activeProjectId: state.activeProjectId", source)
@@ -434,7 +434,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("actionPending: D.activeTask?.action || ''", source)
         self.assertIn("state.actionPending = actionName;", action_branch)
         self.assertIn("paint();", action_branch)
-        self.assertIn("state.actionPending = '';", action_branch)
+        self.assertNotIn("state.actionPending = '';", action_branch)
+        self.assertIn("syncActionState(null);", source)
         self.assertIn("data-ui=\"canvas-action-spinner\"", canvas_action)
         self.assertIn("data-ui=\"canvas-action-button\"", canvas_action)
         self.assertIn("Running", canvas_action)
@@ -442,35 +443,42 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_refresh_resumes_server_active_task_without_submitting_again(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-        normalize = source[source.index("function normalizeData") : source.index("function emptyCategorizationWorkflow")]
-        route_guard = source[source.index("function shouldRestoreSnapshotDataForRoute") : source.index("function writeWorkspaceSnapshot")]
+        restore = source[source.index("function restoreWorkspaceSnapshot") : source.index("function shouldRestoreSnapshotDataForRoute")]
+        snapshot = source[source.index("function snapshotData") : source.index("function migrateWorkspaceSnapshotData")]
         set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
-        resume = source[source.index("async function resumeActiveTask") : source.index("async function submitChatForm")]
-        mount_tail = source[source.rindex("    paint();") : source.index("  if (document.readyState")]
+        monitor = source[source.index("function monitorActiveTask") : source.index("async function postAction")]
+        post_action = source[source.index("async function postAction") : source.index("async function createProject")]
 
-        self.assertIn("activeTask: data.activeTask || null", normalize)
-        self.assertIn("actionPending: D.activeTask?.action || ''", source)
-        self.assertIn("Date.parse(D.activeTask?.created_at || '')", source)
-        self.assertIn("Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt", source)
-        self.assertIn("if (D.activeTask) return false;", route_guard)
+        # Interleaving 1: server-null beats a stale snapshot task.
+        self.assertIn("activeTask: null", snapshot)
+        self.assertIn("data: snapshotData(D)", snapshot)
+        self.assertIn("const authoritativeActiveTask = D.activeTask;", restore)
+        self.assertIn("D.activeTask = authoritativeActiveTask;", restore)
+
+        # Interleaving 2: selecting a project adopts and monitors its active task.
         self.assertIn("function syncActionState(activeTask)", source)
         self.assertIn("syncActionState(D.activeTask);", set_data)
-        self.assertIn("const taskId = D.activeTask.task_id;", resume)
-        self.assertIn("const projectId = D.activeTask.project_id || state.activeProjectId || D.project.id;", resume)
-        self.assertIn("state.activeProjectId === projectId && D.project.id === projectId", resume)
-        self.assertIn("await waitForTask(taskId);", resume)
-        self.assertIn("const refreshedData = await fetchProjectState(projectId);", resume)
-        self.assertIn("if (isCurrentProject())", resume)
-        self.assertIn("if (isCurrentProject()) state.actionError = err.message || String(err);", resume)
-        self.assertIn("D.activeTask?.task_id !== taskId", resume)
-        self.assertIn("state.actionPending = '';", resume)
-        self.assertIn("state.actionStartedAt = 0;", resume)
-        self.assertIn("D.activeTask = null;", resume)
-        self.assertIn("paint();", resume)
-        self.assertNotIn("postAction(", resume)
-        self.assertEqual(source.count("async function resumeActiveTask()"), 1)
-        self.assertEqual(source.count("resumeActiveTask();"), 1)
-        self.assertLess(mount_tail.index("paint();"), mount_tail.index("resumeActiveTask();"))
+        self.assertIn("monitorActiveTask();", set_data)
+        self.assertIn("setData(await fetchProjectState(projectId));", source)
+
+        # Interleaving 3: navigation A->B invalidates resume and submit continuations.
+        self.assertIn("const generation = ++activeTaskMonitor.generation;", monitor)
+        self.assertIn("activeTaskMonitor.generation === generation", monitor)
+        self.assertIn("state.activeProjectId === projectId && D.project.id === projectId", monitor)
+        self.assertIn("const projectId = state.activeProjectId || D.project.id;", post_action)
+        self.assertIn("if (!isCurrentProject()) return;", post_action)
+        self.assertNotIn("await waitForTask", post_action)
+        self.assertNotIn("setData(await fetchProjectState", post_action)
+
+        # Interleaving 4: task-id replacement supersedes the old monitor and dedupes the new one.
+        self.assertIn("const key = `${projectId}:${taskId}`;", monitor)
+        self.assertIn("syncActionState(activeTask);", monitor)
+        self.assertIn("if (activeTaskMonitor.key === key) return;", monitor)
+        self.assertIn("activeTaskMonitor.key === key", monitor)
+        self.assertIn("D.activeTask?.task_id === taskId", monitor)
+        self.assertIn("monitorActiveTask();", post_action)
+        self.assertEqual(source.count("function monitorActiveTask()"), 1)
+        self.assertNotIn("resumeActiveTask", source)
 
     def test_retrieval_canvas_does_not_label_queued_papers_as_retrieved(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -498,13 +506,13 @@ class FrontendContractTests(unittest.TestCase):
     def test_same_project_chat_and_actions_preserve_visible_step_and_tab(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
-        post_action = source[source.index("async function postAction") : source.index("async function createProject")]
+        monitor = source[source.index("function monitorActiveTask") : source.index("async function postAction")]
         send_chat = source[source.index("async function sendProjectChat") : source.index("async function updateProjectSetup")]
 
         self.assertIn("preserveView", set_data)
         self.assertIn("previousStep", set_data)
         self.assertIn("previousTab", set_data)
-        self.assertIn("{ preserveView: true }", post_action)
+        self.assertIn("{ preserveView: true }", monitor)
         self.assertIn("{ preserveView: true }", send_chat)
         self.assertIn("JSON.stringify({ message, step: state.step })", send_chat)
 

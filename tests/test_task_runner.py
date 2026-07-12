@@ -1,10 +1,22 @@
 import unittest
+from datetime import datetime, timedelta
 from threading import Barrier, Event, Lock, Thread
 
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_task_timestamps_are_browser_parseable_utc_with_milliseconds(self):
+        runner = TaskRunner(max_workers=1)
+        task_id = runner.submit("demo", "collect", lambda: None)
+        task = runner.wait(task_id, timeout=2)
+
+        for field in ("created_at", "updated_at"):
+            value = task[field]
+            parsed = datetime.fromisoformat(value)
+            self.assertRegex(value, r"\.\d{3}\+00:00$")
+            self.assertEqual(parsed.utcoffset(), timedelta(0))
+
     def test_submit_rejects_same_project_while_allowing_another_project(self):
         runner = TaskRunner(max_workers=2)
         first_started = Event()

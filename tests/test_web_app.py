@@ -535,6 +535,7 @@ class WebAppTests(unittest.TestCase):
         release = Event()
         started = Event()
         task_id = None
+        temporary_task_runner = None
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 output_root = Path(tmp)
@@ -544,7 +545,8 @@ class WebAppTests(unittest.TestCase):
                     json.dumps({"project_name": "demo"}), encoding="utf-8"
                 )
                 web_app.OUTPUT_ROOT = output_root
-                web_app.task_runner = TaskRunner(max_workers=1)
+                temporary_task_runner = TaskRunner(max_workers=1)
+                web_app.task_runner = temporary_task_runner
 
                 def blocking_collect():
                     started.set()
@@ -571,6 +573,8 @@ class WebAppTests(unittest.TestCase):
             release.set()
             if task_id and web_app.task_runner.get(task_id) and web_app.task_runner.get(task_id)["status"] == "running":
                 web_app.task_runner.wait(task_id, timeout=2)
+            if temporary_task_runner is not None:
+                temporary_task_runner._executor.shutdown(wait=True)
             web_app.OUTPUT_ROOT = old_output_root
             web_app.task_runner = old_task_runner
 
