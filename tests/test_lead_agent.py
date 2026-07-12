@@ -892,6 +892,7 @@ class LeadAgentTests(unittest.TestCase):
             unc_path = r"\\server\share\private-user\out.json"
             workflow_result = {
                 "status": "extraction_done",
+                "outcome": "partial",
                 "processed": 3,
                 "failed": 1,
                 "output_path": unix_path,
@@ -932,11 +933,9 @@ class LeadAgentTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": (
-                                "Extraction completed: 3 processed and 1 failed. "
-                                f"Unix output: {unix_path_with_spaces}, with 11 records retained. "
-                                f"Windows backup: {windows_path_with_spaces}, with 2 warnings. "
-                                f"Network copy: {unc_path}, with outcome complete.\n"
-                                f"Generated copy: /home/other-user/private/out.json. Next action: Categorization & Analysis."
+                                "Unsafe generated reply: /Users/private-user/out,final.json with 99 processed no delimiter; "
+                                f"drive {windows_path_with_spaces})! private-tail; "
+                                f"network {unc_path}! server-tail. Wrong next action: Export."
                             )
                         }
                     ),
@@ -971,30 +970,59 @@ class LeadAgentTests(unittest.TestCase):
                 str(project_dir / "extraction" / "extraction_results.jsonl"),
             ],
         )
-        self.assertIn("3 processed and 1 failed", result.reply)
-        self.assertIn("project artifact", result.reply)
+        self.assertEqual(
+            result.reply,
+            "Information Extraction completed: 3 processed, 1 failed. Outcome: partial. Next action: Categorization & Analysis.",
+        )
         self.assertNotIn("private-user", result.reply)
         self.assertNotIn("Alice Smith", result.reply)
         self.assertNotIn("Review Pilot", result.reply)
         self.assertNotIn("\\\\server\\share", result.reply)
         self.assertNotIn("other-user", result.reply)
+        self.assertNotIn("private-tail", result.reply)
+        self.assertNotIn("server-tail", result.reply)
+        self.assertNotIn("99 processed", result.reply)
+        self.assertNotIn("Wrong next action", result.reply)
         self.assertNotIn("/Users/", result.reply)
         self.assertNotIn("C:\\Users\\", result.reply)
         self.assertIn("Next action: Categorization & Analysis", result.reply)
         self.assertEqual(chat_rows[-1]["text"], result.reply)
-        self.assertIn("11 records retained", result.reply)
-        self.assertIn("2 warnings", result.reply)
-        self.assertIn("outcome complete", result.reply)
-        self.assertEqual(result.reply.count("project artifact, with"), 3)
-        self.assertIn("11 records retained", chat_rows[-1]["text"])
-        self.assertIn("2 warnings", chat_rows[-1]["text"])
+        self.assertIn("3 processed", result.reply)
+        self.assertIn("1 failed", result.reply)
+        self.assertIn("Outcome: partial", result.reply)
+        self.assertIn("3 processed", chat_rows[-1]["text"])
+        self.assertIn("1 failed", chat_rows[-1]["text"])
         projected_activity = json.dumps(projected["activityByStep"])
         self.assertNotIn("private-user", projected_activity)
         self.assertNotIn("Alice Smith", projected_activity)
-        self.assertIn("11 records retained", projected_activity)
-        self.assertIn("2 warnings", projected_activity)
-        self.assertIn("outcome complete", projected_activity)
+        self.assertNotIn("server", projected_activity.lower())
+        self.assertNotIn("private-tail", projected_activity)
+        self.assertIn("3 processed", projected_activity)
+        self.assertIn("1 failed", projected_activity)
+        self.assertIn("Outcome: partial", projected_activity)
         self.assertIn("Next action: Categorization & Analysis", projected_activity)
+
+    def test_unsafe_stage_reply_shapes_all_fall_back_to_structured_summary(self):
+        unsafe_replies = [
+            "Saved to /Users/private-user/out,final.json with no delimiter 99 processed",
+            r"Saved to C:\Users\Alice Smith\out.json) with 99 processed!",
+            r"Saved to \\server\share\private-user\out.json! tail-secret",
+        ]
+
+        for unsafe_reply in unsafe_replies:
+            with self.subTest(reply=unsafe_reply):
+                def fake_llm_query(**_kwargs):
+                    return (json.dumps({"reply": unsafe_reply}), {})
+
+                reply = LeadAgent(Path("unused"), llm_query=fake_llm_query)._stage_reply(
+                    "extraction",
+                    {"status": "extraction_done", "processed": 3, "failed": 1},
+                )
+
+                self.assertEqual(
+                    reply,
+                    "Information Extraction completed: 3 processed, 1 failed. Next action: Categorization & Analysis.",
+                )
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):
         with tempfile.TemporaryDirectory() as tmp:

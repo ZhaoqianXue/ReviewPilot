@@ -28,11 +28,9 @@ from utils.jsonl_handler import append_jsonl
 from utils.llm import query_llm
 
 
-_PATH_END = r"(?=(?:[.,;](?:\s|$)|\r?\n|$))"
-_QUOTED_ABSOLUTE_PATH = re.compile(r'''(?P<quote>["'])(?:/|[A-Za-z]:[\\/]|\\\\)[^\r\n]*?(?P=quote)''')
-_UNC_ABSOLUTE_PATH = re.compile(r"(?<![\\\w])\\\\[^\r\n\"']*?" + _PATH_END)
-_WINDOWS_ABSOLUTE_PATH = re.compile(r"(?<![\w])[A-Za-z]:[\\/][^\r\n\"']*?" + _PATH_END)
-_UNIX_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/])/(?!/)[^\r\n\"']*?" + _PATH_END)
+_ABSOLUTE_PATH_MARKER = re.compile(
+    r"(?<![\w.:/])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
+)
 
 
 @dataclass(frozen=True)
@@ -488,7 +486,7 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
 
     def _stage_reply(self, stage: str, result: dict[str, Any], action: str | None = None) -> str:
         if action == "suggest-categories":
-            field = self._sanitize_reply(str(result.get("field") or "selected field"))
+            field = self._sanitize_prompt_value(str(result.get("field") or "selected field"))
             category_count = result.get("categories")
             if isinstance(category_count, int) and not isinstance(category_count, bool):
                 suggestion_text = f"{category_count} category {'suggestion' if category_count == 1 else 'suggestions'}"
@@ -531,7 +529,10 @@ Return ONLY valid JSON:
             model=LEAD_AGENT_DEV_MODEL,
             provider="openai",
         )
-        return self._sanitize_reply(self._parse_project_chat_reply(response_text))
+        reply = self._parse_project_chat_reply(response_text)
+        if self._contains_absolute_path(reply):
+            return self._safe_stage_reply(stage, result)
+        return reply
 
     def _sanitize_prompt_value(self, value: Any) -> Any:
         if isinstance(value, dict):
@@ -540,17 +541,53 @@ Return ONLY valid JSON:
             return [self._sanitize_prompt_value(item) for item in value]
         if isinstance(value, str):
             stripped = value.strip()
-            if Path(stripped).is_absolute() or PureWindowsPath(stripped).is_absolute():
+            if Path(stripped).is_absolute() or PureWindowsPath(stripped).is_absolute() or self._contains_absolute_path(value):
                 return "project artifact"
-            return self._sanitize_reply(value)
+            return value
         return value
 
-    def _sanitize_reply(self, reply: str) -> str:
-        text = str(reply)
-        text = _QUOTED_ABSOLUTE_PATH.sub("project artifact", text)
-        text = _UNC_ABSOLUTE_PATH.sub("project artifact", text)
-        text = _WINDOWS_ABSOLUTE_PATH.sub("project artifact", text)
-        return _UNIX_ABSOLUTE_PATH.sub("project artifact", text)
+    def _contains_absolute_path(self, value: str) -> bool:
+        return _ABSOLUTE_PATH_MARKER.search(str(value)) is not None
+
+    def _safe_stage_reply(self, stage: str, result: dict[str, Any]) -> str:
+        stage_name = {
+            "collection": "Collection",
+            "filtering": "Paper Screening",
+            "download": "Full-Text Retrieval",
+            "extraction": "Information Extraction",
+            "categorization": "Categorization & Analysis",
+        }.get(stage, stage.replace("_", " ").title())
+        count_labels = (
+            ("total", "collected"),
+            ("total_papers", "papers collected"),
+            ("processed", "processed"),
+            ("success", "available"),
+            ("failed", "failed"),
+            ("included_count", "included"),
+            ("excluded_count", "excluded"),
+            ("errors", "errors"),
+        )
+        counts = [
+            f"{result[key]} {label}"
+            for key, label in count_labels
+            if isinstance(result.get(key), int) and not isinstance(result.get(key), bool)
+        ]
+        reply = f"{stage_name} completed"
+        if counts:
+            reply += f": {', '.join(counts)}"
+        reply += "."
+        outcome = result.get("outcome")
+        if isinstance(outcome, str) and re.fullmatch(r"[A-Za-z0-9 _-]{1,80}", outcome):
+            reply += f" Outcome: {outcome}."
+        next_action = {
+            "collection": "Paper Screening",
+            "filtering": "Full-Text Retrieval",
+            "download": "Information Extraction",
+            "extraction": "Categorization & Analysis",
+        }.get(stage)
+        if next_action:
+            reply += f" Next action: {next_action}."
+        return reply
 
     def _load_search_conditions(self, project_path: Path) -> dict[str, Any]:
         path = project_path / "search_conditions.json"
