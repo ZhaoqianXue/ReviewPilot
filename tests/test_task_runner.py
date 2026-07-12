@@ -1,4 +1,5 @@
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from threading import Barrier, Event, Lock, Thread
 
@@ -6,6 +7,36 @@ from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_setup_mutation_reserves_only_its_project(self):
+        runner = TaskRunner(max_workers=1)
+        entered, release = Event(), Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(runner.run_if_idle, "one", lambda: (entered.set(), release.wait(2)))
+            self.assertTrue(entered.wait(1))
+            try:
+                with self.assertRaises(TaskConflictError):
+                    runner.submit("one", "collect", lambda: None)
+                other = runner.submit("two", "collect", lambda: None)
+                self.assertIsNotNone(runner.get(other))
+            finally:
+                release.set()
+            future.result(timeout=1)
+        runner.shutdown()
+
+    def test_concurrent_setup_mutation_conflicts_and_failed_mutation_releases_reservation(self):
+        runner = TaskRunner(max_workers=1)
+        entered, release = Event(), Event()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(runner.run_if_idle, "one", lambda: (entered.set(), release.wait(2)))
+            self.assertTrue(entered.wait(1))
+            with self.assertRaises(TaskConflictError):
+                runner.run_if_idle("one", lambda: None)
+            release.set()
+            future.result(timeout=1)
+        with self.assertRaisesRegex(RuntimeError, "broken"):
+            runner.run_if_idle("one", lambda: (_ for _ in ()).throw(RuntimeError("broken")))
+        self.assertIsNone(runner.active_for_project("one"))
+        runner.shutdown()
     def test_submit_prepares_registered_task_before_worker_can_start(self):
         runner = TaskRunner(max_workers=1)
         events = []

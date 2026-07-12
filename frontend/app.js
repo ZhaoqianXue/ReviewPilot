@@ -264,6 +264,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       project: data.project || { id: '', title: 'ReviewPilot', status: 'No project', model: '', date: '' },
       researchQuestion: data.researchQuestion || '',
       setup: data.setup || {},
+      setupRevision: data.setupRevision || '',
       stageState: data.stageState || {},
       steps: data.steps || [],
       fields: data.fields || [],
@@ -540,6 +541,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
+        if (body?.confirmationRequired) {
+          const affected = body.affectedStages.join(', ');
+          if (!window.confirm(`This rerun replaces stale results for: ${affected}. Continue?`)) throw new Error('Rerun cancelled.');
+          return postAction(action, { ...(payload || {}), overwrite_confirmation: { expected_revision: body.expectedRevision, affected_stages: body.affectedStages } });
+        }
         const detail = body && typeof body.detail === 'string' && body.detail.trim()
           ? body.detail : `Action failed: ${res.status}`;
         throw new Error(detail);
@@ -625,15 +631,31 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   async function saveDraftSetup(projectId) {
-    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/setup`, {
+    const send = async (payload) => fetch(`/projects/${encodeURIComponent(projectId)}/setup`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(setupPayloadFromDraft()),
+      body: JSON.stringify(payload),
     });
+    const draft = setupPayloadFromDraft();
+    let res = await send(draft);
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `Setup update failed: ${res.status}`);
     }
+    let result = await res.json();
+    if (result.confirmationRequired) {
+      const affected = result.affectedStages.join(', ');
+      if (!window.confirm(`Changing this setup makes these results stale: ${affected}. Continue?`)) {
+        throw new Error('Setup change cancelled.');
+      }
+      res = await send({ ...draft, confirmation: { expected_revision: result.expectedRevision } });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `Setup update failed: ${res.status}`);
+      }
+      result = await res.json();
+    }
+    D.setupRevision = result.setupRevision || D.setupRevision;
   }
 
   async function waitForTask(taskId) {

@@ -97,7 +97,7 @@ def start_action(project_path: Path | str, action: str) -> dict[str, Any]:
     with _project_lock(project_path):
         state = load_workflow_state(project_path)
         prerequisite = _ACTION_PREREQUISITES.get(action)
-        if prerequisite and state["stages"][prerequisite]["status"] != "completed":
+        if prerequisite and (state["stages"][prerequisite]["status"] != "completed" or state["stages"][prerequisite]["stale"]):
             raise ValueError(f"Action '{action}' requires completed stage '{prerequisite}'")
         stage = state["stages"][_action_stage(action)]
         stage.update(status="running", attempt=stage["attempt"] + 1, updated_at=_now(), error=None)
@@ -151,6 +151,19 @@ def save_workflow_state(project_path: Path | str, state: dict[str, Any]) -> None
     """Atomically restore a previously validated ledger snapshot."""
     with _project_lock(project_path):
         _write(project_path, state)
+
+
+def mark_stages_stale(project_path: Path | str, names: list[str]) -> dict[str, Any]:
+    """Atomically mark authoritative outputs stale without deleting artifacts."""
+    with _project_lock(project_path):
+        state = load_workflow_state(project_path)
+        unknown = set(names) - set(STAGE_NAMES)
+        if unknown:
+            raise ValueError(f"Unknown workflow stages: {', '.join(sorted(unknown))}")
+        for name in names:
+            state["stages"][name]["stale"] = True
+        _write(project_path, state)
+        return state
 
 
 def migrate_legacy_workflow_state(project_path: Path | str) -> dict[str, Any]:

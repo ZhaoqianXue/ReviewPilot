@@ -21,11 +21,14 @@ class TaskRunner:
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._tasks: dict[str, dict] = {}
         self._futures: dict[str, Future] = {}
+        self._mutations: dict[str, dict] = {}
         self._registry_lock = Lock()
 
     def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None) -> str:
         with self._registry_lock:
             active_task = self._active_for_project_unlocked(project_id)
+            if active_task is None:
+                active_task = self._mutations.get(project_id)
             if active_task is not None:
                 raise TaskConflictError(active_task)
             task_id = uuid4().hex
@@ -68,6 +71,23 @@ class TaskRunner:
         with self._registry_lock:
             task = self._active_for_project_unlocked(project_id)
             return dict(task) if task else None
+
+    def run_if_idle(self, project_id: str, func):
+        """Run a short project mutation while excluding task submission."""
+        with self._registry_lock:
+            active = self._active_for_project_unlocked(project_id)
+            if active is None:
+                active = self._mutations.get(project_id)
+            if active is not None:
+                raise TaskConflictError(active)
+            now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+            mutation = {"task_id": f"setup-{uuid4().hex}", "project_id": project_id, "action": "update-setup", "status": "running", "created_at": now, "updated_at": now}
+            self._mutations[project_id] = mutation
+        try:
+            return func()
+        finally:
+            with self._registry_lock:
+                self._mutations.pop(project_id, None)
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)

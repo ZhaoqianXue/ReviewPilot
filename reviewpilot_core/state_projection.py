@@ -14,7 +14,8 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
-from .workflow_state import STAGE_NAMES, new_workflow_state, reconcile_orphaned_running
+from .setup_revision import setup_revision
+from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
 
 
 NEW_REVIEW_WELCOME = """Welcome to **ReviewPilot**!
@@ -89,8 +90,18 @@ EXPORT_ARTIFACTS = {
 
 def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
     artifact = EXPORT_ARTIFACTS.get(export_key)
-    if not artifact or project_path.is_symlink():
+    if not artifact or project_path.is_symlink() or (project_path / ".setup_update_pending.json").exists():
         return None
+    export_stage = {
+        "relevance-prompt": "collection", "included-papers": "screening", "download-report": "retrieval",
+        "extraction-results": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
+    }.get(export_key)
+    if export_stage:
+        try:
+            if load_workflow_state(project_path)["stages"][export_stage]["stale"]:
+                return None
+        except ValueError:
+            return None
     # Inner-beta is a single-user local app. Reject every link component immediately
     # before resolution; descriptor-level no-follow serving would require replacing
     # FileResponse and is disproportionate to this deployment's TOCTOU risk.
@@ -151,6 +162,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
             "date_start": "",
             "date_end": "",
         },
+        "setupRevision": "",
         "stageState": new_workflow_state()["stages"],
         "steps": [
             {"n": 1, "key": "search", "label": "Search Setup", "status": "active", "sub": "3 sources", "desc": ""},
@@ -220,6 +232,20 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     categorized_rows = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl", limit=200))
 
     workflow_state = reconcile_orphaned_running(path, active_action=active_action)
+    setup_update_pending = (path / ".setup_update_pending.json").exists()
+    if setup_update_pending:
+        for stage in workflow_state["stages"].values():
+            stage["stale"] = True
+    if workflow_state["stages"]["collection"]["stale"]:
+        collected_summary = {}
+    if workflow_state["stages"]["screening"]["stale"]:
+        filtering_stats, screening_stats, included = {}, {}, []
+    if workflow_state["stages"]["retrieval"]["stale"]:
+        download_report = {}
+    if workflow_state["stages"]["extraction"]["stale"]:
+        schema, extraction_rows, extraction_results = {}, [], []
+    if workflow_state["stages"]["categorization"]["stale"]:
+        categorization, categorization_suggestions, categorized_rows = {}, {}, []
     current_step = _current_step(workflow_state)
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
@@ -237,6 +263,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         },
         "researchQuestion": _research_question(config),
         "setup": _setup(config),
+        "setupRevision": setup_revision(config),
         "stageState": workflow_state["stages"],
         "steps": _steps(path, workflow_state, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
         "optionalCapabilities": [],

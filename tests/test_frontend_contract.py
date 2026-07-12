@@ -6,6 +6,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_setup_update_handles_impact_preview_and_revision_confirmation(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("confirmationRequired", source)
+        self.assertIn("expected_revision", source)
+        self.assertIn("affectedStages", source)
+
     def test_normalized_refresh_state_retains_server_owned_stage_state(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 

@@ -36,14 +36,27 @@ _prefer_local_package_imports()
 
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
+from reviewpilot_core.atomic_files import atomic_write_json
+from reviewpilot_core.setup_revision import affected_stages, materially_changes_dependencies, normalize_setup, setup_revision, stale_replacement_stages
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
-from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, save_workflow_state, start_action
+from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
 
 
 OUTPUT_ROOT = ROOT / "output"
 FRONTEND_DIR = ROOT / "frontend"
 task_runner = TaskRunner()
+
+
+class ConfirmationRequired(ValueError):
+    def __init__(self, revision: str, stages: list[str]):
+        self.revision = revision
+        self.stages = stages
+        super().__init__(f"Overwrite confirmation required for stale stages: {', '.join(stages)}")
+
+
+class SetupRevisionConflict(ValueError):
+    pass
 
 
 def build_project_state(output_root: Path | str, project_id: str) -> dict:
@@ -122,6 +135,8 @@ async def project_action(request):
         task_id = submit_project_action(OUTPUT_ROOT, project_id, action, input_data=input_data)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except ConfirmationRequired as exc:
+        return JSONResponse({"detail": str(exc), "confirmationRequired": True, "expectedRevision": exc.revision, "affectedStages": exc.stages}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"task_id": task_id, "status": "running"})
@@ -167,6 +182,10 @@ async def update_project_setup_api(request):
     try:
         payload = await request.json()
         project = update_project_setup(OUTPUT_ROOT, project_id, payload)
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except SetupRevisionConflict as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(project)
@@ -242,6 +261,9 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
     config = _setup_config(payload)
     project_id = _unique_project_id(Path(output_root), _slugify(config["project_name"]))
     search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+    search_conditions = {**normalize_setup(config), **search_conditions}
+    search_conditions["setup_revision"] = setup_revision(search_conditions)
+    atomic_write_json(Path(output_root) / project_id / "search_conditions.json", search_conditions)
     initialize_workflow_state(Path(output_root) / project_id)
     return {"id": project_id, "title": search_conditions["project_name"], "path": search_conditions["project_path"]}
 
@@ -249,9 +271,48 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
 def update_project_setup(output_root: Path | str, project_id: str, payload: dict) -> dict:
     if not known_project(output_root, project_id):
         raise ValueError("project not found")
+    active = task_runner.active_for_project(project_id)
+    if active:
+        raise TaskConflictError(active)
     config = _setup_config(payload)
-    search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
-    return {"id": project_id, "title": search_conditions["project_name"], "path": search_conditions["project_path"]}
+    confirmation = payload.get("confirmation") if isinstance(payload.get("confirmation"), dict) else {}
+    project_path = Path(output_root) / project_id
+
+    def transact():
+        current = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
+        current_revision = setup_revision(current)
+        next_revision = setup_revision(config)
+        changed = current_revision != next_revision
+        impacts = affected_stages(project_path) if changed and materially_changes_dependencies(current, config) else []
+        expected = confirmation.get("expected_revision")
+        if expected is not None and expected != current_revision:
+            raise SetupRevisionConflict("Setup confirmation revision is stale; refresh and review the new impact")
+        if impacts and expected is None:
+            return {"id": project_id, "confirmationRequired": True, "expectedRevision": current_revision, "proposedRevision": next_revision, "affectedStages": impacts}
+        if not changed:
+            return {"id": project_id, "title": current.get("project_name") or project_id, "confirmationRequired": False, "setupRevision": current_revision}
+        ledger_before = load_workflow_state(project_path)
+        pending = project_path / ".setup_update_pending.json"
+        atomic_write_json(pending, {"expected_revision": current_revision, "proposed_revision": next_revision})
+        try:
+            search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+            persisted = {**normalize_setup(config), **search_conditions}
+            persisted["setup_revision"] = setup_revision(persisted)
+            persisted.setdefault("project_path", str(project_path))
+            atomic_write_json(project_path / "search_conditions.json", persisted)
+            if impacts:
+                mark_stages_stale(project_path, impacts)
+        except Exception:
+            atomic_write_json(project_path / "search_conditions.json", current)
+            save_workflow_state(project_path, ledger_before)
+            raise
+        finally:
+            pending.unlink(missing_ok=True)
+        return {"id": project_id, "title": persisted["project_name"], "path": persisted["project_path"], "confirmationRequired": False, "setupRevision": persisted["setup_revision"], "affectedStages": impacts}
+
+    if hasattr(task_runner, "run_if_idle"):
+        return task_runner.run_if_idle(project_id, transact)
+    return transact()
 
 
 def _run_lead_agent_search_setup(output_root: Path | str, project_id: str, config: dict) -> dict:
@@ -353,6 +414,14 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         raise ValueError(f"Unsupported action: {action}")
 
     project_path = Path(output_root) / project_id
+    action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
+    replacements = stale_replacement_stages(project_path, action_stage)
+    confirmation = input_data.get("overwrite_confirmation") if isinstance(input_data, dict) and isinstance(input_data.get("overwrite_confirmation"), dict) else {}
+    current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
+    if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):
+        raise ConfirmationRequired(setup_revision(current_setup), replacements)
+    if confirmation:
+        input_data = {key: value for key, value in input_data.items() if key != "overwrite_confirmation"}
     previous_state: list[dict] = []
 
     def prepare_action():
