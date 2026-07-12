@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from threading import Event
 from unittest.mock import patch
 
 import web_app
@@ -485,6 +486,47 @@ class WebAppTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 web_app.submit_project_action(output_root, "demo", "unknown-action")
+
+    def test_project_action_rejects_concurrent_action_for_same_project(self):
+        old_output_root = web_app.OUTPUT_ROOT
+        old_task_runner = web_app.task_runner
+        release = Event()
+        started = Event()
+        calls = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_root = Path(tmp)
+                project_dir = output_root / "demo"
+                project_dir.mkdir(parents=True)
+                (project_dir / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+                web_app.OUTPUT_ROOT = output_root
+                web_app.task_runner = TaskRunner(max_workers=2)
+
+                def blocking_collect():
+                    started.set()
+                    release.wait(timeout=2)
+
+                first_id = web_app.task_runner.submit("demo", "collect", blocking_collect)
+                self.assertTrue(started.wait(timeout=1))
+
+                class FakeLeadAgent:
+                    def __init__(self, output_root, llm_query=None):
+                        calls.append("constructed")
+
+                with patch.object(web_app, "LeadAgent", FakeLeadAgent):
+                    response = TestClient(web_app.create_app()).post("/projects/demo/actions/screen")
+
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("already has running action", response.json()["detail"])
+                self.assertEqual(response.json()["active_task"]["action"], "collect")
+                self.assertEqual(response.json()["active_task"]["task_id"], first_id)
+                self.assertEqual(calls, [])
+        finally:
+            release.set()
+            if 'first_id' in locals():
+                web_app.task_runner.wait(first_id, timeout=2)
+            web_app.OUTPUT_ROOT = old_output_root
+            web_app.task_runner = old_task_runner
 
     def test_run_action_routes_canvas_intent_through_lead_agent(self):
         with tempfile.TemporaryDirectory() as tmp:

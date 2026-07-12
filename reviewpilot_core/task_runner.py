@@ -8,18 +8,27 @@ from threading import Lock
 from uuid import uuid4
 
 
+class TaskConflictError(RuntimeError):
+    def __init__(self, task: dict):
+        self.task = dict(task)
+        super().__init__(
+            f"Project '{task['project_id']}' already has running action '{task['action']}'"
+        )
+
+
 class TaskRunner:
     def __init__(self, max_workers: int = 2):
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._tasks: dict[str, dict] = {}
         self._futures: dict[str, Future] = {}
         self._registry_lock = Lock()
-        self._project_locks: dict[str, Lock] = {}
 
     def submit(self, project_id: str, action: str, func) -> str:
-        task_id = uuid4().hex
         with self._registry_lock:
-            project_lock = self._project_locks.setdefault(project_id, Lock())
+            active_task = self._active_for_project_unlocked(project_id)
+            if active_task is not None:
+                raise TaskConflictError(active_task)
+            task_id = uuid4().hex
             self._tasks[task_id] = {
                 "task_id": task_id,
                 "project_id": project_id,
@@ -30,7 +39,7 @@ class TaskRunner:
                 "result": None,
                 "error": None,
             }
-            future = self._executor.submit(self._run, task_id, func, project_lock)
+            future = self._executor.submit(self._run, task_id, func)
             self._futures[task_id] = future
         return task_id
 
@@ -44,16 +53,33 @@ class TaskRunner:
         future.result(timeout=timeout)
         return self.get(task_id)
 
-    def _run(self, task_id: str, func, project_lock: Lock) -> None:
-        task = self._tasks[task_id]
-        with project_lock:
-            try:
-                result = func()
-            except Exception as exc:
+    def active_for_project(self, project_id: str) -> dict | None:
+        with self._registry_lock:
+            task = self._active_for_project_unlocked(project_id)
+            return dict(task) if task else None
+
+    def _active_for_project_unlocked(self, project_id: str) -> dict | None:
+        return next(
+            (
+                task
+                for task in self._tasks.values()
+                if task["project_id"] == project_id and task["status"] == "running"
+            ),
+            None,
+        )
+
+    def _run(self, task_id: str, func) -> None:
+        try:
+            result = func()
+        except Exception as exc:
+            with self._registry_lock:
+                task = self._tasks[task_id]
                 task["status"] = "failed"
                 task["error"] = str(exc)
-            else:
+                task["updated_at"] = datetime.now().isoformat()
+        else:
+            with self._registry_lock:
+                task = self._tasks[task_id]
                 task["status"] = "completed"
                 task["result"] = result
-            finally:
                 task["updated_at"] = datetime.now().isoformat()

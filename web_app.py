@@ -37,7 +37,7 @@ _prefer_local_package_imports()
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.state_projection import build_new_project_data, build_rp_data, list_projects
-from reviewpilot_core.task_runner import TaskRunner
+from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 OUTPUT_ROOT = ROOT / "output"
@@ -112,6 +112,8 @@ async def project_action(request):
     try:
         input_data = await _optional_json(request)
         task_id = submit_project_action(OUTPUT_ROOT, project_id, action, input_data=input_data)
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"task_id": task_id, "status": "running"})

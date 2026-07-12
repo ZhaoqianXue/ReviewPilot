@@ -405,6 +405,13 @@ class FrontendContractTests(unittest.TestCase):
             source.index("const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`"),
         )
 
+    def test_action_failure_uses_server_detail_when_available(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        post_action = source[source.index("async function postAction") : source.index("async function createProject")]
+
+        self.assertIn("const body = await res.json().catch(() => ({}));", post_action)
+        self.assertIn("throw new Error(body.detail || `Action failed: ${res.status}`);", post_action)
+
     def test_max_results_per_platform_defaults_to_ten_in_frontend_payload(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 

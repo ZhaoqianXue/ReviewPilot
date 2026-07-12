@@ -397,7 +397,10 @@
       ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
       : { method: 'POST' };
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
-    if (!res.ok) throw new Error(`Action failed: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Action failed: ${res.status}`);
+    }
     const task = await res.json();
     await waitForTask(task.task_id);
     setData(await fetchProjectState(projectId), false, { preserveView: true });
