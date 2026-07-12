@@ -1,8 +1,9 @@
 import json
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event, Thread, current_thread
+from threading import Event, local
 from unittest.mock import patch
 
 import reviewpilot_core.workflow_state as workflow_state
@@ -212,17 +213,19 @@ class WorkflowStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
             _write_valid_legacy(project, "collection")
+            migration_write_entered = Event()
             starter_attempted = Event()
             starter_entered = Event()
+            role = local()
             original_write = workflow_state._write
             actual_lock = workflow_state._project_lock(project)
 
             class ObservedProjectLock:
                 def __enter__(self):
-                    if current_thread().name == "starter":
+                    if getattr(role, "value", "") == "starter":
                         starter_attempted.set()
                     actual_lock.acquire()
-                    if current_thread().name == "starter":
+                    if getattr(role, "value", "") == "starter":
                         starter_entered.set()
                     return self
 
@@ -230,20 +233,28 @@ class WorkflowStateTests(unittest.TestCase):
                     actual_lock.release()
 
             def ordered_write(path, state):
-                if current_thread().name == "migrator" and state["stages"]["collection"]["status"] == "completed":
-                    starter_attempted.wait()
+                if getattr(role, "value", "") == "migrator" and state["stages"]["collection"]["status"] == "completed":
+                    migration_write_entered.set()
+                    self.assertTrue(starter_attempted.wait(timeout=1), "starter never attempted the project lock")
                     self.assertFalse(starter_entered.is_set())
                 original_write(path, state)
 
+            def migrate():
+                role.value = "migrator"
+                return load_workflow_state(project)
+
+            def start():
+                role.value = "starter"
+                return start_action(project, "collect")
+
             with patch("reviewpilot_core.workflow_state._project_lock", return_value=ObservedProjectLock()), patch(
                 "reviewpilot_core.workflow_state._write", side_effect=ordered_write
-            ):
-                migrator = Thread(name="migrator", target=load_workflow_state, args=(project,))
-                starter = Thread(name="starter", target=start_action, args=(project, "collect"))
-                migrator.start()
-                starter.start()
-                migrator.join()
-                starter.join()
+            ), ThreadPoolExecutor(max_workers=2) as executor:
+                migration_future = executor.submit(migrate)
+                self.assertTrue(migration_write_entered.wait(timeout=1), "migration never entered its controlled write")
+                start_future = executor.submit(start)
+                migration_future.result(timeout=2)
+                start_future.result(timeout=2)
 
             state = load_workflow_state(project)
         self.assertEqual(state["stages"]["collection"]["status"], "running")
