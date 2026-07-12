@@ -1,0 +1,28 @@
+{
+  "scenario": "biomedicine",
+  "project_id": "inner-beta-biomedicine-r7",
+  "tested_commit": "f38b680fd1622434e05e11014c1dd54797ed9b67",
+  "configuration_projection": "pass",
+  "duplicate_collection": {"http_status": 409, "existing_task_id": "6cce97909ab642fc830b54edc6b17bc0"},
+  "tasks": [
+    {"action": "collect", "task_id": "6cce97909ab642fc830b54edc6b17bc0", "status": "completed", "seconds": 19.958, "counts": {"pubmed": 5, "arxiv": 5, "openalex": 5, "total": 15}},
+    {"action": "screen", "task_id": "d3624804e0224a639754655b601cc781", "status": "completed", "seconds": 30.338, "counts": {"screened_after_deduplication": 14, "included": 1, "excluded": 13}, "refresh_resumed_same_task": true},
+    {"action": "download-pdfs", "task_id": "e3f449a8020942b3b0239a364e782e14", "status": "completed", "seconds": 37.493, "counts": {"success": 1, "failed": 0}},
+    {"action": "generate-schema", "task_id": "d493c2fd072f4fb09aa0d867d6d28e58", "status": "completed", "seconds": 5.784, "counts": {"fields": 10}, "next_actions": ["finalize_schema"]},
+    {"action": "finalize-schema", "task_id": "67d80a7e432143169a267d74010ada80", "status": "completed", "seconds": 0.009, "next_actions": ["run_extraction"]},
+    {"action": "run-extraction", "task_id": "4aabcd444f5c4207b46d6d867f74697d", "status": "completed", "seconds": 8.921, "counts": {"processed": 1, "errors": 0}, "user_visible_absolute_path": false},
+    {"action": "suggest-categories", "task_id": "f9d436f18a9a4d3cbc32014dd87dac29", "status": "completed", "seconds": 2.979, "counts": {"categories": 5}, "next_actions": ["confirm_categories", "apply_categorization"]},
+    {"action": "categorize", "task_id": "fc6778a29af04f31a4dfb0ae17fc84de", "status": "completed", "seconds": 4.354, "counts": {"categories": 5, "rows": 1}, "next_actions": []}
+  ],
+  "export_validation": {
+    "browser_clicked": "search-setup",
+    "browser_request_status": 200,
+    "downloaded_sha256_matches_source": true,
+    "all_seven_status": 200,
+    "json_and_ndjson_media_types_correct": true,
+    "attachment_filenames_correct": true,
+    "client_projection_contains_local_path": false
+  },
+  "external_failures": [],
+  "disposition": "pass"
+}
