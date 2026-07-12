@@ -444,6 +444,7 @@ class FrontendContractTests(unittest.TestCase):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         normalize = source[source.index("function normalizeData") : source.index("function emptyCategorizationWorkflow")]
         route_guard = source[source.index("function shouldRestoreSnapshotDataForRoute") : source.index("function writeWorkspaceSnapshot")]
+        set_data = source[source.index("function setData") : source.index("function mergeConversationMessages")]
         resume = source[source.index("async function resumeActiveTask") : source.index("async function submitChatForm")]
         mount_tail = source[source.rindex("    paint();") : source.index("  if (document.readyState")]
 
@@ -452,9 +453,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("Date.parse(D.activeTask?.created_at || '')", source)
         self.assertIn("Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt", source)
         self.assertIn("if (D.activeTask) return false;", route_guard)
-        self.assertIn("await waitForTask(D.activeTask.task_id);", resume)
-        self.assertIn("setData(await fetchProjectState(projectId), false, { preserveView: true });", resume)
-        self.assertIn("state.actionError = err.message || String(err);", resume)
+        self.assertIn("function syncActionState(activeTask)", source)
+        self.assertIn("syncActionState(D.activeTask);", set_data)
+        self.assertIn("const taskId = D.activeTask.task_id;", resume)
+        self.assertIn("const projectId = D.activeTask.project_id || state.activeProjectId || D.project.id;", resume)
+        self.assertIn("state.activeProjectId === projectId && D.project.id === projectId", resume)
+        self.assertIn("await waitForTask(taskId);", resume)
+        self.assertIn("const refreshedData = await fetchProjectState(projectId);", resume)
+        self.assertIn("if (isCurrentProject())", resume)
+        self.assertIn("if (isCurrentProject()) state.actionError = err.message || String(err);", resume)
+        self.assertIn("D.activeTask?.task_id !== taskId", resume)
         self.assertIn("state.actionPending = '';", resume)
         self.assertIn("state.actionStartedAt = 0;", resume)
         self.assertIn("D.activeTask = null;", resume)

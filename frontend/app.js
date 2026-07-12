@@ -344,6 +344,12 @@
     return labels[key] || key.replace(/[_-]/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
+  function syncActionState(activeTask) {
+    const startedAt = Date.parse(activeTask?.created_at || '');
+    state.actionPending = activeTask?.action || '';
+    state.actionStartedAt = activeTask ? (Number.isNaN(startedAt) ? Date.now() : startedAt) : 0;
+  }
+
   function setData(data, alreadyEscaped = false, { preserveView = false } = {}) {
     const previousProjectId = D.project.id || '';
     const previousStep = state.step;
@@ -356,6 +362,7 @@
     D = nextData;
     MAX = maxPlatformValue(D.platforms);
     state.activeProjectId = D.project.id || '';
+    syncActionState(D.activeTask);
     const sameProject = !!previousProjectId && previousProjectId === D.project.id;
     const stepKeys = new Set(D.steps.map((step) => step.key));
     state.step = preserveView && sameProject && stepKeys.has(previousStep) ? previousStep : initialStep(D);
@@ -1384,13 +1391,20 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
 
     async function resumeActiveTask() {
       if (!D.activeTask || !D.activeTask.task_id) return;
+      const taskId = D.activeTask.task_id;
       const projectId = D.activeTask.project_id || state.activeProjectId || D.project.id;
+      const isCurrentProject = () => state.activeProjectId === projectId && D.project.id === projectId;
       try {
-        await waitForTask(D.activeTask.task_id);
-        setData(await fetchProjectState(projectId), false, { preserveView: true });
+        await waitForTask(taskId);
+        const refreshedData = await fetchProjectState(projectId);
+        if (isCurrentProject()) {
+          setData(refreshedData, false, { preserveView: true });
+          paint();
+        }
       } catch (err) {
-        state.actionError = err.message || String(err);
+        if (isCurrentProject()) state.actionError = err.message || String(err);
       } finally {
+        if (!isCurrentProject() || D.activeTask?.task_id !== taskId) return;
         state.actionPending = '';
         state.actionStartedAt = 0;
         D.activeTask = null;
