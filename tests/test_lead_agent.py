@@ -6,6 +6,7 @@ from pathlib import Path
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
 from reviewpilot_core.project_store import read_jsonl
+from reviewpilot_core.state_projection import build_rp_data
 
 
 class LeadAgentTests(unittest.TestCase):
@@ -859,6 +860,107 @@ class LeadAgentTests(unittest.TestCase):
 
         self.assertEqual(calls, ["run-extraction"])
         self.assertEqual(result.stage, "extraction")
+
+    def test_extraction_stage_reply_redacts_nested_local_paths_without_mutating_machine_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "filtered").mkdir(parents=True)
+            (project_dir / "pdfs").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(
+                json.dumps({"project_name": "Demo", "platforms": ["openalex"], "search_terms": "LLM"}),
+                encoding="utf-8",
+            )
+            (project_dir / "filtered" / "included_papers.jsonl").write_text(
+                json.dumps({"title": "Paper A", "source": "openalex"}) + "\n",
+                encoding="utf-8",
+            )
+            (project_dir / "filtered" / "screening_stats.json").write_text(
+                json.dumps({"included_count": 1, "excluded_count": 0}),
+                encoding="utf-8",
+            )
+            (project_dir / "pdfs" / "download_report.json").write_text(
+                json.dumps({"success": 1, "failed": 0}),
+                encoding="utf-8",
+            )
+            save_schema_draft(project_dir, {"fields": [{"name": "finding", "type": "Text", "description": "Finding"}]})
+            finalize_schema(project_dir)
+            unix_path = "/Users/private-user/ReviewPilot/output/demo/extraction/results.jsonl"
+            windows_path = r"C:\Users\private-user\ReviewPilot\output\demo\report.json"
+            workflow_result = {
+                "status": "extraction_done",
+                "processed": 3,
+                "failed": 1,
+                "output_path": unix_path,
+                "details": {"artifacts": [{"report_file": windows_path}]},
+            }
+            seen_prompts = []
+
+            class FakeWorkflowAdapter:
+                class Contract:
+                    agent_name = "ExtractionAgent"
+                    stage = "extraction"
+                    model = "gpt-5.4-mini"
+
+                def contract_for(self, _action):
+                    return self.Contract()
+
+                def run(self, action, output_root, project_id, llm_query=None, input_data=None):
+                    if action != "run-extraction":
+                        raise AssertionError(action)
+                    project = Path(output_root) / project_id
+                    (project / "extraction" / "extraction_results.jsonl").write_text(
+                        json.dumps({"title": "Paper A", "finding": "Result"}) + "\n",
+                        encoding="utf-8",
+                    )
+                    return workflow_result
+
+            def fake_llm_query(*args, **kwargs):
+                prompt = kwargs["text_prompt"]
+                seen_prompts.append(prompt)
+                return (
+                    json.dumps(
+                        {
+                            "reply": (
+                                "Extraction completed: 3 processed and 1 failed. Results are at "
+                                f"{unix_path}; backup: {windows_path}; generated copy: /home/other-user/private/out.json."
+                            )
+                        }
+                    ),
+                    {},
+                )
+
+            result = LeadAgent(
+                output_root,
+                workflow_adapter=FakeWorkflowAdapter(),
+                llm_query=fake_llm_query,
+            ).handle_message(project_id="demo", action="run-extraction")
+            chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
+            projected = build_rp_data(output_root, "demo")
+
+        self.assertEqual(len(seen_prompts), 1)
+        self.assertNotIn("private-user", seen_prompts[0])
+        self.assertNotIn("/Users/", seen_prompts[0])
+        self.assertNotIn("C:\\Users\\", seen_prompts[0])
+        self.assertIn('"processed": 3', seen_prompts[0])
+        self.assertIn('"failed": 1', seen_prompts[0])
+        self.assertEqual(result.data["output_path"], unix_path)
+        self.assertEqual(result.data["details"]["artifacts"][0]["report_file"], windows_path)
+        self.assertEqual(
+            result.artifacts,
+            [
+                str(project_dir / "prompts" / "extraction_prompt.json"),
+                str(project_dir / "extraction" / "extraction_results.jsonl"),
+            ],
+        )
+        self.assertIn("3 processed and 1 failed", result.reply)
+        self.assertIn("project artifact", result.reply)
+        self.assertNotIn("private-user", result.reply)
+        self.assertNotIn("other-user", result.reply)
+        self.assertNotIn("/Users/", result.reply)
+        self.assertNotIn("C:\\Users\\", result.reply)
+        self.assertEqual(chat_rows[-1]["text"], result.reply)
+        self.assertNotIn("private-user", json.dumps(projected["activityByStep"]))
 
     def test_lead_agent_uses_workflow_adapter_for_actions(self):
         with tempfile.TemporaryDirectory() as tmp:

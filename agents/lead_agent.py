@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from agents.prompt_agent import PromptAgent
@@ -25,6 +26,12 @@ from reviewpilot_core.sub_agent_contracts import default_sub_agent_contracts
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 from utils.jsonl_handler import append_jsonl
 from utils.llm import query_llm
+
+
+_UNIX_ABSOLUTE_PATH = re.compile(r"(?<![\w.:/])/(?:[^/\s\"'<>|]+/)*[^/\s\"'<>|,;:!?)]+")
+_WINDOWS_ABSOLUTE_PATH = re.compile(
+    r"(?<![\w])(?:[A-Za-z]:[\\/](?:[^\\/\s\"'<>|]+[\\/])*[^\\/\s\"'<>|,;:!?)]*)"
+)
 
 
 @dataclass(frozen=True)
@@ -480,7 +487,7 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
 
     def _stage_reply(self, stage: str, result: dict[str, Any], action: str | None = None) -> str:
         if action == "suggest-categories":
-            field = str(result.get("field") or "selected field")
+            field = self._sanitize_reply(str(result.get("field") or "selected field"))
             category_count = result.get("categories")
             if isinstance(category_count, int) and not isinstance(category_count, bool):
                 suggestion_text = f"{category_count} category {'suggestion' if category_count == 1 else 'suggestions'}"
@@ -497,12 +504,13 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
                 count_text = f" with {field_count} {'field' if field_count == 1 else 'fields'}"
             return f"Draft extraction schema generated{count_text}. Review it, then select Finalize Schema before running Information Extraction."
         llm_query = self.llm_query or query_llm
+        prompt_result = self._sanitize_prompt_value(result)
         response_text, _usage = llm_query(
             text_prompt=f"""A ReviewPilot canvas action completed.
 
 Stage: {stage}
 Structured result:
-{json.dumps(result, ensure_ascii=False, indent=2)}
+{json.dumps(prompt_result, ensure_ascii=False, indent=2)}
 
 Write one concise Lead Agent reply for the chat panel. Mention the stage outcome and the next canvas action when obvious. Do not invent counts beyond the structured result.
 Use this exact stage-to-next-canvas-action policy:
@@ -522,7 +530,24 @@ Return ONLY valid JSON:
             model=LEAD_AGENT_DEV_MODEL,
             provider="openai",
         )
-        return self._parse_project_chat_reply(response_text)
+        return self._sanitize_reply(self._parse_project_chat_reply(response_text))
+
+    def _sanitize_prompt_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: self._sanitize_prompt_value(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_prompt_value(item) for item in value]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if Path(stripped).is_absolute() or PureWindowsPath(stripped).is_absolute():
+                return "project artifact"
+            return self._sanitize_reply(value)
+        return value
+
+    def _sanitize_reply(self, reply: str) -> str:
+        text = str(reply)
+        text = _WINDOWS_ABSOLUTE_PATH.sub("project artifact", text)
+        return _UNIX_ABSOLUTE_PATH.sub("project artifact", text)
 
     def _load_search_conditions(self, project_path: Path) -> dict[str, Any]:
         path = project_path / "search_conditions.json"
