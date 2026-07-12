@@ -1,0 +1,62 @@
+{
+  "biomedicine": {
+    "project_name": "inner-beta-biomedicine",
+    "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+    "primary_topic": "Survey of large language models (LLMs) for biomedicine",
+    "domain": "Biomedical informatics and health AI",
+    "search_terms": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+    "platforms": [
+      "pubmed",
+      "arxiv",
+      "openalex"
+    ],
+    "source_limits": {
+      "pubmed": 5,
+      "arxiv": 5,
+      "openalex": 5
+    },
+    "max_results": 5,
+    "date_start": "2023-01-01",
+    "date_end": ""
+  },
+  "hci": {
+    "project_name": "inner-beta-hci",
+    "description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+    "primary_topic": "Using large language models in human-computer interaction",
+    "domain": "Human-Computer Interaction (HCI)",
+    "search_terms": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+    "platforms": [
+      "pubmed",
+      "arxiv",
+      "openalex"
+    ],
+    "source_limits": {
+      "pubmed": 5,
+      "arxiv": 5,
+      "openalex": 5
+    },
+    "max_results": 5,
+    "date_start": "2020-01-01",
+    "date_end": ""
+  },
+  "spatial_authoring": {
+    "project_name": "inner-beta-spatial-authoring",
+    "description": "I want to do a survey in terms of interactive AI-assisted 3D design and spatial authoring tools in VR, AR, or mixed reality. give me search terms.",
+    "primary_topic": "Interactive AI-assisted 3D design and spatial authoring tools in VR/AR/MR",
+    "domain": "Human-computer interaction (HCI), immersive computing, and AI-assisted creative tools",
+    "search_terms": "(\"AI-assisted\" OR \"AI assisted\" OR \"interactive AI\" OR \"intelligent assistant\" OR \"conversational AI\" OR \"generative AI\" OR \"AI co-creation\" OR \"large language model\" OR LLM OR \"foundation model\") AND (\"3D design\" OR \"3D modeling\" OR \"spatial authoring\" OR \"spatial creation\" OR \"3D scene\" OR \"virtual environment\" OR VR OR \"virtual reality\" OR AR OR \"augmented reality\" OR MR OR \"mixed reality\" OR \"extended reality\" OR XR)",
+    "platforms": [
+      "pubmed",
+      "arxiv",
+      "openalex"
+    ],
+    "source_limits": {
+      "pubmed": 5,
+      "arxiv": 5,
+      "openalex": 5
+    },
+    "max_results": 5,
+    "date_start": "2020-01-01",
+    "date_end": ""
+  }
+}
