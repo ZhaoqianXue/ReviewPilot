@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import shutil
 from types import MappingProxyType
@@ -233,15 +234,16 @@ def prepare_retry_publication(
     merged_facts: RetryMergedFacts,
 ) -> RetryPublicationPlan:
     """Revalidate retry inputs and freeze a no-write publication plan."""
-    project = Path(project_path)
     try:
-        before = _authoritative_fingerprint(project)
+        concrete_path_type = type(Path())
+        if type(project_path) not in (str, concrete_path_type):
+            raise ValueError
+        project = Path(project_path)
         resolved_project = project.resolve(strict=True)
-        if (not isinstance(preparation, RetryPreparation)
-                or not isinstance(staged_outcome, StagedRetryOutcome)
-                or type(merged_facts) is not RetryMergedFacts
-                or not isinstance(preparation.snapshot, RetrySnapshot)
-                or preparation._project_identity != resolved_project):
+        _validate_publication_inputs(
+            preparation, staged_outcome, merged_facts, type(resolved_project))
+        before = _authoritative_fingerprint(project)
+        if preparation._project_identity != resolved_project:
             raise ValueError
 
         current = current_retry_snapshot(project)
@@ -314,6 +316,128 @@ def prepare_retry_publication(
         return RetryPublicationPlan(current.report_revision, expected, tuple(publication_pdfs))
     except (OSError, RuntimeError, TypeError, ValueError):
         raise ValueError("Retry publication preparation failed") from None
+
+
+def _validate_publication_inputs(
+    preparation: RetryPreparation,
+    staged_outcome: StagedRetryOutcome,
+    merged_facts: RetryMergedFacts,
+    concrete_path_type: type[Path],
+) -> None:
+    """Reject polymorphic values before equality or filesystem decisions."""
+    if (type(preparation) is not RetryPreparation
+            or type(preparation.snapshot) is not RetrySnapshot
+            or type(staged_outcome) is not StagedRetryOutcome
+            or type(merged_facts) is not RetryMergedFacts):
+        raise ValueError
+
+    snapshot = preparation.snapshot
+    _require_exact_sha256(snapshot.report_revision)
+    _require_frozen_mapping(snapshot.report)
+    _require_frozen_mapping_tuple(snapshot.included)
+    _require_frozen_mapping(snapshot.ledger)
+    _require_exact_tuple(snapshot.items)
+    for item in snapshot.items:
+        _validate_retry_item(item)
+
+    _require_exact_tuple(preparation.selected_ids)
+    for retry_id in preparation.selected_ids:
+        _require_exact_sha256(retry_id)
+    _require_exact_tuple(preparation.items)
+    for item in preparation.items:
+        _validate_retry_item(item)
+    _require_frozen_mapping_tuple(preparation.included_rows)
+    _require_concrete_path(preparation._project_identity, concrete_path_type)
+
+    _require_concrete_path(staged_outcome.staging_root, concrete_path_type)
+    _require_concrete_path(staged_outcome.staging_project_path, concrete_path_type)
+    _require_exact_sha256(staged_outcome.report_revision)
+    _require_exact_tuple(staged_outcome.selected_ids)
+    for retry_id in staged_outcome.selected_ids:
+        _require_exact_sha256(retry_id)
+    _require_frozen_mapping_tuple(staged_outcome.updated_rows)
+    _require_frozen_mapping(staged_outcome.report)
+    _require_exact_tuple(staged_outcome.successful_pdfs)
+    for item in staged_outcome.successful_pdfs:
+        if type(item) is not StagedRetryPdf:
+            raise ValueError
+        _require_exact_sha256(item.retry_id)
+        _require_concrete_path(item.source_path, concrete_path_type)
+        if type(item.source_size) is not int or item.source_size < 0:
+            raise ValueError
+        _require_exact_sha256(item.source_sha256)
+
+    _require_exact_sha256(merged_facts.report_revision)
+    _require_frozen_mapping(merged_facts.report)
+    _require_frozen_mapping_tuple(merged_facts.included)
+    if type(merged_facts.status) is not str:
+        raise ValueError
+    _require_frozen_mapping(merged_facts.counts)
+    if any(type(value) is not int or value < 0 for value in merged_facts.counts.values()):
+        raise ValueError
+    _require_exact_tuple(merged_facts.planned_pdfs)
+    for item in merged_facts.planned_pdfs:
+        if type(item) is not RetryPlannedPdf:
+            raise ValueError
+        _require_exact_sha256(item.retry_id)
+        _require_concrete_path(item.source_path, concrete_path_type)
+        _require_concrete_path(item.destination_path, concrete_path_type)
+
+
+def _validate_retry_item(item: RetryItem) -> None:
+    if type(item) is not RetryItem:
+        raise ValueError
+    _require_exact_sha256(item.retry_id)
+    if (type(item.label) is not str or type(item.failure_class) is not str
+            or type(item.report_index) is not int or item.report_index < 0
+            or type(item.included_index) is not int or item.included_index < 0):
+        raise ValueError
+
+
+def _require_exact_sha256(value: Any) -> None:
+    if (type(value) is not str or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)):
+        raise ValueError
+
+
+def _require_concrete_path(value: Any, concrete_path_type: type[Path]) -> None:
+    if type(value) is not concrete_path_type or not value.is_absolute():
+        raise ValueError
+
+
+def _require_exact_tuple(value: Any) -> None:
+    if type(value) is not tuple:
+        raise ValueError
+
+
+def _require_frozen_mapping_tuple(value: Any) -> None:
+    _require_exact_tuple(value)
+    for item in value:
+        _require_frozen_mapping(item)
+
+
+def _require_frozen_mapping(value: Any) -> None:
+    if type(value) is not MappingProxyType:
+        raise ValueError
+    _require_frozen_json(value)
+
+
+def _require_frozen_json(value: Any) -> None:
+    value_type = type(value)
+    if value_type is MappingProxyType:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError
+            _require_frozen_json(item)
+    elif value_type is tuple:
+        for item in value:
+            _require_frozen_json(item)
+    elif value is None or value_type in (str, int, bool):
+        return
+    elif value_type is float and math.isfinite(value):
+        return
+    else:
+        raise ValueError
 
 
 def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int, str, tuple[int, int]]:

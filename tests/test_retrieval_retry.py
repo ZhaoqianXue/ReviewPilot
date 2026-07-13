@@ -12,6 +12,8 @@ from reviewpilot_core.retrieval_retry import (
     InvalidRetryRequest,
     RevisionConflict,
     RetryItem,
+    RetryMergedFacts,
+    RetryPlannedPdf,
     RetryPreparation,
     RetryPublicationPlan,
     RetrySnapshot,
@@ -1191,6 +1193,83 @@ class RetryPublicationPlanTests(unittest.TestCase):
                     prepare_retry_publication(project, preparation, outcome, forged)
             with self.assertRaises(ValueError):
                 prepare_retry_publication(project, replace(preparation, _project_identity=Path("/tmp/other")), outcome, merged)
+
+    def test_rejects_polymorphic_security_values_before_comparison(self):
+        class EvilStr(str):
+            def __eq__(self, other): return True
+            def __ne__(self, other): return False
+
+            __hash__ = str.__hash__
+
+        class EvilInt(int):
+            def __eq__(self, other): return True
+            def __ne__(self, other): return False
+
+            __hash__ = int.__hash__
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            source = outcome.successful_pdfs[0]
+            forged_snapshot = replace(preparation.snapshot, report_revision=EvilStr("0" * 64))
+            with self.assertRaises(ValueError):
+                prepare_retry_publication(project, replace(preparation, snapshot=forged_snapshot), outcome, merged)
+            with self.assertRaises(ValueError):
+                prepare_retry_publication(project,
+                    replace(preparation, selected_ids=tuple(EvilStr(value) for value in preparation.selected_ids)),
+                    outcome, merged)
+            for forged_outcome in (
+                replace(outcome, report_revision=EvilStr("0" * 64)),
+                replace(outcome, successful_pdfs=(replace(source, source_size=EvilInt(0)),)),
+                replace(outcome, successful_pdfs=(replace(source, source_sha256=EvilStr("0" * 64)),)),
+            ):
+                with self.subTest(forged_outcome=forged_outcome), self.assertRaises(ValueError):
+                    prepare_retry_publication(project, preparation, forged_outcome, merged)
+
+            forged_nested_report = replace(merged, report={**merged.report, "success": EvilInt(99)})
+            with self.assertRaises(ValueError):
+                prepare_retry_publication(project, preparation, outcome, forged_nested_report)
+
+    def test_rejects_dataclass_and_concrete_path_subclasses_at_publication_boundary(self):
+        class PreparationSubclass(RetryPreparation): pass
+        class SnapshotSubclass(RetrySnapshot): pass
+        class OutcomeSubclass(StagedRetryOutcome): pass
+        class StagedPdfSubclass(StagedRetryPdf): pass
+        class MergedFactsSubclass(RetryMergedFacts): pass
+        class PlannedPdfSubclass(RetryPlannedPdf): pass
+        class ConcretePathSubclass(type(Path.cwd())): pass
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            prep_subclass = PreparationSubclass(preparation.snapshot, preparation.selected_ids,
+                preparation.items, preparation.included_rows, preparation._project_identity)
+            snapshot_subclass = SnapshotSubclass(preparation.snapshot.report_revision,
+                preparation.snapshot.report, preparation.snapshot.included, preparation.snapshot.ledger,
+                preparation.snapshot.items)
+            outcome_subclass = OutcomeSubclass(outcome.staging_root, outcome.staging_project_path,
+                outcome.report_revision, outcome.selected_ids, outcome.updated_rows, outcome.report,
+                outcome.successful_pdfs)
+            staged_pdf = outcome.successful_pdfs[0]
+            staged_pdf_subclass = StagedPdfSubclass(staged_pdf.retry_id, staged_pdf.source_path,
+                staged_pdf.source_size, staged_pdf.source_sha256)
+            merged_subclass = MergedFactsSubclass(merged.report_revision, merged.report, merged.included,
+                merged.status, merged.counts, merged.planned_pdfs)
+            planned_pdf = merged.planned_pdfs[0]
+            planned_pdf_subclass = PlannedPdfSubclass(planned_pdf.retry_id, planned_pdf.source_path,
+                planned_pdf.destination_path)
+            path_subclass = ConcretePathSubclass(str(outcome.staging_root))
+            cases = (
+                (prep_subclass, outcome, merged),
+                (replace(preparation, snapshot=snapshot_subclass), outcome, merged),
+                (preparation, outcome_subclass, merged),
+                (preparation, replace(outcome, successful_pdfs=(staged_pdf_subclass,)), merged),
+                (preparation, outcome, merged_subclass),
+                (preparation, outcome, replace(merged, planned_pdfs=(planned_pdf_subclass,))),
+                (preparation, replace(outcome, staging_root=path_subclass), merged),
+            )
+            for forged_preparation, forged_outcome, forged_merged in cases:
+                with self.subTest(case=(type(forged_preparation), type(forged_outcome), type(forged_merged))), \
+                        self.assertRaises(ValueError):
+                    prepare_retry_publication(project, forged_preparation, forged_outcome, forged_merged)
 
     def test_rejects_source_mutation_invalid_pdf_aliases_and_boundary_replacement(self):
         mutations = (
