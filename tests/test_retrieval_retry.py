@@ -3,7 +3,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from reviewpilot_core.retrieval_retry import (
     ConfirmationRequired,
@@ -11,6 +11,7 @@ from reviewpilot_core.retrieval_retry import (
     RevisionConflict,
     current_retry_snapshot,
     prepare_retry_request,
+    run_retry_staging,
     retrieval_report_revision,
     stable_retry_id,
 )
@@ -76,7 +77,176 @@ def assert_no_retry_writes(test: unittest.TestCase, project: Path, before) -> No
     test.assertFalse(any("retrieval_retry" in path.name for path in project.iterdir()))
 
 
+def confirmed_preparation(project: Path, selected: list[str] | None = None):
+    snapshot = current_retry_snapshot(project)
+    selected = selected or [item.retry_id for item in snapshot.items]
+    return prepare_retry_request(project, {
+        "failed_ids": selected,
+        "report_revision": snapshot.report_revision,
+        "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": selected},
+    })
+
+
+def fake_download(outcomes: list[bool], *, mutate=None):
+    def run(root: Path, project_id: str):
+        staging = root / project_id
+        included_path = staging / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        downloaded, failed = [], []
+        for index, (row, succeeds) in enumerate(zip(rows, outcomes), 1):
+            if succeeds:
+                pdf = staging / "pdfs" / f"row{index}_paper.pdf"
+                pdf.parent.mkdir(parents=True, exist_ok=True)
+                pdf.write_bytes(b"%PDF-1.7\nretry")
+                row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
+                downloaded.append({"path": str(pdf), "title": row.get("title", "")})
+            else:
+                row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
+                row.pop("pdf_path", None)
+                failed.append({"id": row["id"], "failure_class": "download_failed"})
+        write_jsonl(included_path, rows)
+        report = {"success": sum(outcomes), "failed": len(outcomes) - sum(outcomes),
+                  "downloaded": downloaded, "failed_papers": failed}
+        write_json(staging / "pdfs" / "download_report.json", report)
+        if mutate:
+            mutate(staging, rows, report)
+        return {"success": report["success"], "failed": report["failed"], "stats": {
+            "success": report["success"], "failed": report["failed"]}}
+    return run
+
+
 class RetrievalRetryTests(unittest.TestCase):
+    def test_staging_retries_only_selected_in_request_order_and_preserves_source_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"; two_failure_project(project)
+            rows = [{"id": "ok-1"}, {"id": "failed-1", "custom": {"keep": [1]}, "pdf_downloaded": False,
+                     "pdf_path": "/old", "retrieval_status": "unavailable", "pdf_failure_class": "old",
+                     "web_search_fallback_pending": True}, {"id": "failed-2", "custom": {"keep": [2]}}]
+            write_jsonl(project / "filtered" / "included_papers.jsonl", rows)
+            snapshot = current_retry_snapshot(project); selected = [snapshot.items[1].retry_id, snapshot.items[0].retry_id]
+            preparation = confirmed_preparation(project, selected)
+            before = authoritative_fingerprint(project); seen = {"calls": 0}
+            def callback(root, project_id):
+                seen["calls"] += 1
+                self.assertNotIn(project.name, project_id)
+                staged = [json.loads(line) for line in (root / project_id / "filtered" / "included_papers.jsonl").read_text().splitlines()]
+                seen["rows"] = staged
+                return fake_download([True, False])(root, project_id)
+            outcome = run_retry_staging(project, preparation, project / ".retrieval_retry_staging_case", callback)
+            self.assertEqual([row["id"] for row in seen["rows"]], ["failed-2", "failed-1"])
+            self.assertEqual(seen["calls"], 1)
+            self.assertEqual(seen["rows"][1]["custom"], {"keep": [1]})
+            self.assertFalse(any(key.startswith("web_search_fallback_") or key in {
+                "pdf_downloaded", "pdf_path", "retrieval_status", "pdf_failure_class"} for row in seen["rows"] for key in row))
+            self.assertEqual(outcome.selected_ids, tuple(selected))
+            self.assertEqual([row["id"] for row in outcome.updated_rows], ["failed-2", "failed-1"])
+            self.assertEqual(len(outcome.successful_pdfs), 1)
+            self.assertTrue(outcome.staging_path.exists())
+            self.assertEqual(authoritative_fingerprint(project), before)
+            with self.assertRaises(TypeError): outcome.updated_rows[0]["id"] = "changed"
+            with self.assertRaises(TypeError): outcome.report["success"] = 9
+
+    def test_staging_accepts_all_success_partial_and_all_failure(self):
+        for flags in ([True, True], [True, False], [False, False]):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project)
+                outcome = run_retry_staging(project, confirmed_preparation(project),
+                    project / ".retrieval_retry_staging_case", fake_download(flags))
+                self.assertEqual(outcome.report["success"], sum(flags))
+                self.assertEqual(len(outcome.successful_pdfs), sum(flags))
+
+    def test_staging_rejects_invalid_location_and_cleans_its_own_failures(self):
+        for kind in ("wrong-name", "nested", "existing", "symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); preparation = confirmed_preparation(project)
+                staging = project / ("bad" if kind == "wrong-name" else ".retrieval_retry_staging_case")
+                if kind == "nested": staging = project / "nested" / staging.name
+                elif kind == "existing": staging.mkdir()
+                elif kind == "symlink": staging.symlink_to(Path(tmp), target_is_directory=True)
+                before = authoritative_fingerprint(project)
+                with self.assertRaises(ValueError): run_retry_staging(project, preparation, staging, fake_download([True, True]))
+                self.assertEqual(authoritative_fingerprint(project), before)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"; two_failure_project(project); preparation = confirmed_preparation(project)
+            staging = project / ".retrieval_retry_staging_case"
+            with self.assertRaisesRegex(ValueError, "^Retry downloader failed$"):
+                run_retry_staging(project, preparation, staging, lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+            self.assertFalse(staging.exists())
+
+    def test_staging_preparation_is_bound_to_its_source_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first"; second = Path(tmp) / "second"
+            two_failure_project(first); two_failure_project(second)
+            preparation = confirmed_preparation(first)
+            first_before = authoritative_fingerprint(first); second_before = authoritative_fingerprint(second)
+            staging = second / ".retrieval_retry_staging_case"
+            callback = Mock()
+            with self.assertRaises(ValueError):
+                run_retry_staging(second, preparation, staging, callback)
+            callback.assert_not_called()
+            self.assertFalse(staging.exists())
+            self.assertEqual(authoritative_fingerprint(first), first_before)
+            self.assertEqual(authoritative_fingerprint(second), second_before)
+
+    def test_staging_rejects_result_report_identity_and_count_conflicts(self):
+        mutations = {
+            "result conflict": lambda staging, rows, report: None,
+            "unknown failure": lambda staging, rows, report: (report["failed_papers"][0].update(id="unknown"), write_json(staging / "pdfs" / "download_report.json", report)),
+            "duplicate failure": lambda staging, rows, report: (report.update(failed=2, failed_papers=[report["failed_papers"][0]] * 2), write_json(staging / "pdfs" / "download_report.json", report)),
+            "row reorder": lambda staging, rows, report: write_jsonl(staging / "filtered" / "included_papers.jsonl", list(reversed(rows))),
+            "source mutation": lambda staging, rows, report: (rows[0].update(title="changed"), write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); preparation = confirmed_preparation(project)
+                callback = fake_download([False, False], mutate=mutation)
+                if name == "result conflict":
+                    base = callback
+                    callback = lambda root, pid: {**base(root, pid), "success": 1}
+                staging = project / ".retrieval_retry_staging_case"
+                with self.assertRaises(ValueError): run_retry_staging(project, preparation, staging, callback)
+                self.assertFalse(staging.exists())
+
+    def test_staging_rejects_invalid_pdf_content_paths_symlinks_and_extras(self):
+        def invalid_content(staging, rows, report):
+            Path(rows[0]["pdf_path"]).write_bytes(b"<html>")
+        def extra_pdf(staging, rows, report):
+            (staging / "pdfs" / "extra.pdf").write_bytes(b"%PDF-extra")
+        def symlink_pdf(staging, rows, report):
+            path = Path(rows[0]["pdf_path"]); external = staging.parent / "external.pdf"; external.write_bytes(b"%PDF-x")
+            path.unlink(); path.symlink_to(external)
+        def lexical_escape(staging, rows, report):
+            rows[0]["pdf_path"] = str(staging / "pdfs" / ".." / "pdfs" / "row1_paper.pdf")
+            report["downloaded"][0]["path"] = rows[0]["pdf_path"]
+            write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)
+            write_json(staging / "pdfs" / "download_report.json", report)
+        for name, mutation in (("content", invalid_content), ("extra", extra_pdf), ("symlink", symlink_pdf), ("escape", lexical_escape)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); staging = project / ".retrieval_retry_staging_case"
+                with self.assertRaises(ValueError):
+                    run_retry_staging(project, confirmed_preparation(project), staging, fake_download([True, False], mutate=mutation))
+                self.assertFalse(staging.exists())
+
+    def test_staging_rejects_malformed_flags_details_and_authority_symlinks(self):
+        def bad_flag(staging, rows, report):
+            rows[0]["pdf_downloaded"] = 1
+            write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)
+        def bad_details(staging, rows, report):
+            report["downloaded"] = ["not-an-object"]
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def linked_report(staging, rows, report):
+            path = staging / "pdfs" / "download_report.json"; external = staging.parent / "outside-report.json"
+            external.write_bytes(path.read_bytes()); path.unlink(); path.symlink_to(external)
+        for mutation in (bad_flag, bad_details, linked_report):
+            with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); staging = project / ".retrieval_retry_staging_case"
+                before = authoritative_fingerprint(project)
+                with self.assertRaises(ValueError) as raised:
+                    run_retry_staging(project, confirmed_preparation(project), staging, fake_download([True, False], mutate=mutation))
+                self.assertNotIn(str(Path(tmp)), str(raised.exception))
+                self.assertFalse(staging.exists())
+                self.assertEqual(authoritative_fingerprint(project), before)
     def test_prepare_rejects_malformed_selection_without_writing(self):
         cases = (
             ([], InvalidRetryRequest),
