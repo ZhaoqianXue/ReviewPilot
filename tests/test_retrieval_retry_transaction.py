@@ -763,6 +763,17 @@ class RetryTargetTransactionTests(unittest.TestCase):
                     self.plan = publication(self.project, self.prepared, self.staging_name)
                     self.ledger = target_ledger(self.project, self.plan)
 
+    def test_record_accepts_success_detail_with_all_identity_aliases_omitted(self):
+        report, included = self.plan.merged_facts.mutable_copies()
+        detail = report["downloaded"][-1]
+        for key in ("id", "doi", "url", "title"):
+            detail.pop(key, None)
+        plan = self.refreeze_plan(report, included)
+
+        record_retry_transaction_target(self.project, plan, self.ledger)
+
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_partial_delta_preserves_unselected_failure_order_and_nested_facts(self):
         self.assertTrue(abort_retry_transaction(self.project))
         rows_path = self.project / "filtered" / "included_papers.jsonl"

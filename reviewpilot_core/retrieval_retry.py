@@ -876,8 +876,6 @@ def _validate_merged_retry_delta(
         raise ValueError("Retry success detail count is invalid")
     success_details: dict[str, dict[str, Any]] = {}
     for retry_id, detail in zip(success_ids, appended):
-        if stable_retry_id(detail) != retry_id:
-            raise ValueError("Retry success identity is invalid")
         success_details[retry_id] = detail
 
     failure_by_id: dict[str, dict[str, Any]] = {}
