@@ -1,5 +1,7 @@
 import json
 import hashlib
+import os
+import shutil
 import tempfile
 import unittest
 from dataclasses import replace
@@ -1177,6 +1179,71 @@ class RetryPublicationPlanTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
                     prepare_retry_publication(project, preparation, outcome, merged)
                 self.assertEqual(authoritative_fingerprint(project), changed)
+
+    def test_relative_project_cannot_be_rebound_by_mapping_materialization_chdir(self):
+        class ChdirOnFirstItems(dict):
+            def __init__(self, value, destination):
+                super().__init__(value)
+                self.destination = destination
+                self.reads = 0
+
+            def items(self):
+                self.reads += 1
+                if self.reads == 1:
+                    os.chdir(self.destination)
+                return super().items()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            first_root = base / "A"
+            project = first_root / "project"
+            project.mkdir(parents=True)
+            two_failure_project(project)
+            (project / "pdfs" / "original.pdf").write_bytes(b"%PDF-1.7\noriginal")
+            preparation = confirmed_preparation(project)
+            staging = project / ".retrieval_retry_staging_relative"
+            outcome = run_retry_staging(project, preparation, staging, fake_download([True, False]))
+            merged = merge_staged_retry_facts(preparation, outcome)
+
+            second_root = base / "B"
+            second_root.mkdir()
+            alternate = second_root / "project"
+            shutil.copytree(project, alternate)
+            report_path = project / "pdfs" / "download_report.json"
+            write_json(report_path, {**json.loads(report_path.read_text()), "drift": True})
+            project_before = authoritative_fingerprint(project)
+            alternate_before = authoritative_fingerprint(alternate)
+            backing = ChdirOnFirstItems(dict(merged.report), second_root)
+            forged_merged = replace(merged, report=MappingProxyType(backing))
+
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(first_root)
+                with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                    prepare_retry_publication(Path("project"), preparation, outcome, forged_merged)
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(backing.reads, 1)
+            self.assertEqual(authoritative_fingerprint(project), project_before)
+            self.assertEqual(authoritative_fingerprint(alternate), alternate_before)
+
+    def test_accepts_direct_relative_project_but_rejects_project_symlink(self):
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            link = project / "linked-project"
+            link.symlink_to(project, target_is_directory=True)
+            before = authoritative_fingerprint(project)
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(project.parent)
+                plan = prepare_retry_publication(Path(project.name), preparation, outcome, merged)
+                self.assertEqual(plan.report_revision, preparation.snapshot.report_revision)
+                with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                    prepare_retry_publication(link, preparation, outcome, merged)
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(authoritative_fingerprint(project), before)
 
     def test_rejects_forged_or_cross_bound_inputs(self):
         temporary, project, preparation, outcome, merged = self.fixture()

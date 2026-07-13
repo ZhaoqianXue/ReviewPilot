@@ -239,7 +239,12 @@ def prepare_retry_publication(
         if type(project_path) not in (str, concrete_path_type):
             raise ValueError
         project = Path(project_path)
+        if project.is_symlink() or not project.is_dir():
+            raise ValueError
         resolved_project = project.resolve(strict=True)
+        if type(resolved_project) is not concrete_path_type or not resolved_project.is_absolute():
+            raise ValueError
+        project = resolved_project
         preparation, staged_outcome, merged_facts = _trusted_publication_inputs(
             preparation, staged_outcome, merged_facts, type(resolved_project))
         before = _authoritative_fingerprint(project)
