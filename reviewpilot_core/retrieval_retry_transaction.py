@@ -1617,3 +1617,31 @@ def _write_retry_authority_target(project_path: Path | str, marker: dict[str, An
             if temporary is not None and not replaced:
                 try: temporary.unlink(missing_ok=True)
                 except OSError: pass
+
+
+def _roll_forward_retry_authorities(project_path: Path | str,
+                                    marker: dict[str, Any]) -> RetryAuthorityClassification:
+    """Idempotently roll an apply marker's authorities forward in fixed order."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            if type(marker) is not dict or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker:
+                raise ValueError
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply": raise ValueError
+            snapshot = _classify_retry_authorities(project, current)
+            for index in range(3):
+                _assert_marker_generation(project, current)
+                if snapshot.kinds[index] == "before":
+                    snapshot = _write_retry_authority_target(project, current, snapshot, index)
+                elif snapshot.kinds[index] != "target":
+                    raise ValueError
+                _assert_marker_generation(project, current)
+            first = _classify_retry_authorities(project, current)
+            _assert_marker_generation(project, current)
+            second = _classify_retry_authorities(project, current)
+            _assert_marker_generation(project, current)
+            if first != second or second.kinds != ("target", "target", "target"): raise ValueError
+            return second
+        except Exception as exc:
+            raise ValueError("Retry transaction authorities could not be rolled forward") from exc

@@ -36,6 +36,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _validate_retry_apply_readiness,
     _classify_retry_authorities,
     _write_retry_authority_target,
+    _roll_forward_retry_authorities,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2403,6 +2404,102 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
         self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), marker_bytes)
         self.assertEqual(_classify_retry_authorities(self.project, marker).kinds[0], "target")
+
+    def test_authority_coordinator_rolls_all_eight_before_target_combinations_to_target(self):
+        marker = self.decoded_apply_marker(); paths = (
+            self.project / "pdfs/download_report.json", self.project / "filtered/included_papers.jsonl",
+            self.project / "workflow_state.json"); keys = ("report", "included", "ledger")
+        for mask in range(8):
+            for index, (path, key) in enumerate(zip(paths, keys)):
+                value = marker["target" if mask & (1 << index) else "before"][key]
+                atomic_write_jsonl(path, value) if key == "included" else atomic_write_json(path, value)
+            self.assertEqual(_roll_forward_retry_authorities(self.project, marker).kinds,
+                ("target", "target", "target"))
+
+    def test_authority_coordinator_is_idempotent_and_uses_fixed_writer_order(self):
+        marker = self.decoded_apply_marker()
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._write_retry_authority_target; events = []
+        def ordered(project, current, snapshot, index):
+            events.append(index); return original(project, current, snapshot, index)
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=ordered):
+            _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(events, [0, 1, 2])
+        paths = (self.project / "pdfs/download_report.json", self.project / "filtered/included_papers.jsonl",
+            self.project / "workflow_state.json")
+        before = tuple((path.read_bytes(), path.stat().st_ino) for path in paths)
+        forged = dict(marker); forged["phase"] = "abort"; forged["target"] = {"forged": True}
+        self.assertEqual(_roll_forward_retry_authorities(self.project, forged).kinds, ("target",) * 3)
+        self.assertEqual(tuple((path.read_bytes(), path.stat().st_ino) for path in paths), before)
+
+    def test_authority_coordinator_initial_foreign_is_zero_write_for_each_position(self):
+        marker = self.decoded_apply_marker(); paths = (
+            self.project / "pdfs/download_report.json", self.project / "filtered/included_papers.jsonl",
+            self.project / "workflow_state.json"); keys = ("report", "included", "ledger")
+        for index, (path, key) in enumerate(zip(paths, keys)):
+            for restore_path, restore_key in zip(paths, keys):
+                value = marker["before"][restore_key]
+                atomic_write_jsonl(restore_path, value) if restore_key == "included" else atomic_write_json(restore_path, value)
+            path.write_text("foreign")
+            before = tuple((item.read_bytes(), item.stat().st_ino) for item in paths)
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction authorities could not be rolled forward$"):
+                _roll_forward_retry_authorities(self.project, marker)
+            self.assertEqual(tuple((item.read_bytes(), item.stat().st_ino) for item in paths), before)
+
+    def test_authority_coordinator_keeps_completed_target_when_later_authority_turns_foreign(self):
+        marker = self.decoded_apply_marker(); included = self.project / "filtered/included_papers.jsonl"
+        marker_path = self.project / PENDING_RETRY_FILE; marker_before = marker_path.read_bytes()
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._write_retry_authority_target
+        def inject_after_first(project, current, snapshot, index):
+            result = original(project, current, snapshot, index)
+            if index == 0: included.write_text("foreign\n")
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=inject_after_first):
+            with self.assertRaises(ValueError): _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(json.loads((self.project / "pdfs/download_report.json").read_text()), marker["target"]["report"])
+        self.assertEqual(included.read_text(), "foreign\n"); self.assertEqual(marker_path.read_bytes(), marker_before)
+
+    def test_authority_coordinator_keeps_index0_when_index2_turns_foreign(self):
+        marker = self.decoded_apply_marker(); ledger = self.project / "workflow_state.json"
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._write_retry_authority_target
+        def inject(project, current, snapshot, index):
+            result = original(project, current, snapshot, index)
+            if index == 0: ledger.write_text("foreign")
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=inject):
+            with self.assertRaises(ValueError): _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(json.loads((self.project / "pdfs/download_report.json").read_text()), marker["target"]["report"])
+        self.assertEqual(ledger.read_text(), "foreign")
+
+    def test_authority_coordinator_rejects_marker_aba_between_steps(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._write_retry_authority_target; foreign_inode = None
+        def swap_marker(project, current, snapshot, index):
+            nonlocal foreign_inode
+            result = original(project, current, snapshot, index)
+            if index == 0:
+                replacement = self.project / "foreign-marker"; replacement.write_bytes(marker_path.read_bytes())
+                os.replace(replacement, marker_path); foreign_inode = marker_path.stat().st_ino
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=swap_marker):
+            with self.assertRaises(ValueError): _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(marker_path.stat().st_ino, foreign_inode)
+        self.assertEqual(json.loads((self.project / "pdfs/download_report.json").read_text()), marker["target"]["report"])
+
+    def test_authority_coordinator_reenters_after_post_replace_dirsync_failure(self):
+        marker = self.decoded_apply_marker(); failed = False
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory
+        def fail_once(path):
+            nonlocal failed
+            if not failed: failed = True; raise OSError("dir fsync")
+            return original(path)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_once):
+            with self.assertRaises(ValueError): _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(_roll_forward_retry_authorities(self.project, marker).kinds, ("target",) * 3)
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
