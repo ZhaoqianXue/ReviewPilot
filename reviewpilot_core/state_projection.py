@@ -15,6 +15,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
+from .retrieval_retry import current_retry_snapshot, disabled_retry_projection
 from .safe_text import contains_absolute_path, safe_display_text
 from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
@@ -186,6 +187,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
         "platformIssues": [],
         "screeningMetrics": {"identified": 0, "afterDedup": 0, "included": 0},
         "retrievalSummary": {"retrieved": 0, "total": 0, "openAccess": 0, "viaInstitution": 0, "unavailable": 0},
+        "retrievalRecovery": disabled_retry_projection(),
         "categorizationSummary": {"papers": 0, "groups": 0},
         "categorizationWorkflow": _empty_categorization_workflow(),
         "resultOverview": [],
@@ -265,6 +267,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     extraction_stage = workflow_state["stages"]["extraction"]
     schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage)) and is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
+    retrieval_recovery = disabled_retry_projection() if setup_update_pending else _retrieval_recovery(path)
 
     return {
         "isNewProject": False,
@@ -291,6 +294,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrieved": _retrieved(included),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
+        "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
         "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
@@ -313,6 +317,13 @@ def _format_mtime(path: Path) -> str:
         return datetime.fromtimestamp(path.stat().st_mtime).strftime("%b %d, %Y")
     except OSError:
         return datetime.now().strftime("%b %d, %Y")
+
+
+def _retrieval_recovery(path: Path) -> dict[str, Any]:
+    try:
+        return current_retry_snapshot(path).to_projection()
+    except (OSError, TypeError, ValueError):
+        return disabled_retry_projection()
 
 
 def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str]]:

@@ -43,6 +43,31 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_new_project_has_disabled_retrieval_recovery(self):
+        self.assertEqual(build_new_project_data("/tmp")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
+
+    def test_valid_retry_projection_is_safe_and_malformed_facts_degrade_closed(self):
+        variants = [
+            ({"id": "failed-1", "title": "/Users/private/paper.pdf", "failure_class": "error at C:\\secret\\key"}, True),
+            ({"id": "failed-1", "title": "Visible paper", "failure_class": "paywall"}, False),
+        ]
+        for failed_row, contains_path in variants:
+            with self.subTest(contains_path=contains_path), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); project = root / "p"; project.mkdir()
+                write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"]})
+                write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "ok"}, {"id": "failed-1", "title": "Visible paper"}])
+                write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1, "downloaded": [{"id": "ok"}], "failed_papers": [failed_row]})
+                initialize_workflow_state(project)
+                for action, result in (("collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}}), ("screen", {}), ("download-pdfs", {"success": 1, "failed": 1})):
+                    start_action(project, action); complete_action(project, action, result)
+                data = build_rp_data(root, "p")
+                projected = data["retrievalRecovery"]
+                self.assertTrue(projected["canRetry"]); self.assertEqual(len(projected["reportRevision"]), 64); self.assertEqual(len(projected["items"]), 1)
+                if contains_path:
+                    self.assertNotIn("Users/private", json.dumps(projected)); self.assertNotIn("secret", json.dumps(projected))
+                write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1})
+                self.assertEqual(build_rp_data(root, "p")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
+
     def test_running_reruns_block_current_and_downstream_exports_and_projected_artifacts(self):
         cases = [("collect", "relevance-prompt", "included-papers"), ("download-pdfs", "download-report", "extraction-results"), ("run-extraction", "extraction-results", "categorization-mapping")]
         for action, current_export, downstream_export in cases:
