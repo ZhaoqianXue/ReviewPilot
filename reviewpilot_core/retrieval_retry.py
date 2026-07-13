@@ -506,15 +506,13 @@ def _materialize_frozen_json(value: Any) -> Any:
 def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int, str, tuple[int, int]]:
     fd = None
     try:
-        if not hasattr(os, "O_NOFOLLOW"):
-            raise ValueError
         resolved_path = path.resolve(strict=True)
         if resolved_path.parent != resolved_parent:
             raise ValueError
         before = path.lstat()
         if not stat_module.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise ValueError
-        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         fd = os.open(path, flags)
         opened = os.fstat(fd)
         identity = (opened.st_dev, opened.st_ino)

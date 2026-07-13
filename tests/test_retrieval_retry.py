@@ -499,6 +499,45 @@ class RetrievalRetryTests(unittest.TestCase):
             self.assertTrue(swapped)
             self.assertNotIn(str(Path(tmp)), str(raised.exception))
 
+    def test_publication_pdf_fingerprint_remains_safe_without_o_nofollow(self):
+        had_nofollow = hasattr(os, "O_NOFOLLOW")
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if had_nofollow:
+            del os.O_NOFOLLOW
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp) / "pdfs"; parent.mkdir()
+                source = parent / "source.pdf"; payload = b" \n%PDF-portable"
+                source.write_bytes(payload)
+                size, digest, identity = _publication_pdf_fingerprint(
+                    source, parent.resolve(strict=True))
+                self.assertEqual((size, digest), (len(payload), hashlib.sha256(payload).hexdigest()))
+                self.assertEqual(identity, (source.stat().st_dev, source.stat().st_ino))
+
+            with tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp) / "pdfs"; parent.mkdir()
+                source = parent / "source.pdf"; source.write_bytes(b"%PDF-original")
+                external = Path(tmp) / "external.pdf"; external.write_bytes(b"%PDF-external")
+                original_open = os.open
+                swapped = False
+
+                def swap_between_lstat_and_open(path, flags, *args, **kwargs):
+                    nonlocal swapped
+                    if Path(path) == source and not swapped:
+                        swapped = True
+                        source.unlink()
+                        source.symlink_to(external)
+                    return original_open(path, flags, *args, **kwargs)
+
+                with patch("reviewpilot_core.retrieval_retry.os.open", swap_between_lstat_and_open):
+                    with self.assertRaises(ValueError) as raised:
+                        _publication_pdf_fingerprint(source, parent.resolve(strict=True))
+                self.assertTrue(swapped)
+                self.assertNotIn(str(Path(tmp)), str(raised.exception))
+        finally:
+            if had_nofollow:
+                os.O_NOFOLLOW = nofollow
+
     def test_staging_rejects_count_contract_variants_duplicate_paths_and_symlink_boundaries(self):
         for location in ("root", "stats"):
             for value in (True, "1", None, 9):
