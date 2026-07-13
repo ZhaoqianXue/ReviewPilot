@@ -4,10 +4,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import patch
 
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
-from reviewpilot_core.retrieval_retry import current_retry_snapshot, prepare_retry_request
+from reviewpilot_core.retrieval_retry import RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot, prepare_retry_request
 from reviewpilot_core.retrieval_retry_transaction import (
     PENDING_RETRY_FILE,
     abandon_retry_transaction,
@@ -62,6 +63,65 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
         self.assertEqual(marker, json.loads(handle.marker_path.read_text()))
         self.assertEqual(original[2], self.preparation.snapshot.mutable_fact_copies()[2])
+
+    def test_begin_rejects_polymorphic_or_noncanonical_preparation_without_reserving_project(self):
+        class SnapshotSubclass(RetrySnapshot): pass
+        class ItemSubclass(RetryItem): pass
+        class EvilStr(str): pass
+        class EvilInt(int): pass
+        absolute_project = str(self.project)
+        class AlwaysEqualDict(dict):
+            def __eq__(self, other): return True
+            def __ne__(self, other): return False
+        class StatefulItems(dict):
+            calls = 0
+            def items(self):
+                self.calls += 1
+                if self.calls == 1:
+                    return {**self, "success": 99}.items()
+                return super().items()
+        class ExplodingItems(dict):
+            def items(self): raise ValueError(absolute_project)
+
+        base = self.preparation
+        snapshot = base.snapshot
+        item = base.items[0]
+        bad_item = ItemSubclass(item.retry_id, item.label, item.failure_class, item.report_index, item.included_index)
+        stateful_backing = StatefulItems(snapshot.report)
+        cases = [
+            RetryPreparation(SnapshotSubclass(snapshot.report_revision, snapshot.report, snapshot.included, snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(snapshot, base.selected_ids, (bad_item,), base.included_rows, base._project_identity),
+            RetryPreparation(snapshot, (EvilStr(base.selected_ids[0]),), base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, snapshot.report, snapshot.included, snapshot.ledger,
+                (RetryItem(item.retry_id, item.label, item.failure_class, EvilInt(item.report_index), item.included_index),)), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, MappingProxyType(AlwaysEqualDict({**snapshot.report, "success": 99})), snapshot.included, snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, MappingProxyType({**snapshot.report,
+                "downloaded": (MappingProxyType(AlwaysEqualDict({**snapshot.report["downloaded"][0], "id": "forged"})),)}), snapshot.included, snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, snapshot.report,
+                (MappingProxyType(AlwaysEqualDict({**snapshot.included[1], "title": "forged"})), snapshot.included[0]), snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, MappingProxyType(stateful_backing), snapshot.included, snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(RetrySnapshot(snapshot.report_revision, MappingProxyType(ExplodingItems(snapshot.report)), snapshot.included, snapshot.ledger, snapshot.items), base.selected_ids, base.items, base.included_rows, base._project_identity),
+            RetryPreparation(snapshot, base.selected_ids,
+                (RetryItem(item.retry_id, "forged", item.failure_class, item.report_index, item.included_index),), base.included_rows, base._project_identity),
+        ]
+        for forged in cases:
+            with self.subTest(kind=type(forged.snapshot).__name__):
+                with self.assertRaises(ValueError) as caught:
+                    begin_retry_transaction(self.project, forged, self.staging_name, self.project / self.staging_name)
+                self.assertNotIn(str(self.project), str(caught.exception))
+                self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+                begin_retry_transaction(self.project, base, self.staging_name, self.project / self.staging_name)
+                self.assertTrue(abort_retry_transaction(self.project))
+        self.assertEqual(stateful_backing.calls, 1)
+
+    def test_begin_uses_fresh_authoritative_facts_for_abort_marker(self):
+        snapshot = self.preparation.snapshot
+        forged_report = MappingProxyType({**snapshot.report, "opaque": "forged"})
+        forged = RetryPreparation(RetrySnapshot(snapshot.report_revision, forged_report, snapshot.included, snapshot.ledger, snapshot.items),
+            self.preparation.selected_ids, self.preparation.items, self.preparation.included_rows, self.preparation._project_identity)
+        with self.assertRaises(ValueError):
+            begin_retry_transaction(self.project, forged, self.staging_name, self.project / self.staging_name)
+        self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
     def test_marker_round_trips_sentinel_shaped_values_and_absolute_keys_without_raw_paths(self):
         report_path = self.project / "pdfs" / "download_report.json"

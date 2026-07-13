@@ -6,15 +6,17 @@ import base64
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import shutil
 import stat
 from threading import Lock, RLock
+from types import MappingProxyType
 from typing import Any
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
-from .retrieval_retry import RetryPreparation, current_retry_snapshot, retrieval_report_revision, stable_retry_id
+from .retrieval_retry import RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot, retrieval_report_revision, stable_retry_id
 from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state
 from .workflow_state import load_workflow_state, save_workflow_state
 
@@ -60,11 +62,77 @@ def _lexists(path: Path) -> bool:
 
 
 def _basename(value: str, prefix: str = "") -> bool:
-    return isinstance(value, str) and value.startswith(prefix) and value not in {"", ".", ".."} and Path(value).name == value
+    return type(value) is str and value.startswith(prefix) and value not in {"", ".", ".."} and Path(value).name == value
 
 
 def _digest(value: Any) -> bool:
-    return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+    return type(value) is str and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
+def _trusted_json(value: Any) -> Any:
+    value_type = type(value)
+    if value_type is MappingProxyType:
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str or key in result:
+                raise ValueError
+            result[key] = _trusted_json(item)
+        return result
+    if value_type is tuple:
+        return [_trusted_json(item) for item in value]
+    if value is None or value_type in (str, int, bool):
+        return value
+    if value_type is float and math.isfinite(value):
+        return value
+    raise ValueError
+
+
+def _freeze_json(value: Any) -> Any:
+    if type(value) is dict:
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if type(value) is list:
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _trusted_item(value: Any) -> RetryItem:
+    if type(value) is not RetryItem:
+        raise ValueError
+    retry_id, label, failure_class = value.retry_id, value.label, value.failure_class
+    report_index, included_index = value.report_index, value.included_index
+    if (not _digest(retry_id) or type(label) is not str or type(failure_class) is not str
+            or type(report_index) is not int or report_index < 0
+            or type(included_index) is not int or included_index < 0):
+        raise ValueError
+    return RetryItem(retry_id, label, failure_class, report_index, included_index)
+
+
+def _trusted_preparation(value: Any, project: Path) -> RetryPreparation:
+    if type(value) is not RetryPreparation:
+        raise ValueError
+    snapshot, selected_ids, items = value.snapshot, value.selected_ids, value.items
+    included_rows, identity = value.included_rows, value._project_identity
+    if (type(snapshot) is not RetrySnapshot or type(selected_ids) is not tuple
+            or type(items) is not tuple or type(included_rows) is not tuple
+            or type(identity) is not type(project) or not identity.is_absolute() or identity != project):
+        raise ValueError
+    revision, snapshot_items = snapshot.report_revision, snapshot.items
+    if not _digest(revision) or type(snapshot_items) is not tuple:
+        raise ValueError
+    trusted_ids = tuple(selected_ids)
+    if not trusted_ids or any(not _digest(retry_id) for retry_id in trusted_ids) or len(set(trusted_ids)) != len(trusted_ids):
+        raise ValueError
+    report = _trusted_json(snapshot.report)
+    included = _trusted_json(snapshot.included)
+    ledger = _trusted_json(snapshot.ledger)
+    selected_rows = _trusted_json(included_rows)
+    if (type(report) is not dict or type(included) is not list or type(ledger) is not dict
+            or type(selected_rows) is not list or any(type(row) is not dict for row in included + selected_rows)):
+        raise ValueError
+    trusted_snapshot = RetrySnapshot(revision, _freeze_json(report), _freeze_json(included), _freeze_json(ledger),
+        tuple(_trusted_item(item) for item in snapshot_items))
+    return RetryPreparation(trusted_snapshot, trusted_ids, tuple(_trusted_item(item) for item in items),
+        _freeze_json(selected_rows), identity)
 
 
 def _encode_before(value: dict[str, Any]) -> str:
@@ -116,31 +184,32 @@ def begin_retry_transaction(
             raise ValueError("Retry transaction cannot begin safely")
         if _lexists(project / staging_name):
             raise ValueError("Retry transaction cannot begin safely")
-        if type(preparation) is not RetryPreparation or preparation._project_identity != project:
-            raise ValueError("Retry transaction preparation is stale")
         try:
+            trusted = _trusted_preparation(preparation, project)
             authorities = ((project / "pdfs" / "download_report.json", project / "pdfs"),
                 (project / "filtered" / "included_papers.jsonl", project / "filtered"),
                 (project / "workflow_state.json", project))
             if any(not _direct_regular(path, parent) for path, parent in authorities):
                 raise ValueError
             current = current_retry_snapshot(project)
-            before_report, before_included, before_stage = preparation.snapshot.mutable_fact_copies()
+            before_report, before_included, before_stage = current.mutable_fact_copies()
             before_ledger = load_workflow_state(project)
-            if (current.report_revision != preparation.snapshot.report_revision
-                    or current.mutable_fact_copies() != (before_report, before_included, before_stage)
+            trusted_report, trusted_included, trusted_stage = trusted.snapshot.mutable_fact_copies()
+            current_items = {item.retry_id: item for item in current.items}
+            if (current.report_revision != trusted.snapshot.report_revision
+                    or (before_report, before_included, before_stage) != (trusted_report, trusted_included, trusted_stage)
                     or before_ledger.get("stages", {}).get("retrieval") != before_stage
-                    or current.items != preparation.snapshot.items
-                    or tuple(item.retry_id for item in preparation.items) != preparation.selected_ids
-                    or [before_included[item.included_index] for item in preparation.items] != list(preparation.included_rows)
-                    or any(not _digest(item) for item in preparation.selected_ids)):
+                    or current.items != trusted.snapshot.items
+                    or tuple(item.retry_id for item in trusted.items) != trusted.selected_ids
+                    or trusted.items != tuple(current_items[retry_id] for retry_id in trusted.selected_ids)
+                    or [before_included[item.included_index] for item in trusted.items] != list(trusted.included_rows)):
                 raise ValueError
-            candidates = tuple(f"retry-{current.report_revision}-{retry_id}.pdf" for retry_id in preparation.selected_ids)
+            candidates = tuple(f"retry-{current.report_revision}-{retry_id}.pdf" for retry_id in trusted.selected_ids)
             if not candidates or len(set(candidates)) != len(candidates) or any(not _basename(name, "retry-") for name in candidates):
                 raise ValueError
             if any(_lexists(project / "pdfs" / name) for name in candidates):
                 raise ValueError
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        except Exception as exc:
             raise ValueError("Retry transaction preparation is stale") from exc
         with _GUARD:
             if project in _ACTIVE:
@@ -149,7 +218,7 @@ def begin_retry_transaction(
         data = {
             "version": 1, "phase": "abort",
             "expected_revision": current.report_revision,
-            "selected_ids": list(preparation.selected_ids),
+            "selected_ids": list(trusted.selected_ids),
             "staging_name": staging_name,
             "candidate_names": list(candidates),
             "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
