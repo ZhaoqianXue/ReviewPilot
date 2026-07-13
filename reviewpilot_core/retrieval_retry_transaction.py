@@ -1476,6 +1476,14 @@ def publish_retry_transaction_pdfs(project_path: Path | str) -> None:
             _validate_before_with_published_pdfs(project, marker)
             _validate_committed_source_set(project, marker)
             _assert_marker_generation(project, marker)
+            if marker["target"]["pdfs"] == [] and "published" not in marker:
+                raw = json.loads(marker[_RAW_MARKER_BYTES].decode("utf-8"))
+                raw["published_json_b64"] = _encode_before({"pdfs": []})
+                _replace_marker_cas(project, marker, raw)
+                updated = _read_marker(project)
+                if (updated["transaction_id"] != active_id or updated["phase"] != "abort"
+                        or updated.get("published") != {"pdfs": []}): raise ValueError
+                _assert_marker_generation(project, updated)
         except Exception as exc:
             raise ValueError("Retry transaction PDFs could not be published") from exc
 
