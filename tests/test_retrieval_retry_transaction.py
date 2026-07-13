@@ -51,19 +51,19 @@ def preparation(project: Path):
         "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": ids}})
 
 
-def publication(project: Path, prepared: RetryPreparation, staging_name: str, *, succeeds: bool = True):
+def publication(project: Path, prepared: RetryPreparation, staging_name: str, *, succeeds: bool | int = True):
     def download(root: Path, project_id: str):
         staged = root / project_id
         rows = [json.loads(line) for line in (staged / "filtered" / "included_papers.jsonl").read_text().splitlines()]
         downloaded = []; failed = []
-        if succeeds:
-            for index, row in enumerate(rows):
+        success_count = len(rows) if succeeds is True else 0 if succeeds is False else succeeds
+        for index, row in enumerate(rows):
+            if index < success_count:
                 pdf = staged / "pdfs" / f"retry-{index}.pdf"
                 pdf.write_bytes(b"%PDF-1.7\nretry")
                 row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
                 downloaded.append({"id": row.get("id", ""), "title": row.get("title", ""), "path": str(pdf)})
-        else:
-            for row in rows:
+            else:
                 row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
                 failed.append({"id": row["id"], "title": row.get("title", ""),
                     "doi": "", "url": "", "failure_class": "download_failed"})
@@ -80,11 +80,14 @@ def publication(project: Path, prepared: RetryPreparation, staging_name: str, *,
 
 
 def target_ledger(project: Path, plan) -> dict:
-    ledger = load_workflow_state(project)
-    stage = ledger["stages"]["retrieval"]
-    stage.update(status=plan.merged_facts.status, counts=dict(plan.merged_facts.counts), stale=False,
-        error=None if plan.merged_facts.status != "failed" else "Action produced no successful outputs (1 failed).")
-    return ledger
+    with tempfile.TemporaryDirectory() as directory:
+        oracle = Path(directory)
+        save_workflow_state(oracle, load_workflow_state(project))
+        start_action(oracle, "retry-failed-downloads")
+        counts = plan.merged_facts.counts
+        return complete_action(oracle, "retry-failed-downloads", {
+            "success": counts["succeeded"], "failed": counts["failed"],
+        })
 
 
 class RetryAbortTransactionTests(unittest.TestCase):
@@ -485,6 +488,13 @@ class RetryTargetTransactionTests(unittest.TestCase):
         )
         return RetryPublicationPlan(base.report_revision, forged, base.pdfs if pdfs is None else pdfs)
 
+    def assert_ledger_rejected_without_marker_mutation(self, ledger):
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(self.project, self.plan, ledger)
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_recorded_target_is_path_safe_immutable_and_abort_still_restores(self):
         before = self.prepared.snapshot.mutable_fact_copies()
         record_retry_transaction_target(self.project, self.plan, self.ledger)
@@ -506,6 +516,77 @@ class RetryTargetTransactionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target is invalid") as caught:
             record_retry_transaction_target(self.project, self.plan, bad)
         self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+
+    def test_record_rejects_forged_terminal_ledger_semantics(self):
+        cases = {
+            "attempt": lambda ledger: ledger["stages"]["retrieval"].update(attempt=999),
+            "error": lambda ledger: ledger["stages"]["retrieval"].update(error="forged"),
+            "last-valid": lambda ledger: ledger["stages"]["retrieval"]["last_valid"].update(attempt=999),
+            "downstream-stale": lambda ledger: ledger["stages"]["extraction"].update(stale=True),
+        }
+        for index, (label, mutate) in enumerate(cases.items()):
+            with self.subTest(label=label):
+                bad = deepcopy(self.ledger); mutate(bad)
+                self.assert_ledger_rejected_without_marker_mutation(bad)
+                if index + 1 < len(cases):
+                    self.prepared = preparation(self.project)
+                    self.handle = begin_retry_transaction(
+                        self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                    self.plan = publication(self.project, self.prepared, self.staging_name)
+                    self.ledger = target_ledger(self.project, self.plan)
+
+    def test_record_requires_exact_extraction_promotion_from_not_started(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        before = load_workflow_state(self.project)
+        before["stages"]["extraction"].update(status="not_started", stale=False)
+        save_workflow_state(self.project, before)
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+        self.assertEqual(self.ledger["stages"]["extraction"]["status"], "ready")
+        bad = deepcopy(self.ledger)
+        bad["stages"]["extraction"] = deepcopy(before["stages"]["extraction"])
+        self.assert_ledger_rejected_without_marker_mutation(bad)
+
+    def test_record_matches_start_only_downstream_stale_rule_without_last_valid(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        report_path = self.project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text()); report.update(success=0, downloaded=[])
+        atomic_write_json(report_path, report)
+        rows_path = self.project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+        rows[0].pop("pdf_path"); atomic_write_jsonl(rows_path, rows)
+        before = load_workflow_state(self.project)
+        before["stages"]["retrieval"].update(status="failed", error="Action produced no successful outputs (1 failed).",
+            counts={"succeeded": 0, "failed": 1}, stale=False, last_valid=None)
+        before["stages"]["extraction"].update(status="ready", attempt=1, stale=False, last_valid=None)
+        save_workflow_state(self.project, before)
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+        self.assertTrue(self.ledger["stages"]["extraction"]["stale"])
+        bad = deepcopy(self.ledger); bad["stages"]["extraction"]["stale"] = False
+        self.assert_ledger_rejected_without_marker_mutation(bad)
+
+    def test_record_preserves_unknown_top_level_ledger_facts(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        before = load_workflow_state(self.project); before["opaque"] = {"kept": [1, "two"]}
+        save_workflow_state(self.project, before)
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+        record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+        bad = deepcopy(self.ledger); bad["opaque"] = {"kept": [999]}
+        self.assert_ledger_rejected_without_marker_mutation(bad)
 
     def test_record_rejects_foreign_business_paths_hidden_by_opaque_destination(self):
         report, included = self.plan.merged_facts.mutable_copies()
@@ -596,11 +677,41 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.handle = begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
         plan = publication(self.project, self.prepared, self.staging_name, succeeds=False)
         ledger = target_ledger(self.project, plan)
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+        bad = deepcopy(ledger); bad["stages"]["retrieval"]["last_valid"] = None
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(self.project, plan, bad)
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
         record_retry_transaction_target(self.project, plan, ledger)
         marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
         target = json.loads(base64.b64decode(marker["target_json_b64"]))
         self.assertEqual(target["pdfs"], [])
         self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_partial_target_uses_real_workflow_terminal_ledger(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        project = Path(self.temp.name).resolve() / "partial"; project.mkdir(); retryable_project(project)
+        rows_path = project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+        rows.append({"id": "failed-2", "title": "Failed 2"}); atomic_write_jsonl(rows_path, rows)
+        report_path = project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text()); report["failed"] = 2
+        report["failed_papers"].append({"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(project, ledger)
+        prepared = preparation(project); staging = ".retrieval_retry_staging_partial"
+        begin_retry_transaction(project, prepared, staging, project / staging)
+        plan = publication(project, prepared, staging, succeeds=1)
+        ledger = target_ledger(project, plan)
+        self.assertEqual((plan.merged_facts.status, ledger["stages"]["retrieval"]["status"]), ("partial", "partial"))
+        before = (project / PENDING_RETRY_FILE).read_bytes()
+        bad = deepcopy(ledger); bad["stages"]["retrieval"]["attempt"] += 1
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(project, plan, bad)
+        self.assertEqual((project / PENDING_RETRY_FILE).read_bytes(), before)
+        record_retry_transaction_target(project, plan, ledger)
+        self.assertTrue(abort_retry_transaction(project))
 
 
 if __name__ == "__main__": unittest.main()

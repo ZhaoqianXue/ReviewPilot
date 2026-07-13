@@ -420,6 +420,55 @@ def _validate_target_provenance(project: Path, marker: dict[str, Any], report: d
             raise ValueError
 
 
+def _material_output(stage: dict[str, Any]) -> bool:
+    return (stage["last_valid"] is not None
+        or (stage["status"] == "ready" and stage["attempt"] > 0)
+        or (stage["status"] == "failed"
+            and str(stage.get("error") or "").startswith("Action produced no successful outputs")))
+
+
+def _validate_target_ledger(marker: dict[str, Any], ledger: dict[str, Any],
+                            status: str, counts: dict[str, Any]) -> None:
+    """Require the exact non-time result of one retry start and completion."""
+    expected = deepcopy(marker["before"]["ledger"])
+    stages = expected["stages"]
+    retrieval_index = STAGE_NAMES.index("retrieval")
+    retrieval = stages["retrieval"]
+
+    if _material_output(retrieval):
+        retrieval["stale"] = True
+        for name in STAGE_NAMES[retrieval_index + 1:]:
+            if _material_output(stages[name]):
+                stages[name]["stale"] = True
+    retrieval.update(status="running", attempt=retrieval["attempt"] + 1, error=None, counts={})
+
+    is_rerun = retrieval["last_valid"] is not None
+    target_retrieval = ledger["stages"]["retrieval"]
+    error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
+    retrieval.update(status=status, updated_at=target_retrieval["updated_at"], error=error,
+        counts=deepcopy(counts), stale=False)
+    if status in {"completed", "partial"}:
+        retrieval["last_valid"] = {
+            "status": status,
+            "attempt": retrieval["attempt"],
+            "updated_at": retrieval["updated_at"],
+            "counts": deepcopy(counts),
+        }
+
+    if is_rerun:
+        for name in STAGE_NAMES[retrieval_index + 1:]:
+            downstream = stages[name]
+            if downstream["last_valid"] is not None or downstream["attempt"] > 0:
+                downstream["stale"] = True
+
+    extraction = stages["extraction"]
+    if status in {"completed", "partial"} and extraction["status"] == "not_started":
+        extraction.update(status="ready", updated_at=ledger["stages"]["extraction"]["updated_at"])
+
+    if ledger != expected:
+        raise ValueError
+
+
 def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicationPlan,
                     target_ledger: dict[str, Any]) -> dict[str, Any]:
     if type(plan) is not RetryPublicationPlan or type(plan.merged_facts) is not RetryMergedFacts:
@@ -437,16 +486,11 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
             or type(ledger) is not dict or any(type(row) is not dict for row in included)):
         raise ValueError
     _validate_workflow_state(ledger)
-    stage = ledger["stages"]["retrieval"]
-    if stage["status"] != merged.status or stage["counts"] != counts or stage["stale"] is not False:
+    status, outcome_counts = structured_action_outcome("retry-failed-downloads", {
+        "success": report.get("success"), "failed": report.get("failed")})
+    if merged.status != status or counts != outcome_counts:
         raise ValueError
-    for name in STAGE_NAMES[STAGE_NAMES.index("retrieval") + 1:]:
-        downstream = ledger["stages"][name]
-        material = (downstream["last_valid"] is not None
-            or (downstream["status"] == "ready" and downstream["attempt"] > 0)
-            or (downstream["status"] == "failed" and str(downstream.get("error") or "").startswith("Action produced no successful outputs")))
-        if downstream["stale"] is not material:
-            raise ValueError
+    _validate_target_ledger(marker, ledger, status, outcome_counts)
     pdfs: list[dict[str, Any]] = []
     successful_names: list[str] = []
     concrete_path_type = type(Path())
@@ -502,16 +546,7 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
         raise ValueError
     target["ledger"]["stages"] = {name: stages[name] for name in STAGE_NAMES}
     _validate_workflow_state(target["ledger"])
-    retrieval = target["ledger"]["stages"]["retrieval"]
-    if retrieval["status"] != status or retrieval["counts"] != counts or retrieval["stale"] is not False:
-        raise ValueError
-    for name in STAGE_NAMES[STAGE_NAMES.index("retrieval") + 1:]:
-        downstream = target["ledger"]["stages"][name]
-        material = (downstream["last_valid"] is not None
-            or (downstream["status"] == "ready" and downstream["attempt"] > 0)
-            or (downstream["status"] == "failed" and str(downstream.get("error") or "").startswith("Action produced no successful outputs")))
-        if downstream["stale"] is not material:
-            raise ValueError
+    _validate_target_ledger(marker, target["ledger"], status, counts)
     names: list[str] = []
     for pdf in target["pdfs"]:
         if (type(pdf) is not dict or set(pdf) != {"destination_name", "retry_id", "size", "sha256"}
