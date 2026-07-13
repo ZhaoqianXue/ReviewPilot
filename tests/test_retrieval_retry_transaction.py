@@ -35,6 +35,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _publication_pdf_fingerprint,
     _validate_retry_apply_readiness,
     _classify_retry_authorities,
+    _write_retry_authority_target,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2287,6 +2288,106 @@ class RetryPdfPublicationTests(unittest.TestCase):
 
         with patch("reviewpilot_core.retrieval_retry_transaction.os.read", side_effect=swap_after_read):
             with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+
+    def test_single_authority_writer_durably_writes_each_target_in_fixed_order(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        for index in range(3):
+            expected = _write_retry_authority_target(self.project, marker, expected, index)
+            self.assertEqual(expected.kinds[index], "target")
+        self.assertEqual(expected.kinds, ("target", "target", "target"))
+
+    def test_single_authority_writer_orders_fsync_replace_dirsync_and_postread(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        events = []; original_fsync = os.fsync; original_replace = os.replace
+        original_classify = transaction._classify_retry_authorities
+
+        def fsync(descriptor):
+            events.append("dir-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync")
+            return original_fsync(descriptor)
+        def replace(source, target):
+            events.append("replace"); return original_replace(source, target)
+        def classify(*args):
+            events.append("classify"); return original_classify(*args)
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=fsync), \
+                patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=replace), \
+                patch("reviewpilot_core.retrieval_retry_transaction._classify_retry_authorities", side_effect=classify):
+            _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertLess(events.index("file-fsync"), events.index("classify"))
+        self.assertLess(events.index("classify"), events.index("replace"))
+        self.assertLess(events.index("replace"), events.index("dir-fsync"))
+        self.assertLess(events.index("dir-fsync"), len(events) - 1)
+
+    def test_single_authority_writer_pre_replace_failures_preserve_before_and_clean_temp(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        report = self.project / "pdfs/download_report.json"; before = report.read_bytes()
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fdopen", side_effect=OSError("fdopen")):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction authority could not be written$"):
+                _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(report.read_bytes(), before); self.assertFalse(list(report.parent.glob(f".{report.name}.*.tmp")))
+        original_fsync = os.fsync
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=OSError("file fsync")):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(report.read_bytes(), before)
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=OSError("replace")):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(report.read_bytes(), before); self.assertFalse(list(report.parent.glob(f".{report.name}.*.tmp")))
+
+    def test_single_authority_writer_rejects_destination_aba_before_replace(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        report = self.project / "pdfs/download_report.json"; before = report.read_bytes()
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._classify_retry_authorities; swapped = False
+        def swap(*args):
+            nonlocal swapped
+            result = original(*args)
+            if not swapped:
+                swapped = True; replacement = self.project / "foreign-report"; replacement.write_bytes(before)
+                os.replace(replacement, report)
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._classify_retry_authorities", side_effect=swap):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(report.read_bytes(), before); self.assertNotEqual(report.stat().st_ino, expected.identities[0][1])
+
+    def test_single_authority_writer_rejects_marker_aba_before_replace(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        marker_path = self.project / PENDING_RETRY_FILE; marker_bytes = marker_path.read_bytes(); report = self.project / "pdfs/download_report.json"
+        original_fsync = os.fsync; swapped = False
+        def swap_marker(descriptor):
+            nonlocal swapped
+            result = original_fsync(descriptor)
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode) and not swapped:
+                swapped = True; replacement = self.project / "foreign-marker"; replacement.write_bytes(marker_bytes)
+                os.replace(replacement, marker_path)
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=swap_marker):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(_classify_retry_authorities(self.project, transaction._read_marker(self.project.resolve())).kinds[0], "before")
+
+    def test_single_authority_writer_rejects_exact_target_new_inode_after_replace(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        report = self.project / "pdfs/download_report.json"
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._classify_retry_authorities; calls = 0; foreign_inode = None
+        def swap_before_postread(*args):
+            nonlocal calls, foreign_inode
+            calls += 1
+            if calls == 2:
+                replacement = self.project / "exact-target"; replacement.write_bytes(report.read_bytes())
+                os.replace(replacement, report); foreign_inode = report.stat().st_ino
+            return original(*args)
+        with patch("reviewpilot_core.retrieval_retry_transaction._classify_retry_authorities", side_effect=swap_before_postread):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual(report.stat().st_ino, foreign_inode)
+
+    def test_single_authority_writer_post_replace_failures_keep_destination_and_marker(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        marker_bytes = (self.project / PENDING_RETRY_FILE).read_bytes()
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=OSError("dir fsync")):
+            with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), marker_bytes)
+        self.assertEqual(_classify_retry_authorities(self.project, marker).kinds[0], "target")
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path

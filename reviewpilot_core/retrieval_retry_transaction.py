@@ -1565,3 +1565,55 @@ def _classify_retry_authorities(project_path: Path | str,
             return RetryAuthorityClassification(tuple(kinds), tuple(identities))
         except Exception as exc:
             raise ValueError("Retry transaction authorities cannot be classified") from exc
+
+
+def _write_retry_authority_target(project_path: Path | str, marker: dict[str, Any],
+                                  expected: RetryAuthorityClassification,
+                                  index: int) -> RetryAuthorityClassification:
+    """Durably replace one exact before authority with its apply target fact."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        temporary = None; replaced = False; descriptor_owned = False; stream = None
+        try:
+            if type(expected) is not RetryAuthorityClassification or type(index) is not int or index not in range(3):
+                raise ValueError
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply" or expected.kinds[index] != "before": raise ValueError
+            specs = ((project / "pdfs/download_report.json", current["target"]["report"], False),
+                (project / "filtered/included_papers.jsonl", current["target"]["included"], True),
+                (project / "workflow_state.json", current["target"]["ledger"], False))
+            path, value, jsonl = specs[index]
+            raw = ("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in value).encode("utf-8")
+                if jsonl else json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+            descriptor_owned = True; temporary = Path(temporary_name)
+            stream = os.fdopen(descriptor, "wb"); descriptor_owned = False
+            stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            before_replace_temp = _file_identity(os.fstat(stream.fileno()))
+            _assert_marker_generation(project, current)
+            observed = _classify_retry_authorities(project, current)
+            destination_identity = _file_identity(path.lstat())
+            if observed != expected or destination_identity != expected.identities[index]:
+                raise ValueError
+            os.replace(temporary, path); replaced = True
+            _fsync_directory(path.parent)
+            post_identity = _file_identity(os.fstat(stream.fileno()))
+            if (post_identity[:4] != before_replace_temp[:4] or post_identity[5] != before_replace_temp[5]):
+                raise ValueError
+            after = _classify_retry_authorities(project, current)
+            kinds = list(expected.kinds); kinds[index] = "target"
+            identities = list(expected.identities); identities[index] = post_identity
+            if after != RetryAuthorityClassification(tuple(kinds), tuple(identities)): raise ValueError
+            return after
+        except Exception as exc:
+            raise ValueError("Retry transaction authority could not be written") from exc
+        finally:
+            if stream is not None:
+                try: stream.close()
+                except OSError: pass
+            elif descriptor_owned:
+                try: os.close(descriptor)
+                except OSError: pass
+            if temporary is not None and not replaced:
+                try: temporary.unlink(missing_ok=True)
+                except OSError: pass
