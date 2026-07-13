@@ -33,6 +33,7 @@ _GUARD = Lock()
 _ACTIVE: dict[Path, str] = {}
 _LOCKS: dict[Path, RLock] = {}
 _RAW_MARKER_BYTES = "_raw_marker_bytes"
+_MARKER_IDENTITY = "_marker_identity"
 _FIXED_AUTHORITIES = (
     ("pdfs/download_report.json", "pdfs"),
     ("filtered/included_papers.jsonl", "filtered"),
@@ -315,18 +316,48 @@ def _serialized_marker_bytes(data: dict[str, Any]) -> bytes:
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def _remove_owned_begin_marker(marker: Path, project: Path, transaction_id: str,
-                               expected_bytes: bytes) -> None:
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
+
+
+def _read_marker_generation(project: Path) -> tuple[bytes, tuple[int, int, int, int, int, int]]:
+    marker = project / PENDING_RETRY_FILE
+    before = marker.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError
+    with marker.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if _file_identity(opened) != _file_identity(before):
+            raise ValueError
+        raw = stream.read()
+        after_read = os.fstat(stream.fileno())
+    after_path = marker.lstat()
+    identity = _file_identity(before)
+    if (identity != _file_identity(after_read) or identity != _file_identity(after_path)
+            or len(raw) != before.st_size or marker.resolve(strict=True).parent != project
+            or identity != _file_identity(marker.lstat())):
+        raise ValueError
+    return raw, identity
+
+
+def _assert_marker_generation(project: Path, expected: dict[str, Any]) -> dict[str, Any]:
+    if (_RAW_MARKER_BYTES not in expected or _MARKER_IDENTITY not in expected
+            or not _digest(expected.get("transaction_id"))):
+        raise ValueError
+    current = _read_marker(project)
+    if (current["transaction_id"] != expected["transaction_id"]
+            or current[_RAW_MARKER_BYTES] != expected[_RAW_MARKER_BYTES]
+            or current[_MARKER_IDENTITY] != expected[_MARKER_IDENTITY]):
+        raise ValueError
+    return current
+
+
+def _remove_owned_begin_marker(marker: Path, project: Path, expected: dict[str, Any]) -> None:
     """Remove only the exact marker generation written by a failed begin."""
     try:
-        if not _direct_regular(marker, project):
-            return
-        raw = marker.read_bytes()
-        parsed = json.loads(raw.decode("utf-8"))
-        if (raw == expected_bytes and type(parsed) is dict
-                and parsed.get("transaction_id") == transaction_id):
-            marker.unlink()
-    except (OSError, RuntimeError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        _assert_marker_generation(project, expected)
+        marker.unlink()
+    except (OSError, RuntimeError, TypeError, ValueError):
         return
 
 
@@ -415,17 +446,17 @@ def begin_retry_transaction(
                 if _ACTIVE.get(project) == transaction_id:
                     _ACTIVE.pop(project)
             raise ValueError("Retry transaction marker could not be written") from exc
+        written = None
         try:
             written = _read_marker(project)
             if (written["transaction_id"] != transaction_id
-                    or written[_RAW_MARKER_BYTES] != expected_marker_bytes
-                    or marker.read_bytes() != expected_marker_bytes):
+                    or written[_RAW_MARKER_BYTES] != expected_marker_bytes):
                 raise ValueError
             _validate_current_before(project, written)
-            if marker.read_bytes() != expected_marker_bytes:
-                raise ValueError
+            _assert_marker_generation(project, written)
         except Exception as exc:
-            _remove_owned_begin_marker(marker, project, transaction_id, expected_marker_bytes)
+            if written is not None:
+                _remove_owned_begin_marker(marker, project, written)
             with _GUARD:
                 if _ACTIVE.get(project) == transaction_id:
                     _ACTIVE.pop(project)
@@ -434,11 +465,8 @@ def begin_retry_transaction(
 
 
 def _read_marker(project: Path) -> dict[str, Any]:
-    marker = project / PENDING_RETRY_FILE
     try:
-        if not _direct_regular(marker, project):
-            raise ValueError
-        raw_marker_bytes = marker.read_bytes()
+        raw_marker_bytes, marker_identity = _read_marker_generation(project)
         data = json.loads(raw_marker_bytes.decode("utf-8"))
         base = {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "pdf_baseline_json_b64", "before_json_b64"}
         phase = data.get("phase") if type(data) is dict else None
@@ -477,6 +505,7 @@ def _read_marker(project: Path) -> dict[str, Any]:
         if "target_json_b64" in data:
             data["target"] = _decode_target(data["target_json_b64"], data, project)
         data[_RAW_MARKER_BYTES] = raw_marker_bytes
+        data[_MARKER_IDENTITY] = marker_identity
         return data
     except (OSError, RuntimeError, TypeError, KeyError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc
@@ -487,20 +516,14 @@ def _replace_marker_cas(project: Path, marker: dict[str, Any], replacement: dict
     with _lock(project):
         transaction_id = marker.get("transaction_id")
         if (not _digest(transaction_id) or replacement.get("transaction_id") != transaction_id
-                or _RAW_MARKER_BYTES not in marker or _RAW_MARKER_BYTES in replacement):
+                or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker
+                or _RAW_MARKER_BYTES in replacement or _MARKER_IDENTITY in replacement):
             raise ValueError
         with _GUARD:
             if _ACTIVE.get(project) != transaction_id:
                 raise ValueError
-        marker_path = project / PENDING_RETRY_FILE
-        if not _direct_regular(marker_path, project):
-            raise ValueError
-        current = _read_marker(project)
-        if (current["transaction_id"] != transaction_id
-                or current[_RAW_MARKER_BYTES] != marker[_RAW_MARKER_BYTES]
-                or marker_path.read_bytes() != marker[_RAW_MARKER_BYTES]):
-            raise ValueError
-        atomic_write_json(marker_path, replacement)
+        _assert_marker_generation(project, marker)
+        atomic_write_json(project / PENDING_RETRY_FILE, replacement)
 
 
 def _decode_sources(encoded: Any, marker: dict[str, Any]) -> dict[str, Any]:
@@ -628,10 +651,10 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             raise ValueError("Retry transaction staging failed") from exc
 
 
-def _restore(project: Path) -> bool:
-    data = _read_marker(project)
+def _restore(project: Path, data: dict[str, Any]) -> bool:
     before = data["before"]
     try:
+        _assert_marker_generation(project, data)
         for path, parent in ((project / "pdfs" / "download_report.json", project / "pdfs"),
                 (project / "filtered" / "included_papers.jsonl", project / "filtered"),
                 (project / "workflow_state.json", project)):
@@ -644,18 +667,26 @@ def _restore(project: Path) -> bool:
         staging = project / data["staging_name"]
         if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
             raise ValueError
+        _assert_marker_generation(project, data)
         atomic_write_json(project / "pdfs" / "download_report.json", before["report"])
+        _assert_marker_generation(project, data)
         atomic_write_jsonl(project / "filtered" / "included_papers.jsonl", before["included"])
+        _assert_marker_generation(project, data)
         save_workflow_state(project, before["ledger"])
         for name in data["candidate_names"]:
+            _assert_marker_generation(project, data)
             path = project / "pdfs" / name
             if not _lexists(path):
                 continue
             if not _direct_regular(path, project / "pdfs"):
                 raise ValueError
+            _assert_marker_generation(project, data)
             path.unlink()
+        _assert_marker_generation(project, data)
         if _lexists(staging):
+            _assert_marker_generation(project, data)
             shutil.rmtree(staging)
+        _assert_marker_generation(project, data)
         (project / PENDING_RETRY_FILE).unlink()
         return True
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -671,7 +702,8 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
         with _GUARD:
             if project in _ACTIVE:
                 return False
-        return _restore(project)
+        marker_data = _read_marker(project)
+        return _restore(project, marker_data)
 
 
 def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:
@@ -686,7 +718,7 @@ def abort_retry_transaction(project_path: Path | str, expected_transaction_id: s
             return False
         released_id = transaction_id
         try:
-            return _restore(project)
+            return _restore(project, marker)
         finally:
             with _GUARD:
                 if _ACTIVE.get(project) == released_id:

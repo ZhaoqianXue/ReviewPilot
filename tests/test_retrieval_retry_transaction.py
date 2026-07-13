@@ -356,6 +356,29 @@ class RetryAbortTransactionTests(unittest.TestCase):
         begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_begin_postwrite_failure_preserves_same_bytes_new_inode_marker(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+        replacement = {}
+
+        def replace_with_same_bytes(project, marker):
+            old_inode = marker_path.stat().st_ino
+            temporary = marker_path.with_name("same-marker.tmp")
+            temporary.write_bytes(marker_path.read_bytes())
+            os.replace(temporary, marker_path)
+            replacement["inode"] = marker_path.stat().st_ino
+            self.assertNotEqual(replacement["inode"], old_inode)
+            raise ValueError("postwrite replacement")
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_current_before",
+                   side_effect=replace_with_same_bytes):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be validated$"):
+                begin_retry_transaction(self.project, self.preparation,
+                    self.staging_name, self.project / self.staging_name)
+
+        self.assertTrue(marker_path.exists())
+        self.assertEqual(marker_path.stat().st_ino, replacement["inode"])
+        self.assertTrue(reconcile_retry_transaction(self.project))
+
     def test_marker_round_trips_sentinel_shaped_values_and_absolute_keys_without_raw_paths(self):
         report_path = self.project / "pdfs" / "download_report.json"
         report = json.loads(report_path.read_text())
@@ -461,6 +484,42 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertEqual(load_workflow_state(self.project)["stages"]["retrieval"], before[2])
         self.assertFalse(candidate.exists()); self.assertFalse(staging.exists()); self.assertEqual(keep.read_bytes(), b"keep")
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+
+    def test_abort_stops_when_authority_write_is_followed_by_a_new_transaction(self):
+        first = begin_retry_transaction(
+            self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        marker_path = self.project / PENDING_RETRY_FILE
+        report_path = self.project.resolve() / "pdfs" / "download_report.json"
+        second = {}
+        injected = False
+
+        def replace_transaction(path, data, *args, **kwargs):
+            nonlocal injected
+            result = atomic_write_json(path, data, *args, **kwargs)
+            if Path(path) == report_path and not injected:
+                injected = True
+                abandon_retry_transaction(self.project, first.transaction_id)
+                marker_path.unlink()
+                prepared = preparation(self.project)
+                handle = begin_retry_transaction(
+                    self.project, prepared, self.staging_name, self.project / self.staging_name)
+                (self.project / self.staging_name).mkdir()
+                (self.project / "pdfs" / handle.candidate_names[0]).write_bytes(b"%PDF-second")
+                second.update(handle=handle, marker=marker_path.read_bytes())
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json",
+                   side_effect=replace_transaction):
+            with self.assertRaisesRegex(
+                    ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+                abort_retry_transaction(self.project, first.transaction_id)
+
+        handle = second["handle"]
+        self.assertEqual(marker_path.read_bytes(), second["marker"])
+        self.assertTrue((self.project / self.staging_name).exists())
+        self.assertTrue((self.project / "pdfs" / handle.candidate_names[0]).exists())
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project, handle.transaction_id))
 
     def test_live_reconcile_skips_but_abandon_allows_restart_recovery(self):
         begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
@@ -996,6 +1055,26 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_target_cas_rejects_same_bytes_new_inode_marker(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+        before = marker_path.read_bytes()
+        old_inode = marker_path.stat().st_ino
+
+        def replace_with_same_bytes(project, marker):
+            temporary = marker_path.with_name("same-marker.tmp")
+            temporary.write_bytes(before)
+            os.replace(temporary, marker_path)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_committed_source_set",
+                   side_effect=replace_with_same_bytes):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+        self.assertNotEqual(marker_path.stat().st_ino, old_inode)
+        self.assertEqual(marker_path.read_bytes(), before)
+        self.assertNotIn("target_json_b64", json.loads(marker_path.read_text()))
+        self.assertTrue(abort_retry_transaction(self.project))
 
     def test_record_rejects_each_live_authority_drift_without_marker_mutation(self):
         def mutate_report():
