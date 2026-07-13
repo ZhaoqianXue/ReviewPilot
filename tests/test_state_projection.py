@@ -68,6 +68,23 @@ class StateProjectionTests(unittest.TestCase):
                 write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1})
                 self.assertEqual(build_rp_data(root, "p")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
 
+    def test_retrieval_recovery_is_disabled_when_stale_running_or_setup_update_pending(self):
+        for condition in ("stale", "running", "setup-pending"):
+            with self.subTest(condition=condition), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]})
+                write_jsonl(project/"filtered"/"included_papers.jsonl", [{"id":"ok"},{"id":"bad"}]); write_json(project/"pdfs"/"download_report.json", {"success":1,"failed":1,"downloaded":[{"id":"ok"}],"failed_papers":[{"id":"bad"}]})
+                initialize_workflow_state(project)
+                for action,result in (("collect",{"total":0,"platform_stats":{"pubmed":0},"platform_errors":{}}),("screen",{}),("download-pdfs",{"success":1,"failed":1})): start_action(project,action); complete_action(project,action,result)
+                if condition == "stale":
+                    state=json.loads((project/"workflow_state.json").read_text()); state["stages"]["retrieval"]["stale"]=True; write_json(project/"workflow_state.json",state)
+                elif condition == "running": start_action(project,"download-pdfs")
+                else:
+                    from reviewpilot_core.setup_revision import begin_setup_transaction, finish_setup_transaction
+                    begin_setup_transaction(project, {"project_name":"p","platforms":["pubmed"]}, {"project_name":"changed","platforms":["pubmed"]}, [])
+                try: self.assertEqual(build_rp_data(root,"p",active_action="download-pdfs" if condition=="running" else None)["retrievalRecovery"], {"canRetry":False,"reportRevision":"","items":[]})
+                finally:
+                    if condition == "setup-pending": finish_setup_transaction(project)
+
     def test_running_reruns_block_current_and_downstream_exports_and_projected_artifacts(self):
         cases = [("collect", "relevance-prompt", "included-papers"), ("download-pdfs", "download-report", "extraction-results"), ("run-extraction", "extraction-results", "categorization-mapping")]
         for action, current_export, downstream_export in cases:

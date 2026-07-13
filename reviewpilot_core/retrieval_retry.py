@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .safe_text import safe_display_text
-from .workflow_state import load_workflow_state
+from .workflow_state import load_workflow_state, structured_action_outcome
 
 
 _IDENTITY_FIELDS = ("id", "doi", "url", "title")
@@ -72,8 +72,8 @@ class RetrySnapshot:
 
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
     project = Path(project_path)
+    _validate_authoritative_paths(project)
     ledger = load_workflow_state(project)["stages"]["retrieval"]
-    _validate_current_stage(ledger)
     report = _read_json_object(project / "pdfs" / "download_report.json")
     included = _read_jsonl_strict(project / "filtered" / "included_papers.jsonl")
     success = _count(report, "success")
@@ -82,6 +82,8 @@ def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
     failed_papers = _detail_rows(report, "failed_papers")
     if len(downloaded) != success or len(failed_papers) != failed or failed == 0:
         raise ValueError("Retrieval report detail counts are inconsistent")
+    expected_status, _ = structured_action_outcome("download-pdfs", {"success": success, "failed": failed})
+    _validate_current_stage(ledger, expected_status, failed)
     counts = ledger.get("counts")
     if not isinstance(counts, dict) or _count(counts, "succeeded") != success or _count(counts, "failed") != failed:
         raise ValueError("Retrieval ledger counts do not match report")
@@ -126,13 +128,46 @@ def disabled_retry_projection() -> dict[str, Any]:
     return {"canRetry": False, "reportRevision": "", "items": []}
 
 
-def _validate_current_stage(stage: dict[str, Any]) -> None:
+def _validate_current_stage(stage: dict[str, Any], expected_status: str, failed: int) -> None:
     if stage.get("status") not in {"partial", "failed"} or stage.get("stale") is not False:
         raise ValueError("Retrieval report is not a current retryable outcome")
+    if stage["status"] != expected_status:
+        raise ValueError("Retrieval ledger classification does not match report")
+    if stage["status"] == "partial" and stage.get("error") is not None:
+        raise ValueError("Partial retrieval must not contain a terminal error")
     if stage["status"] == "failed":
-        error = stage.get("error")
-        if not isinstance(error, str) or not error.startswith("Action produced no successful outputs"):
+        if stage.get("error") != f"Action produced no successful outputs ({failed} failed).":
             raise ValueError("Retrieval failure is not a structured terminal report")
+
+
+def _validate_authoritative_paths(project: Path) -> None:
+    try:
+        if project.is_symlink() or not project.is_dir():
+            raise ValueError
+        resolved_project = project.resolve(strict=True)
+        _regular_child(project / "workflow_state.json", resolved_project)
+        pdfs = _directory_child(project / "pdfs", resolved_project)
+        filtered = _directory_child(project / "filtered", resolved_project)
+        _regular_child(project / "pdfs" / "download_report.json", pdfs)
+        _regular_child(project / "filtered" / "included_papers.jsonl", filtered)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("Authoritative retry facts are unavailable") from exc
+
+
+def _directory_child(path: Path, resolved_parent: Path) -> Path:
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError
+    resolved = path.resolve(strict=True)
+    if resolved.parent != resolved_parent:
+        raise ValueError
+    return resolved
+
+
+def _regular_child(path: Path, resolved_parent: Path) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError
+    if path.resolve(strict=True).parent != resolved_parent:
+        raise ValueError
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -182,7 +217,9 @@ def _safe_label(row: dict[str, Any]) -> str:
     for field in ("title", "id", "doi"):
         value = row.get(field)
         if isinstance(value, str) and value.strip():
-            return safe_display_text(value, fallback="Unavailable paper")
+            safe = safe_display_text(value, fallback="")
+            if safe:
+                return safe
     return "Unavailable paper"
 
 
@@ -190,5 +227,7 @@ def _safe_failure_class(row: dict[str, Any]) -> str:
     for field in ("failure_class", "error", "reason"):
         value = row.get(field)
         if isinstance(value, str) and value.strip():
-            return safe_display_text(value, fallback="Retrieval failed")
+            safe = safe_display_text(value, fallback="")
+            if safe:
+                return safe
     return "Retrieval failed"

@@ -52,6 +52,13 @@ class RetrievalRetryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             stable_retry_id([])
 
+    def test_stable_identity_precedence_is_id_then_doi_then_url_then_title(self):
+        row = {"id": "I", "doi": "D", "url": "U", "title": "T"}
+        for discarded in ((), ("id",), ("id", "doi"), ("id", "doi", "url")):
+            candidate = {key: value for key, value in row.items() if key not in discarded}
+            expected_field = next(key for key in ("id", "doi", "url", "title") if key in candidate)
+            self.assertEqual(stable_retry_id(candidate), stable_retry_id({expected_field: candidate[expected_field]}))
+
     def test_report_revision_is_canonical_and_changes_with_report_or_stage_identity(self):
         report = {"failed": 1, "success": 0, "downloaded": [], "failed_papers": [{"id": "a"}]}
         stage = {"attempt": 2, "status": "failed", "counts": {"succeeded": 0, "failed": 1}}
@@ -125,6 +132,69 @@ class RetrievalRetryTests(unittest.TestCase):
             (project / "filtered" / "included_papers.jsonl").write_text('{"id":"ok"}\nnot-json\n', encoding="utf-8")
             with self.assertRaises(ValueError):
                 current_retry_snapshot(project)
+
+    def test_rejects_invalid_report_counts(self):
+        for value in (True, "1", 1.0, -1):
+            for key in ("success", "failed"):
+                with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as tmp:
+                    project = Path(tmp); partial_project(project)
+                    report = json.loads((project / "pdfs" / "download_report.json").read_text()); report[key] = value
+                    write_json(project / "pdfs" / "download_report.json", report)
+                    with self.assertRaises(ValueError): current_retry_snapshot(project)
+
+    def test_ledger_classification_must_exactly_match_report(self):
+        cases = [
+            (0, 1, "partial", None, False),
+            (1, 1, "failed", "Action produced no successful outputs (1 failed).", False),
+            (0, 1, "failed", "Action produced no successful outputs (1 failed). forged", False),
+            (1, 1, "partial", None, True),
+            (0, 1, "failed", "Action produced no successful outputs (1 failed).", True),
+        ]
+        for success, failed, status, error, accepted in cases:
+            with self.subTest(success=success, status=status, error=error), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); partial_project(project)
+                write_json(project / "pdfs" / "download_report.json", {"success": success, "failed": failed, "downloaded": [{"id": "ok-1"}][:success], "failed_papers": [{"id": "failed-1"}]})
+                state = load_workflow_state(project); stage = state["stages"]["retrieval"]
+                stage.update(status=status, error=error, counts={"succeeded": success, "failed": failed}, stale=False)
+                write_json(project / "workflow_state.json", state)
+                if accepted: self.assertEqual(current_retry_snapshot(project).ledger["status"], status)
+                else:
+                    with self.assertRaises(ValueError): current_retry_snapshot(project)
+
+    def test_rejects_symlinks_at_every_authoritative_boundary(self):
+        boundaries = ("project", "ledger", "pdfs", "report", "filtered", "included")
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp); project = base / "project"; project.mkdir(); partial_project(project)
+                external = base / "external"; external.mkdir()
+                if boundary == "project":
+                    link = base / "linked-project"; link.symlink_to(project, target_is_directory=True); target = link
+                else:
+                    target = project
+                    paths = {"ledger": project / "workflow_state.json", "pdfs": project / "pdfs", "report": project / "pdfs" / "download_report.json", "filtered": project / "filtered", "included": project / "filtered" / "included_papers.jsonl"}
+                    path = paths[boundary]
+                    if path.is_dir():
+                        replacement = external / boundary; replacement.mkdir();
+                        for child in path.iterdir(): (replacement / child.name).write_bytes(child.read_bytes())
+                        for child in path.iterdir(): child.unlink()
+                        path.rmdir(); path.symlink_to(replacement, target_is_directory=True)
+                    else:
+                        replacement = external / path.name; replacement.write_bytes(path.read_bytes()); path.unlink(); path.symlink_to(replacement)
+                with self.assertRaisesRegex(ValueError, "^Authoritative retry facts are unavailable$"):
+                    current_retry_snapshot(target)
+
+    def test_safe_display_candidates_fall_through_before_generic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            partial_project(project, failed_row={"id": "failed-1", "title": "/Users/private/paper.pdf", "failure_class": "C:\\private\\error", "error": "paywall"})
+            item = current_retry_snapshot(project).items[0]
+        self.assertEqual(item.label, "failed-1"); self.assertEqual(item.failure_class, "paywall")
+
+    def test_snapshot_ledger_is_detached_from_disk_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); partial_project(project)
+            snapshot = current_retry_snapshot(project); snapshot.ledger["status"] = "completed"
+            self.assertEqual(current_retry_snapshot(project).ledger["status"], "partial")
 
 
 if __name__ == "__main__":
