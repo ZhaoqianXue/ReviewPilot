@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 from copy import deepcopy
 from dataclasses import dataclass
-import hashlib
 import json
 import math
 import os
@@ -20,7 +19,7 @@ from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
     RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
-    retrieval_report_revision, stable_retry_id,
+    _publication_pdf_fingerprint, retrieval_report_revision, stable_retry_id,
 )
 from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
 from .workflow_state import load_workflow_state, save_workflow_state
@@ -509,9 +508,8 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
         if (pdf.destination_path != project / "pdfs" / name or name not in marker["candidate_names"]
                 or pdf.source_path.parent != source_parent or not _direct_regular(pdf.source_path, source_parent)):
             raise ValueError
-        payload = pdf.source_path.read_bytes()
-        if (len(payload) != pdf.source_size or hashlib.sha256(payload).hexdigest() != pdf.source_sha256
-                or not payload.startswith(b"%PDF-")):
+        size, digest, _ = _publication_pdf_fingerprint(pdf.source_path, source_parent)
+        if size != pdf.source_size or digest != pdf.source_sha256:
             raise ValueError
         successful_names.append(name)
         pdfs.append({"destination_name": name, "retry_id": pdf.retry_id,

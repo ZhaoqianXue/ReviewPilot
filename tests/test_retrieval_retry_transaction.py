@@ -51,7 +51,8 @@ def preparation(project: Path):
         "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": ids}})
 
 
-def publication(project: Path, prepared: RetryPreparation, staging_name: str, *, succeeds: bool | int = True):
+def publication(project: Path, prepared: RetryPreparation, staging_name: str, *, succeeds: bool | int = True,
+                pdf_payload: bytes = b"%PDF-1.7\nretry"):
     def download(root: Path, project_id: str):
         staged = root / project_id
         rows = [json.loads(line) for line in (staged / "filtered" / "included_papers.jsonl").read_text().splitlines()]
@@ -60,7 +61,7 @@ def publication(project: Path, prepared: RetryPreparation, staging_name: str, *,
         for index, row in enumerate(rows):
             if index < success_count:
                 pdf = staged / "pdfs" / f"retry-{index}.pdf"
-                pdf.write_bytes(b"%PDF-1.7\nretry")
+                pdf.write_bytes(pdf_payload)
                 row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
                 downloaded.append({"id": row.get("id", ""), "title": row.get("title", ""), "path": str(pdf)})
             else:
@@ -509,6 +510,68 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_record_streams_staged_pdf_and_accepts_upstream_whitespace_header(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        self.handle = begin_retry_transaction(
+            self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        payload = b" \n\t%PDF-1.7\n" + b"x" * (130 * 1024)
+        self.plan = publication(
+            self.project, self.prepared, self.staging_name, pdf_payload=payload)
+        self.ledger = target_ledger(self.project, self.plan)
+        source = self.plan.pdfs[0].source_path
+        original_open = Path.open
+        original_read_bytes = Path.read_bytes
+        read_sizes = []
+
+        class TrackingReader:
+            def __init__(self, handle):
+                self.handle = handle
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.handle.close()
+
+            def read(self, size=-1):
+                read_sizes.append(size)
+                return self.handle.read(size)
+
+        def guarded_open(path, *args, **kwargs):
+            handle = original_open(path, *args, **kwargs)
+            mode = args[0] if args else kwargs.get("mode", "r")
+            return TrackingReader(handle) if path == source and mode == "rb" else handle
+
+        def guarded_read_bytes(path):
+            if path == source:
+                raise AssertionError("record must not call read_bytes for a staged PDF")
+            return original_read_bytes(path)
+
+        with patch.object(Path, "open", guarded_open), patch.object(Path, "read_bytes", guarded_read_bytes):
+            record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+        self.assertGreater(len(read_sizes), 2)
+        self.assertEqual(set(read_sizes), {64 * 1024})
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_stream_rejection_preserves_marker_and_abort_recovery(self):
+        source = self.plan.pdfs[0].source_path
+        source.write_bytes(b"not-a-pdf")
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+        original_read_bytes = Path.read_bytes
+
+        def guarded_read_bytes(path):
+            if path == source:
+                raise AssertionError("record must not call read_bytes for a staged PDF")
+            return original_read_bytes(path)
+
+        with patch.object(Path, "read_bytes", guarded_read_bytes):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
 
     def test_record_rejects_ledger_mismatch_and_forged_plan_without_changing_marker(self):
         before = (self.project / PENDING_RETRY_FILE).read_bytes()
