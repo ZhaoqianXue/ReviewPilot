@@ -14,7 +14,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
-from .setup_revision import setup_revision
+from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
 
 
@@ -89,6 +89,7 @@ EXPORT_ARTIFACTS = {
 
 
 def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
+    reconcile_setup_transaction(project_path)
     artifact = EXPORT_ARTIFACTS.get(export_key)
     if not artifact or project_path.is_symlink() or (project_path / ".setup_update_pending.json").exists():
         return None
@@ -123,7 +124,7 @@ def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
 def list_projects(output_root: Path | str = Path("output")) -> list[dict]:
     projects = []
     for path in iter_project_dirs(Path(output_root)):
-        config = _unescape_strings(read_json(path / "search_conditions.json", {}) or {})
+        config = _unescape_strings(read_consistent_setup(path))
         projects.append(
             {
                 "id": path.name,
@@ -161,6 +162,8 @@ def build_new_project_data(output_root: Path | str) -> dict:
             },
             "date_start": "",
             "date_end": "",
+            "model": LEAD_AGENT_DEV_MODEL,
+            "derive_search_terms": False,
         },
         "setupRevision": "",
         "stageState": new_workflow_state()["stages"],
@@ -218,7 +221,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
 def build_rp_data(output_root: Path | str, project_id: str, active_action: str | None = None) -> dict:
     root = Path(output_root)
     path = project_dir(root, project_id)
-    config = _unescape_strings(read_json(path / "search_conditions.json", {}) or {})
+    config = _unescape_strings(read_consistent_setup(path))
     collected_summary = _unescape_strings(read_json(path / "collected" / "summary.json", {}) or {})
     filtering_stats = _unescape_strings(read_json(path / "filtered" / "filtering_stats.json", {}) or {})
     screening_stats = _unescape_strings(read_json(path / "filtered" / "screening_stats.json", {}) or {})
@@ -249,8 +252,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     current_step = _current_step(workflow_state)
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
-    schema_finalized = is_schema_finalized(path)
-    platform_stats = _platform_stats(path, config, collected_summary)
+    schema_finalized = not workflow_state["stages"]["extraction"]["stale"] and is_schema_finalized(path)
+    platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
 
     return {
         "isNewProject": False,
@@ -275,19 +278,19 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "groups": _groups(categorization),
         "retrieved": _retrieved(included),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
-        "retrievalSummary": _retrieval_summary(path, included, download_report),
+        "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "categorizationSummary": _categorization_summary(categorization),
         "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows),
-        "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization),
+        "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "evidenceMatrix": _evidence_matrix(extraction_rows, included, categorized_rows),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
         "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
         "previewPaper": _preview_paper(extraction_results[0] if extraction_results else {}, included),
-        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization),
+        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, extraction_stale=workflow_state["stages"]["extraction"]["stale"]),
         "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization),
-        "quietLabels": _quiet_labels(path),
-        "quietActions": _quiet_actions(path),
+        "quietLabels": _quiet_labels(path, workflow_state),
+        "quietActions": _quiet_actions(path, workflow_state),
         "ctxLabels": _ctx_labels(current_step),
         "history": _history(root, project_id),
     }
@@ -312,6 +315,9 @@ def _unescape_strings(value: Any) -> Any:
 
 def _current_step(workflow_state: dict) -> int:
     stages = workflow_state["stages"]
+    stale = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["stale"]]
+    if stale:
+        return stale[0]
     exceptional = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"running", "partial", "failed"}]
     if exceptional:
         return exceptional[-1]
@@ -341,7 +347,10 @@ def _steps(
     steps = []
     for index, (key, label, fallback_sub) in enumerate(STEP_DEFS, start=1):
         stage_name = STAGE_NAMES[index - 1]
-        if workflow_state["stages"][stage_name]["status"] == "completed":
+        stage_state = workflow_state["stages"][stage_name]
+        if stage_state["stale"]:
+            status = "stale"
+        elif stage_state["status"] == "completed":
             status = "done"
         elif index == current_step:
             status = "active"
@@ -353,27 +362,29 @@ def _steps(
                 "key": key,
                 "label": label,
                 "status": status,
-                "sub": subs.get(key) or fallback_sub,
+                "sub": "Needs rerun" if stage_state["stale"] else (subs.get(key) or fallback_sub),
                 "desc": "",
             }
         )
     return steps
 
 
-def _download_success(path: Path, download_report: dict) -> int:
+def _download_success(path: Path, download_report: dict, *, allow_artifact_fallback: bool = True) -> int:
     for key in ("success", "successful", "downloaded", "success_count"):
         value = download_report.get(key)
         if isinstance(value, int):
             return value
-    return len(list((path / "pdfs").glob("*.pdf"))) if (path / "pdfs").exists() else 0
+    return len(list((path / "pdfs").glob("*.pdf"))) if allow_artifact_fallback and (path / "pdfs").exists() else 0
 
 
-def _platform_stats(path: Path, config: dict, collected_summary: dict) -> list[list[Any]]:
+def _platform_stats(path: Path, config: dict, collected_summary: dict, *, allow_artifact_fallback: bool = True) -> list[list[Any]]:
     stats = collected_summary.get("platform_stats") or {}
-    if not stats:
+    if not stats and allow_artifact_fallback:
         collected_dir = path / "collected"
         for platform in config.get("platforms") or []:
             stats[platform] = count_jsonl(collected_dir / f"{platform}.jsonl")
+    if not stats:
+        stats = {platform: 0 for platform in config.get("platforms") or []}
     return [[_platform_label(key), int(value or 0)] for key, value in stats.items()]
 
 
@@ -478,6 +489,8 @@ def _setup(config: dict) -> dict:
         "source_limits": _source_limits(config, platforms, max_results),
         "date_start": str(date_range.get("start") or ""),
         "date_end": str(date_range.get("end") or ""),
+        "model": str(config.get("model") or LEAD_AGENT_DEV_MODEL),
+        "derive_search_terms": bool(config.get("derive_search_terms")),
     }
 
 
@@ -571,8 +584,8 @@ def _screening_metrics(collected_summary: dict, filtering_stats: dict, screening
     return {"identified": identified, "afterDedup": after_dedup, "included": included_count}
 
 
-def _retrieval_summary(path: Path, included: list[dict], download_report: dict) -> dict:
-    retrieved = _download_success(path, download_report)
+def _retrieval_summary(path: Path, included: list[dict], download_report: dict, *, allow_artifact_fallback: bool = True) -> dict:
+    retrieved = _download_success(path, download_report, allow_artifact_fallback=allow_artifact_fallback)
     total = len(included)
     failed = download_report.get("failed")
     unavailable = int(failed) if isinstance(failed, int) else max(total - retrieved, 0)
@@ -592,8 +605,10 @@ def _result_overview(
     download_report: dict,
     extraction_rows: list[dict],
     categorization: dict,
+    *,
+    allow_retrieval_fallback: bool = True,
 ) -> list[dict[str, str]]:
-    retrieval = _retrieval_summary(path, included, download_report)
+    retrieval = _retrieval_summary(path, included, download_report, allow_artifact_fallback=allow_retrieval_fallback)
     categorization_summary = _categorization_summary(categorization)
     return [
         {"label": "Identified", "value": str(collected_summary.get("total_papers", 0))},
@@ -967,8 +982,8 @@ def _export_package(path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _quiet_labels(path: Path) -> dict[str, str]:
-    extraction_done = (path / "extraction" / "extraction_results.jsonl").exists()
+def _quiet_labels(path: Path, workflow_state: dict | None = None) -> dict[str, str]:
+    extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     labels = {
         "search": "Run collection",
         "screening": "Run screening",
@@ -980,8 +995,8 @@ def _quiet_labels(path: Path) -> dict[str, str]:
     return labels
 
 
-def _quiet_actions(path: Path) -> dict[str, str]:
-    extraction_done = (path / "extraction" / "extraction_results.jsonl").exists()
+def _quiet_actions(path: Path, workflow_state: dict | None = None) -> dict[str, str]:
+    extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     actions = {
         "search": "collect",
         "screening": "screen",
@@ -1051,6 +1066,8 @@ def _messages(
     fields: list[list[Any]],
     extraction_results: list[dict],
     categorization: dict,
+    *,
+    extraction_stale: bool = False,
 ) -> list[dict]:
     description = _initial_user_topic(path, config)
     messages = [
@@ -1067,7 +1084,7 @@ def _messages(
         )
     if categorization:
         messages.append({"step": 5, "role": "a", "text": "The final Categorization & Analysis report is ready."})
-    elif extraction_results or (path / "extraction" / "extraction_results.jsonl").exists():
+    elif extraction_results or (not extraction_stale and (path / "extraction" / "extraction_results.jsonl").exists()):
         messages.append({"step": 5, "role": "a", "text": "Extraction is complete. Choose a field to categorize for final analysis."})
     messages.extend(_stored_chat_messages(path))
     return _dedupe_messages(messages)

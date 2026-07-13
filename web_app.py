@@ -37,7 +37,7 @@ _prefer_local_package_imports()
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.atomic_files import atomic_write_json
-from reviewpilot_core.setup_revision import affected_stages, materially_changes_dependencies, normalize_setup, setup_revision, stale_replacement_stages
+from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, materially_changes_dependencies, normalize_setup, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
@@ -279,6 +279,7 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
     project_path = Path(output_root) / project_id
 
     def transact():
+        reconcile_setup_transaction(project_path)
         current = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
         current_revision = setup_revision(current)
         next_revision = setup_revision(config)
@@ -292,22 +293,26 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
         if not changed:
             return {"id": project_id, "title": current.get("project_name") or project_id, "confirmationRequired": False, "setupRevision": current_revision}
         ledger_before = load_workflow_state(project_path)
-        pending = project_path / ".setup_update_pending.json"
-        atomic_write_json(pending, {"expected_revision": current_revision, "proposed_revision": next_revision})
+        pending = begin_setup_transaction(project_path, current, config, impacts)
         try:
             search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
             persisted = {**normalize_setup(config), **search_conditions}
             persisted["setup_revision"] = setup_revision(persisted)
             persisted.setdefault("project_path", str(project_path))
+            update_setup_transaction_target(pending, persisted)
             atomic_write_json(project_path / "search_conditions.json", persisted)
             if impacts:
                 mark_stages_stale(project_path, impacts)
         except Exception:
-            atomic_write_json(project_path / "search_conditions.json", current)
-            save_workflow_state(project_path, ledger_before)
+            try:
+                atomic_write_json(project_path / "search_conditions.json", current)
+                save_workflow_state(project_path, ledger_before)
+            except Exception:
+                abandon_setup_transaction(project_path)
+                raise
+            finish_setup_transaction(project_path)
             raise
-        finally:
-            pending.unlink(missing_ok=True)
+        finish_setup_transaction(project_path)
         return {"id": project_id, "title": persisted["project_name"], "path": persisted["project_path"], "confirmationRequired": False, "setupRevision": persisted["setup_revision"], "affectedStages": impacts}
 
     if hasattr(task_runner, "run_if_idle"):
@@ -415,16 +420,17 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
 
     project_path = Path(output_root) / project_id
     action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
-    replacements = stale_replacement_stages(project_path, action_stage)
     confirmation = input_data.get("overwrite_confirmation") if isinstance(input_data, dict) and isinstance(input_data.get("overwrite_confirmation"), dict) else {}
-    current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
-    if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):
-        raise ConfirmationRequired(setup_revision(current_setup), replacements)
     if confirmation:
         input_data = {key: value for key, value in input_data.items() if key != "overwrite_confirmation"}
     previous_state: list[dict] = []
 
     def prepare_action():
+        reconcile_setup_transaction(project_path)
+        replacements = stale_replacement_stages(project_path, action_stage)
+        current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
+        if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):
+            raise ConfirmationRequired(setup_revision(current_setup), replacements)
         previous_state.append(load_workflow_state(project_path))
         start_action(project_path, action)
 

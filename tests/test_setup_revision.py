@@ -1,13 +1,16 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
 import unittest
+from threading import Event
 from unittest.mock import patch
 from starlette.testclient import TestClient
 
-from reviewpilot_core.setup_revision import materially_changes_dependencies, normalize_setup, setup_revision
+from reviewpilot_core.setup_revision import begin_setup_transaction, materially_changes_dependencies, normalize_setup, reconcile_setup_transaction, setup_revision, update_setup_transaction_target
 from reviewpilot_core.state_projection import build_rp_data, export_artifact_path
 from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, mark_stages_stale
+import reviewpilot_core.setup_revision as setup_revision_module
 import web_app
 
 
@@ -41,6 +44,23 @@ class SetupRevisionTests(unittest.TestCase):
                 self.assertTrue(materially_changes_dependencies(base, {**base, **changes}))
         self.assertFalse(materially_changes_dependencies(base, {**base, "project_name": "Renamed"}))
 
+    def test_each_material_setup_input_returns_impact_preview_without_writing(self):
+        changes = {
+            "description": {"description": "Other"}, "topic": {"primary_topic": "Robotics"},
+            "domain": {"domain": "surgery"}, "query": {"search_terms": "robotics"},
+            "platforms": {"platforms": ["arxiv"], "source_limits": {"arxiv": 10}},
+            "limits": {"source_limits": {"pubmed": 20}, "max_results": 20},
+            "dates": {"date_start": "2021", "date_end": "2025"},
+            "model": {"model": "custom-model"}, "derive": {"derive_search_terms": True},
+        }
+        for label, change in changes.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); project, current = self._project(root)
+                payload = {"project_name": "Demo", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "source_limits": {"pubmed": 10}, "max_results": 10, **change}
+                preview = web_app.update_project_setup(root, "demo", payload)
+                self.assertTrue(preview["confirmationRequired"])
+                self.assertEqual(json.loads((project / "search_conditions.json").read_text()), current)
+
     def test_material_change_previews_then_confirmed_write_marks_outputs_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -68,6 +88,11 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertFalse(result["confirmationRequired"])
             self.assertEqual(result["setupRevision"], setup_revision(config))
 
+    def test_legacy_implicit_defaults_are_a_visual_noop_when_saved(self):
+        legacy = {"project_name": "Demo", "description": "Question", "search_terms": "Question", "platforms": ["pubmed"]}
+        submitted = web_app._setup_config({"project_name": "Demo", "description": "Question", "platforms": ["pubmed"]})
+        self.assertEqual(setup_revision(legacy), setup_revision(submitted))
+
     def test_stale_confirmation_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -87,6 +112,32 @@ class SetupRevisionTests(unittest.TestCase):
             projected = build_rp_data(root, "demo")
             self.assertEqual(projected["screeningMetrics"]["identified"], 0)
 
+    def test_projection_never_recounts_or_marks_stale_artifacts_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _config = self._project(root)
+            (project / "collected").mkdir()
+            (project / "collected" / "pubmed.jsonl").write_text('{"title":"old"}\n')
+            (project / "pdfs").mkdir(); (project / "pdfs" / "old.pdf").write_bytes(b"old")
+            (project / "extraction").mkdir(); (project / "extraction" / "extraction_schema.json").write_text('{"fields":[{"name":"old"}],"finalized":true}')
+            (project / "extraction" / "extraction_results.jsonl").write_text('{"title":"old","old":"value"}\n')
+            mark_stages_stale(project, ["collection", "retrieval", "extraction"])
+            projected = build_rp_data(root, "demo")
+        self.assertEqual(projected["platforms"], [["PubMed", 0]])
+        self.assertEqual(projected["retrievalSummary"]["retrieved"], 0)
+        self.assertEqual(projected["schemaWorkbench"]["status"], "missing")
+        self.assertNotIn("categorize", projected["quietActions"])
+        self.assertEqual(projected["steps"][0]["status"], "stale")
+        self.assertEqual(projected["steps"][0]["sub"], "Needs rerun")
+
+    def test_setup_projection_round_trips_model_and_derive_search_terms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, config = self._project(root)
+            config.update(model="custom-model", derive_search_terms=True)
+            (project / "search_conditions.json").write_text(json.dumps(config))
+            setup = build_rp_data(root, "demo")["setup"]
+        self.assertEqual(setup["model"], "custom-model")
+        self.assertTrue(setup["derive_search_terms"])
+
     def test_rerun_of_stale_stage_requires_exact_overwrite_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, config = self._project(root)
@@ -105,6 +156,27 @@ class SetupRevisionTests(unittest.TestCase):
                 task = web_app.task_runner.wait(task_id, timeout=2)
             self.assertEqual(task["status"], "completed")
             self.assertFalse(load_workflow_state(project)["stages"]["collection"]["stale"])
+
+    def test_overwrite_validation_and_start_are_inside_project_reservation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _config = self._project(root)
+            mark_stages_stale(project, ["collection"])
+            entered, release = Event(), Event()
+            original = web_app.stale_replacement_stages
+            def gated(*args):
+                entered.set(); self.assertTrue(release.wait(2)); return original(*args)
+            old_runner = web_app.task_runner; web_app.task_runner = web_app.TaskRunner(max_workers=1)
+            try:
+                with patch.object(web_app, "stale_replacement_stages", side_effect=gated), ThreadPoolExecutor(max_workers=2) as executor:
+                    action = executor.submit(web_app.submit_project_action, root, "demo", "collect")
+                    self.assertTrue(entered.wait(1))
+                    update = executor.submit(web_app.update_project_setup, root, "demo", {"project_name": "Demo", "description": "Other", "platforms": ["pubmed"]})
+                    self.assertFalse(update.done())
+                    release.set()
+                    with self.assertRaises(web_app.ConfirmationRequired): action.result(timeout=1)
+                    self.assertTrue(update.result(timeout=1)["confirmationRequired"])
+            finally:
+                release.set(); web_app.task_runner.shutdown(); web_app.task_runner = old_runner
 
     def test_active_task_rejects_setup_change(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,6 +208,57 @@ class SetupRevisionTests(unittest.TestCase):
                     web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10})
             self.assertEqual(json.loads((project / "search_conditions.json").read_text()), before)
             self.assertFalse((project / ".setup_update_pending.json").exists())
+
+    def test_pending_transaction_rolls_forward_after_setup_write_before_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, current = self._project(root)
+            target = {**current, "description": "Changed"}
+            marker = begin_setup_transaction(project, current, target, ["collection"])
+            update_setup_transaction_target(marker, target)
+            (project / "search_conditions.json").write_text(json.dumps(target))
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            self.assertTrue(reconcile_setup_transaction(project))
+            self.assertTrue(load_workflow_state(project)["stages"]["collection"]["stale"])
+            self.assertFalse(marker.exists())
+
+    def test_pending_transaction_rolls_back_when_setup_was_not_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, current = self._project(root)
+            marker = begin_setup_transaction(project, current, {**current, "description": "Changed"}, ["collection"])
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            self.assertTrue(reconcile_setup_transaction(project))
+            self.assertFalse(load_workflow_state(project)["stages"]["collection"]["stale"])
+            self.assertFalse(marker.exists())
+
+    def test_failed_immediate_rollback_leaves_marker_for_next_read_recovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _current = self._project(root)
+            with patch.object(web_app, "_run_lead_agent_search_setup", side_effect=RuntimeError("agent failed")), patch.object(web_app, "atomic_write_json", side_effect=OSError("rollback failed")):
+                with self.assertRaisesRegex(OSError, "rollback failed"):
+                    web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10})
+            marker = project / ".setup_update_pending.json"
+            self.assertTrue(marker.exists())
+            build_rp_data(root, "demo")
+            self.assertFalse(marker.exists())
+
+    def test_noop_update_recovers_pending_and_crash_rollforward_still_requires_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, current = self._project(root)
+            marker = begin_setup_transaction(project, current, {**current, "description": "Changed"}, ["collection"])
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            result = web_app.update_project_setup(root, "demo", current)
+            self.assertFalse(result["confirmationRequired"])
+            self.assertFalse(marker.exists())
+
+            target = {**current, "description": "Changed"}
+            marker = begin_setup_transaction(project, current, target, ["collection"])
+            update_setup_transaction_target(marker, target)
+            (project / "search_conditions.json").write_text(json.dumps(target))
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            with self.assertRaises(web_app.ConfirmationRequired):
+                web_app.submit_project_action(root, "demo", "collect")
+            self.assertTrue(load_workflow_state(project)["stages"]["collection"]["stale"])
+            self.assertFalse(marker.exists())
 
 
 if __name__ == "__main__":

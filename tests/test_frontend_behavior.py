@@ -7,6 +7,51 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_material_setup_values_round_trip_without_dropping_fields(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { materialSetupValues } = require('./frontend/app.js');
+const setup = { project_name:'P', description:'D', primary_topic:'T', domain:'X', search_terms:'Q', platforms:['pubmed'], max_results:7, source_limits:{pubmed:7}, date_start:'2020', date_end:'2024', model:'custom', derive_search_terms:true };
+assert.deepEqual(materialSetupValues({ setup }), setup);
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_setup_confirmation_retries_only_after_user_accepts(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { confirmSetupImpact } = require('./frontend/app.js');
+let sends = 0;
+const preview = { confirmationRequired: true, expectedRevision: 'r1', affectedStages: ['collection'] };
+let confirmations = 0;
+confirmSetupImpact({ confirmationRequired: false, setupRevision: 'r1' }, {}, () => { confirmations += 1; return true; }, async () => { sends += 1; }).then((unchanged) => {
+  assert.equal(unchanged.setupRevision, 'r1'); assert.equal(confirmations, 0); assert.equal(sends, 0);
+  return confirmSetupImpact(preview, { description: 'new' }, () => false, async () => { sends += 1; });
+}).then((result) => {
+  assert.equal(result.cancelled, true); assert.equal(sends, 0);
+  return confirmSetupImpact(preview, { description: 'new' }, () => true, async (payload) => {
+    sends += 1; assert.equal(payload.confirmation.expected_revision, 'r1'); return { setupRevision: 'r2' };
+  });
+}).then((result) => { assert.equal(result.setupRevision, 'r2'); assert.equal(sends, 1); });
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stale_overwrite_confirmation_retries_with_exact_revision_and_stages(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { confirmOverwriteImpact } = require('./frontend/app.js');
+const preview = { expectedRevision: 'r2', affectedStages: ['collection', 'screening'] };
+let retries = 0;
+confirmOverwriteImpact(preview, null, () => false, async () => { retries += 1; }).then((cancelled) => {
+  assert.equal(cancelled.cancelled, true); assert.equal(retries, 0);
+  return confirmOverwriteImpact(preview, { mode: 'x' }, () => true, async (payload) => { retries += 1; return payload; });
+}).then((payload) => {
+  assert.equal(retries, 1); assert.equal(payload.mode, 'x');
+  assert.deepEqual(payload.overwrite_confirmation, { expected_revision: 'r2', affected_stages: ['collection', 'screening'] });
+});
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
     def test_dialog_maximum_updates_only_selected_source_limits_when_changed(self):
         script = r"""
 const assert = require('node:assert/strict');

@@ -61,8 +61,29 @@ function applySubmittedMaxToSourceLimits(setupDraft, previousMaxResults, submitt
   return draft;
 }
 
+async function confirmSetupImpact(preview, payload, confirmFn, send) {
+  if (!preview?.confirmationRequired) return preview;
+  if (!confirmFn(`Changing this setup makes these results stale: ${preview.affectedStages.join(', ')}. Continue?`)) return { cancelled: true };
+  return send({ ...payload, confirmation: { expected_revision: preview.expectedRevision } });
+}
+
+async function confirmOverwriteImpact(preview, payload, confirmFn, retry) {
+  if (!confirmFn(`This rerun replaces stale results for: ${preview.affectedStages.join(', ')}. Continue?`)) return { cancelled: true };
+  return retry({ ...(payload || {}), overwrite_confirmation: { expected_revision: preview.expectedRevision, affected_stages: preview.affectedStages } });
+}
+
+function materialSetupValues(data) {
+  const setup = data.setup || {};
+  return {
+    project_name: setup.project_name || '', description: setup.description || '', primary_topic: setup.primary_topic || '', domain: setup.domain || '',
+    search_terms: setup.search_terms || '', platforms: [...(setup.platforms || [])], max_results: setup.max_results,
+    source_limits: { ...(setup.source_limits || {}) }, date_start: setup.date_start || '', date_end: setup.date_end || '',
+    model: setup.model || '', derive_search_terms: !!setup.derive_search_terms,
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues };
 }
 
 /* ReviewPilot workspace UI.
@@ -351,6 +372,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function setupDraftFromData(data) {
+    const material = materialSetupValues(data);
     const sourceNames = data.platforms.map((p) => platformKey(p[0]));
     const setup = data.setup || {};
     const selectedPlatforms = (setup.platforms && setup.platforms.length) ? setup.platforms : (sourceNames.length ? sourceNames : ['pubmed', 'arxiv', 'openalex']);
@@ -366,6 +388,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       source_limits: normalizeSourceLimits(setup.source_limits || {}, selectedPlatforms, fallbackMaxResults),
       date_start: setup.date_start || '',
       date_end: setup.date_end || '',
+      model: material.model || data.project.model || '',
+      derive_search_terms: material.derive_search_terms,
       keywords: data.keywords.length ? data.keywords.slice(0, 8) : [],
     };
   }
@@ -411,6 +435,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       max_results: maxResultsFromSourceLimits(sourceLimits, state.setupDraft.max_results),
       date_start: unescapePayloadValue(state.setupDraft.date_start),
       date_end: unescapePayloadValue(state.setupDraft.date_end),
+      model: unescapePayloadValue(state.setupDraft.model),
+      derive_search_terms: !!state.setupDraft.derive_search_terms,
       ...overrides,
     };
   }
@@ -542,9 +568,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         if (body?.confirmationRequired) {
-          const affected = body.affectedStages.join(', ');
-          if (!window.confirm(`This rerun replaces stale results for: ${affected}. Continue?`)) throw new Error('Rerun cancelled.');
-          return postAction(action, { ...(payload || {}), overwrite_confirmation: { expected_revision: body.expectedRevision, affected_stages: body.affectedStages } });
+          const retried = await confirmOverwriteImpact(body, payload, window.confirm, (confirmed) => postAction(action, confirmed));
+          if (retried?.cancelled) throw new Error('Rerun cancelled.');
+          return retried;
         }
         const detail = body && typeof body.detail === 'string' && body.detail.trim()
           ? body.detail : `Action failed: ${res.status}`;
@@ -644,16 +670,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     }
     let result = await res.json();
     if (result.confirmationRequired) {
-      const affected = result.affectedStages.join(', ');
-      if (!window.confirm(`Changing this setup makes these results stale: ${affected}. Continue?`)) {
-        throw new Error('Setup change cancelled.');
-      }
-      res = await send({ ...draft, confirmation: { expected_revision: result.expectedRevision } });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `Setup update failed: ${res.status}`);
-      }
-      result = await res.json();
+      result = await confirmSetupImpact(result, draft, window.confirm, async (confirmed) => {
+        res = await send(confirmed);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.detail || `Setup update failed: ${res.status}`);
+        }
+        return res.json();
+      });
+      if (result.cancelled) throw new Error('Setup change cancelled.');
     }
     D.setupRevision = result.setupRevision || D.setupRevision;
   }
@@ -765,6 +790,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         isDone: s.status === 'done',
         isActive: s.status === 'active',
         isTodo: s.status === 'todo',
+        isStale: s.status === 'stale',
         noLeft: i === 0,
         leftNavy: i > 0 && arr[i - 1].status === 'done',
         leftGray: i > 0 && arr[i - 1].status !== 'done',
@@ -1070,6 +1096,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
           ${s.isDone ? '<i class="ph-fill ph-check-circle" style="font-size:19px;color:#1a365d;"></i>' : ''}
           ${s.isActive ? '<span style="width:18px;height:18px;border-radius:999px;border:2px solid #1a365d;display:flex;align-items:center;justify-content:center;background:#fffefc;"><span style="width:7px;height:7px;border-radius:999px;background:#1a365d;"></span></span>' : ''}
           ${s.isTodo ? '<span style="width:16px;height:16px;border-radius:999px;border:1.5px solid #cdd5e0;background:#fffefc;"></span>' : ''}
+          ${s.isStale ? '<i class="ph ph-arrow-counter-clockwise" aria-label="Needs rerun" style="font-size:19px;color:#b45309;"></i>' : ''}
         </span>
         ${s.noRight ? '<span style="flex:1;"></span>' : ''}
         ${s.rightNavy ? '<span style="flex:1;height:2px;background:#1a365d;"></span>' : ''}
@@ -1077,6 +1104,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       </div>
       <div style="text-align:center;margin-top:2px;">
         <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;white-space:nowrap;">${s.label}</div>
+        ${s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
       </div>
       ${s.active ? '<span style="position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:#1a365d;"></span>' : ''}
     </div>`;
@@ -1457,6 +1485,8 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${dialogInput('Primary topic', 'primary_topic', d.primary_topic, 'AI tools')}${dialogInput('Domain', 'domain', d.domain, 'Surgery')}</div>
         ${dialogInput('Boolean query / search terms', 'search_terms', d.search_terms || d.keywords.join(' AND '), 'AI AND surgery')}
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">${dialogInput('Max/source', 'max_results', d.max_results, DEFAULT_MAX_RESULTS_PER_PLATFORM, 'inputmode="numeric"')}${dialogInput('Start date', 'date_start', d.date_start, '2020-01-01')}${dialogInput('End date', 'date_end', d.date_end, '2026-12-31')}</div>
+        ${dialogInput('Model', 'model', d.model, 'Model name')}
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms ? 'checked' : ''}> Derive search terms from the research question</label>
         <div style="font-size:11px;color:#6b746c;margin-top:10px;">Sources are selected on the canvas: ${d.platforms.map(platformLabel).join(', ')}</div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="ph ph-check-circle" style="font-size:15px;"></i>${v.isNewProject ? 'Create project' : 'Save setup'}</button></div>
       </form>
@@ -1473,6 +1503,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
 
   function updateDraftFromForm(form) {
     const payload = Object.fromEntries(new FormData(form).entries());
+    payload.derive_search_terms = !!form.elements.derive_search_terms?.checked;
     const previousMaxResults = state.setupDraft.max_results;
     const mergedDraft = { ...state.setupDraft, ...payload };
     state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);

@@ -91,6 +91,20 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(stage["last_valid"]["counts"], {"total_papers": 12})
         self.assertNotIn("private", stage["error"])
 
+    def test_ready_only_action_preserves_stale_terminal_last_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            initialize_workflow_state(project)
+            for action in ("collect", "screen", "download-pdfs", "run-extraction"):
+                start_action(project, action)
+                complete_action(project, action, {"processed": 2})
+            from reviewpilot_core.workflow_state import mark_stages_stale
+            before = mark_stages_stale(project, ["extraction"])["stages"]["extraction"]["last_valid"]
+            start_action(project, "generate-schema")
+            stage = complete_action(project, "generate-schema", {"field_count": 4})["stages"]["extraction"]
+        self.assertTrue(stage["stale"])
+        self.assertEqual(stage["last_valid"], before)
+
     def test_legacy_migration_uses_valid_json_evidence_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)

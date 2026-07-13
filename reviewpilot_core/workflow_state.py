@@ -112,8 +112,10 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         stage = state["stages"][stage_name]
         counts = _counts(result or {})
         status = "ready" if action in _READY_ACTIONS else "completed"
-        stage.update(status=status, updated_at=_now(), error=None, counts=counts, stale=False)
-        stage["last_valid"] = {"status": status, "attempt": stage["attempt"], "updated_at": stage["updated_at"], "counts": counts}
+        stage.update(status=status, updated_at=_now(), error=None, counts=counts)
+        if status == "completed":
+            stage["stale"] = False
+            stage["last_valid"] = {"status": status, "attempt": stage["attempt"], "updated_at": stage["updated_at"], "counts": counts}
         next_index = STAGE_NAMES.index(stage_name) + 1
         if status == "completed" and next_index < len(STAGE_NAMES):
             next_stage = state["stages"][STAGE_NAMES[next_index]]
