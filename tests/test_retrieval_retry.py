@@ -10,7 +10,13 @@ from reviewpilot_core.retrieval_retry import (
     ConfirmationRequired,
     InvalidRetryRequest,
     RevisionConflict,
+    RetryItem,
+    RetryPreparation,
+    RetrySnapshot,
+    StagedRetryOutcome,
+    StagedRetryPdf,
     current_retry_snapshot,
+    merge_staged_retry_facts,
     prepare_retry_request,
     run_retry_staging,
     retrieval_report_revision,
@@ -792,6 +798,161 @@ class RetrievalRetryTests(unittest.TestCase):
             snapshot = current_retry_snapshot(project)
             with self.assertRaises(TypeError): snapshot.ledger["status"] = "completed"
             self.assertEqual(current_retry_snapshot(project).ledger["status"], "partial")
+
+
+class RetryMergeFactsTests(unittest.TestCase):
+    def fixture(self, selected_names=("f2", "f1"), outcomes=(False, True)):
+        project = Path("/nonexistent/reviewpilot-project")
+        rows = [
+            {"id": "ok", "legacy": {"keep": [1]}},
+            {"id": "f1", "pdf_downloaded": False, "pdf_failure_class": "paywall", "legacy": {"keep": [2]}},
+            {"id": "f2", "pdf_downloaded": False, "pdf_failure_class": "network", "legacy": {"keep": [3]}},
+        ]
+        report = {
+            "success": 1, "failed": 2,
+            "downloaded": [{"id": "ok", "path": "/authoritative/original.pdf", "legacy": {"keep": [1]}}],
+            "failed_papers": [
+                {"id": "f1", "failure_class": "paywall", "legacy": {"keep": [2]}},
+                {"id": "f2", "failure_class": "network", "legacy": {"keep": [3]}},
+            ],
+            "pdf_count": 1, "attempted": 3,
+        }
+        ledger = {"attempt": 2, "status": "partial", "counts": {"succeeded": 1, "failed": 2}}
+        revision = retrieval_report_revision(report, ledger)
+        ids = {name: stable_retry_id({"id": name}) for name in ("f1", "f2")}
+        items = {
+            "f1": RetryItem(ids["f1"], "f1", "paywall", 0, 1),
+            "f2": RetryItem(ids["f2"], "f2", "network", 1, 2),
+        }
+        snapshot = RetrySnapshot(revision, report, tuple(rows), ledger, (items["f1"], items["f2"]))
+        selected_ids = tuple(ids[name] for name in selected_names)
+        preparation = RetryPreparation(snapshot, selected_ids, tuple(items[name] for name in selected_names),
+            tuple(rows[items[name].included_index] for name in selected_names), project)
+        staging_root = project / ".retrieval_retry_staging_case"
+        staging_project = staging_root / "retry"
+        updated, downloaded, failed, pdfs = [], [], [], []
+        for index, (name, succeeds) in enumerate(zip(selected_names, outcomes), 1):
+            row = {"id": name, "legacy": {"keep": [items[name].included_index + 1]}}
+            if succeeds:
+                source = staging_project / "pdfs" / f"row{index}.pdf"
+                row.update(pdf_downloaded=True, pdf_path=str(source), pdf_method="direct",
+                    retrieval_status="downloaded", pdf_failure_detail="", pdf_error=None,
+                    retry_id="private", staging_note=str(staging_root))
+                downloaded.append({"id": name, "path": str(source), "pdf_path": str(source),
+                    "pdf_downloaded": True, "retrieval_status": "downloaded", "failure_detail": "",
+                    "pdf_error": None, "retry_id": "private"})
+                pdfs.append(StagedRetryPdf(ids[name], source))
+            else:
+                failure_class = "network" if name == "f2" else "paywall"
+                status = "unavailable" if name == "f2" else "subscribed_unavailable"
+                row.update(pdf_downloaded=False, pdf_failure_class=failure_class,
+                    pdf_failure_detail="raw-row", pdf_failure_classes=[failure_class], pdf_error="raw-row-error",
+                    retrieval_status=status, web_search_fallback_pending=True, web_search_fallback_eligible=True,
+                    retry_id="private")
+                failed.append({"id": name, "failure_class": failure_class, "failure_detail": "raw-report",
+                    "failure_classes": [failure_class], "error": "raw-report-error", "pdf_failure_detail": "alias",
+                    "pdf_failure_classes": [failure_class], "pdf_error": "alias-error", "pdf_downloaded": False,
+                    "retrieval_status": status, "web_search_fallback_pending": True,
+                    "web_search_fallback_eligible": True, "staging_note": str(staging_root)})
+            updated.append(row)
+        staged_report = {"success": sum(outcomes), "failed": len(outcomes) - sum(outcomes),
+            "downloaded": downloaded, "failed_papers": failed,
+            "pdf_count": sum(outcomes), "attempted": len(outcomes)}
+        outcome = StagedRetryOutcome(staging_root, staging_project, selected_ids, tuple(updated), staged_report, tuple(pdfs))
+        return preparation, outcome
+
+    def test_merge_preserves_unselected_facts_and_replaces_selected_in_authoritative_order(self):
+        preparation, outcome = self.fixture(("f2",), (False,))
+        facts = merge_staged_retry_facts(preparation, outcome)
+        report, included = facts.mutable_copies()
+        self.assertEqual(report["downloaded"], preparation.snapshot.report["downloaded"])
+        self.assertEqual(report["failed_papers"][0], preparation.snapshot.report["failed_papers"][0])
+        self.assertEqual(included[:2], list(preparation.snapshot.included[:2]))
+        self.assertEqual([row["id"] for row in report["failed_papers"]], ["f1", "f2"])
+        self.assertFalse(any(key in report["failed_papers"][1] for key in (
+            "failure_detail", "failure_classes", "error", "pdf_failure_detail", "pdf_failure_classes", "pdf_error", "retry_id", "staging_note")))
+
+    def test_merge_success_uses_revision_bound_destination_and_strips_staging_diagnostics(self):
+        preparation, outcome = self.fixture()
+        facts = merge_staged_retry_facts(preparation, outcome)
+        report, included = facts.mutable_copies()
+        retry_id = preparation.selected_ids[1]
+        destination = preparation._project_identity / "pdfs" / f"retry-{preparation.snapshot.report_revision}-{retry_id}.pdf"
+        self.assertEqual(facts.planned_pdfs[0].destination_path, destination)
+        self.assertEqual(report["downloaded"][-1]["path"], str(destination))
+        self.assertEqual(report["downloaded"][-1]["pdf_path"], str(destination))
+        self.assertEqual(included[1]["pdf_path"], str(destination))
+        serialized = json.dumps([report, included], sort_keys=True)
+        self.assertNotIn(str(outcome.staging_root), serialized)
+        self.assertNotIn("raw-row", serialized); self.assertNotIn("raw-report", serialized)
+        self.assertNotIn("private", serialized)
+
+    def test_merge_recomputes_total_counts_classification_and_aggregate_status(self):
+        cases = ((('f2', 'f1'), (True, True), "completed", 3, 0),
+            (("f2",), (True,), "partial", 2, 1),
+            (("f2", "f1"), (False, False), "partial", 1, 2))
+        for selected, outcomes, status, success, failed in cases:
+            with self.subTest(selected=selected, outcomes=outcomes):
+                facts = merge_staged_retry_facts(*self.fixture(selected, outcomes))
+                report, _ = facts.mutable_copies()
+                self.assertEqual((facts.status, facts.counts["succeeded"], facts.counts["failed"]), (status, success, failed))
+                self.assertEqual((report["success"], report["failed"], report["pdf_count"], report["attempted"]),
+                    (success, failed, success, success + failed))
+                self.assertEqual(len(report["downloaded"]), success); self.assertEqual(len(report["failed_papers"]), failed)
+                self.assertEqual(report["web_search_fallback_candidates"], report["failed_papers"])
+
+    def test_merge_all_repeat_fail_without_prior_success_is_failed(self):
+        preparation, outcome = self.fixture(("f2", "f1"), (False, False))
+        report = {**preparation.snapshot.report, "success": 0, "downloaded": [], "pdf_count": 0, "attempted": 2}
+        ledger = {**preparation.snapshot.ledger, "status": "failed", "counts": {"succeeded": 0, "failed": 2}}
+        revision = retrieval_report_revision(report, ledger)
+        snapshot = RetrySnapshot(revision, report, preparation.snapshot.included, ledger, preparation.snapshot.items)
+        preparation = RetryPreparation(snapshot, preparation.selected_ids, preparation.items,
+            preparation.included_rows, preparation._project_identity)
+        facts = merge_staged_retry_facts(preparation, outcome)
+        self.assertEqual((facts.status, facts.counts["succeeded"], facts.counts["failed"]), ("failed", 0, 2))
+
+    def test_merge_is_deterministic_revision_bound_and_recursively_immutable(self):
+        preparation, outcome = self.fixture(("f2",), (True,))
+        original_report = json.loads(json.dumps(outcome.report)); original_rows = json.loads(json.dumps(outcome.updated_rows))
+        first = merge_staged_retry_facts(preparation, outcome)
+        second = merge_staged_retry_facts(preparation, outcome)
+        self.assertEqual(outcome.report, original_report); self.assertEqual(list(outcome.updated_rows), original_rows)
+        self.assertEqual(first.planned_pdfs, second.planned_pdfs)
+        with self.assertRaises(TypeError): first.report["success"] = 9
+        with self.assertRaises(TypeError): first.included[0]["id"] = "changed"
+        mutable_report, mutable_included = first.mutable_copies(); mutable_report["success"] = 9; mutable_included[0]["id"] = "changed"
+        self.assertNotEqual(first.report["success"], 9); self.assertNotEqual(first.included[0]["id"], "changed")
+        changed_ledger = {**preparation.snapshot.ledger, "attempt": 3}
+        changed = RetrySnapshot(retrieval_report_revision(preparation.snapshot.report, changed_ledger),
+            preparation.snapshot.report, preparation.snapshot.included, changed_ledger, preparation.snapshot.items)
+        changed_preparation = RetryPreparation(changed, preparation.selected_ids, preparation.items,
+            preparation.included_rows, preparation._project_identity)
+        changed_destination = merge_staged_retry_facts(changed_preparation, outcome).planned_pdfs[0].destination_path
+        self.assertNotEqual(first.planned_pdfs[0].destination_path, changed_destination)
+
+    def test_merge_rejects_malformed_or_cross_project_contracts_without_filesystem_access(self):
+        preparation, outcome = self.fixture()
+        mutations = (
+            lambda p, o: StagedRetryOutcome(o.staging_root.parent / "other", o.staging_project_path, o.selected_ids, o.updated_rows, o.report, o.successful_pdfs),
+            lambda p, o: StagedRetryOutcome(o.staging_root, o.staging_project_path, tuple(reversed(o.selected_ids)), o.updated_rows, o.report, o.successful_pdfs),
+            lambda p, o: StagedRetryOutcome(o.staging_root, o.staging_project_path, o.selected_ids, tuple(reversed(o.updated_rows)), o.report, o.successful_pdfs),
+            lambda p, o: StagedRetryOutcome(o.staging_root, o.staging_project_path, o.selected_ids, o.updated_rows, {**o.report, "success": 2}, o.successful_pdfs),
+            lambda p, o: StagedRetryOutcome(o.staging_root, o.staging_project_path, o.selected_ids, o.updated_rows, o.report, o.successful_pdfs + o.successful_pdfs),
+            lambda p, o: StagedRetryOutcome(o.staging_root, o.staging_project_path, o.selected_ids,
+                ({**o.updated_rows[0], "pdf_downloaded": True}, *o.updated_rows[1:]), o.report, o.successful_pdfs),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                merge_staged_retry_facts(preparation, mutate(preparation, outcome))
+
+        duplicate_rows = (*preparation.snapshot.included, preparation.snapshot.included[0])
+        duplicate_snapshot = RetrySnapshot(preparation.snapshot.report_revision, preparation.snapshot.report,
+            duplicate_rows, preparation.snapshot.ledger, preparation.snapshot.items)
+        duplicate_preparation = RetryPreparation(duplicate_snapshot, preparation.selected_ids, preparation.items,
+            preparation.included_rows, preparation._project_identity)
+        with self.assertRaises(ValueError):
+            merge_staged_retry_facts(duplicate_preparation, outcome)
 
 
 if __name__ == "__main__":
