@@ -2325,7 +2325,6 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction authority could not be written$"):
                 _write_retry_authority_target(self.project, marker, expected, 0)
         self.assertEqual(report.read_bytes(), before); self.assertFalse(list(report.parent.glob(f".{report.name}.*.tmp")))
-        original_fsync = os.fsync
         with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=OSError("file fsync")):
             with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
         self.assertEqual(report.read_bytes(), before)
@@ -2333,6 +2332,22 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaises(ValueError): _write_retry_authority_target(self.project, marker, expected, 0)
         self.assertEqual(report.read_bytes(), before); self.assertFalse(list(report.parent.glob(f".{report.name}.*.tmp")))
 
+    def test_single_authority_writer_rejects_forged_noncurrent_expected_snapshot_before_replace(self):
+        marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
+        report = self.project / "pdfs/download_report.json"
+        before = (report.read_bytes(), report.stat().st_ino)
+        forged_kinds = list(expected.kinds); forged_kinds[1] = "target"
+        forged_identities = list(expected.identities)
+        forged_identities[1] = (forged_identities[1][0], forged_identities[1][1] + 1,
+            *forged_identities[1][2:])
+        for label, forged in (
+                ("kind", type(expected)(tuple(forged_kinds), expected.identities)),
+                ("identity", type(expected)(expected.kinds, tuple(forged_identities)))):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction authority could not be written$"):
+                    _write_retry_authority_target(self.project, marker, forged, 0)
+                self.assertEqual((report.read_bytes(), report.stat().st_ino), before)
+                self.assertFalse(list(report.parent.glob(f".{report.name}.*.tmp")))
     def test_single_authority_writer_rejects_destination_aba_before_replace(self):
         marker = self.decoded_apply_marker(); expected = _classify_retry_authorities(self.project, marker)
         report = self.project / "pdfs/download_report.json"; before = report.read_bytes()
