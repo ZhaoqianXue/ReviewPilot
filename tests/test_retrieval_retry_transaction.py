@@ -2690,6 +2690,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
 
     def test_apply_staging_cleanup_reenters_after_project_fsync_failure(self):
         marker = self.committed_apply_marker(); staging = self.project / self.staging
+        marker_path = self.project / PENDING_RETRY_FILE; marker_before = marker_path.read_bytes()
         from reviewpilot_core import retrieval_retry_transaction as transaction
         original = transaction._fsync_directory; failed = False
         def fail_after_rmtree(path):
@@ -2698,8 +2699,34 @@ class RetryPdfPublicationTests(unittest.TestCase):
                 failed = True; raise OSError("project fsync")
             return original(path)
         with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_after_rmtree):
-            with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
-        self.assertFalse(staging.exists()); self.assertTrue(_cleanup_apply_staging(self.project, marker))
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction staging could not be cleaned$"):
+                _cleanup_apply_staging(self.project, marker)
+        self.assertFalse(staging.exists()); self.assertEqual(marker_path.read_bytes(), marker_before)
+        events = []
+        original_assert = transaction._assert_marker_generation
+        def track_fsync(path):
+            events.append("fsync-project"); return original(path)
+        def track_marker(*args):
+            events.append("marker"); return original_assert(*args)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=track_fsync), \
+                patch("reviewpilot_core.retrieval_retry_transaction._assert_marker_generation", side_effect=track_marker):
+            self.assertTrue(_cleanup_apply_staging(self.project, marker))
+        self.assertIn("fsync-project", events)
+        fsync_index = events.index("fsync-project")
+        self.assertIn("marker", events[fsync_index + 1:])
+
+    def test_apply_staging_cleanup_fsyncs_project_when_initially_absent(self):
+        marker = self.committed_apply_marker(); staging = self.project / self.staging
+        shutil.rmtree(staging); marker_path = self.project / PENDING_RETRY_FILE
+        before = marker_path.read_bytes(); calls = []
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory
+        def track(path):
+            calls.append(Path(path)); return original(path)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=track):
+            self.assertTrue(_cleanup_apply_staging(self.project, marker))
+        self.assertIn(self.project.resolve(), calls)
+        self.assertEqual(marker_path.read_bytes(), before)
 
     def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
         marker = self.decoded_apply_marker(); included = self.project / self.staging / "retry/filtered/included_papers.jsonl"

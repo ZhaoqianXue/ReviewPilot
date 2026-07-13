@@ -1793,7 +1793,8 @@ def _cleanup_apply_staging(project_path: Path | str, marker: dict[str, Any]) -> 
 
             validate_committed(); staging = project / current["staging_name"]
             if not _lexists(staging):
-                validate_committed(); return True
+                validate_committed(); _fsync_directory(project)
+                _assert_marker_generation(project, current); return True
             source_parent = staging / "retry" / "pdfs"
             for receipt in current["published"]["pdfs"]:
                 quarantine = source_parent / receipt["quarantine_name"]
