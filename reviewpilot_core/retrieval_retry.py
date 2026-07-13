@@ -769,6 +769,8 @@ def _validate_canonical_merge_stage(
     source_by_id: dict[str, Path],
     detail_by_source: dict[Path, dict[str, Any]],
     failed_detail_by_id: dict[str, dict[str, Any]],
+    *,
+    cleaned: bool = False,
 ) -> None:
     for key, expected in (("pdf_count", len(source_by_id)), ("attempted", len(rows))):
         value = report.get(key)
@@ -811,6 +813,9 @@ def _validate_canonical_merge_stage(
                 raise ValueError("Staged retry failure classifications conflict")
             if "pdf_failure_class" in detail and not _same_nonempty_text(detail_class, detail["pdf_failure_class"]):
                 raise ValueError("Staged retry failure class alias conflicts")
+            if (cleaned and (any(key in row for key in _ROW_SECONDARY_DIAGNOSTICS)
+                    or any(key in detail for key in _REPORT_SECONDARY_DIAGNOSTICS))):
+                raise ValueError("Staged retry failure detail is not canonical")
             expected_status = "subscribed_unavailable" if _is_subscription_failure(row_class.strip().casefold()) else "unavailable"
             for container in (row, detail):
                 if (container.get("pdf_downloaded") is not False or container.get("retrieval_status") != expected_status
@@ -936,7 +941,8 @@ def _validate_merged_retry_delta(
         "web_search_fallback_candidates": selected_failures,
     }
     _validate_canonical_merge_stage(selected_rows, canonical_report, destinations,
-        {destinations[retry_id]: success_details[retry_id] for retry_id in success_ids}, failure_by_id)
+        {destinations[retry_id]: success_details[retry_id] for retry_id in success_ids}, failure_by_id,
+        cleaned=True)
 
     if ((set(before_report) - _MERGED_REPORT_FIELDS) != (set(report) - _MERGED_REPORT_FIELDS)
             or any(not _exact_json(before_report[key], report[key])

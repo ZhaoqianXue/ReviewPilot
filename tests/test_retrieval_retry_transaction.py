@@ -1211,6 +1211,76 @@ class RetryTargetTransactionTests(unittest.TestCase):
                     self.plan = publication(self.project, self.prepared, self.staging_name)
                     self.ledger = target_ledger(self.project, self.plan)
 
+    def test_record_rejects_failure_diagnostics_removed_by_canonical_merge(self):
+        row_diagnostics = {
+            "pdf_failure_detail": "secondary detail",
+            "pdf_failure_classes": ["download_failed"],
+            "pdf_error": "secondary error",
+        }
+        report_diagnostics = {
+            "failure_detail": "secondary detail",
+            "failure_classes": ["download_failed"],
+            "error": "secondary error",
+            "pdf_failure_class": "download_failed",
+            "pdf_failure_detail": "secondary detail",
+            "pdf_failure_classes": ["download_failed"],
+            "pdf_error": "secondary error",
+        }
+
+        self.assertTrue(abort_retry_transaction(self.project))
+        case_index = 0
+        for label, failure_count, succeeds in (("all-failure", 1, False), ("partial", 2, 1)):
+            for container, diagnostics in (("row", row_diagnostics), ("report", report_diagnostics)):
+                for key, value in diagnostics.items():
+                    with self.subTest(outcome=label, container=container, key=key):
+                        case_index += 1
+                        project = Path(self.temp.name).resolve() / f"{label}-{case_index}"
+                        project.mkdir(); retryable_project(project)
+                        if failure_count == 2:
+                            included_path = project / "filtered" / "included_papers.jsonl"
+                            included = [json.loads(line) for line in included_path.read_text().splitlines()]
+                            included.append({"id": "failed-2", "title": "Failed 2"})
+                            atomic_write_jsonl(included_path, included)
+                            report_path = project / "pdfs" / "download_report.json"
+                            report = json.loads(report_path.read_text()); report["failed"] = 2
+                            report["failed_papers"].append(
+                                {"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+                            atomic_write_json(report_path, report)
+                            current_ledger = load_workflow_state(project)
+                            current_ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+                            current_ledger["stages"]["retrieval"]["last_valid"]["counts"]["failed"] = 2
+                            save_workflow_state(project, current_ledger)
+                        prepared = preparation(project)
+                        staging = f".retrieval_retry_staging_{label}"
+                        begin_retry_transaction(project, prepared, staging, project / staging)
+                        plan = publication(project, prepared, staging, succeeds=succeeds)
+                        ledger = target_ledger(project, plan)
+                        marker = project / PENDING_RETRY_FILE
+                        marker_before = marker.read_bytes()
+                        report, included = plan.merged_facts.mutable_copies()
+                        failed_row = next(row for row in included if row.get("pdf_downloaded") is False)
+                        if container == "row":
+                            failed_row[key] = deepcopy(value)
+                        else:
+                            report["failed_papers"][0][key] = deepcopy(value)
+                            failures = report["failed_papers"]
+                            report["subscribed_papers"] = [
+                                row for row in failures if row["retrieval_status"] == "subscribed_unavailable"]
+                            report["unavailable_papers"] = [
+                                row for row in failures if row["retrieval_status"] == "unavailable"]
+                            report["web_search_fallback_candidates"] = deepcopy(failures)
+                        forged = self.refreeze_plan(report, included, base_plan=plan)
+
+                        with self.assertRaisesRegex(
+                                ValueError, r"^Retry transaction target is invalid$") as caught:
+                            record_retry_transaction_target(project, forged, ledger)
+
+                        self.assertNotIn(str(project), str(caught.exception))
+                        self.assertEqual(marker.read_bytes(), marker_before)
+                        self.assertFalse(reconcile_retry_transaction(project))
+                        record_retry_transaction_target(project, plan, ledger)
+                        self.assertTrue(abort_retry_transaction(project))
+
     def test_record_accepts_success_detail_with_all_identity_aliases_omitted(self):
         report, included = self.plan.merged_facts.mutable_copies()
         detail = report["downloaded"][-1]
