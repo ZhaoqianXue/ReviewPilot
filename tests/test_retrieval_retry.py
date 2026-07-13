@@ -57,7 +57,9 @@ def partial_project(project: Path, *, failed_row=None, included=None) -> None:
 
 def two_failure_project(project: Path) -> None:
     partial_project(project)
-    write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "ok-1"}, {"id": "failed-1"}, {"id": "failed-2"}])
+    write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "ok-1"},
+        {"id": "failed-1", "title": "Failed 1", "doi": "", "url": ""},
+        {"id": "failed-2", "title": "Failed 2", "doi": "", "url": ""}])
     write_json(project / "pdfs" / "download_report.json", {
         "success": 1, "failed": 2, "downloaded": [{"id": "ok-1"}],
         "failed_papers": [{"id": "failed-1"}, {"id": "failed-2"}],
@@ -107,14 +109,17 @@ def fake_download(outcomes: list[bool], *, mutate=None):
                 pdf.parent.mkdir(parents=True, exist_ok=True)
                 pdf.write_bytes(b"%PDF-1.7\nretry")
                 row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
-                downloaded.append({"path": str(pdf), "title": row.get("title", "")})
+                detail = {"path": str(pdf)}
+                if "title" in row: detail["title"] = row["title"]
+                downloaded.append(detail)
             else:
                 row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
                 row.pop("pdf_path", None)
                 failed.append({"id": row["id"], "failure_class": "download_failed"})
         write_jsonl(included_path, rows)
         report = {"success": sum(outcomes), "failed": len(outcomes) - sum(outcomes),
-                  "downloaded": downloaded, "failed_papers": failed}
+                  "downloaded": downloaded, "failed_papers": failed,
+                  "pdf_count": sum(outcomes), "attempted": len(outcomes)}
         write_json(staging / "pdfs" / "download_report.json", report)
         if mutate:
             mutate(staging, rows, report)
@@ -807,9 +812,11 @@ class RetryMergeFactsTests(unittest.TestCase):
         rows = [
             {"id": "ok", "legacy": {"keep": [1]}},
             {"id": "f1", "pdf_downloaded": False, "pdf_failure_class": "paywall", "legacy": {"keep": [2]},
-                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned"},
+                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned",
+                "title": "f1 title", "authors": ["A"], "custom": {"nested": "f1"}},
             {"id": "f2", "pdf_downloaded": False, "pdf_failure_class": "network", "legacy": {"keep": [3]},
-                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned"},
+                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned",
+                "title": "f2 title", "authors": ["A"], "custom": {"nested": "f2"}},
         ]
         report = {
             "success": 1, "failed": 2,
@@ -837,12 +844,14 @@ class RetryMergeFactsTests(unittest.TestCase):
         updated, downloaded, failed, pdfs = [], [], [], []
         for index, (name, succeeds) in enumerate(zip(selected_names, outcomes), 1):
             row = {"id": name, "legacy": {"keep": [items[name].included_index + 1]},
-                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned"}
+                "retry_id": "source-owned", "_retry_note": "source-owned", "staging_label": "source-owned",
+                "title": f"{name} title", "authors": ["A"], "custom": {"nested": name}}
             if succeeds:
                 source = staging_project / "pdfs" / f"row{index}.pdf"
                 row.update(pdf_downloaded=True, pdf_path=str(source), pdf_method="direct",
                     retrieval_status="downloaded")
-                downloaded.append({"id": name, "path": str(source), "pdf_path": str(source),
+                downloaded.append({"id": name, "title": f"{name} title", "authors": ["A"],
+                    "custom": {"nested": name}, "path": str(source), "pdf_path": str(source),
                     "pdf_downloaded": True, "retrieval_status": "downloaded"})
                 pdfs.append(StagedRetryPdf(ids[name], source))
             else:
@@ -851,7 +860,8 @@ class RetryMergeFactsTests(unittest.TestCase):
                 row.update(pdf_downloaded=False, pdf_failure_class=failure_class,
                     pdf_failure_detail="raw-row", pdf_failure_classes=[failure_class], pdf_error="raw-row-error",
                     retrieval_status=status, web_search_fallback_pending=True, web_search_fallback_eligible=True)
-                failed.append({"id": name, "failure_class": failure_class, "failure_detail": "raw-report",
+                failed.append({"id": name, "title": f"{name} title", "authors": ["A"],
+                    "custom": {"nested": name}, "failure_class": failure_class, "failure_detail": "raw-report",
                     "failure_classes": [failure_class], "error": "raw-report-error", "pdf_failure_class": failure_class,
                     "pdf_failure_detail": "alias",
                     "pdf_failure_classes": [failure_class], "pdf_error": "alias-error", "pdf_downloaded": False,
@@ -993,6 +1003,32 @@ class RetryMergeFactsTests(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 merge_staged_retry_facts(preparation, mutation)
+
+    def test_merge_requires_all_report_detail_provenance_from_corresponding_selected_row(self):
+        preparation, outcome = self.fixture()
+        for field, forged in (("title", "forged"), ("authors", ["forged"]), ("custom", {"nested": "forged"})):
+            downloaded = [dict(row) for row in outcome.report["downloaded"]]
+            downloaded[0][field] = forged
+            with self.subTest(kind="success", field=field), self.assertRaises(ValueError):
+                merge_staged_retry_facts(preparation, replace(outcome,
+                    report={**outcome.report, "downloaded": downloaded}))
+
+            failure = {**outcome.report["failed_papers"][0], field: forged}
+            forged_report = {**outcome.report, "failed_papers": [failure],
+                "unavailable_papers": [failure], "web_search_fallback_candidates": [failure]}
+            with self.subTest(kind="failure", field=field), self.assertRaises(ValueError):
+                merge_staged_retry_facts(preparation, replace(outcome, report=forged_report))
+
+    def test_merge_requires_strict_staged_report_pdf_count_and_attempted(self):
+        preparation, outcome = self.fixture()
+        for key, values in (("pdf_count", (None, True, "1", -1, 999)),
+                ("attempted", (None, True, "2", -1, 999))):
+            for value in values:
+                report = dict(outcome.report)
+                if value is None: report.pop(key)
+                else: report[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    merge_staged_retry_facts(preparation, replace(outcome, report=report))
 
     def test_merge_revalidates_current_snapshot_items_and_preserves_legacy_report_metadata_contract(self):
         preparation, outcome = self.fixture(("f2",), (True,))

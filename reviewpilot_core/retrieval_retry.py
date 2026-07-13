@@ -415,8 +415,8 @@ _REPORT_SECONDARY_DIAGNOSTICS = {
     "failure_detail", "failure_classes", "error", "pdf_failure_class", "pdf_failure_detail",
     "pdf_failure_classes", "pdf_error",
 }
-_STAGED_DETAIL_ALLOWED_FIELDS = {
-    *_IDENTITY_FIELDS, "paper_id", "pmid", "authors", "year", "journal", "source", "method", "pdf_method",
+_OUTCOME_DERIVED_DETAIL_FIELDS = {
+    "method", "pdf_method",
     "path", "pdf_path", "pdf_downloaded", "retrieval_status", "failure_class", "pdf_failure_class",
     "failure_detail", "failure_classes", "error", "pdf_failure_detail", "pdf_failure_classes", "pdf_error",
     "web_search_fallback_pending", "web_search_fallback_eligible",
@@ -430,9 +430,15 @@ def _validate_canonical_merge_stage(
     detail_by_source: dict[Path, dict[str, Any]],
     failed_detail_by_id: dict[str, dict[str, Any]],
 ) -> None:
-    for detail in (*detail_by_source.values(), *failed_detail_by_id.values()):
-        if not set(detail).issubset(_STAGED_DETAIL_ALLOWED_FIELDS):
-            raise ValueError("Staged retry report contains unknown metadata")
+    for key, expected in (("pdf_count", len(source_by_id)), ("attempted", len(rows))):
+        value = report.get(key)
+        if type(value) is not int or value < 0 or value != expected:
+            raise ValueError("Staged retry report aggregate counts are inconsistent")
+    rows_by_id = {stable_retry_id(row): row for row in rows}
+    for retry_id, source in source_by_id.items():
+        _validate_detail_provenance(rows_by_id[retry_id], detail_by_source[source])
+    for retry_id, detail in failed_detail_by_id.items():
+        _validate_detail_provenance(rows_by_id[retry_id], detail)
     for row in rows:
         retry_id = stable_retry_id(row)
         if retry_id in source_by_id:
@@ -473,6 +479,12 @@ def _validate_canonical_merge_stage(
         actual = report.get(key)
         if not isinstance(actual, list) or actual != value:
             raise ValueError("Staged retry classification facts are inconsistent")
+
+
+def _validate_detail_provenance(row: dict[str, Any], detail: dict[str, Any]) -> None:
+    for key, value in detail.items():
+        if key not in _OUTCOME_DERIVED_DETAIL_FIELDS and (key not in row or row[key] != value):
+            raise ValueError("Staged retry report metadata has no paper provenance")
 
 
 def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dict[str, Any]:
