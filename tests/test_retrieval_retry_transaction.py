@@ -2091,10 +2091,22 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
         marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
         receipt = json.loads(base64.b64decode(marker["published_json_b64"]))["pdfs"][0]
-        self.assertTrue((self.project / "pdfs" / receipt["temp_name"]).exists())
+        self.assertTrue((self.project / self.staging / "retry" / "pdfs" / receipt["temp_name"]).exists())
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
         publish_retry_transaction_pdfs(self.project)
         self.assertTrue(self.plan.pdfs[0].destination_path.exists())
+
+    def test_crash_before_receipt_cas_is_fully_abort_recoverable(self):
+        with patch("reviewpilot_core.retrieval_retry_transaction._replace_marker_cas", side_effect=OSError("crash before receipt")):
+            with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
+        self.assertEqual(sorted(path.name for path in (self.project / "pdfs").glob("*.pdf")), ["original.pdf"])
+        self.assertTrue(any(path.name.endswith(".tmp")
+            for path in (self.project / self.staging / "retry" / "pdfs").iterdir()))
+        abandon_retry_transaction(self.project)
+        self.assertTrue(reconcile_retry_transaction(self.project)); self.assertFalse((self.project / self.staging).exists())
+        fresh = preparation(self.project); handle = begin_retry_transaction(
+            self.project, fresh, ".retrieval_retry_staging_fresh", self.project / ".retrieval_retry_staging_fresh")
+        self.assertTrue(abort_retry_transaction(self.project, handle.transaction_id))
 
     def test_crash_before_temp_unlink_recovers_double_link_without_rewriting_destination(self):
         original = Path.unlink

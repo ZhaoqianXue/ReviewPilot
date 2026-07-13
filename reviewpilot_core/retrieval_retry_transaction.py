@@ -810,9 +810,9 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
             _assert_marker_generation(project, data)
             save_workflow_state(project, before["ledger"])
             for receipt in data.get("published", {}).get("pdfs", []):
-                for name in (receipt["temp_name"], receipt["destination_name"]):
+                for path in (project / data["staging_name"] / "retry" / "pdfs" / receipt["temp_name"],
+                        project / "pdfs" / receipt["destination_name"]):
                     _assert_marker_generation(project, data)
-                    path = project / "pdfs" / name
                     if not _lexists(path):
                         continue
                     info = path.lstat()
@@ -1088,7 +1088,7 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
     receipts = marker.get("published", {}).get("pdfs", [])
     index = marker["target"]["pdfs"].index(pdf)
     if index < len(receipts):
-        receipt = receipts[index]; temporary = destination_parent / receipt["temp_name"]
+        receipt = receipts[index]; temporary = source_parent / receipt["temp_name"]
         paths = [path for path in (temporary, destination) if _lexists(path)]
         if not paths:
             raise ValueError
@@ -1115,6 +1115,9 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
         if _lexists(temporary):
             _assert_marker_generation(project, marker)
             temporary.unlink()
+            directory = os.open(source_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try: os.fsync(directory)
+            finally: os.close(directory)
         directory = os.open(destination_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try: os.fsync(directory)
         finally: os.close(directory)
@@ -1124,7 +1127,7 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
         raise ValueError
 
     temp_name = f".{pdf['destination_name']}.{marker['transaction_id']}.tmp"
-    temporary = destination_parent / temp_name
+    temporary = source_parent / temp_name
     before_info = source.lstat()
     size, digest, identity = _publication_pdf_fingerprint(source, source_parent)
     if (size, digest) != (pdf["size"], pdf["sha256"]):
@@ -1169,6 +1172,9 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
             info = temporary.lstat()
             if created_identity is not None and (info.st_dev, info.st_ino) == created_identity:
                 temporary.unlink()
+                directory = os.open(source_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try: os.fsync(directory)
+                finally: os.close(directory)
         except (OSError, ValueError):
             pass
         raise
@@ -1178,11 +1184,11 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
         if source_descriptor is not None:
             os.close(source_descriptor)
     after_size, after_digest, after_identity = _publication_pdf_fingerprint(source, source_parent)
-    destination_size, destination_digest, destination_identity = _publication_pdf_fingerprint(temporary, destination_parent)
+    destination_size, destination_digest, destination_identity = _publication_pdf_fingerprint(temporary, source_parent)
     if ((after_size, after_digest, after_identity) != (pdf["size"], pdf["sha256"], identity)
             or (destination_size, destination_digest) != (pdf["size"], pdf["sha256"])):
         raise ValueError
-    directory = os.open(destination_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    directory = os.open(source_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
         os.fsync(directory)
     finally:
@@ -1201,14 +1207,6 @@ def _validate_before_with_published_pdfs(project: Path, marker: dict[str, Any]) 
     expected_pdfs = [(pdf["name"], pdf["sha256"]) for pdf in marker["pdf_baseline"]["pdfs"]]
     receipts = marker.get("published", {}).get("pdfs", [])
     receipt_count = len(receipts)
-    for receipt in receipts:
-        temporary = project / "pdfs" / receipt["temp_name"]
-        if _lexists(temporary):
-            info = temporary.lstat()
-            if (not stat.S_ISREG(info.st_mode)
-                    or (info.st_dev, info.st_ino) != (receipt["device"], receipt["inode"])):
-                raise ValueError
-            expected_pdfs.append((receipt["temp_name"], receipt["sha256"]))
     for index, pdf in enumerate(marker["target"]["pdfs"]):
         destination = project / "pdfs" / pdf["destination_name"]
         if not _lexists(destination):
