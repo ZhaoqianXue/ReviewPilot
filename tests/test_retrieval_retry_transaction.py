@@ -2806,20 +2806,29 @@ class RetryPdfPublicationTests(unittest.TestCase):
         marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
         staging = self.project / self.staging
         from reviewpilot_core import retrieval_retry_transaction as transaction
-        original = transaction._fsync_directory; foreign_identity = None
+        original = transaction._fsync_directory; original_unlink = type(marker_path).unlink
+        foreign_identity = None; eligible_fsyncs = 0; marker_unlinks = 0
         def swap_after_pre_unlink_fsync(path):
-            nonlocal foreign_identity
+            nonlocal foreign_identity, eligible_fsyncs
             result = original(path)
             if (Path(path) == self.project.resolve() and not staging.exists()
-                    and marker_path.exists() and foreign_identity is None):
+                    and marker_path.exists()):
+                eligible_fsyncs += 1
+            if eligible_fsyncs == 2 and foreign_identity is None:
                 replacement = self.project / "foreign-marker"
                 replacement.write_bytes(marker_path.read_bytes()); os.replace(replacement, marker_path)
                 info = marker_path.lstat(); foreign_identity = (info.st_dev, info.st_ino)
             return result
-        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=swap_after_pre_unlink_fsync):
+        def track_marker_unlink(path, *args, **kwargs):
+            nonlocal marker_unlinks
+            if path.name == PENDING_RETRY_FILE: marker_unlinks += 1
+            return original_unlink(path, *args, **kwargs)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=swap_after_pre_unlink_fsync), \
+                patch.object(type(marker_path), "unlink", autospec=True, side_effect=track_marker_unlink):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be rolled forward$"):
                 transaction._roll_forward_retry_transaction(self.project, marker)
         info = marker_path.lstat()
+        self.assertEqual(eligible_fsyncs, 2); self.assertEqual(marker_unlinks, 0)
         self.assertEqual((info.st_dev, info.st_ino), foreign_identity)
 
     def test_apply_finish_reenters_after_marker_unlink_failure(self):
