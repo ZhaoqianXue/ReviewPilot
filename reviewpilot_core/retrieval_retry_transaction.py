@@ -599,8 +599,13 @@ def _read_marker(project: Path) -> dict[str, Any]:
         optional = {key for key in ("sources_json_b64", "target_json_b64", "published_json_b64") if key in data}
         expected = base | optional
         if (type(data) is not dict or set(data) != expected or type(data["version"]) is not int
-                or data["version"] != 2 or type(phase) is not str or phase != "abort"
+                or data["version"] != 2 or type(phase) is not str or phase not in {"abort", "apply"}
                 or not _digest(data["transaction_id"])):
+            raise ValueError
+        allowed_abort = (set(), {"sources_json_b64"}, {"sources_json_b64", "target_json_b64"},
+            {"sources_json_b64", "target_json_b64", "published_json_b64"})
+        if ((phase == "abort" and optional not in allowed_abort)
+                or (phase == "apply" and optional != allowed_abort[-1])):
             raise ValueError
         revision, ids = data["expected_revision"], data["selected_ids"]
         if not _digest(revision) or not isinstance(ids, list) or not ids or any(not _digest(item) for item in ids) or len(set(ids)) != len(ids):
@@ -647,6 +652,8 @@ def _read_marker(project: Path) -> dict[str, Any]:
                         or receipt["size"] != target["size"] or receipt["sha256"] != target["sha256"]):
                     raise ValueError
             data["published"] = published
+        if phase == "apply" and len(data["published"]["pdfs"]) != len(data["target"]["pdfs"]):
+            raise ValueError
         data[_RAW_MARKER_BYTES] = raw_marker_bytes
         data[_MARKER_IDENTITY] = marker_identity
         return data
@@ -924,6 +931,7 @@ def _quarantine_owned_path(project: Path, marker: dict[str, Any], receipt: dict[
 def _restore(project: Path, data: dict[str, Any]) -> bool:
     before = data["before"]
     try:
+        if data.get("phase") != "abort": raise ValueError
         with _project_file_lock(project):
             _assert_marker_generation(project, data)
             for path, parent in ((project / "pdfs" / "download_report.json", project / "pdfs"),
@@ -989,6 +997,8 @@ def abort_retry_transaction(project_path: Path | str, expected_transaction_id: s
         transaction_id = marker["transaction_id"]
         if expected_transaction_id is not None and transaction_id != expected_transaction_id:
             return False
+        if marker["phase"] != "abort":
+            raise ValueError("Retry transaction cannot be aborted")
         released_id = transaction_id
         try:
             return _restore(project, marker)

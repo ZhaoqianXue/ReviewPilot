@@ -2150,6 +2150,53 @@ class RetryPdfPublicationTests(unittest.TestCase):
         return tuple((self.project / name).read_bytes() for name in (
             "pdfs/download_report.json", "filtered/included_papers.jsonl", "workflow_state.json"))
 
+    def promote_marker_raw_for_test(self):
+        publish_retry_transaction_pdfs(self.project)
+        marker = self.project / PENDING_RETRY_FILE; raw = json.loads(marker.read_text()); raw["phase"] = "apply"
+        atomic_write_json(marker, raw)
+        return marker, raw
+
+    def test_complete_apply_marker_decodes_without_mutation(self):
+        marker, _ = self.promote_marker_raw_for_test(); before = marker.read_bytes()
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        decoded = transaction._read_marker(self.project.resolve())
+        self.assertEqual(decoded["phase"], "apply"); self.assertEqual(marker.read_bytes(), before)
+
+    def test_apply_marker_decoder_rejects_incomplete_prefix_unknown_and_wrong_types(self):
+        marker, valid = self.promote_marker_raw_for_test()
+        cases = []
+        for key in ("sources_json_b64", "target_json_b64", "published_json_b64"):
+            forged = deepcopy(valid); forged.pop(key); cases.append((f"missing-{key}", forged))
+        prefix = deepcopy(valid); published = json.loads(base64.b64decode(prefix["published_json_b64"])); published["pdfs"] = []
+        prefix["published_json_b64"] = base64.b64encode(
+            json.dumps(published, sort_keys=True, separators=(",", ":")).encode()).decode(); cases.append(("prefix", prefix))
+        unknown = deepcopy(valid); unknown["unknown"] = True; cases.append(("unknown", unknown))
+        derived = deepcopy(valid); derived["target"] = {}; cases.append(("derived", derived))
+        for value in ("other", 1, None):
+            wrong = deepcopy(valid); wrong["phase"] = value; cases.append((f"phase-{value}", wrong))
+        for value in (3, True, "2"):
+            wrong = deepcopy(valid); wrong["version"] = value; cases.append((f"version-{value}", wrong))
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        for label, forged in cases:
+            with self.subTest(label=label):
+                atomic_write_json(marker, forged); before = marker.read_bytes()
+                with self.assertRaises(ValueError): transaction._read_marker(self.project.resolve())
+                self.assertEqual(marker.read_bytes(), before)
+
+    def test_abort_and_reconcile_fail_closed_for_valid_apply_marker(self):
+        marker, _ = self.promote_marker_raw_for_test(); before = marker.read_bytes()
+        destination = self.plan.pdfs[0].destination_path; pdf_before = destination.read_bytes()
+        staging = self.project / self.staging; transaction_id = json.loads(before)["transaction_id"]
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction cannot be aborted$"):
+            abort_retry_transaction(self.project)
+        self.assertEqual(transaction._ACTIVE[self.project.resolve()], transaction_id)
+        self.assertEqual(marker.read_bytes(), before); self.assertEqual(destination.read_bytes(), pdf_before); self.assertTrue(staging.exists())
+        abandon_retry_transaction(self.project)
+        with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+            reconcile_retry_transaction(self.project)
+        self.assertEqual(marker.read_bytes(), before); self.assertEqual(destination.read_bytes(), pdf_before); self.assertTrue(staging.exists())
+
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
         destination.write_bytes(self.plan.pdfs[0].source_path.read_bytes())
