@@ -636,10 +636,14 @@ def _read_marker(project: Path) -> dict[str, Any]:
                     or len(published["pdfs"]) > len(data["target"]["pdfs"])):
                 raise ValueError
             for receipt, target in zip(published["pdfs"], data["target"]["pdfs"]):
-                if (type(receipt) is not dict or set(receipt) != {"destination_name", "temp_name", "device", "inode", "size", "sha256"}
+                if (type(receipt) is not dict or set(receipt) != {"destination_name", "temp_name", "device", "inode", "size", "sha256",
+                        "quarantine_name", "quarantine_device", "quarantine_inode"}
                         or receipt["destination_name"] != target["destination_name"]
                         or receipt["temp_name"] != f".{target['destination_name']}.{data['transaction_id']}.tmp"
                         or any(type(receipt[key]) is not int or receipt[key] < 0 for key in ("device", "inode", "size"))
+                        or receipt["quarantine_name"] != f".{target['destination_name']}.{data['transaction_id']}.quarantine"
+                        or any(type(receipt[key]) is not int or receipt[key] < 0
+                            for key in ("quarantine_device", "quarantine_inode"))
                         or receipt["size"] != target["size"] or receipt["sha256"] != target["sha256"]):
                     raise ValueError
             data["published"] = published
@@ -791,9 +795,23 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
 
 
 def _receipt_paths(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> tuple[Path, ...]:
-    candidates = (project / marker["staging_name"] / "retry" / "pdfs" / receipt["temp_name"],
-        project / "pdfs" / receipt["destination_name"])
+    source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+    quarantine = source_parent / receipt["quarantine_name"]
+    candidates = (source_parent / receipt["temp_name"], project / "pdfs" / receipt["destination_name"],
+        quarantine / "temp", quarantine / "destination")
     return tuple(path for path in candidates if _lexists(path))
+
+
+def _validate_quarantine(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> Path:
+    parent = project / marker["staging_name"] / "retry" / "pdfs"
+    path = parent / receipt["quarantine_name"]
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or path.is_symlink()
+            or (info.st_dev, info.st_ino) != (receipt["quarantine_device"], receipt["quarantine_inode"])
+            or path.resolve(strict=True).parent != parent
+            or {child.name for child in path.iterdir()} - {"temp", "destination"}):
+        raise ValueError
+    return path
 
 
 def _fsync_directory(path: Path) -> None:
@@ -839,19 +857,24 @@ def _validate_receipt_group(project: Path, marker: dict[str, Any], receipt: dict
 
 
 def _quarantine_owned_path(project: Path, marker: dict[str, Any], receipt: dict[str, Any], path: Path) -> None:
-    quarantine_parent = project / marker["staging_name"] / "retry" / "pdfs"
-    quarantine = quarantine_parent / f".{marker['transaction_id']}.{secrets.token_hex(32)}.quarantine"
-    if _lexists(quarantine): raise ValueError
-    _assert_marker_generation(project, marker)
-    os.rename(path, quarantine)
-    _fsync_directory(path.parent); _fsync_directory(quarantine_parent)
-    remaining_links = 1 + len(_receipt_paths(project, marker, receipt))
+    source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+    quarantine_parent = _validate_quarantine(project, marker, receipt)
+    slot = "temp" if path.name in {receipt["temp_name"], "temp"} else "destination"
+    original = (source_parent / receipt["temp_name"] if slot == "temp"
+        else project / "pdfs" / receipt["destination_name"])
+    quarantine = quarantine_parent / slot
+    if path != quarantine:
+        if _lexists(quarantine): raise ValueError
+        _assert_marker_generation(project, marker)
+        os.rename(path, quarantine)
+        _fsync_directory(path.parent); _fsync_directory(quarantine_parent)
+    remaining_links = len(_receipt_paths(project, marker, receipt))
     try:
         _validate_receipt_path(quarantine, receipt, remaining_links)
     except Exception:
         try:
-            os.link(quarantine, path, follow_symlinks=False)
-            _fsync_directory(path.parent)
+            os.link(quarantine, original, follow_symlinks=False)
+            _fsync_directory(original.parent)
             quarantine.unlink(); _fsync_directory(quarantine_parent)
         except OSError:
             pass
@@ -874,6 +897,7 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
             if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
                 raise ValueError
             for receipt in data.get("published", {}).get("pdfs", []):
+                _validate_quarantine(project, data, receipt)
                 _validate_receipt_group(project, data, receipt)
             _assert_marker_generation(project, data)
             atomic_write_json(project / "pdfs" / "download_report.json", before["report"])
@@ -886,6 +910,9 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
                     _assert_marker_generation(project, data)
                     _validate_receipt_group(project, data, receipt)
                     _quarantine_owned_path(project, data, receipt, path)
+                quarantine = _validate_quarantine(project, data, receipt)
+                if any(quarantine.iterdir()): raise ValueError
+                quarantine.rmdir(); _fsync_directory(quarantine.parent)
             _fsync_directory(project / "pdfs")
             _assert_marker_generation(project, data)
             if _lexists(staging):
@@ -1158,7 +1185,8 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
     receipts = marker.get("published", {}).get("pdfs", [])
     index = marker["target"]["pdfs"].index(pdf)
     if index < len(receipts):
-        receipt = receipts[index]; temporary = source_parent / receipt["temp_name"]
+        receipt = receipts[index]; _validate_quarantine(project, marker, receipt)
+        temporary = source_parent / receipt["temp_name"]
         paths = [path for path in (temporary, destination) if _lexists(path)]
         if not paths:
             raise ValueError
@@ -1266,6 +1294,16 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
     receipt = {"destination_name": pdf["destination_name"], "temp_name": temp_name,
         "device": destination_identity[0], "inode": destination_identity[1],
         "size": pdf["size"], "sha256": pdf["sha256"]}
+    quarantine_name = f".{pdf['destination_name']}.{marker['transaction_id']}.quarantine"
+    quarantine = source_parent / quarantine_name
+    os.mkdir(quarantine, 0o700)
+    quarantine_info = quarantine.lstat()
+    if (not stat.S_ISDIR(quarantine_info.st_mode) or stat.S_IMODE(quarantine_info.st_mode) != 0o700 or quarantine.is_symlink()
+            or quarantine.resolve(strict=True).parent != source_parent):
+        raise ValueError
+    _fsync_directory(source_parent)
+    receipt.update(quarantine_name=quarantine_name, quarantine_device=quarantine_info.st_dev,
+        quarantine_inode=quarantine_info.st_ino)
     raw = json.loads(marker[_RAW_MARKER_BYTES].decode("utf-8"))
     raw["published_json_b64"] = _encode_before({"pdfs": receipts + [receipt]})
     _replace_marker_cas(project, marker, raw)

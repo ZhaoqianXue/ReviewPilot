@@ -2177,6 +2177,41 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertTrue(failed); self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
         self.assertTrue(reconcile_retry_transaction(self.project))
 
+    def test_post_rename_failure_keeps_swapped_foreign_in_recorded_quarantine(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        destination = self.plan.pdfs[0].destination_path; foreign = b"%PDF-quarantined-foreign"
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        receipt = json.loads(base64.b64decode(marker["published_json_b64"]))["pdfs"][0]
+        qslot = self.project / self.staging / "retry" / "pdfs" / receipt["quarantine_name"] / "destination"
+        original_rename = os.rename; renamed = False
+
+        def swap(source, target, *args, **kwargs):
+            nonlocal renamed
+            if Path(source) == destination:
+                destination.unlink(); destination.write_bytes(foreign); renamed = True
+            return original_rename(source, target, *args, **kwargs)
+
+        def fail_after_rename(path):
+            if renamed: raise OSError("post-rename fsync")
+            return None
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.rename", side_effect=swap), \
+                patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_after_rename):
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertEqual(qslot.read_bytes(), foreign); self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertEqual(qslot.read_bytes(), foreign)
+
+    def test_quarantine_slot_collision_is_never_overwritten(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        receipt = json.loads(base64.b64decode(marker["published_json_b64"]))["pdfs"][0]
+        collision = self.project / self.staging / "retry" / "pdfs" / receipt["quarantine_name"] / "destination"
+        collision.write_bytes(b"%PDF-collision")
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertEqual(collision.read_bytes(), b"%PDF-collision")
+        self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
+
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
         publish_retry_transaction_pdfs(self.project)
