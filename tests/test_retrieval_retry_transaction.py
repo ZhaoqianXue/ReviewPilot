@@ -580,6 +580,57 @@ class RetryTargetTransactionTests(unittest.TestCase):
             record_retry_transaction_target(self.project, self.plan, bad)
         self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
 
+    def test_record_rejects_equal_float_merged_counts_without_changing_marker(self):
+        merged = self.plan.merged_facts
+        float_counts = MappingProxyType({key: float(value) for key, value in merged.counts.items()})
+        forged_merged = RetryMergedFacts(
+            merged.report_revision, merged.report, merged.included,
+            merged.status, float_counts, merged.planned_pdfs,
+        )
+        forged = RetryPublicationPlan(self.plan.report_revision, forged_merged, self.plan.pdfs)
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(self.project, forged, self.ledger)
+
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_rejects_equal_float_terminal_counts_without_changing_marker(self):
+        locations = (
+            ("counts",),
+            ("last_valid", "counts"),
+        )
+        for index, location in enumerate(locations):
+            with self.subTest(location=location):
+                bad = deepcopy(self.ledger)
+                counts = bad["stages"]["retrieval"]
+                for key in location:
+                    counts = counts[key]
+                counts["succeeded"] = float(counts["succeeded"])
+                self.assert_ledger_rejected_without_marker_mutation(bad)
+                if index + 1 < len(locations):
+                    self.prepared = preparation(self.project)
+                    begin_retry_transaction(
+                        self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                    self.plan = publication(self.project, self.prepared, self.staging_name)
+                    self.ledger = target_ledger(self.project, self.plan)
+
+    def test_record_rejects_equal_float_in_unknown_before_ledger_fact(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        before_ledger = load_workflow_state(self.project)
+        before_ledger["opaque"] = {"nested": {"value": 2}}
+        save_workflow_state(self.project, before_ledger)
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(
+            self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+        bad = deepcopy(self.ledger)
+        bad["opaque"]["nested"]["value"] = 2.0
+
+        self.assert_ledger_rejected_without_marker_mutation(bad)
+
     def test_record_rejects_forged_terminal_ledger_semantics(self):
         cases = {
             "attempt": lambda ledger: ledger["stages"]["retrieval"].update(attempt=999),

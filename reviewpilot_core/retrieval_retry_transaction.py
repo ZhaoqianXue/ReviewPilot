@@ -464,7 +464,7 @@ def _validate_target_ledger(marker: dict[str, Any], ledger: dict[str, Any],
     if status in {"completed", "partial"} and extraction["status"] == "not_started":
         extraction.update(status="ready", updated_at=ledger["stages"]["extraction"]["updated_at"])
 
-    if ledger != expected:
+    if _encode_before(ledger) != _encode_before(expected):
         raise ValueError
 
 
@@ -487,7 +487,7 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
     _validate_workflow_state(ledger)
     status, outcome_counts = structured_action_outcome("retry-failed-downloads", {
         "success": report.get("success"), "failed": report.get("failed")})
-    if merged.status != status or counts != outcome_counts:
+    if merged.status != status or _encode_before(counts) != _encode_before(outcome_counts):
         raise ValueError
     _validate_target_ledger(marker, ledger, status, outcome_counts)
     pdfs: list[dict[str, Any]] = []
