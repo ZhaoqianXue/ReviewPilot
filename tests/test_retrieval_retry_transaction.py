@@ -15,7 +15,7 @@ from reviewpilot_core.retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
     RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
     merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
-    stable_retry_id, _validate_detail_provenance,
+    stable_retry_id, _authoritative_fingerprint, _validate_detail_provenance,
 )
 from reviewpilot_core.retrieval_retry_transaction import (
     PENDING_RETRY_FILE,
@@ -260,6 +260,91 @@ class RetryAbortTransactionTests(unittest.TestCase):
         ledger = load_workflow_state(self.project)
         ledger.pop("opaque")
         save_workflow_state(self.project, ledger)
+        begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_begin_rejects_fixed_authority_races_after_final_fingerprint_without_rollback(self):
+        report_path = self.project / "pdfs" / "download_report.json"
+        included_path = self.project / "filtered" / "included_papers.jsonl"
+        ledger_path = self.project / "workflow_state.json"
+
+        def mutate_report():
+            report = json.loads(report_path.read_text())
+            report["concurrent"] = "report"
+            atomic_write_json(report_path, report)
+
+        def mutate_included():
+            rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+            rows[0]["concurrent"] = "included"
+            atomic_write_jsonl(included_path, rows)
+
+        def mutate_ledger():
+            ledger = load_workflow_state(self.project)
+            ledger["concurrent"] = "ledger"
+            save_workflow_state(self.project, ledger)
+
+        for label, mutate, path in (
+                ("report", mutate_report, report_path),
+                ("included", mutate_included, included_path),
+                ("ledger", mutate_ledger, ledger_path)):
+            with self.subTest(authority=label):
+                calls = 0
+                concurrent_bytes = None
+
+                def raced_fingerprint(project):
+                    nonlocal calls, concurrent_bytes
+                    fingerprint = _authoritative_fingerprint(project)
+                    calls += 1
+                    if calls == 2:
+                        mutate()
+                        concurrent_bytes = path.read_bytes()
+                    return fingerprint
+
+                with patch("reviewpilot_core.retrieval_retry_transaction._authoritative_fingerprint",
+                           side_effect=raced_fingerprint):
+                    with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be validated$"):
+                        begin_retry_transaction(self.project, self.preparation,
+                            self.staging_name, self.project / self.staging_name)
+
+                self.assertGreaterEqual(calls, 3)
+                self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+                self.assertEqual(path.read_bytes(), concurrent_bytes)
+                fresh = preparation(self.project)
+                begin_retry_transaction(self.project, fresh, self.staging_name, self.project / self.staging_name)
+                self.assertTrue(abort_retry_transaction(self.project))
+                self.preparation = preparation(self.project)
+
+    def test_begin_postwrite_validation_failure_removes_only_its_exact_marker(self):
+        before = _authoritative_fingerprint(self.project)
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_current_before",
+                   side_effect=ValueError("postwrite seam")):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be validated$"):
+                begin_retry_transaction(self.project, self.preparation,
+                    self.staging_name, self.project / self.staging_name)
+
+        self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+        self.assertEqual(_authoritative_fingerprint(self.project), before)
+        begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_begin_postwrite_failure_leaves_a_marker_it_cannot_prove_it_owns(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+
+        def replace_own_marker(project, marker):
+            replacement = json.loads(marker_path.read_text())
+            replacement["transaction_id"] = "f" * 64
+            atomic_write_json(marker_path, replacement)
+            raise ValueError("postwrite replacement")
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_current_before",
+                   side_effect=replace_own_marker):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be validated$"):
+                begin_retry_transaction(self.project, self.preparation,
+                    self.staging_name, self.project / self.staging_name)
+
+        self.assertTrue(marker_path.exists())
+        self.assertEqual(json.loads(marker_path.read_text())["transaction_id"], "f" * 64)
+        marker_path.unlink()
         begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
         self.assertTrue(abort_retry_transaction(self.project))
 

@@ -233,6 +233,55 @@ def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnap
     return current
 
 
+def _fingerprint_matches_before(
+    fingerprint: tuple[bytes, bytes, bytes, tuple[tuple[str, str], ...]],
+    report: dict[str, Any],
+    included: list[dict[str, Any]],
+    ledger: dict[str, Any],
+) -> bool:
+    """Bind raw fixed-authority bytes to the facts selected for the marker."""
+    try:
+        raw_report = json.loads(fingerprint[0].decode("utf-8"))
+        raw_included = [json.loads(line) for line in fingerprint[1].decode("utf-8").splitlines()]
+        raw_ledger = json.loads(fingerprint[2].decode("utf-8"))
+        return _same_loaded_fact(
+            {"report": raw_report, "included": raw_included, "ledger": raw_ledger},
+            {"report": report, "included": included, "ledger": ledger})
+    except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+
+
+def _same_loaded_fact(first: Any, second: Any) -> bool:
+    if type(first) is not type(second):
+        return False
+    if type(first) is dict:
+        return set(first) == set(second) and all(_same_loaded_fact(first[key], second[key]) for key in first)
+    if type(first) is list:
+        return len(first) == len(second) and all(_same_loaded_fact(a, b) for a, b in zip(first, second))
+    if type(first) is float and math.isnan(first) and math.isnan(second):
+        return True
+    return first == second
+
+
+def _serialized_marker_bytes(data: dict[str, Any]) -> bytes:
+    return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _remove_owned_begin_marker(marker: Path, project: Path, transaction_id: str,
+                               expected_bytes: bytes) -> None:
+    """Remove only the exact marker generation written by a failed begin."""
+    try:
+        if not _direct_regular(marker, project):
+            return
+        raw = marker.read_bytes()
+        parsed = json.loads(raw.decode("utf-8"))
+        if (raw == expected_bytes and type(parsed) is dict
+                and parsed.get("transaction_id") == transaction_id):
+            marker.unlink()
+    except (OSError, RuntimeError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+
+
 def begin_retry_transaction(
     project_path: Path | str,
     preparation: RetryPreparation,
@@ -252,12 +301,13 @@ def begin_retry_transaction(
         if _lexists(project / staging_name):
             raise ValueError("Retry transaction cannot begin safely")
         try:
-            trusted = _trusted_preparation(preparation, project)
             authorities = ((project / "pdfs" / "download_report.json", project / "pdfs"),
                 (project / "filtered" / "included_papers.jsonl", project / "filtered"),
                 (project / "workflow_state.json", project))
             if any(not _direct_regular(path, parent) for path, parent in authorities):
                 raise ValueError
+            authority_before = _authoritative_fingerprint(project)
+            trusted = _trusted_preparation(preparation, project)
             current = current_retry_snapshot(project)
             before_report, before_included, before_stage = current.mutable_fact_copies()
             before_ledger = load_workflow_state(project)
@@ -280,7 +330,12 @@ def begin_retry_transaction(
                 raise ValueError
             if any(_lexists(project / "pdfs" / name) for name in candidates):
                 raise ValueError
-            pdf_fingerprint = _authoritative_fingerprint(project)[3]
+            authority_after = _authoritative_fingerprint(project)
+            if (authority_after != authority_before
+                    or not _fingerprint_matches_before(
+                        authority_after, before_report, before_included, before_ledger)):
+                raise ValueError
+            pdf_fingerprint = authority_after[3]
             pdf_baseline_json_b64 = _encode_before({"pdfs": [
                 {"name": name, "sha256": digest} for name, digest in pdf_fingerprint]})
             _decode_pdf_baseline(pdf_baseline_json_b64)
@@ -301,12 +356,28 @@ def begin_retry_transaction(
                 "pdf_baseline_json_b64": pdf_baseline_json_b64,
                 "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
             }
+            expected_marker_bytes = _serialized_marker_bytes(data)
             atomic_write_json(marker, data)
         except Exception as exc:
             with _GUARD:
                 if _ACTIVE.get(project) == transaction_id:
                     _ACTIVE.pop(project)
             raise ValueError("Retry transaction marker could not be written") from exc
+        try:
+            written = _read_marker(project)
+            if (written["transaction_id"] != transaction_id
+                    or written[_RAW_MARKER_BYTES] != expected_marker_bytes
+                    or marker.read_bytes() != expected_marker_bytes):
+                raise ValueError
+            _validate_current_before(project, written)
+            if marker.read_bytes() != expected_marker_bytes:
+                raise ValueError
+        except Exception as exc:
+            _remove_owned_begin_marker(marker, project, transaction_id, expected_marker_bytes)
+            with _GUARD:
+                if _ACTIVE.get(project) == transaction_id:
+                    _ACTIVE.pop(project)
+            raise ValueError("Retry transaction marker could not be validated") from exc
         return RetryTransactionHandle(marker, staging_name, candidates, transaction_id)
 
 
