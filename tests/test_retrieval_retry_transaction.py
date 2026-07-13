@@ -723,6 +723,88 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_record_rejects_every_noncanonical_merged_fact_delta_without_marker_mutation(self):
+        def mutate_unselected(report, included):
+            included[0]["opaque"] = {"forged": True}
+
+        def mutate_selected_business(report, included):
+            included[1]["title"] = "forged"
+
+        def mutate_prior_success(report, included):
+            report["downloaded"][0]["opaque"] = "forged"
+
+        def mutate_unrelated_report(report, included):
+            report["opaque"] = {"nested": True}
+
+        def mutate_aggregate_type(report, included):
+            report["attempted"] = float(report["attempted"])
+
+        def mutate_classification(report, included):
+            report["web_search_fallback_candidates"] = [{"id": "forged"}]
+
+        def mutate_success_identity(report, included):
+            report["downloaded"][-1]["id"] = None
+
+        cases = (mutate_unselected, mutate_selected_business, mutate_prior_success,
+            mutate_unrelated_report, mutate_aggregate_type, mutate_classification, mutate_success_identity)
+        for index, mutate in enumerate(cases):
+            with self.subTest(case=mutate.__name__):
+                report, included = self.plan.merged_facts.mutable_copies()
+                mutate(report, included)
+                forged = self.refreeze_plan(report, included)
+                before = (self.project / PENDING_RETRY_FILE).read_bytes()
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                    record_retry_transaction_target(self.project, forged, self.ledger)
+                self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+                self.assertTrue(abort_retry_transaction(self.project))
+                if index + 1 < len(cases):
+                    self.prepared = preparation(self.project)
+                    begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                    self.plan = publication(self.project, self.prepared, self.staging_name)
+                    self.ledger = target_ledger(self.project, self.plan)
+
+    def test_partial_delta_preserves_unselected_failure_order_and_nested_facts(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        rows_path = self.project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+        rows[0]["opaque"] = {"nested": [1, {"typed": True}]}
+        rows.extend(({"id": "failed-2", "title": "Failed 2"}, {"id": "failed-3", "title": "Failed 3"}))
+        atomic_write_jsonl(rows_path, rows)
+        report_path = self.project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text())
+        report["opaque"] = {"nested": [1, {"typed": True}]}
+        report["failed_papers"].extend((
+            {"id": "failed-2", "title": "Failed 2", "failure_class": "network"},
+            {"id": "failed-3", "title": "Failed 3", "failure_class": "network"},
+        ))
+        report["failed"] = 3
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(self.project)
+        ledger["stages"]["retrieval"]["counts"]["failed"] = 3
+        save_workflow_state(self.project, ledger)
+        snapshot = current_retry_snapshot(self.project)
+        selected = [item.retry_id for item in snapshot.items[:2]]
+        prepared = prepare_retry_request(self.project, {"failed_ids": selected,
+            "report_revision": snapshot.report_revision,
+            "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": selected}})
+        begin_retry_transaction(self.project, prepared, self.staging_name, self.project / self.staging_name)
+        plan = publication(self.project, prepared, self.staging_name, succeeds=1)
+        ledger = target_ledger(self.project, plan)
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+
+        target_report, target_included = plan.merged_facts.mutable_copies()
+        reversed_report = deepcopy(target_report)
+        reversed_report["failed_papers"].reverse()
+        forged_unselected = deepcopy(target_report)
+        forged_unselected["failed_papers"][-1]["title"] = "forged"
+        for forged_report in (reversed_report, forged_unselected):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                record_retry_transaction_target(self.project,
+                    self.refreeze_plan(forged_report, target_included, base_plan=plan), ledger)
+            self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        record_retry_transaction_target(self.project, plan, ledger)
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_record_rejects_success_facts_when_pdf_subset_is_empty(self):
         report, included = self.plan.merged_facts.mutable_copies()
         forged = self.refreeze_plan(report, included, pdfs=(), planned_pdfs=())

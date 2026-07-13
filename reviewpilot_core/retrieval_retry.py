@@ -812,6 +812,119 @@ def _validate_detail_provenance(row: dict[str, Any], detail: dict[str, Any]) -> 
             raise ValueError("Staged retry report metadata has no paper provenance")
 
 
+_MERGED_REPORT_FIELDS = {
+    "success", "failed", "downloaded", "failed_papers", "pdf_count", "attempted",
+    "subscribed_papers", "unavailable_papers", "web_search_fallback_candidates",
+}
+
+
+def _exact_json(first: Any, second: Any) -> bool:
+    """Compare already-materialized JSON without bool/int or int/float coercion."""
+    if type(first) is not type(second):
+        return False
+    if type(first) is dict:
+        return (set(first) == set(second)
+            and all(_exact_json(first[key], second[key]) for key in first))
+    if type(first) is list:
+        return len(first) == len(second) and all(_exact_json(a, b) for a, b in zip(first, second))
+    return first == second
+
+
+def _validate_merged_retry_delta(
+    before_report: dict[str, Any],
+    before_included: list[dict[str, Any]],
+    selected_ids: tuple[str, ...],
+    report: dict[str, Any],
+    included: list[dict[str, Any]],
+    destinations: dict[str, Path],
+) -> None:
+    """Validate that target facts are exactly one canonical retry merge."""
+    if (any(type(value) is not dict for value in (before_report, report, destinations))
+            or type(before_included) is not list or type(included) is not list
+            or type(selected_ids) is not tuple
+            or any(type(row) is not dict for row in before_included + included)):
+        raise ValueError("Retry merged fact delta is invalid")
+    before_ids = tuple(stable_retry_id(row) for row in before_included)
+    target_ids = tuple(stable_retry_id(row) for row in included)
+    if (before_ids != target_ids or len(set(before_ids)) != len(before_ids)
+            or not set(selected_ids).issubset(before_ids)
+            or set(destinations) - set(selected_ids)
+            or any(type(path) is not type(Path()) for path in destinations.values())):
+        raise ValueError("Retry merged included identities changed")
+    selected = set(selected_ids)
+    target_rows = dict(zip(target_ids, included))
+    for retry_id, before_row, target_row in zip(before_ids, before_included, included):
+        if retry_id not in selected:
+            if not _exact_json(before_row, target_row):
+                raise ValueError("Retry changed an unselected paper")
+        elif not _exact_json(_fresh_retry_row(deepcopy(before_row)), _fresh_retry_row(deepcopy(target_row))):
+            raise ValueError("Retry changed selected paper business facts")
+
+    before_downloaded = before_report.get("downloaded")
+    downloaded = report.get("downloaded")
+    before_failures = before_report.get("failed_papers")
+    failures = report.get("failed_papers")
+    if any(type(value) is not list for value in (before_downloaded, downloaded, before_failures, failures)) \
+            or any(type(row) is not dict for row in before_downloaded + downloaded + before_failures + failures):
+        raise ValueError("Retry report detail lists are invalid")
+    if not _exact_json(downloaded[:len(before_downloaded)], before_downloaded):
+        raise ValueError("Retry changed prior downloaded facts")
+
+    success_ids = tuple(retry_id for retry_id in selected_ids if retry_id in destinations)
+    appended = downloaded[len(before_downloaded):]
+    if len(appended) != len(success_ids):
+        raise ValueError("Retry success detail count is invalid")
+    success_details: dict[str, dict[str, Any]] = {}
+    for retry_id, detail in zip(success_ids, appended):
+        if stable_retry_id(detail) != retry_id:
+            raise ValueError("Retry success identity is invalid")
+        success_details[retry_id] = detail
+
+    failure_by_id: dict[str, dict[str, Any]] = {}
+    expected_failures: list[tuple[str, dict[str, Any] | None]] = []
+    for old in before_failures:
+        retry_id = stable_retry_id(old)
+        if retry_id not in selected:
+            expected_failures.append((retry_id, old))
+        elif retry_id not in destinations:
+            expected_failures.append((retry_id, None))
+    if len(failures) != len(expected_failures):
+        raise ValueError("Retry failure detail count is invalid")
+    for detail, (retry_id, old) in zip(failures, expected_failures):
+        if stable_retry_id(detail) != retry_id or (old is not None and not _exact_json(detail, old)):
+            raise ValueError("Retry failure ordering or provenance is invalid")
+        if old is None:
+            failure_by_id[retry_id] = detail
+
+    selected_rows = [target_rows[retry_id] for retry_id in selected_ids]
+    selected_failures = [failure_by_id[retry_id] for retry_id in selected_ids if retry_id not in destinations]
+    canonical_report = {
+        "pdf_count": len(destinations), "attempted": len(selected_ids),
+        "subscribed_papers": [row for row in selected_failures if _merged_failure_status(row) == "subscribed_unavailable"],
+        "unavailable_papers": [row for row in selected_failures if _merged_failure_status(row) == "unavailable"],
+        "web_search_fallback_candidates": selected_failures,
+    }
+    _validate_canonical_merge_stage(selected_rows, canonical_report, destinations,
+        {destinations[retry_id]: success_details[retry_id] for retry_id in success_ids}, failure_by_id)
+
+    if ((set(before_report) - _MERGED_REPORT_FIELDS) != (set(report) - _MERGED_REPORT_FIELDS)
+            or any(not _exact_json(before_report[key], report[key])
+                for key in set(before_report) - _MERGED_REPORT_FIELDS)):
+        raise ValueError("Retry changed unrelated report facts")
+    success_count, failed_count = len(downloaded), len(failures)
+    for key, expected in (("success", success_count), ("failed", failed_count),
+            ("pdf_count", success_count), ("attempted", success_count + failed_count)):
+        if type(report.get(key)) is not int or report[key] != expected:
+            raise ValueError("Retry aggregate count is invalid")
+    classifications = {
+        "subscribed_papers": [row for row in failures if _merged_failure_status(row) == "subscribed_unavailable"],
+        "unavailable_papers": [row for row in failures if _merged_failure_status(row) == "unavailable"],
+        "web_search_fallback_candidates": failures,
+    }
+    if any(not _exact_json(report.get(key), value) for key, value in classifications.items()):
+        raise ValueError("Retry report classification is invalid")
+
+
 def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dict[str, Any]:
     row = deepcopy(source)
     for key in _ROW_SECONDARY_DIAGNOSTICS:

@@ -19,7 +19,8 @@ from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
     RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
-    _publication_pdf_fingerprint, retrieval_report_revision, stable_retry_id,
+    _publication_pdf_fingerprint, _validate_merged_retry_delta,
+    retrieval_report_revision, stable_retry_id,
 )
 from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
 from .workflow_state import load_workflow_state, save_workflow_state
@@ -369,56 +370,6 @@ def _contains_text(value: Any, needle: str) -> bool:
     return False
 
 
-def _validate_target_provenance(project: Path, marker: dict[str, Any], report: dict[str, Any],
-                                included: list[dict[str, Any]], pdfs: list[dict[str, Any]]) -> None:
-    """Bind each selected success to its canonical row, detail, and candidate."""
-    downloaded = report.get("downloaded")
-    if type(downloaded) is not list or any(type(detail) is not dict for detail in downloaded):
-        raise ValueError
-    candidates = dict(zip(marker["selected_ids"], marker["candidate_names"]))
-    pdf_ids = [pdf["retry_id"] for pdf in pdfs]
-    if (len(pdf_ids) != len(set(pdf_ids))
-            or pdf_ids != [retry_id for retry_id in marker["selected_ids"] if retry_id in set(pdf_ids)]):
-        raise ValueError
-
-    rows_by_id: dict[str, list[dict[str, Any]]] = {retry_id: [] for retry_id in marker["selected_ids"]}
-    details_by_id: dict[str, list[dict[str, Any]]] = {retry_id: [] for retry_id in marker["selected_ids"]}
-    for row in included:
-        try:
-            retry_id = stable_retry_id(row)
-        except ValueError:
-            continue
-        if retry_id in rows_by_id:
-            rows_by_id[retry_id].append(row)
-    for detail in downloaded:
-        try:
-            retry_id = stable_retry_id(detail)
-        except ValueError:
-            continue
-        if retry_id in details_by_id:
-            details_by_id[retry_id].append(detail)
-
-    success_ids = set(pdf_ids)
-    for retry_id in marker["selected_ids"]:
-        rows = rows_by_id[retry_id]
-        details = details_by_id[retry_id]
-        if len(rows) != 1:
-            raise ValueError
-        row = rows[0]
-        destination = str(project / "pdfs" / candidates[retry_id])
-        if retry_id in success_ids:
-            if (row.get("pdf_downloaded") is not True or row.get("retrieval_status") != "downloaded"
-                    or row.get("pdf_path") != destination or len(details) != 1):
-                raise ValueError
-            detail = details[0]
-            if (detail.get("pdf_downloaded") is not True or detail.get("retrieval_status") != "downloaded"
-                    or detail.get("path") != destination or detail.get("pdf_path") != destination):
-                raise ValueError
-        elif (details or row.get("pdf_downloaded") is True or row.get("retrieval_status") == "downloaded"
-                or row.get("pdf_path") not in (None, "")):
-            raise ValueError
-
-
 def _material_output(stage: dict[str, Any]) -> bool:
     return (stage["last_valid"] is not None
         or (stage["status"] == "ready" and stage["attempt"] > 0)
@@ -516,7 +467,9 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
             "size": pdf.source_size, "sha256": pdf.source_sha256})
     if successful_names != [name for name in marker["candidate_names"] if name in set(successful_names)]:
         raise ValueError
-    _validate_target_provenance(project, marker, report, included, pdfs)
+    destinations = {pdf["retry_id"]: project / "pdfs" / pdf["destination_name"] for pdf in pdfs}
+    _validate_merged_retry_delta(marker["before"]["report"], marker["before"]["included"],
+        tuple(marker["selected_ids"]), report, included, destinations)
     if (_contains_text(report, str(project / marker["staging_name"]))
             or _contains_text(included, str(project / marker["staging_name"]))):
         raise ValueError
@@ -555,7 +508,9 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
         names.append(pdf["destination_name"])
     if len(names) != len(set(names)) or names != [name for name in marker["candidate_names"] if name in set(names)]:
         raise ValueError
-    _validate_target_provenance(project, marker, report, target["included"], target["pdfs"])
+    destinations = {pdf["retry_id"]: project / "pdfs" / pdf["destination_name"] for pdf in target["pdfs"]}
+    _validate_merged_retry_delta(marker["before"]["report"], marker["before"]["included"],
+        tuple(marker["selected_ids"]), report, target["included"], destinations)
     staging = str(project / marker["staging_name"])
     if _contains_text(report, staging) or _contains_text(target["included"], staging):
         raise ValueError
