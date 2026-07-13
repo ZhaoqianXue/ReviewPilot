@@ -61,6 +61,12 @@ class RetryAuthorityClassification:
     identities: tuple[tuple[int, int, int, int, int, int], ...]
 
 
+@dataclass(frozen=True)
+class RetryPdfCommitSnapshot:
+    baseline_identities: tuple[tuple[int, int, int, int, int, int], ...]
+    receipt_identities: tuple[tuple[int, int, int, int, int, int], ...]
+
+
 def _lock(project: Path) -> RLock:
     with _GUARD:
         return _LOCKS.setdefault(project, RLock())
@@ -1645,3 +1651,64 @@ def _roll_forward_retry_authorities(project_path: Path | str,
             return second
         except Exception as exc:
             raise ValueError("Retry transaction authorities could not be rolled forward") from exc
+
+
+def _validate_apply_pdf_commit(project_path: Path | str,
+                               marker: dict[str, Any]) -> RetryPdfCommitSnapshot:
+    """Read-only proof that an apply marker's exact committed PDF set is stable."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            if type(marker) is not dict or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker:
+                raise ValueError
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply": raise ValueError
+
+            def direct_directory(path: Path, parent: Path) -> None:
+                info = path.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or path.is_symlink()
+                        or path.resolve(strict=True).parent != parent): raise ValueError
+
+            def validate_round() -> RetryPdfCommitSnapshot:
+                pdfs = project / "pdfs"; direct_directory(pdfs, project)
+                baseline = current["pdf_baseline"]["pdfs"]; receipts = current["published"]["pdfs"]
+                expected_names = {"download_report.json"} | {item["name"] for item in baseline} \
+                    | {item["destination_name"] for item in receipts}
+                if {path.name for path in pdfs.iterdir()} != expected_names \
+                        or not _direct_regular(pdfs / "download_report.json", pdfs): raise ValueError
+                baseline_identities = []
+                for item in baseline:
+                    path = pdfs / item["name"]; before = path.lstat()
+                    expected = tuple(item[key] for key in ("device", "inode", "size", "mtime_ns", "ctime_ns")) + (1,)
+                    if _file_identity(before) != expected: raise ValueError
+                    size, digest, identity = _publication_pdf_fingerprint(path, pdfs)
+                    after = path.lstat()
+                    if (_file_identity(after) != expected or size != item["size"] or digest != item["sha256"]
+                            or identity != (item["device"], item["inode"])): raise ValueError
+                    baseline_identities.append(expected)
+                receipt_identities = []
+                for receipt in receipts:
+                    destination = pdfs / receipt["destination_name"]
+                    _validate_receipt_path(destination, receipt, 1)
+                    receipt_identities.append(_file_identity(destination.lstat()))
+
+                staging = project / current["staging_name"]
+                if _lexists(staging):
+                    direct_directory(staging, project); retry = staging / "retry"; direct_directory(retry, staging)
+                    source_parent = retry / "pdfs"; direct_directory(source_parent, retry)
+                    for receipt in receipts:
+                        if _lexists(source_parent / receipt["temp_name"]): raise ValueError
+                        quarantine = source_parent / receipt["quarantine_name"]
+                        if _lexists(quarantine):
+                            validated = _validate_quarantine(project, current, receipt)
+                            if validated is None or any(validated.iterdir()): raise ValueError
+                return RetryPdfCommitSnapshot(tuple(baseline_identities), tuple(receipt_identities))
+
+            snapshots = []
+            for _ in range(2):
+                _assert_marker_generation(project, current); snapshots.append(validate_round())
+                _assert_marker_generation(project, current)
+            if snapshots[0] != snapshots[1]: raise ValueError
+            return snapshots[1]
+        except Exception as exc:
+            raise ValueError("Retry transaction PDF commit is invalid") from exc

@@ -37,6 +37,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _classify_retry_authorities,
     _write_retry_authority_target,
     _roll_forward_retry_authorities,
+    _validate_apply_pdf_commit,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2521,6 +2522,89 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertEqual(calls, 3); self.assertNotEqual(foreign_inode, original_inode)
         self.assertEqual((report.read_bytes(), report.stat().st_ino), (target_bytes, foreign_inode))
         self.assertEqual(marker_path.read_bytes(), marker_before)
+
+    def test_apply_pdf_commit_validator_is_read_only_and_ignores_caller_derived_facts(self):
+        marker = self.decoded_apply_marker(); before = {str(path.relative_to(self.project)):
+            (path.lstat().st_ino, path.lstat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in self.project.rglob("*")}
+        forged = dict(marker); forged["phase"] = "abort"; forged["published"] = {"pdfs": []}
+        snapshot = _validate_apply_pdf_commit(self.project, forged)
+        self.assertEqual(len(snapshot.receipt_identities), 1)
+        after = {str(path.relative_to(self.project)):
+            (path.lstat().st_ino, path.lstat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in self.project.rglob("*")}
+        self.assertEqual(after, before)
+
+    def test_apply_pdf_commit_validator_rejects_destination_and_directory_forgeries(self):
+        marker = self.decoded_apply_marker(); destination = self.plan.pdfs[0].destination_path
+        unknown = self.project / "pdfs/failed-candidate.pdf"; unknown.write_bytes(b"%PDF-unknown")
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+        unknown.unlink(); link = self.project / "destination-link"; os.link(destination, link)
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+        link.unlink(); original = destination.read_bytes(); destination.write_bytes(b"not-pdf" + b"x" * (len(original) - 7))
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+
+    def test_apply_pdf_commit_validator_accepts_cleaned_qdir_and_staging(self):
+        marker = self.decoded_apply_marker(); receipt = marker["published"]["pdfs"][0]
+        qdir = self.project / self.staging / "retry" / "pdfs" / receipt["quarantine_name"]
+        qdir.rmdir(); self.assertEqual(len(_validate_apply_pdf_commit(self.project, marker).receipt_identities), 1)
+        shutil.rmtree(self.project / self.staging)
+        self.assertEqual(len(_validate_apply_pdf_commit(self.project, marker).receipt_identities), 1)
+
+    def test_apply_pdf_commit_validator_rejects_temp_qslot_and_bad_qdir(self):
+        marker = self.decoded_apply_marker(); receipt = marker["published"]["pdfs"][0]
+        parent = self.project / self.staging / "retry" / "pdfs"; qdir = parent / receipt["quarantine_name"]
+        temp = parent / receipt["temp_name"]; temp.write_bytes(b"%PDF-temp")
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+        temp.unlink(); slot = qdir / "destination"; slot.write_bytes(b"%PDF-slot")
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+
+    def test_apply_pdf_commit_validator_rejects_baseline_drift_and_hardlink(self):
+        marker = self.decoded_apply_marker(); baseline = self.project / "pdfs/original.pdf"
+        link = self.project / "baseline-link"; os.link(baseline, link)
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+        link.unlink(); baseline.write_bytes(b"%PDF-drift")
+        with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+
+    def test_apply_pdf_commit_validator_rejects_pdf_and_marker_aba_between_rounds(self):
+        marker = self.decoded_apply_marker(); destination = self.plan.pdfs[0].destination_path
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._validate_receipt_path; calls = 0
+        def swap_pdf(*args):
+            nonlocal calls
+            result = original(*args); calls += 1
+            if calls == 1:
+                replacement = self.project / "same-pdf"; replacement.write_bytes(destination.read_bytes())
+                os.replace(replacement, destination)
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_receipt_path", side_effect=swap_pdf):
+            with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+
+    def test_apply_pdf_commit_validator_rejects_marker_aba_between_rounds(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._validate_receipt_path; swapped = False
+        def swap_marker(*args):
+            nonlocal swapped
+            result = original(*args)
+            if not swapped:
+                swapped = True; replacement = self.project / "same-marker"; replacement.write_bytes(marker_path.read_bytes())
+                os.replace(replacement, marker_path)
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_receipt_path", side_effect=swap_marker):
+            with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
+
+    def test_apply_pdf_commit_validator_accepts_zero_pdf_apply(self):
+        self.assertTrue(abort_retry_transaction(self.project)); self.prepared = preparation(self.project)
+        begin_retry_transaction(self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging, succeeds=False)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        current = transaction._read_marker(self.project.resolve()); raw = json.loads(current["_raw_marker_bytes"].decode())
+        raw["published_json_b64"] = base64.b64encode(b'{"pdfs":[]}').decode(); raw["phase"] = "apply"
+        transaction._replace_marker_cas(self.project.resolve(), current, raw)
+        apply_marker = transaction._read_marker(self.project.resolve())
+        self.assertEqual(_validate_apply_pdf_commit(self.project, apply_marker).receipt_identities, ())
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
