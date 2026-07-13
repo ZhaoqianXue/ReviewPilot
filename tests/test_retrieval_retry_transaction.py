@@ -496,6 +496,29 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def assert_screening_prerequisite_rejected(self, **screening_changes):
+        valid_target = deepcopy(self.ledger)
+        self.assertTrue(abort_retry_transaction(self.project))
+        before_ledger = load_workflow_state(self.project)
+        before_ledger["stages"]["screening"].update(screening_changes)
+        save_workflow_state(self.project, before_ledger)
+        self.prepared = preparation(self.project)
+        begin_retry_transaction(
+            self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        target = deepcopy(valid_target)
+        target["stages"]["screening"] = deepcopy(before_ledger["stages"]["screening"])
+        marker = self.project / PENDING_RETRY_FILE
+        marker_before = marker.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+            record_retry_transaction_target(self.project, self.plan, target)
+
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertEqual(marker.read_bytes(), marker_before)
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_recorded_target_is_path_safe_immutable_and_abort_still_restores(self):
         before = self.prepared.snapshot.mutable_fact_copies()
         record_retry_transaction_target(self.project, self.plan, self.ledger)
@@ -510,6 +533,12 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_record_rejects_retry_when_screening_is_not_terminal(self):
+        self.assert_screening_prerequisite_rejected(status="ready")
+
+    def test_record_rejects_retry_when_screening_is_stale(self):
+        self.assert_screening_prerequisite_rejected(stale=True)
 
     def test_record_streams_staged_pdf_and_accepts_upstream_whitespace_header(self):
         self.assertTrue(abort_retry_transaction(self.project))

@@ -380,6 +380,9 @@ def _material_output(stage: dict[str, Any]) -> bool:
 def _validate_target_ledger(marker: dict[str, Any], ledger: dict[str, Any],
                             status: str, counts: dict[str, Any]) -> None:
     """Require the exact non-time result of one retry start and completion."""
+    screening = marker["before"]["ledger"]["stages"]["screening"]
+    if screening["status"] not in {"completed", "partial"} or screening["stale"]:
+        raise ValueError
     expected = deepcopy(marker["before"]["ledger"])
     stages = expected["stages"]
     retrieval_index = STAGE_NAMES.index("retrieval")
