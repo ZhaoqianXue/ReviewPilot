@@ -79,6 +79,86 @@ class RetrySnapshot:
         return report, included, ledger
 
 
+class RetryRequestError(ValueError):
+    """Path-independent retry request failure suitable for transport mapping."""
+
+    code = "invalid_retry_request"
+
+
+class InvalidRetryRequest(RetryRequestError):
+    pass
+
+
+class RevisionConflict(RetryRequestError):
+    code = "revision_conflict"
+
+    def __init__(self, expected_report_revision: str):
+        super().__init__(self.code)
+        self.expected_report_revision = expected_report_revision
+
+
+class ConfirmationRequired(RetryRequestError):
+    code = "confirmation_required"
+
+    def __init__(self, expected_report_revision: str, failed_ids: tuple[str, ...]):
+        super().__init__(self.code)
+        self.expected_report_revision = expected_report_revision
+        self.failed_ids = failed_ids
+
+
+@dataclass(frozen=True)
+class RetryPreparation:
+    snapshot: RetrySnapshot
+    selected_ids: tuple[str, ...]
+    items: tuple[RetryItem, ...]
+    included_rows: tuple[Mapping[str, Any], ...]
+
+
+def prepare_retry_request(project_path: Path | str, payload: Any) -> RetryPreparation:
+    """Validate and freeze one confirmed retry selection without writing files."""
+    try:
+        snapshot = current_retry_snapshot(project_path)
+    except ValueError as exc:
+        raise InvalidRetryRequest("retry_unavailable") from exc
+    if not isinstance(payload, dict):
+        raise InvalidRetryRequest("payload_must_be_object")
+
+    failed_ids = payload.get("failed_ids")
+    if (
+        not isinstance(failed_ids, list)
+        or not failed_ids
+        or any(not isinstance(retry_id, str) or not retry_id.strip() for retry_id in failed_ids)
+        or len(set(failed_ids)) != len(failed_ids)
+    ):
+        raise InvalidRetryRequest("invalid_failed_ids")
+    report_revision = payload.get("report_revision")
+    if not isinstance(report_revision, str) or not report_revision:
+        raise InvalidRetryRequest("invalid_report_revision")
+    if report_revision != snapshot.report_revision:
+        raise RevisionConflict(snapshot.report_revision)
+
+    items_by_id = {item.retry_id: item for item in snapshot.items}
+    if any(retry_id not in items_by_id for retry_id in failed_ids):
+        raise InvalidRetryRequest("unknown_failed_id")
+    selected_ids = tuple(failed_ids)
+    if "retry_confirmation" not in payload:
+        raise ConfirmationRequired(snapshot.report_revision, selected_ids)
+    confirmation = payload["retry_confirmation"]
+    if not isinstance(confirmation, dict):
+        raise InvalidRetryRequest("invalid_retry_confirmation")
+    expected_revision = confirmation.get("expected_report_revision")
+    if not isinstance(expected_revision, str) or not expected_revision:
+        raise InvalidRetryRequest("invalid_confirmation_revision")
+    if expected_revision != snapshot.report_revision:
+        raise RevisionConflict(snapshot.report_revision)
+    if confirmation.get("failed_ids") != failed_ids:
+        raise InvalidRetryRequest("confirmation_selection_mismatch")
+
+    items = tuple(items_by_id[retry_id] for retry_id in selected_ids)
+    included_rows = tuple(snapshot.included[item.included_index] for item in items)
+    return RetryPreparation(snapshot=snapshot, selected_ids=selected_ids, items=items, included_rows=included_rows)
+
+
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
     project = Path(project_path)
     _validate_authoritative_paths(project)

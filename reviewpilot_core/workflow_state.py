@@ -19,6 +19,7 @@ ACTION_STAGES = {
     "collect": "collection",
     "screen": "screening",
     "download-pdfs": "retrieval",
+    "retry-failed-downloads": "retrieval",
     "generate-schema": "extraction",
     "finalize-schema": "extraction",
     "edit-schema": "extraction",
@@ -30,6 +31,7 @@ _READY_ACTIONS = {"generate-schema", "finalize-schema", "edit-schema", "suggest-
 _ACTION_PREREQUISITES = {
     "screen": "collection",
     "download-pdfs": "screening",
+    "retry-failed-downloads": "screening",
     "generate-schema": "screening",
     "finalize-schema": "screening",
     "edit-schema": "screening",
@@ -116,7 +118,7 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         is_rerun = stage["last_valid"] is not None
         result = result or {}
         status, outcome_counts = structured_action_outcome(action, result)
-        counts = outcome_counts if action in {"collect", "download-pdfs", "run-extraction"} else _counts(result)
+        counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction"} else _counts(result)
         if action in _READY_ACTIONS:
             status = "ready"
         error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
@@ -166,7 +168,7 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
         succeeded = len(set(stats) - set(errors))
         failed = len(errors)
         counts = {"succeeded": succeeded, "failed": failed, "collected": total}
-    elif action == "download-pdfs":
+    elif action in {"download-pdfs", "retry-failed-downloads"}:
         failed = _consistent_count(result, nested, ("failed",), "retrieval failed")
         success = _consistent_count(result, nested, ("success", "successful"), "retrieval success")
         succeeded = success

@@ -49,6 +49,21 @@ def _terminal_result(action: str) -> dict:
 
 
 class WorkflowStateTests(unittest.TestCase):
+    def test_retry_failed_downloads_uses_retrieval_stage_and_strict_download_outcomes(self):
+        from reviewpilot_core.workflow_state import structured_action_outcome
+        for result, expected in (({"success": 2, "failed": 0}, "completed"), ({"success": 1, "failed": 1}, "partial"), ({"success": 0, "failed": 2}, "failed")):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as tmp:
+                self.assertEqual(structured_action_outcome("retry-failed-downloads", result)[0], expected)
+                project = Path(tmp); initialize_workflow_state(project)
+                for prerequisite in ("collect", "screen"):
+                    start_action(project, prerequisite); complete_action(project, prerequisite, _terminal_result(prerequisite))
+                self.assertEqual(start_action(project, "retry-failed-downloads")["stages"]["retrieval"]["status"], "running")
+                stage = complete_action(project, "retry-failed-downloads", result)["stages"]["retrieval"]
+                self.assertEqual(stage["status"], expected)
+                self.assertEqual(stage["counts"], {"succeeded": result["success"], "failed": result["failed"]})
+        for invalid in ({}, {"success": True, "failed": 0}, {"success": 1, "failed": "0"}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                structured_action_outcome("retry-failed-downloads", invalid)
     def test_starting_material_rerun_atomically_stales_current_and_downstream_outputs(self):
         for rerun_action, stage_name in (("collect", "collection"), ("download-pdfs", "retrieval"), ("run-extraction", "extraction")):
             with self.subTest(action=rerun_action), tempfile.TemporaryDirectory() as tmp:
@@ -246,7 +261,7 @@ class WorkflowStateTests(unittest.TestCase):
         self.assertEqual(
             ACTION_STAGES,
             {
-                "collect": "collection", "screen": "screening", "download-pdfs": "retrieval",
+                "collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "retry-failed-downloads": "retrieval",
                 "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction",
                 "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization",
             },
