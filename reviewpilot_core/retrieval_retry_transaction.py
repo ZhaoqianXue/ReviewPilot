@@ -1812,3 +1812,30 @@ def _cleanup_apply_staging(project_path: Path | str, marker: dict[str, Any]) -> 
             return True
         except Exception as exc:
             raise ValueError("Retry transaction staging could not be cleaned") from exc
+
+
+def _roll_forward_retry_transaction(project_path: Path | str, marker: dict[str, Any]) -> bool:
+    """Finish one fresh apply generation, deleting its marker only after stable commit."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply": raise ValueError
+            _validate_apply_pdf_commit(project, current)
+            _roll_forward_retry_authorities(project, current)
+            _validate_apply_pdf_commit(project, current)
+            _cleanup_apply_staging(project, current)
+            _assert_marker_generation(project, current)
+            first = _classify_retry_authorities(project, current)
+            _assert_marker_generation(project, current)
+            second = _classify_retry_authorities(project, current)
+            if (first != second or second.kinds != ("target", "target", "target")): raise ValueError
+            _validate_apply_pdf_commit(project, current)
+            if _lexists(project / current["staging_name"]): raise ValueError
+            _fsync_directory(project)
+            _assert_marker_generation(project, current)
+            (project / PENDING_RETRY_FILE).unlink()
+            _fsync_directory(project)
+            return True
+        except Exception as exc:
+            raise ValueError("Retry transaction could not be rolled forward") from exc
