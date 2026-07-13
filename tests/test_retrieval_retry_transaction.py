@@ -1,5 +1,6 @@
 import base64
 from copy import deepcopy
+import hashlib
 import json
 import os
 import shutil
@@ -112,9 +113,38 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertEqual(handle.transaction_id, marker["transaction_id"])
         self.assertNotIn(str(self.project), json.dumps(marker))
         self.assertEqual(marker["candidate_names"], [f"retry-{self.preparation.snapshot.report_revision}-{self.preparation.selected_ids[0]}.pdf"])
+        baseline = json.loads(base64.b64decode(marker["pdf_baseline_json_b64"]))
+        self.assertEqual(baseline, {"pdfs": [{"name": "original.pdf",
+            "sha256": hashlib.sha256(b"%PDF-old").hexdigest()}]})
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
         self.assertEqual(marker, json.loads(handle.marker_path.read_text()))
         self.assertEqual(original[2], self.preparation.snapshot.mutable_fact_copies()[2])
+
+    def test_marker_requires_canonical_path_safe_sorted_pdf_baseline(self):
+        (self.project / "pdfs" / "z.pdf").write_bytes(b"%PDF-z")
+        self.preparation = preparation(self.project)
+        handle = begin_retry_transaction(
+            self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        valid = handle.marker_path.read_bytes()
+        marker = json.loads(valid)
+        baseline = json.loads(base64.b64decode(marker["pdf_baseline_json_b64"]))
+        self.assertEqual([pdf["name"] for pdf in baseline["pdfs"]], ["original.pdf", "z.pdf"])
+        invalid = (
+            {"pdfs": list(reversed(baseline["pdfs"]))},
+            {"pdfs": [{**baseline["pdfs"][0], "name": "../original.pdf"}, baseline["pdfs"][1]]},
+            {"pdfs": [{**baseline["pdfs"][0], "extra": True}, baseline["pdfs"][1]]},
+            {"pdfs": [baseline["pdfs"][0], baseline["pdfs"][0]]},
+        )
+        for forged in invalid:
+            with self.subTest(forged=forged):
+                raw = dict(marker)
+                raw["pdf_baseline_json_b64"] = base64.b64encode(
+                    json.dumps(forged, sort_keys=True, separators=(",", ":")).encode()).decode()
+                atomic_write_json(handle.marker_path, raw)
+                with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+                    abort_retry_transaction(self.project)
+                handle.marker_path.write_bytes(valid)
+        self.assertTrue(abort_retry_transaction(self.project))
 
     def test_begin_rejects_polymorphic_or_noncanonical_preparation_without_reserving_project(self):
         class SnapshotSubclass(RetrySnapshot): pass
@@ -628,6 +658,40 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertFalse(reconcile_retry_transaction(self.project))
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_wrapper_rejects_existing_pdf_changed_after_inner_validation(self):
+        original = self.project / "pdfs" / "original.pdf"
+        original_bytes = original.read_bytes()
+        download = self.download(1)
+
+        for operation in ("mutate", "delete", "replace"):
+            with self.subTest(operation=operation):
+                marker = self.project / PENDING_RETRY_FILE
+                before = marker.read_bytes()
+
+                class MutatingResult(dict):
+                    def __del__(self):
+                        if operation == "mutate":
+                            original.write_bytes(b"%PDF-mutated")
+                        elif operation == "delete":
+                            original.unlink()
+                        else:
+                            replacement = original.with_name("replacement.tmp")
+                            replacement.write_bytes(b"%PDF-replaced")
+                            os.replace(replacement, original)
+
+                def mutating_download(root, project_id):
+                    return MutatingResult(download(root, project_id))
+
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$"):
+                    run_retry_transaction_staging(self.project, self.prepared, mutating_download)
+                self.assertEqual(marker.read_bytes(), before)
+                self.assertNotIn("sources_json_b64", json.loads(marker.read_text()))
+                original.write_bytes(original_bytes)
+                self.assertTrue(abort_retry_transaction(self.project))
+                if operation != "replace":
+                    begin_retry_transaction(
+                        self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+
     def test_source_commit_rejects_earlier_source_changed_while_later_source_is_fingerprinted(self):
         marker_path = self.project / PENDING_RETRY_FILE
         before = marker_path.read_bytes()
@@ -674,6 +738,18 @@ class RetryTargetTransactionTests(unittest.TestCase):
         atomic_write_json(self.project / "pdfs" / "download_report.json", report)
         atomic_write_jsonl(self.project / "filtered" / "included_papers.jsonl", included)
         save_workflow_state(self.project, self.ledger)
+
+    def test_record_rejects_pdf_baseline_drift_without_marker_mutation(self):
+        marker = self.project / PENDING_RETRY_FILE
+        before = marker.read_bytes()
+        original = self.project / "pdfs" / "original.pdf"
+        original.write_bytes(b"%PDF-drift")
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
 
     def forged_target(self, mutate_report):
         def freeze(value):
@@ -750,7 +826,7 @@ class RetryTargetTransactionTests(unittest.TestCase):
         raw = marker_path.read_text(); marker = json.loads(raw)
         self.assertEqual(marker["phase"], "abort"); self.assertNotIn(str(self.project), raw)
         self.assertEqual(set(marker), {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name",
-            "candidate_names", "before_json_b64", "sources_json_b64", "target_json_b64"})
+            "candidate_names", "pdf_baseline_json_b64", "before_json_b64", "sources_json_b64", "target_json_b64"})
         target = json.loads(base64.b64decode(marker["target_json_b64"]))
         self.assertEqual(target["pdfs"][0]["source_name"], self.plan.pdfs[0].source_path.name)
         self.ledger["stages"]["retrieval"]["counts"]["succeeded"] = 99

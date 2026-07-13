@@ -180,6 +180,22 @@ def _decode_before(value: Any) -> dict[str, Any]:
     return decoded
 
 
+def _decode_pdf_baseline(value: Any) -> dict[str, Any]:
+    baseline = _decode_before(value)
+    if type(baseline) is not dict or set(baseline) != {"pdfs"} or type(baseline["pdfs"]) is not list:
+        raise ValueError
+    names: list[str] = []
+    for pdf in baseline["pdfs"]:
+        if (type(pdf) is not dict or set(pdf) != {"name", "sha256"}
+                or not _basename(pdf["name"]) or not pdf["name"].endswith(".pdf")
+                or not _digest(pdf["sha256"])):
+            raise ValueError
+        names.append(pdf["name"])
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise ValueError
+    return baseline
+
+
 def _direct_regular(path: Path, parent: Path) -> bool:
     try:
         info = path.lstat()
@@ -202,9 +218,11 @@ def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnap
     report, included, retrieval = current.mutable_fact_copies()
     ledger = load_workflow_state(project)
     after_fingerprint = _authoritative_fingerprint(project)
+    baseline = tuple((pdf["name"], pdf["sha256"]) for pdf in marker["pdf_baseline"]["pdfs"])
     selected_ids = set(marker["selected_ids"])
     canonical_selected = tuple(item.retry_id for item in current.items if item.retry_id in selected_ids)
-    if (after_fingerprint != before_fingerprint
+    if (after_fingerprint[:3] != before_fingerprint[:3]
+            or before_fingerprint[3] != baseline or after_fingerprint[3] != baseline
             or current.report_revision != marker["expected_revision"]
             or canonical_selected != tuple(marker["selected_ids"])
             or _encode_before({"report": report, "included": included, "ledger": ledger})
@@ -262,6 +280,10 @@ def begin_retry_transaction(
                 raise ValueError
             if any(_lexists(project / "pdfs" / name) for name in candidates):
                 raise ValueError
+            pdf_fingerprint = _authoritative_fingerprint(project)[3]
+            pdf_baseline_json_b64 = _encode_before({"pdfs": [
+                {"name": name, "sha256": digest} for name, digest in pdf_fingerprint]})
+            _decode_pdf_baseline(pdf_baseline_json_b64)
         except Exception as exc:
             raise ValueError("Retry transaction preparation is stale") from exc
         transaction_id = secrets.token_hex(32)
@@ -276,6 +298,7 @@ def begin_retry_transaction(
                 "selected_ids": list(trusted.selected_ids),
                 "staging_name": staging_name,
                 "candidate_names": list(candidates),
+                "pdf_baseline_json_b64": pdf_baseline_json_b64,
                 "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
             }
             atomic_write_json(marker, data)
@@ -294,7 +317,7 @@ def _read_marker(project: Path) -> dict[str, Any]:
             raise ValueError
         raw_marker_bytes = marker.read_bytes()
         data = json.loads(raw_marker_bytes.decode("utf-8"))
-        base = {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
+        base = {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "pdf_baseline_json_b64", "before_json_b64"}
         phase = data.get("phase") if type(data) is dict else None
         optional = {key for key in ("sources_json_b64", "target_json_b64") if key in data}
         expected = base | optional
@@ -308,6 +331,7 @@ def _read_marker(project: Path) -> dict[str, Any]:
         expected_candidates = [f"retry-{revision}-{item}.pdf" for item in ids]
         if data["candidate_names"] != expected_candidates or not _basename(data["staging_name"], _STAGING_PREFIX):
             raise ValueError
+        data["pdf_baseline"] = _decode_pdf_baseline(data["pdf_baseline_json_b64"])
         before = _decode_before(data["before_json_b64"])
         if not isinstance(before, dict) or set(before) != {"report", "included", "ledger"} or not isinstance(before["report"], dict) or not isinstance(before["included"], list) or not isinstance(before["ledger"], dict):
             raise ValueError
@@ -404,7 +428,7 @@ def _validate_committed_source_set(project: Path, marker_or_sources: dict[str, A
 
 def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPreparation,
                                   run_download) -> StagedRetryOutcome:
-    """Stage one retry and commit portable source bindings before exposing it."""
+    """Stage with a trusted internal downloader that may write only the supplied staging tree."""
     project = _project_path(project_path)
     with _lock(project):
         try:
@@ -471,7 +495,7 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             if _encode_before(sources) != encoded:
                 raise ValueError
             raw_keys = ("version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name",
-                "candidate_names", "before_json_b64")
+                "candidate_names", "pdf_baseline_json_b64", "before_json_b64")
             raw = {key: marker[key] for key in raw_keys}; raw["sources_json_b64"] = encoded
             _validate_current_before(project, marker)
             _validate_committed_source_set(project, {**marker, "sources": sources})
@@ -753,7 +777,7 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             encoded = _encode_before(target)
             if _encode_before(_decode_target(encoded, marker, project)) != encoded:
                 raise ValueError
-            raw = {key: marker[key] for key in ("version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
+            raw = {key: marker[key] for key in ("version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "pdf_baseline_json_b64", "before_json_b64")}
             if "sources_json_b64" in marker:
                 raw["sources_json_b64"] = marker["sources_json_b64"]
             raw["target_json_b64"] = encoded
