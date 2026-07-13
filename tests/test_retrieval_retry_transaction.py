@@ -2501,6 +2501,27 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaises(ValueError): _roll_forward_retry_authorities(self.project, marker)
         self.assertEqual(_roll_forward_retry_authorities(self.project, marker).kinds, ("target",) * 3)
 
+    def test_authority_coordinator_final_double_classify_detects_same_target_new_inode(self):
+        marker = self.decoded_apply_marker(); _roll_forward_retry_authorities(self.project, marker)
+        report = self.project / "pdfs/download_report.json"; marker_path = self.project / PENDING_RETRY_FILE
+        marker_before = marker_path.read_bytes(); target_bytes = report.read_bytes(); original_inode = report.stat().st_ino
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._classify_retry_authorities; calls = 0; foreign_inode = None
+        def replace_after_first_final(*args):
+            nonlocal calls, foreign_inode
+            result = original(*args); calls += 1
+            if calls == 2:
+                replacement = self.project / "same-target-foreign"; replacement.write_bytes(target_bytes)
+                os.replace(replacement, report); foreign_inode = report.stat().st_ino
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._classify_retry_authorities",
+                   side_effect=replace_after_first_final):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction authorities could not be rolled forward$"):
+                _roll_forward_retry_authorities(self.project, marker)
+        self.assertEqual(calls, 3); self.assertNotEqual(foreign_inode, original_inode)
+        self.assertEqual((report.read_bytes(), report.stat().st_ino), (target_bytes, foreign_inode))
+        self.assertEqual(marker_path.read_bytes(), marker_before)
+
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
         destination.write_bytes(self.plan.pdfs[0].source_path.read_bytes())
