@@ -1054,6 +1054,16 @@ class RetryMergeFactsTests(unittest.TestCase):
             merge_staged_retry_facts(present_preparation,
                 replace(present_outcome, report={**present_outcome.report, "downloaded": wrong_empty}))
 
+    def test_merge_requires_nonempty_textual_success_methods_even_when_row_and_aliases_match(self):
+        preparation, outcome = self.fixture()
+        for value in ({}, [], True, 1, None, "", "   "):
+            rows = (outcome.updated_rows[0], {**outcome.updated_rows[1], "pdf_method": value})
+            downloaded = [{**outcome.report["downloaded"][0], "method": value, "pdf_method": value}]
+            malicious = replace(outcome, updated_rows=rows,
+                report={**outcome.report, "downloaded": downloaded})
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                merge_staged_retry_facts(preparation, malicious)
+
     def test_merge_requires_strict_staged_report_pdf_count_and_attempted(self):
         preparation, outcome = self.fixture()
         for key, values in (("pdf_count", (None, True, "1", -1, 999)),

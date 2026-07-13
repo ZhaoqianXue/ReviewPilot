@@ -445,6 +445,9 @@ def _validate_canonical_merge_stage(
             detail = detail_by_source[source_by_id[retry_id]]
             if row.get("pdf_downloaded") is not True or row.get("retrieval_status") != "downloaded":
                 raise ValueError("Staged retry success row is not canonical")
+            row_method = row.get("pdf_method")
+            if "pdf_method" in row and (not isinstance(row_method, str) or not row_method.strip()):
+                raise ValueError("Staged retry success method is invalid")
             if _logical_report_path(row.get("pdf_path"), Path(".")) != source_by_id[retry_id]:
                 raise ValueError("Staged retry success row path is inconsistent")
             forbidden = (*_ROW_SECONDARY_DIAGNOSTICS, "pdf_failure_class",
@@ -456,8 +459,11 @@ def _validate_canonical_merge_stage(
                         "pdf_failure_class", "web_search_fallback_pending", "web_search_fallback_eligible"))):
                 raise ValueError("Staged retry success detail is not canonical")
             for alias in ("method", "pdf_method"):
-                if alias in detail and (not row.get("pdf_method") or detail[alias] != row["pdf_method"]):
-                    raise ValueError("Staged retry success method is inconsistent")
+                if alias in detail:
+                    alias_value = detail[alias]
+                    if (not isinstance(alias_value, str) or not alias_value.strip()
+                            or not isinstance(row_method, str) or alias_value != row_method):
+                        raise ValueError("Staged retry success method is inconsistent")
         else:
             detail = failed_detail_by_id[retry_id]
             row_class, detail_class = row.get("pdf_failure_class"), detail.get("failure_class")
