@@ -23,6 +23,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     begin_retry_transaction,
     reconcile_retry_transaction,
     record_retry_transaction_target,
+    run_retry_transaction_staging,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -472,6 +473,84 @@ class RetryAbortTransactionTests(unittest.TestCase):
         marker.unlink(); begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
         abandon_retry_transaction(self.project); (self.project / self.staging_name).symlink_to(self.project / "filtered")
         with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+
+
+class RetrySourceCommitTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.project = Path(self.temp.name).resolve() / "project"
+        self.project.mkdir(); retryable_project(self.project)
+        included = [json.loads(line) for line in (self.project / "filtered" / "included_papers.jsonl").read_text().splitlines()]
+        included.append({"id": "failed-two", "title": "Failed Two"})
+        atomic_write_jsonl(self.project / "filtered" / "included_papers.jsonl", included)
+        report_path = self.project / "pdfs" / "download_report.json"; report = json.loads(report_path.read_text())
+        report["failed"] = 2; report["failed_papers"].append({"id": "failed-two", "title": "Failed Two", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(self.project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        ledger["stages"]["retrieval"]["last_valid"]["counts"]["failed"] = 2; save_workflow_state(self.project, ledger)
+        self.prepared = preparation(self.project)
+        self.staging_name = ".retrieval_retry_staging_sources"
+        begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+
+    def tearDown(self):
+        abandon_retry_transaction(self.project); self.temp.cleanup()
+
+    def download(self, success_count):
+        def callback(root, project_id):
+            staged = root / project_id
+            rows = [json.loads(line) for line in (staged / "filtered" / "included_papers.jsonl").read_text().splitlines()]
+            downloaded, failed = [], []
+            for index, row in enumerate(rows):
+                if index < success_count:
+                    pdf = staged / "pdfs" / f"source-{index}.pdf"; pdf.write_bytes(b"\n%PDF-1.7\nsource")
+                    row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
+                    downloaded.append({"id": row["id"], "title": row.get("title", ""), "path": str(pdf)})
+                else:
+                    row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
+                    failed.append({"id": row["id"], "title": row.get("title", ""), "doi": "", "url": "", "failure_class": "download_failed"})
+            atomic_write_jsonl(staged / "filtered" / "included_papers.jsonl", rows)
+            atomic_write_json(staged / "pdfs" / "download_report.json", {"success": len(downloaded), "failed": len(failed),
+                "downloaded": downloaded, "failed_papers": failed, "pdf_count": len(downloaded), "attempted": len(rows)})
+            return {"success": len(downloaded), "failed": len(failed),
+                "stats": {"success": len(downloaded), "failed": len(failed)}}
+        return callback
+
+    def decoded_sources(self):
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        return marker, json.loads(base64.b64decode(marker["sources_json_b64"]))
+
+    def test_wrapper_commits_exact_path_safe_success_source_before_return(self):
+        outcome = run_retry_transaction_staging(self.project, self.prepared, self.download(2))
+        marker, sources = self.decoded_sources()
+        self.assertEqual(sources, {"pdfs": [{"retry_id": item.retry_id, "source_name": item.source_path.name,
+            "size": item.source_size, "sha256": item.source_sha256} for item in outcome.successful_pdfs]})
+        self.assertNotIn(str(self.project), json.dumps(marker))
+
+    def test_wrapper_commits_selected_order_for_partial_outcome(self):
+        outcome = run_retry_transaction_staging(self.project, self.prepared, self.download(1))
+        self.assertEqual([row["retry_id"] for row in self.decoded_sources()[1]["pdfs"]],
+            [outcome.successful_pdfs[0].retry_id])
+
+    def test_wrapper_commits_explicit_empty_sources_for_all_failure(self):
+        outcome = run_retry_transaction_staging(self.project, self.prepared, self.download(0))
+        self.assertEqual(outcome.successful_pdfs, ())
+        self.assertEqual(self.decoded_sources()[1], {"pdfs": []})
+
+    def test_malformed_source_commit_fails_recovery_closed(self):
+        run_retry_transaction_staging(self.project, self.prepared, self.download(1))
+        abandon_retry_transaction(self.project)
+        marker_path = self.project / PENDING_RETRY_FILE; marker = json.loads(marker_path.read_text())
+        marker["sources_json_b64"] = base64.b64encode(b'{"pdfs":[{"retry_id":"x","source_name":"../x.pdf","size":1,"sha256":"x"}]}').decode()
+        marker_path.write_text(json.dumps(marker))
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+
+    def test_marker_write_failure_keeps_abort_marker_and_staging_retryable(self):
+        marker_path = self.project / PENDING_RETRY_FILE; before = marker_path.read_bytes()
+        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json", side_effect=OSError(str(self.project))):
+            with self.assertRaises(ValueError) as caught:
+                run_retry_transaction_staging(self.project, self.prepared, self.download(1))
+        self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual(marker_path.read_bytes(), before)
+        self.assertTrue((self.project / self.staging_name).exists())
+        self.assertTrue(abort_retry_transaction(self.project)); self.assertFalse((self.project / self.staging_name).exists())
 
 
 class RetryTargetTransactionTests(unittest.TestCase):

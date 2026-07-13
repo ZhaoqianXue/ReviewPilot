@@ -18,9 +18,9 @@ from typing import Any
 from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
-    RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
+    RetryPublicationPlan, RetrySnapshot, StagedRetryOutcome, StagedRetryPdf, current_retry_snapshot,
     _publication_pdf_fingerprint, _validate_merged_retry_delta,
-    retrieval_report_revision, stable_retry_id,
+    retrieval_report_revision, run_retry_staging, stable_retry_id,
 )
 from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
 from .workflow_state import load_workflow_state, save_workflow_state
@@ -263,7 +263,8 @@ def _read_marker(project: Path) -> dict[str, Any]:
         data = json.loads(marker.read_text(encoding="utf-8"))
         base = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
         phase = data.get("phase") if type(data) is dict else None
-        expected = base | ({"target_json_b64"} if "target_json_b64" in data else set())
+        optional = {key for key in ("sources_json_b64", "target_json_b64") if key in data}
+        expected = base | optional
         if (type(data) is not dict or set(data) != expected or type(data["version"]) is not int
                 or data["version"] != 1 or type(phase) is not str or phase != "abort"):
             raise ValueError
@@ -290,11 +291,106 @@ def _read_marker(project: Path) -> dict[str, Any]:
         if not isinstance(failed, list) or not set(ids).issubset({stable_retry_id(row) for row in failed}):
             raise ValueError
         data["before"] = before
+        if "sources_json_b64" in data:
+            data["sources"] = _decode_sources(data["sources_json_b64"], data)
         if "target_json_b64" in data:
             data["target"] = _decode_target(data["target_json_b64"], data, project)
         return data
     except (OSError, RuntimeError, TypeError, KeyError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc
+
+
+def _decode_sources(encoded: Any, marker: dict[str, Any]) -> dict[str, Any]:
+    sources = _decode_before(encoded)
+    if set(sources) != {"pdfs"} or type(sources["pdfs"]) is not list:
+        raise ValueError
+    ids: list[str] = []
+    names: set[str] = set()
+    for pdf in sources["pdfs"]:
+        if (type(pdf) is not dict or set(pdf) != {"retry_id", "source_name", "size", "sha256"}
+                or not _digest(pdf["retry_id"]) or pdf["retry_id"] not in marker["selected_ids"]
+                or not _basename(pdf["source_name"]) or not pdf["source_name"].endswith(".pdf")
+                or type(pdf["size"]) is not int or pdf["size"] < 0 or not _digest(pdf["sha256"])):
+            raise ValueError
+        ids.append(pdf["retry_id"]); names.add(pdf["source_name"])
+    if len(ids) != len(set(ids)) or len(names) != len(ids):
+        raise ValueError
+    if ids != [retry_id for retry_id in marker["selected_ids"] if retry_id in set(ids)]:
+        raise ValueError
+    return sources
+
+
+def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPreparation,
+                                  run_download) -> StagedRetryOutcome:
+    """Stage one retry and commit portable source bindings before exposing it."""
+    project = _project_path(project_path)
+    with _lock(project):
+        try:
+            with _GUARD:
+                if project not in _ACTIVE:
+                    raise ValueError
+            marker = _read_marker(project)
+            if "sources" in marker or "target" in marker:
+                raise ValueError
+            trusted = _trusted_preparation(preparation, project)
+            if (trusted.snapshot.report_revision != marker["expected_revision"]
+                    or trusted.selected_ids != tuple(marker["selected_ids"])):
+                raise ValueError
+            current = current_retry_snapshot(project)
+            current_report, current_included, _ = current.mutable_fact_copies()
+            trusted_report, trusted_included, trusted_ledger, trusted_rows = _trusted_json((
+                trusted.snapshot.report, trusted.snapshot.included, trusted.snapshot.ledger, trusted.included_rows))
+            current_by_id = {item.retry_id: item for item in current.items}
+            if (current.report_revision != marker["expected_revision"] or current.items != trusted.snapshot.items
+                    or _encode_before({"report": current_report, "included": current_included})
+                        != _encode_before({"report": marker["before"]["report"], "included": marker["before"]["included"]})
+                    or _encode_before(load_workflow_state(project)) != _encode_before(marker["before"]["ledger"])
+                    or _encode_before({"report": trusted_report, "included": trusted_included, "stage": trusted_ledger})
+                        != _encode_before({"report": marker["before"]["report"], "included": marker["before"]["included"],
+                            "stage": marker["before"]["ledger"]["stages"]["retrieval"]})
+                    or trusted.items != tuple(current_by_id[retry_id] for retry_id in trusted.selected_ids)
+                    or _encode_before({"rows": [current_included[item.included_index] for item in trusted.items]})
+                        != _encode_before({"rows": trusted_rows})):
+                raise ValueError
+            outcome = run_retry_staging(project, trusted, project / marker["staging_name"], run_download)
+            if (type(outcome) is not StagedRetryOutcome
+                    or outcome.report_revision != marker["expected_revision"]
+                    or outcome.selected_ids != tuple(marker["selected_ids"])
+                    or outcome.staging_root != project / marker["staging_name"]
+                    or outcome.staging_project_path != outcome.staging_root / "retry"
+                    or type(outcome.successful_pdfs) is not tuple):
+                raise ValueError
+            source_parent = outcome.staging_project_path / "pdfs"
+            ids: list[str] = []
+            names: set[str] = set()
+            identities: set[tuple[int, int]] = set()
+            pdfs: list[dict[str, Any]] = []
+            for item in outcome.successful_pdfs:
+                if (type(item) is not StagedRetryPdf or not _digest(item.retry_id)
+                        or type(item.source_path) is not type(Path()) or item.source_path.parent != source_parent
+                        or not _basename(item.source_path.name) or item.source_path.suffix != ".pdf"
+                        or type(item.source_size) is not int or item.source_size < 0
+                        or not _digest(item.source_sha256) or not _direct_regular(item.source_path, source_parent)):
+                    raise ValueError
+                size, digest, identity = _publication_pdf_fingerprint(item.source_path, source_parent)
+                if size != item.source_size or digest != item.source_sha256 or identity in identities:
+                    raise ValueError
+                ids.append(item.retry_id); names.add(item.source_path.name); identities.add(identity)
+                pdfs.append({"retry_id": item.retry_id, "source_name": item.source_path.name,
+                    "size": size, "sha256": digest})
+            if (len(ids) != len(set(ids)) or len(names) != len(ids)
+                    or ids != [retry_id for retry_id in marker["selected_ids"] if retry_id in set(ids)]):
+                raise ValueError
+            encoded = _encode_before({"pdfs": pdfs})
+            if _encode_before(_decode_sources(encoded, marker)) != encoded:
+                raise ValueError
+            raw_keys = ("version", "phase", "expected_revision", "selected_ids", "staging_name",
+                "candidate_names", "before_json_b64")
+            raw = {key: marker[key] for key in raw_keys}; raw["sources_json_b64"] = encoded
+            atomic_write_json(project / PENDING_RETRY_FILE, raw)
+            return outcome
+        except Exception as exc:
+            raise ValueError("Retry transaction staging failed") from exc
 
 
 def _restore(project: Path) -> bool:
@@ -543,6 +639,8 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             if _encode_before(_decode_target(encoded, marker, project)) != encoded:
                 raise ValueError
             raw = {key: marker[key] for key in ("version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
+            if "sources_json_b64" in marker:
+                raw["sources_json_b64"] = marker["sources_json_b64"]
             raw["target_json_b64"] = encoded
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
         except Exception as exc:
