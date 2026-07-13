@@ -666,7 +666,25 @@ def _replace_marker_cas(project: Path, marker: dict[str, Any], replacement: dict
             if _ACTIVE.get(project) != transaction_id:
                 raise ValueError
         _assert_marker_generation(project, marker)
-        atomic_write_json(project / PENDING_RETRY_FILE, replacement)
+        marker_path = project / PENDING_RETRY_FILE
+        raw = _serialized_marker_bytes(replacement)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{PENDING_RETRY_FILE}.", suffix=".tmp", dir=project)
+        temporary = Path(temporary_name)
+        replaced = False
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+            _assert_marker_generation(project, marker)
+            os.replace(temporary, marker_path); replaced = True
+            _fsync_directory(project)
+            updated = _read_marker(project)
+            if (updated["transaction_id"] != transaction_id
+                    or updated[_RAW_MARKER_BYTES] != raw):
+                raise ValueError
+        finally:
+            if not replaced:
+                temporary.unlink(missing_ok=True)
 
 
 def _decode_sources(encoded: Any, marker: dict[str, Any]) -> dict[str, Any]:

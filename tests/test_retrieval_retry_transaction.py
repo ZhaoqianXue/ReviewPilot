@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -921,7 +922,13 @@ class RetrySourceCommitTests(unittest.TestCase):
 
     def test_marker_write_failure_keeps_abort_marker_and_staging_retryable(self):
         marker_path = self.project / PENDING_RETRY_FILE; before = marker_path.read_bytes()
-        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json", side_effect=OSError(str(self.project))):
+        original_mkstemp = tempfile.mkstemp
+
+        def fail_marker_temp(*args, **kwargs):
+            if kwargs.get("prefix") == f".{PENDING_RETRY_FILE}.": raise OSError(str(self.project))
+            return original_mkstemp(*args, **kwargs)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.tempfile.mkstemp", side_effect=fail_marker_temp):
             with self.assertRaises(ValueError) as caught:
                 run_retry_transaction_staging(self.project, self.prepared, self.download(1))
         self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual(marker_path.read_bytes(), before)
@@ -1226,7 +1233,9 @@ class RetryTargetTransactionTests(unittest.TestCase):
         contender = None
         acquired_during_replace = False
 
-        def raced_write(path, data, *args, **kwargs):
+        original_replace = os.replace
+
+        def raced_write(source, path, *args, **kwargs):
             nonlocal contender, acquired_during_replace
             if Path(path) == marker:
                 contender, acquired = marker_lock_contender(resolved_project, marker_bytes)
@@ -1235,9 +1244,9 @@ class RetryTargetTransactionTests(unittest.TestCase):
                     acquired_during_replace = acquired.exists()
                 except subprocess.TimeoutExpired:
                     acquired_during_replace = False
-            return atomic_write_json(path, data, *args, **kwargs)
+            return original_replace(source, path, *args, **kwargs)
 
-        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json",
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.replace",
                    side_effect=raced_write):
             record_retry_transaction_target(self.project, self.plan, self.ledger)
         self.assertIsNotNone(contender)
@@ -1245,6 +1254,60 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertFalse(acquired_during_replace)
         self.assertEqual(marker.read_bytes(), marker_bytes)
         self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_marker_cas_fsyncs_temp_before_replace_then_project_before_reread(self):
+        events = []; original_fsync = os.fsync; original_replace = os.replace
+
+        def track_fsync(descriptor):
+            events.append("dir-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync")
+            return original_fsync(descriptor)
+
+        def track_replace(source, destination):
+            if Path(destination).name == PENDING_RETRY_FILE: events.append("replace")
+            return original_replace(source, destination)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=track_fsync), \
+                patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=track_replace):
+            record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertLess(events.index("file-fsync"), events.index("replace"))
+        self.assertLess(events.index("replace"), events.index("dir-fsync"))
+
+    def test_marker_cas_rejects_same_bytes_new_inode_after_temp_fsync(self):
+        marker = self.project / PENDING_RETRY_FILE; before = marker.read_bytes(); old_inode = marker.stat().st_ino
+        original_fsync = os.fsync; swapped = False
+
+        def swap_after_file_fsync(descriptor):
+            nonlocal swapped
+            result = original_fsync(descriptor)
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode) and not swapped:
+                swapped = True; replacement = self.project / ".foreign-marker"; replacement.write_bytes(before)
+                os.replace(replacement, marker)
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=swap_after_file_fsync):
+            with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertNotEqual(marker.stat().st_ino, old_inode); self.assertEqual(marker.read_bytes(), before)
+
+    def test_marker_cas_dir_fsync_failure_keeps_replaced_marker_for_recovery(self):
+        marker = self.project / PENDING_RETRY_FILE
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=OSError("dir fsync")):
+            with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertIn("target_json_b64", json.loads(marker.read_text()))
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_marker_cas_reread_mismatch_preserves_foreign_marker(self):
+        marker = self.project / PENDING_RETRY_FILE; foreign = marker.read_bytes(); original_replace = os.replace
+
+        def replace_then_foreign(source, destination):
+            result = original_replace(source, destination)
+            if Path(destination) == marker:
+                replacement = self.project / ".foreign-marker"; replacement.write_bytes(foreign)
+                original_replace(replacement, marker)
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=replace_then_foreign):
+            with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertEqual(marker.read_bytes(), foreign)
 
     def test_record_rejects_each_live_authority_drift_without_marker_mutation(self):
         def mutate_report():
