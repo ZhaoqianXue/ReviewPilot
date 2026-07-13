@@ -187,7 +187,16 @@ class StagedRetryOutcome:
 
 
 _STAGING_PROJECT_ID = "retry"
-_DERIVED_RETRY_FIELDS = {"pdf_downloaded", "pdf_path", "retrieval_status", "pdf_failure_class"}
+_DERIVED_RETRY_FIELDS = {
+    "pdf_downloaded",
+    "pdf_path",
+    "pdf_method",
+    "pdf_failure_class",
+    "pdf_failure_detail",
+    "pdf_failure_classes",
+    "pdf_error",
+    "retrieval_status",
+}
 
 
 def run_retry_staging(
@@ -231,6 +240,10 @@ def run_retry_staging(
         if _authoritative_fingerprint(project) != before:
             raise ValueError("Authoritative retry facts changed during staging")
         return outcome
+    except OSError as exc:
+        if created:
+            _remove_staging(staging)
+        raise ValueError("Retry staging setup failed") from exc
     except Exception:
         if created:
             _remove_staging(staging)
@@ -295,6 +308,7 @@ def _normalize_staged_retry(
 
     successes: list[StagedRetryPdf] = []
     actual_failed: list[str] = []
+    rows_by_id = dict(zip(row_ids, rows))
     for retry_id, row in zip(row_ids, rows):
         downloaded_flag = row.get("pdf_downloaded")
         if type(downloaded_flag) is not bool:
@@ -314,9 +328,23 @@ def _normalize_staged_retry(
         raise ValueError("Staged retry successes do not match report")
     success_by_path = {item.source_path: item.retry_id for item in successes}
     for detail, path in zip(downloaded, downloaded_paths):
+        row = rows_by_id[success_by_path[path]]
+        _validate_shared_identity_fields(row, detail)
         if any(isinstance(detail.get(field), str) and detail[field].strip() for field in ("id", "doi", "url")):
             if stable_retry_id(detail) != success_by_path[path]:
                 raise ValueError("Staged retry success identity does not match report")
+    failed_by_id = {stable_retry_id(detail): detail for detail in failed_rows}
+    for retry_id in actual_failed:
+        row = rows_by_id[retry_id]
+        detail = failed_by_id[retry_id]
+        _validate_shared_identity_fields(row, detail)
+        row_failure = row.get("pdf_failure_class")
+        report_failure = detail.get("failure_class")
+        if not _same_nonempty_text(row_failure, report_failure):
+            raise ValueError("Staged retry failure classifications conflict")
+        expected_status = "subscribed_unavailable" if _is_subscription_failure(row_failure) else "unavailable"
+        if row.get("retrieval_status") != expected_status:
+            raise ValueError("Staged retry failure status is inconsistent")
 
     disk_pdfs: set[Path] = set()
     for path in (staging_project / "pdfs").iterdir():
@@ -358,7 +386,9 @@ def _staged_pdf_path(value: Any, staging_project: Path, resolved_pdfs: Path) -> 
         if path.parent != staging_project / "pdfs" or path.is_symlink() or not path.is_file() or path.suffix != ".pdf":
             raise ValueError
         resolved = path.resolve(strict=True)
-        if resolved.parent != resolved_pdfs or not path.read_bytes()[:1024].lstrip().startswith(b"%PDF-"):
+        with path.open("rb") as handle:
+            header = handle.read(1024)
+        if resolved.parent != resolved_pdfs or not header.lstrip().startswith(b"%PDF-"):
             raise ValueError
         return resolved
     except (OSError, RuntimeError, ValueError) as exc:
@@ -382,10 +412,39 @@ def _remove_staging(staging: Path) -> None:
     try:
         if staging.is_symlink():
             staging.unlink()
-        elif staging.exists():
+        elif staging.is_dir():
             shutil.rmtree(staging)
+        elif staging.exists():
+            staging.unlink()
     except OSError as exc:
         raise ValueError("Retry staging cleanup failed") from exc
+
+
+def _same_nonempty_text(first: Any, second: Any) -> bool:
+    return (
+        isinstance(first, str)
+        and isinstance(second, str)
+        and bool(first.strip())
+        and first.strip().casefold() == second.strip().casefold()
+    )
+
+
+def _validate_shared_identity_fields(row: dict[str, Any], detail: dict[str, Any]) -> None:
+    for field in _IDENTITY_FIELDS:
+        left = row.get(field)
+        right = detail.get(field)
+        if _has_identity_value(left) and _has_identity_value(right):
+            if not isinstance(left, str) or not isinstance(right, str) or left.strip().casefold() != right.strip().casefold():
+                raise ValueError("Staged retry report identity conflicts with paper")
+
+
+def _has_identity_value(value: Any) -> bool:
+    return bool(value.strip()) if isinstance(value, str) else value is not None
+
+
+def _is_subscription_failure(value: str) -> bool:
+    normalized = value.casefold()
+    return any(marker in normalized for marker in ("paywall", "subscrib", "subscription", "closed"))
 
 
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
