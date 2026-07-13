@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
@@ -16,8 +17,12 @@ from types import MappingProxyType
 from typing import Any
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
-from .retrieval_retry import RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot, retrieval_report_revision, stable_retry_id
-from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state
+from .retrieval_retry import (
+    RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
+    RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
+    retrieval_report_revision, stable_retry_id,
+)
+from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
 from .workflow_state import load_workflow_state, save_workflow_state
 
 
@@ -83,6 +88,20 @@ def _trusted_json(value: Any) -> Any:
     if value is None or value_type in (str, int, bool):
         return value
     if value_type is float and math.isfinite(value):
+        return value
+    raise ValueError
+
+
+def _plain_json(value: Any) -> Any:
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise ValueError
+        return {key: _plain_json(item) for key, item in value.items()}
+    if type(value) is list:
+        return [_plain_json(item) for item in value]
+    if value is None or type(value) in (str, int, bool):
+        return value
+    if type(value) is float and math.isfinite(value):
         return value
     raise ValueError
 
@@ -238,8 +257,11 @@ def _read_marker(project: Path) -> dict[str, Any]:
         if not _direct_regular(marker, project):
             raise ValueError
         data = json.loads(marker.read_text(encoding="utf-8"))
-        expected = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
-        if not isinstance(data, dict) or set(data) != expected or type(data["version"]) is not int or data["version"] != 1 or data["phase"] != "abort":
+        base = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
+        phase = data.get("phase") if type(data) is dict else None
+        expected = base | ({"target_json_b64"} if "target_json_b64" in data else set())
+        if (type(data) is not dict or set(data) != expected or type(data["version"]) is not int
+                or data["version"] != 1 or type(phase) is not str or phase != "abort"):
             raise ValueError
         revision, ids = data["expected_revision"], data["selected_ids"]
         if not _digest(revision) or not isinstance(ids, list) or not ids or any(not _digest(item) for item in ids) or len(set(ids)) != len(ids):
@@ -264,6 +286,8 @@ def _read_marker(project: Path) -> dict[str, Any]:
         if not isinstance(failed, list) or not set(ids).issubset({stable_retry_id(row) for row in failed}):
             raise ValueError
         data["before"] = before
+        if "target_json_b64" in data:
+            data["target"] = _decode_target(data["target_json_b64"], data, project)
         return data
     except (OSError, RuntimeError, TypeError, KeyError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc
@@ -334,3 +358,155 @@ def abandon_retry_transaction(project_path: Path | str) -> None:
         return
     with _GUARD:
         _ACTIVE.discard(project)
+
+
+def _contains(value: Any, expected: str) -> bool:
+    if type(value) is str:
+        return value == expected
+    if type(value) is dict:
+        return any(_contains(item, expected) for item in value.values())
+    if type(value) is list:
+        return any(_contains(item, expected) for item in value)
+    return False
+
+
+def _contains_text(value: Any, needle: str) -> bool:
+    if type(value) is str:
+        return needle in value
+    if type(value) is dict:
+        return any(_contains_text(key, needle) or _contains_text(item, needle) for key, item in value.items())
+    if type(value) is list:
+        return any(_contains_text(item, needle) for item in value)
+    return False
+
+
+def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicationPlan,
+                    target_ledger: dict[str, Any]) -> dict[str, Any]:
+    if type(plan) is not RetryPublicationPlan or type(plan.merged_facts) is not RetryMergedFacts:
+        raise ValueError
+    merged = plan.merged_facts
+    if (not _digest(plan.report_revision) or not _digest(merged.report_revision)
+            or plan.report_revision != marker["expected_revision"] or merged.report_revision != plan.report_revision
+            or type(plan.pdfs) is not tuple or type(merged.planned_pdfs) is not tuple
+            or type(merged.status) is not str or type(merged.counts) is not MappingProxyType):
+        raise ValueError
+    report, included = _trusted_json(merged.report), _trusted_json(merged.included)
+    counts = _trusted_json(merged.counts)
+    ledger = _plain_json(target_ledger)
+    if (type(report) is not dict or type(included) is not list or type(counts) is not dict
+            or type(ledger) is not dict or any(type(row) is not dict for row in included)):
+        raise ValueError
+    _validate_workflow_state(ledger)
+    stage = ledger["stages"]["retrieval"]
+    if stage["status"] != merged.status or stage["counts"] != counts or stage["stale"] is not False:
+        raise ValueError
+    for name in STAGE_NAMES[STAGE_NAMES.index("retrieval") + 1:]:
+        downstream = ledger["stages"][name]
+        material = (downstream["last_valid"] is not None
+            or (downstream["status"] == "ready" and downstream["attempt"] > 0)
+            or (downstream["status"] == "failed" and str(downstream.get("error") or "").startswith("Action produced no successful outputs")))
+        if downstream["stale"] is not material:
+            raise ValueError
+    pdfs: list[dict[str, Any]] = []
+    successful_names: list[str] = []
+    concrete_path_type = type(Path())
+    if len(plan.pdfs) != len(merged.planned_pdfs):
+        raise ValueError
+    for pdf, planned in zip(plan.pdfs, merged.planned_pdfs):
+        if (type(planned) is not RetryPlannedPdf or type(pdf) is not RetryPublicationPdf
+                or type(pdf.retry_id) is not str or not _digest(pdf.retry_id)
+                or type(pdf.source_path) is not concrete_path_type or type(pdf.destination_path) is not concrete_path_type
+                or type(pdf.source_size) is not int or pdf.source_size < 0 or not _digest(pdf.source_sha256)
+                or planned.retry_id != pdf.retry_id or planned.source_path != pdf.source_path
+                or planned.destination_path != pdf.destination_path):
+            raise ValueError
+        name = pdf.destination_path.name
+        source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+        if (pdf.destination_path != project / "pdfs" / name or name not in marker["candidate_names"]
+                or pdf.source_path.parent != source_parent or not _direct_regular(pdf.source_path, source_parent)):
+            raise ValueError
+        payload = pdf.source_path.read_bytes()
+        if (len(payload) != pdf.source_size or hashlib.sha256(payload).hexdigest() != pdf.source_sha256
+                or not payload.startswith(b"%PDF-")):
+            raise ValueError
+        destination = str(pdf.destination_path)
+        if not _contains(report, destination) or not _contains(included, destination):
+            raise ValueError
+        successful_names.append(name)
+        pdfs.append({"destination_name": name, "retry_id": pdf.retry_id,
+            "size": pdf.source_size, "sha256": pdf.source_sha256})
+    if successful_names != [name for name in marker["candidate_names"] if name in set(successful_names)]:
+        raise ValueError
+    if (_contains_text(report, str(project / marker["staging_name"]))
+            or _contains_text(included, str(project / marker["staging_name"]))):
+        raise ValueError
+    return {"report": report, "included": included, "ledger": ledger, "pdfs": pdfs}
+
+
+def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[str, Any]:
+    target = _decode_before(encoded)
+    if set(target) != {"report", "included", "ledger", "pdfs"} or type(target["report"]) is not dict \
+            or type(target["included"]) is not list or type(target["ledger"]) is not dict or type(target["pdfs"]) is not list:
+        raise ValueError
+    if any(type(row) is not dict for row in target["included"]):
+        raise ValueError
+    report = target["report"]
+    success, failed = report.get("success"), report.get("failed")
+    downloaded, failures = report.get("downloaded"), report.get("failed_papers")
+    if (type(success) is not int or success < 0 or type(failed) is not int or failed < 0
+            or type(downloaded) is not list or type(failures) is not list
+            or len(downloaded) != success or len(failures) != failed
+            or any(type(row) is not dict for row in downloaded + failures)):
+        raise ValueError
+    status, counts = structured_action_outcome("retry-failed-downloads", {"success": success, "failed": failed})
+    stages = target["ledger"].get("stages")
+    if type(stages) is not dict or set(stages) != set(STAGE_NAMES):
+        raise ValueError
+    target["ledger"]["stages"] = {name: stages[name] for name in STAGE_NAMES}
+    _validate_workflow_state(target["ledger"])
+    retrieval = target["ledger"]["stages"]["retrieval"]
+    if retrieval["status"] != status or retrieval["counts"] != counts or retrieval["stale"] is not False:
+        raise ValueError
+    for name in STAGE_NAMES[STAGE_NAMES.index("retrieval") + 1:]:
+        downstream = target["ledger"]["stages"][name]
+        material = (downstream["last_valid"] is not None
+            or (downstream["status"] == "ready" and downstream["attempt"] > 0)
+            or (downstream["status"] == "failed" and str(downstream.get("error") or "").startswith("Action produced no successful outputs")))
+        if downstream["stale"] is not material:
+            raise ValueError
+    names: list[str] = []
+    for pdf in target["pdfs"]:
+        if (type(pdf) is not dict or set(pdf) != {"destination_name", "retry_id", "size", "sha256"}
+                or not _basename(pdf["destination_name"], "retry-") or pdf["destination_name"] not in marker["candidate_names"]
+                or pdf["destination_name"] != f"retry-{marker['expected_revision']}-{pdf['retry_id']}.pdf"
+                or not _digest(pdf["retry_id"]) or type(pdf["size"]) is not int or pdf["size"] < 0 or not _digest(pdf["sha256"])):
+            raise ValueError
+        names.append(pdf["destination_name"])
+        destination = str(project / "pdfs" / pdf["destination_name"])
+        if not _contains(report, destination) or not _contains(target["included"], destination):
+            raise ValueError
+    if len(names) != len(set(names)) or names != [name for name in marker["candidate_names"] if name in set(names)]:
+        raise ValueError
+    staging = str(project / marker["staging_name"])
+    if _contains_text(report, staging) or _contains_text(target["included"], staging):
+        raise ValueError
+    return target
+
+
+def record_retry_transaction_target(project_path: Path | str, publication_plan: RetryPublicationPlan,
+                                    target_ledger: dict[str, Any]) -> None:
+    project = _project_path(project_path)
+    with _lock(project):
+        with _GUARD:
+            if project not in _ACTIVE:
+                raise ValueError("Retry transaction is not active")
+        marker = _read_marker(project)
+        if marker["phase"] != "abort" or "target" in marker:
+            raise ValueError("Retry transaction target cannot be recorded")
+        try:
+            target = _trusted_target(project, marker, publication_plan, target_ledger)
+            raw = {key: marker[key] for key in ("version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
+            raw["target_json_b64"] = _encode_before(target)
+            atomic_write_json(project / PENDING_RETRY_FILE, raw)
+        except Exception as exc:
+            raise ValueError("Retry transaction target is invalid") from exc

@@ -1,4 +1,5 @@
 import base64
+from copy import deepcopy
 import json
 import os
 import shutil
@@ -9,13 +10,18 @@ from types import MappingProxyType
 from unittest.mock import patch
 
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
-from reviewpilot_core.retrieval_retry import RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot, prepare_retry_request
+from reviewpilot_core.retrieval_retry import (
+    RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot,
+    merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
+    run_retry_staging,
+)
 from reviewpilot_core.retrieval_retry_transaction import (
     PENDING_RETRY_FILE,
     abandon_retry_transaction,
     abort_retry_transaction,
     begin_retry_transaction,
     reconcile_retry_transaction,
+    record_retry_transaction_target,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -43,6 +49,39 @@ def preparation(project: Path):
     ids = [item.retry_id for item in snapshot.items]
     return prepare_retry_request(project, {"failed_ids": ids, "report_revision": snapshot.report_revision,
         "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": ids}})
+
+
+def publication(project: Path, prepared: RetryPreparation, staging_name: str, *, succeeds: bool = True):
+    def download(root: Path, project_id: str):
+        staged = root / project_id
+        rows = [json.loads(line) for line in (staged / "filtered" / "included_papers.jsonl").read_text().splitlines()]
+        pdf = staged / "pdfs" / "retry.pdf"
+        if succeeds:
+            pdf.write_bytes(b"%PDF-1.7\nretry")
+            rows[0].update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
+            downloaded = [{"title": rows[0].get("title", ""), "path": str(pdf)}]; failed = []
+        else:
+            rows[0].update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
+            downloaded = []; failed = [{"id": rows[0]["id"], "title": rows[0].get("title", ""),
+                "doi": "", "url": "", "failure_class": "download_failed"}]
+        atomic_write_jsonl(staged / "filtered" / "included_papers.jsonl", rows)
+        atomic_write_json(staged / "pdfs" / "download_report.json", {
+            "success": int(succeeds), "failed": int(not succeeds), "downloaded": downloaded,
+            "failed_papers": failed, "pdf_count": int(succeeds), "attempted": 1,
+        })
+        return {"success": int(succeeds), "failed": int(not succeeds),
+            "stats": {"success": int(succeeds), "failed": int(not succeeds)}}
+    outcome = run_retry_staging(project, prepared, project / staging_name, download)
+    merged = merge_staged_retry_facts(prepared, outcome)
+    return prepare_retry_publication(project, prepared, outcome, merged)
+
+
+def target_ledger(project: Path, plan) -> dict:
+    ledger = load_workflow_state(project)
+    stage = ledger["stages"]["retrieval"]
+    stage.update(status=plan.merged_facts.status, counts=dict(plan.merged_facts.counts), stale=False,
+        error=None if plan.merged_facts.status != "failed" else "Action produced no successful outputs (1 failed).")
+    return ledger
 
 
 class RetryAbortTransactionTests(unittest.TestCase):
@@ -383,6 +422,60 @@ class RetryAbortTransactionTests(unittest.TestCase):
         marker.unlink(); begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
         abandon_retry_transaction(self.project); (self.project / self.staging_name).symlink_to(self.project / "filtered")
         with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+
+
+class RetryTargetTransactionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.project = Path(self.temp.name).resolve() / "project"
+        self.project.mkdir(); retryable_project(self.project); self.prepared = preparation(self.project)
+        self.staging_name = ".retrieval_retry_staging_apply"
+        self.handle = begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        self.plan = publication(self.project, self.prepared, self.staging_name)
+        self.ledger = target_ledger(self.project, self.plan)
+
+    def tearDown(self):
+        abandon_retry_transaction(self.project); self.temp.cleanup()
+
+    def publish_target(self):
+        report, included = self.plan.merged_facts.mutable_copies()
+        pdf = self.plan.pdfs[0]
+        pdf.destination_path.write_bytes(pdf.source_path.read_bytes())
+        atomic_write_json(self.project / "pdfs" / "download_report.json", report)
+        atomic_write_jsonl(self.project / "filtered" / "included_papers.jsonl", included)
+        save_workflow_state(self.project, self.ledger)
+
+    def test_recorded_target_is_path_safe_immutable_and_abort_still_restores(self):
+        before = self.prepared.snapshot.mutable_fact_copies()
+        record_retry_transaction_target(self.project, self.plan, self.ledger)
+        marker_path = self.project / PENDING_RETRY_FILE
+        raw = marker_path.read_text(); marker = json.loads(raw)
+        self.assertEqual(marker["phase"], "abort"); self.assertNotIn(str(self.project), raw)
+        self.assertEqual(set(marker), {"version", "phase", "expected_revision", "selected_ids", "staging_name",
+            "candidate_names", "before_json_b64", "target_json_b64"})
+        self.ledger["stages"]["retrieval"]["counts"]["succeeded"] = 99
+        self.assertEqual(raw, marker_path.read_text())
+        self.publish_target()
+        self.assertTrue(abort_retry_transaction(self.project))
+        self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
+        self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_record_rejects_ledger_mismatch_and_forged_plan_without_changing_marker(self):
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+        bad = deepcopy(self.ledger); bad["stages"]["retrieval"]["counts"] = {"succeeded": 99, "failed": 0}
+        with self.assertRaisesRegex(ValueError, "target is invalid") as caught:
+            record_retry_transaction_target(self.project, self.plan, bad)
+        self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+
+    def test_all_failure_target_records_an_empty_pdf_set_and_remains_abortable(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        self.handle = begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+        plan = publication(self.project, self.prepared, self.staging_name, succeeds=False)
+        ledger = target_ledger(self.project, plan)
+        record_retry_transaction_target(self.project, plan, ledger)
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        target = json.loads(base64.b64decode(marker["target_json_b64"]))
+        self.assertEqual(target["pdfs"], [])
+        self.assertTrue(abort_retry_transaction(self.project))
 
 
 if __name__ == "__main__": unittest.main()
