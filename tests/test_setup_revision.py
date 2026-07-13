@@ -10,7 +10,7 @@ from starlette.testclient import TestClient
 from reviewpilot_core.setup_revision import begin_setup_transaction, materially_changes_dependencies, normalize_setup, reconcile_setup_transaction, setup_revision, update_setup_transaction_target
 from reviewpilot_core.state_projection import build_rp_data, export_artifact_path
 from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
-from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, start_action
+from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
 import reviewpilot_core.setup_revision as setup_revision_module
 import web_app
 
@@ -252,16 +252,34 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertEqual(json.loads((project / "search_conditions.json").read_text()), before)
             self.assertFalse((project / ".setup_update_pending.json").exists())
 
-    def test_pending_transaction_rolls_forward_after_setup_write_before_ledger(self):
+    def test_pending_transaction_rolls_forward_only_after_setup_and_ledger_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, current = self._project(root)
             target = {**current, "description": "Changed"}
             marker = begin_setup_transaction(project, current, target, ["collection"])
             update_setup_transaction_target(marker, target)
             (project / "search_conditions.json").write_text(json.dumps(target))
+            mark_stages_stale(project, ["collection"])
+            setup_revision_module.promote_setup_transaction(marker)
             setup_revision_module._ACTIVE_TRANSACTIONS.clear()
             self.assertTrue(reconcile_setup_transaction(project))
             self.assertTrue(load_workflow_state(project)["stages"]["collection"]["stale"])
+            self.assertEqual(json.loads((project / "search_conditions.json").read_text()), target)
+            self.assertFalse(marker.exists())
+
+    def test_target_write_before_apply_promotion_rolls_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, current = self._project(root)
+            ledger_before = load_workflow_state(project)
+            target = {**current, "description": "Changed"}
+            marker = begin_setup_transaction(project, current, target, ["collection"])
+            self.assertEqual(json.loads(marker.read_text())["phase"], "abort")
+            update_setup_transaction_target(marker, target)
+            (project / "search_conditions.json").write_text(json.dumps(target))
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            self.assertTrue(reconcile_setup_transaction(project))
+            self.assertEqual(json.loads((project / "search_conditions.json").read_text()), current)
+            self.assertEqual(load_workflow_state(project), ledger_before)
             self.assertFalse(marker.exists())
 
     def test_pending_transaction_rolls_back_when_setup_was_not_written(self):
@@ -284,23 +302,44 @@ class SetupRevisionTests(unittest.TestCase):
             build_rp_data(root, "demo")
             self.assertFalse(marker.exists())
 
-    def test_failed_request_persists_abort_intent_and_never_rolls_forward_target(self):
+    def test_failed_request_releases_reservation_when_abort_intent_write_and_rollback_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, current = self._project(root)
+            ledger_before = load_workflow_state(project)
             real_write = web_app.atomic_write_json
-            writes = 0
+            real_mark_stale = web_app.mark_stages_stale
             def fail_rollback(path, data, **kwargs):
-                nonlocal writes
-                writes += 1
-                if writes == 2: raise OSError("rollback failed")
+                if Path(path).name == "search_conditions.json" and data == current:
+                    raise OSError("rollback failed")
                 return real_write(path, data, **kwargs)
-            with patch.object(web_app, "mark_stages_stale", side_effect=RuntimeError("post-write failure")), patch.object(web_app, "atomic_write_json", side_effect=fail_rollback):
+            def fail_after_ledger_write(path, stages):
+                real_mark_stale(path, stages)
+                raise RuntimeError("post-write failure")
+            with patch.object(web_app, "mark_stages_stale", side_effect=fail_after_ledger_write), patch.object(web_app, "mark_setup_transaction_aborting", side_effect=OSError("abort marker failed")), patch.object(web_app, "atomic_write_json", side_effect=fail_rollback):
                 with self.assertRaisesRegex(OSError, "rollback failed"):
                     web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
             marker = project / ".setup_update_pending.json"
+            self.assertNotIn(project.resolve(), setup_revision_module._ACTIVE_TRANSACTIONS)
             self.assertEqual(json.loads(marker.read_text())["phase"], "abort")
-            build_rp_data(root, "demo")
+            failed_target = json.loads((project / "search_conditions.json").read_text())
+            failed_ledger = load_workflow_state(project)
+            self.assertNotEqual(failed_ledger, ledger_before)
+            pending = marker.read_text()
+
+            projected = build_rp_data(root, "demo")
+            self.assertEqual(projected["setup"]["description"], current["description"])
+            exported = export_artifact_path(project, "search-setup")
+            self.assertIsNotNone(exported)
+            self.assertEqual(json.loads(exported.read_text())["description"], current["description"])
+
+            (project / "search_conditions.json").write_text(json.dumps(failed_target))
+            save_workflow_state(project, failed_ledger)
+            marker.write_text(pending)
+            setup_revision_module._ACTIVE_TRANSACTIONS.clear()
+            self.assertTrue(reconcile_setup_transaction(project))
             self.assertEqual(json.loads((project / "search_conditions.json").read_text()), current)
+            self.assertEqual(load_workflow_state(project), ledger_before)
+            self.assertFalse(marker.exists())
 
     def test_noop_update_recovers_pending_and_crash_rollforward_still_requires_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +354,8 @@ class SetupRevisionTests(unittest.TestCase):
             marker = begin_setup_transaction(project, current, target, ["collection"])
             update_setup_transaction_target(marker, target)
             (project / "search_conditions.json").write_text(json.dumps(target))
+            mark_stages_stale(project, ["collection"])
+            setup_revision_module.promote_setup_transaction(marker)
             setup_revision_module._ACTIVE_TRANSACTIONS.clear()
             with self.assertRaises(web_app.ConfirmationRequired):
                 web_app.submit_project_action(root, "demo", "collect")

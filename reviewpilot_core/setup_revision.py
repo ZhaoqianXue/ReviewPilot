@@ -90,7 +90,7 @@ def begin_setup_transaction(project_path: Path | str, current: dict[str, Any], t
     try:
         atomic_write_json(marker, {
             "version": 1,
-            "phase": "apply",
+            "phase": "abort",
             "current_revision": setup_revision(current),
             "target_revision": setup_revision(target),
             "current_setup": current,
@@ -114,6 +114,13 @@ def update_setup_transaction_target(marker: Path, target: dict[str, Any]) -> Non
 def mark_setup_transaction_aborting(marker: Path) -> None:
     data = json.loads(marker.read_text(encoding="utf-8"))
     data["phase"] = "abort"
+    atomic_write_json(marker, data)
+
+
+def promote_setup_transaction(marker: Path) -> None:
+    """Commit recovery intent only after setup and ledger writes both succeed."""
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    data["phase"] = "apply"
     atomic_write_json(marker, data)
 
 

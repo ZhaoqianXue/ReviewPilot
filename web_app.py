@@ -37,7 +37,7 @@ _prefer_local_package_imports()
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.atomic_files import atomic_write_json
-from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
+from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
@@ -303,18 +303,24 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
             atomic_write_json(project_path / "search_conditions.json", persisted)
             if impacts:
                 mark_stages_stale(project_path, impacts)
+            promote_setup_transaction(pending)
         except Exception:
-            mark_setup_transaction_aborting(pending)
+            try:
+                mark_setup_transaction_aborting(pending)
+            except Exception:
+                pass
             try:
                 atomic_write_json(project_path / "search_conditions.json", current)
                 save_workflow_state(project_path, ledger_before)
             except Exception:
-                abandon_setup_transaction(project_path)
                 raise
             finish_setup_transaction(project_path)
             raise
-        finish_setup_transaction(project_path)
-        return {"id": project_id, "title": persisted["project_name"], "path": persisted["project_path"], "confirmationRequired": False, "setupRevision": persisted["setup_revision"], "affectedStages": impacts}
+        else:
+            finish_setup_transaction(project_path)
+            return {"id": project_id, "title": persisted["project_name"], "path": persisted["project_path"], "confirmationRequired": False, "setupRevision": persisted["setup_revision"], "affectedStages": impacts}
+        finally:
+            abandon_setup_transaction(project_path)
 
     if hasattr(task_runner, "run_if_idle"):
         return task_runner.run_if_idle(project_id, transact)
