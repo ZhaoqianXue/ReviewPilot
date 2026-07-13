@@ -752,6 +752,26 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_record_rejects_foreign_success_detail_paths_when_included_path_is_canonical(self):
+        report, included = self.plan.merged_facts.mutable_copies()
+        selected = self.prepared.selected_ids[0]
+        destination = str(self.plan.pdfs[0].destination_path)
+        row = next(row for row in included if stable_retry_id(row) == selected)
+        detail = report["downloaded"][-1]
+        self.assertEqual(row["pdf_path"], destination)
+        detail.update(path="/tmp/foreign.pdf", pdf_path="/tmp/foreign.pdf")
+        forged = self.refreeze_plan(report, included)
+        marker = self.project / PENDING_RETRY_FILE
+        before = marker.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+            record_retry_transaction_target(self.project, forged, self.ledger)
+
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_record_rejects_every_noncanonical_merged_fact_delta_without_marker_mutation(self):
         def mutate_unselected(report, included):
             included[0]["opaque"] = {"forged": True}

@@ -876,6 +876,10 @@ def _validate_merged_retry_delta(
         raise ValueError("Retry success detail count is invalid")
     success_details: dict[str, dict[str, Any]] = {}
     for retry_id, detail in zip(success_ids, appended):
+        destination = str(destinations[retry_id])
+        if (type(detail.get("path")) is not str or detail["path"] != destination
+                or type(detail.get("pdf_path")) is not str or detail["pdf_path"] != destination):
+            raise ValueError("Retry success detail path is inconsistent")
         success_details[retry_id] = detail
 
     failure_by_id: dict[str, dict[str, Any]] = {}
