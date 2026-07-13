@@ -46,6 +46,17 @@ def partial_project(project: Path, *, failed_row=None, included=None) -> None:
     complete_action(project, "download-pdfs", {"success": 1, "failed": 1})
 
 
+def two_failure_project(project: Path) -> None:
+    partial_project(project)
+    write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "ok-1"}, {"id": "failed-1"}, {"id": "failed-2"}])
+    write_json(project / "pdfs" / "download_report.json", {
+        "success": 1, "failed": 2, "downloaded": [{"id": "ok-1"}],
+        "failed_papers": [{"id": "failed-1"}, {"id": "failed-2"}],
+    })
+    state = load_workflow_state(project); state["stages"]["retrieval"]["counts"]["failed"] = 2
+    write_json(project / "workflow_state.json", state)
+
+
 def authoritative_fingerprint(project: Path) -> tuple[bytes, bytes, bytes, tuple[tuple[str, str], ...]]:
     files = (
         project / "pdfs" / "download_report.json",
@@ -110,6 +121,22 @@ class RetrievalRetryTests(unittest.TestCase):
             self.assertEqual(raised.exception.failed_ids, (retry_id,))
             assert_no_retry_writes(self, project, before)
 
+    def test_unconfirmed_and_confirmed_selection_order_is_exact_and_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); two_failure_project(project)
+            snapshot = current_retry_snapshot(project)
+            requested = [snapshot.items[1].retry_id, snapshot.items[0].retry_id]
+            before = authoritative_fingerprint(project)
+            with self.assertRaises(ConfirmationRequired) as raised:
+                prepare_retry_request(project, {"failed_ids": requested, "report_revision": snapshot.report_revision})
+            self.assertEqual(raised.exception.failed_ids, tuple(requested))
+            assert_no_retry_writes(self, project, before)
+
+            payload = {"failed_ids": requested, "report_revision": snapshot.report_revision,
+                "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": list(reversed(requested))}}
+            with self.assertRaises(InvalidRetryRequest): prepare_retry_request(project, payload)
+            assert_no_retry_writes(self, project, before)
+
     def test_prepare_rejects_malformed_or_mismatched_confirmation_without_writing(self):
         for confirmation, error in ((None, InvalidRetryRequest), ({}, InvalidRetryRequest),
             ({"expected_report_revision": 1, "failed_ids": []}, InvalidRetryRequest),
@@ -150,12 +177,7 @@ class RetrievalRetryTests(unittest.TestCase):
 
     def test_confirmed_prepare_reads_one_snapshot_and_returns_immutable_selected_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
-            project = Path(tmp); partial_project(project)
-            write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "ok-1"}, {"id": "failed-1"}, {"id": "failed-2"}])
-            write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 2,
-                "downloaded": [{"id": "ok-1"}], "failed_papers": [{"id": "failed-1"}, {"id": "failed-2"}]})
-            state = load_workflow_state(project); state["stages"]["retrieval"]["counts"]["failed"] = 2
-            write_json(project / "workflow_state.json", state)
+            project = Path(tmp); two_failure_project(project)
             snapshot = current_retry_snapshot(project); selected = (snapshot.items[1].retry_id, snapshot.items[0].retry_id)
             payload = {"failed_ids": list(selected), "report_revision": snapshot.report_revision,
                 "retry_confirmation": {"expected_report_revision": snapshot.report_revision, "failed_ids": list(selected)}}

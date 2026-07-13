@@ -51,7 +51,9 @@ def _terminal_result(action: str) -> dict:
 class WorkflowStateTests(unittest.TestCase):
     def test_retry_failed_downloads_uses_retrieval_stage_and_strict_download_outcomes(self):
         from reviewpilot_core.workflow_state import structured_action_outcome
-        for result, expected in (({"success": 2, "failed": 0}, "completed"), ({"success": 1, "failed": 1}, "partial"), ({"success": 0, "failed": 2}, "failed")):
+        for result, expected, expected_error in (({"success": 2, "failed": 0}, "completed", None),
+            ({"success": 1, "failed": 1}, "partial", None),
+            ({"success": 0, "failed": 2}, "failed", "Action produced no successful outputs (2 failed).")):
             with self.subTest(result=result), tempfile.TemporaryDirectory() as tmp:
                 self.assertEqual(structured_action_outcome("retry-failed-downloads", result)[0], expected)
                 project = Path(tmp); initialize_workflow_state(project)
@@ -61,7 +63,21 @@ class WorkflowStateTests(unittest.TestCase):
                 stage = complete_action(project, "retry-failed-downloads", result)["stages"]["retrieval"]
                 self.assertEqual(stage["status"], expected)
                 self.assertEqual(stage["counts"], {"succeeded": result["success"], "failed": result["failed"]})
-        for invalid in ({}, {"success": True, "failed": 0}, {"success": 1, "failed": "0"}):
+                self.assertEqual(stage["error"], expected_error)
+
+        valid_aliases = (
+            {"stats": {"success": 2, "failed": 1}},
+            {"success": 2, "failed": 1, "stats": {"successful": 2, "failed": 1}},
+        )
+        for result in valid_aliases:
+            with self.subTest(valid_aliases=result):
+                self.assertEqual(structured_action_outcome("retry-failed-downloads", result),
+                    structured_action_outcome("download-pdfs", result))
+        invalid_contracts = ({}, {"success": True, "failed": 0}, {"success": 1, "failed": "0"},
+            {"success": 1}, {"failed": 0},
+            {"success": 1, "failed": 0, "stats": {"successful": 2, "failed": 0}},
+            {"success": 1, "failed": 0, "stats": {"success": 1, "failed": 1}})
+        for invalid in invalid_contracts:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 structured_action_outcome("retry-failed-downloads", invalid)
     def test_starting_material_rerun_atomically_stales_current_and_downstream_outputs(self):
