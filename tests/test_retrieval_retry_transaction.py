@@ -2126,6 +2126,24 @@ class RetryPdfPublicationTests(unittest.TestCase):
         after = destination.stat()
         self.assertEqual((after.st_ino, after.st_mtime_ns, after.st_nlink), (before.st_ino, before.st_mtime_ns, 1))
 
+    def test_abort_rejects_forged_receipt_inode_and_preserves_foreign_destination(self):
+        publish_retry_transaction_pdfs(self.project)
+        destination = self.plan.pdfs[0].destination_path
+        payload = destination.read_bytes(); destination.unlink()
+        foreign = b"%PDF-forged" + b"x" * (len(payload) - len(b"%PDF-forged"))
+        destination.write_bytes(foreign); info = destination.stat()
+        marker_path = self.project / PENDING_RETRY_FILE; marker = json.loads(marker_path.read_text())
+        published = json.loads(base64.b64decode(marker["published_json_b64"]))
+        published["pdfs"][0].update(device=info.st_dev, inode=info.st_ino)
+        marker["published_json_b64"] = base64.b64encode(
+            json.dumps(published, sort_keys=True, separators=(",", ":")).encode()).decode()
+        atomic_write_json(marker_path, marker); abandon_retry_transaction(self.project)
+
+        with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+            reconcile_retry_transaction(self.project)
+
+        self.assertEqual(destination.read_bytes(), foreign); self.assertTrue(marker_path.exists())
+
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
         publish_retry_transaction_pdfs(self.project)

@@ -790,6 +790,46 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             raise ValueError("Retry transaction staging failed") from exc
 
 
+def _receipt_paths(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> tuple[Path, ...]:
+    candidates = (project / marker["staging_name"] / "retry" / "pdfs" / receipt["temp_name"],
+        project / "pdfs" / receipt["destination_name"])
+    return tuple(path for path in candidates if _lexists(path))
+
+
+def _validate_receipt_group(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> tuple[Path, ...]:
+    paths = _receipt_paths(project, marker, receipt)
+    if not paths:
+        return paths
+    if len(paths) not in (1, 2):
+        raise ValueError
+    for path in paths:
+        parent = path.parent
+        descriptor = None
+        try:
+            before = path.lstat()
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != len(paths)
+                    or (before.st_dev, before.st_ino) != (receipt["device"], receipt["inode"])
+                    or path.resolve(strict=True).parent != parent):
+                raise ValueError
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+            opened = os.fstat(descriptor)
+            if _file_identity(opened) != _file_identity(before):
+                raise ValueError
+            digest = hashlib.sha256(); size = 0; header = bytearray()
+            while chunk := os.read(descriptor, 64 * 1024):
+                if len(header) < 1024: header.extend(chunk[:1024 - len(header)])
+                digest.update(chunk); size += len(chunk)
+            after_fd = os.fstat(descriptor); after_path = path.lstat()
+            if (_file_identity(after_fd) != _file_identity(opened)
+                    or _file_identity(after_path) != _file_identity(opened)
+                    or (size, digest.hexdigest()) != (receipt["size"], receipt["sha256"])
+                    or not bytes(header).lstrip().startswith(b"%PDF-")):
+                raise ValueError
+        finally:
+            if descriptor is not None: os.close(descriptor)
+    return paths
+
+
 def _restore(project: Path, data: dict[str, Any]) -> bool:
     before = data["before"]
     try:
@@ -803,6 +843,8 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
             staging = project / data["staging_name"]
             if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
                 raise ValueError
+            for receipt in data.get("published", {}).get("pdfs", []):
+                _validate_receipt_group(project, data, receipt)
             _assert_marker_generation(project, data)
             atomic_write_json(project / "pdfs" / "download_report.json", before["report"])
             _assert_marker_generation(project, data)
@@ -810,15 +852,10 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
             _assert_marker_generation(project, data)
             save_workflow_state(project, before["ledger"])
             for receipt in data.get("published", {}).get("pdfs", []):
-                for path in (project / data["staging_name"] / "retry" / "pdfs" / receipt["temp_name"],
-                        project / "pdfs" / receipt["destination_name"]):
+                for path in _receipt_paths(project, data, receipt):
                     _assert_marker_generation(project, data)
-                    if not _lexists(path):
-                        continue
-                    info = path.lstat()
-                    if (stat.S_ISREG(info.st_mode)
-                            and (info.st_dev, info.st_ino) == (receipt["device"], receipt["inode"])):
-                        path.unlink()
+                    _validate_receipt_group(project, data, receipt)
+                    path.unlink()
             _assert_marker_generation(project, data)
             if _lexists(staging):
                 _assert_marker_generation(project, data)
