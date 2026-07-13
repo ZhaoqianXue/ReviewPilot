@@ -538,6 +538,56 @@ class RetrievalRetryTests(unittest.TestCase):
             if had_nofollow:
                 os.O_NOFOLLOW = nofollow
 
+    def test_publication_pdf_fingerprint_rejects_append_after_stream_eof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "pdfs"; parent.mkdir()
+            source = parent / "source.pdf"; source.write_bytes(b"%PDF-original")
+            identity = (source.stat().st_dev, source.stat().st_ino)
+            original_read = os.read
+            appended = False
+
+            def append_at_eof(fd, size):
+                nonlocal appended
+                chunk = original_read(fd, size)
+                opened = os.fstat(fd)
+                if not chunk and (opened.st_dev, opened.st_ino) == identity and not appended:
+                    appended = True
+                    with source.open("ab") as stream:
+                        stream.write(b"-concurrent-append")
+                return chunk
+
+            with patch("reviewpilot_core.retrieval_retry.os.read", append_at_eof):
+                with self.assertRaises(ValueError):
+                    _publication_pdf_fingerprint(source, parent.resolve(strict=True))
+            self.assertTrue(appended)
+
+    def test_publication_pdf_fingerprint_rejects_same_size_overwrite_after_stream_eof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "pdfs"; parent.mkdir()
+            source = parent / "source.pdf"; payload = b"%PDF-original"
+            source.write_bytes(payload)
+            os.utime(source, ns=(1_000_000_000, 1_000_000_000))
+            identity = (source.stat().st_dev, source.stat().st_ino)
+            original_read = os.read
+            overwritten = False
+
+            def overwrite_at_eof(fd, size):
+                nonlocal overwritten
+                chunk = original_read(fd, size)
+                opened = os.fstat(fd)
+                if not chunk and (opened.st_dev, opened.st_ino) == identity and not overwritten:
+                    overwritten = True
+                    with source.open("r+b") as stream:
+                        stream.write(b"%PDF-replaced")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                return chunk
+
+            with patch("reviewpilot_core.retrieval_retry.os.read", overwrite_at_eof):
+                with self.assertRaises(ValueError):
+                    _publication_pdf_fingerprint(source, parent.resolve(strict=True))
+            self.assertTrue(overwritten)
+
     def test_staging_rejects_count_contract_variants_duplicate_paths_and_symlink_boundaries(self):
         for location in ("root", "stats"):
             for value in (True, "1", None, 9):

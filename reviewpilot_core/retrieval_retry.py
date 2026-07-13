@@ -504,20 +504,25 @@ def _materialize_frozen_json(value: Any) -> Any:
 
 
 def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int, str, tuple[int, int]]:
+    def stable_metadata(value: os.stat_result) -> tuple[int, int, bool, int, int, int, int]:
+        return (value.st_dev, value.st_ino, stat_module.S_ISREG(value.st_mode), value.st_nlink,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
     fd = None
     try:
         resolved_path = path.resolve(strict=True)
         if resolved_path.parent != resolved_parent:
             raise ValueError
         before = path.lstat()
-        if not stat_module.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        before_metadata = stable_metadata(before)
+        if not before_metadata[2] or before_metadata[3] != 1:
             raise ValueError
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         fd = os.open(path, flags)
         opened = os.fstat(fd)
         identity = (opened.st_dev, opened.st_ino)
-        if (not stat_module.S_ISREG(opened.st_mode) or opened.st_nlink != 1
-                or identity != (before.st_dev, before.st_ino)):
+        opened_metadata = stable_metadata(opened)
+        if not opened_metadata[2] or opened_metadata[3] != 1 or opened_metadata != before_metadata:
             raise ValueError
         digest = hashlib.sha256()
         size = 0
@@ -529,9 +534,9 @@ def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int
             digest.update(chunk)
         after_fd = os.fstat(fd)
         after_path = path.lstat()
-        if (identity != (after_fd.st_dev, after_fd.st_ino)
-                or identity != (after_path.st_dev, after_path.st_ino)
-                or not stat_module.S_ISREG(after_path.st_mode) or after_path.st_nlink != 1
+        if (stable_metadata(after_fd) != opened_metadata
+                or stable_metadata(after_path) != opened_metadata
+                or size != opened.st_size or size != after_fd.st_size
                 or path.resolve(strict=True) != resolved_path
                 or size == 0 or not bytes(header).lstrip().startswith(b"%PDF-")):
             raise ValueError
