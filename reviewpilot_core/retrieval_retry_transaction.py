@@ -1007,6 +1007,35 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
         raise ValueError("Pending retry transaction cannot be recovered safely")
 
 
+def apply_retry_transaction(project_path: Path | str) -> bool:
+    """Durably promote one owned complete abort transaction and finish it marker-last."""
+    project = None; released_id = None
+    try:
+        project = _project_path(project_path)
+        with _lock(project), _project_file_lock(project):
+            initial = _read_marker(project); transaction_id = initial["transaction_id"]
+            with _GUARD:
+                if _ACTIVE.get(project) != transaction_id: raise ValueError
+            released_id = transaction_id
+            marker = _validate_retry_apply_readiness(project)
+            if _assert_marker_generation(project, initial) != marker: raise ValueError
+            with _GUARD:
+                if _ACTIVE.get(project) != transaction_id: raise ValueError
+            _assert_marker_generation(project, marker)
+            replacement = json.loads(marker[_RAW_MARKER_BYTES].decode("utf-8"))
+            replacement["phase"] = "apply"
+            _replace_marker_cas(project, marker, replacement)
+            promoted = _read_marker(project)
+            if promoted["transaction_id"] != transaction_id or promoted["phase"] != "apply": raise ValueError
+            return _roll_forward_retry_transaction(project, promoted)
+    except Exception as exc:
+        raise ValueError("Retry transaction could not be applied") from exc
+    finally:
+        if project is not None and released_id is not None:
+            with _GUARD:
+                if _ACTIVE.get(project) == released_id: _ACTIVE.pop(project)
+
+
 def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:
     project = _project_path(project_path)
     released_id = expected_transaction_id
