@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -241,14 +242,137 @@ class RetryAbortTransactionTests(unittest.TestCase):
         abandon_retry_transaction(self.project)
         self.assertTrue(reconcile_retry_transaction(self.project)); self.assertFalse(reconcile_retry_transaction(self.project))
 
-    def test_partial_restore_failure_leaves_marker_and_second_reconcile_finishes(self):
-        begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
-        abandon_retry_transaction(self.project)
-        atomic_write_json(self.project / "pdfs" / "download_report.json", {"mutated": True})
-        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_jsonl", side_effect=OSError(str(self.project))):
-            with self.assertRaises(ValueError) as caught: reconcile_retry_transaction(self.project)
-        self.assertNotIn(str(self.project), str(caught.exception)); self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
-        self.assertTrue(reconcile_retry_transaction(self.project))
+    def test_every_abort_failure_keeps_the_complete_rollback_retryable(self):
+        ledger = load_workflow_state(self.project)
+        ledger["unknown_valid"] = {"preserve": [1, {"nested": True}]}
+        save_workflow_state(self.project, ledger)
+        self.preparation = preparation(self.project)
+        before_report, before_included, _ = self.preparation.snapshot.mutable_fact_copies()
+        before_ledger = load_workflow_state(self.project)
+        resolved_project = self.project.resolve()
+        keep = self.project / "pdfs" / "unowned-keep.pdf"
+        keep.write_bytes(b"keep")
+        cases = (
+            ("report-write", "reconcile"),
+            ("included-write", "reconcile"),
+            ("ledger-write", "reconcile"),
+            ("candidate-unlink", "abort"),
+            ("staging-rmtree", "abort"),
+            ("marker-unlink", "abort"),
+        )
+
+        for seam, recovery_mode in cases:
+            with self.subTest(seam=seam, recovery_mode=recovery_mode):
+                handle = begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                marker = self.project / PENDING_RETRY_FILE
+                candidate = self.project / "pdfs" / handle.candidate_names[0]
+                candidate.write_bytes(b"%PDF-new")
+                staging = self.project / self.staging_name
+                staging.mkdir()
+                (staging / "owned-junk").write_text("x")
+                atomic_write_json(self.project / "pdfs" / "download_report.json", {"mutated": seam})
+                atomic_write_jsonl(self.project / "filtered" / "included_papers.jsonl", [{"mutated": seam}])
+                mutated_ledger = load_workflow_state(self.project)
+                mutated_ledger["unknown_valid"] = {"mutated": seam}
+                for index, stage in enumerate(mutated_ledger["stages"].values()):
+                    stage["attempt"] += 100 + index
+                    stage["counts"] = {"mutated": index}
+                save_workflow_state(self.project, mutated_ledger)
+
+                failed = {"once": False}
+                real_unlink = Path.unlink
+                real_rmtree = shutil.rmtree
+
+                def fail_once(target):
+                    if not failed["once"]:
+                        failed["once"] = True
+                        raise OSError(str(self.project / target))
+
+                def injected_json(path, data, *args, **kwargs):
+                    if Path(path) == resolved_project / "pdfs" / "download_report.json":
+                        fail_once("report-write")
+                    return atomic_write_json(path, data, *args, **kwargs)
+
+                def injected_jsonl(path, records, *args, **kwargs):
+                    if Path(path) == resolved_project / "filtered" / "included_papers.jsonl":
+                        fail_once("included-write")
+                    return atomic_write_jsonl(path, records, *args, **kwargs)
+
+                def injected_ledger(project, state):
+                    if Path(project).resolve() == self.project.resolve():
+                        fail_once("ledger-write")
+                    return save_workflow_state(project, state)
+
+                def injected_unlink(path, *args, **kwargs):
+                    target = resolved_project / PENDING_RETRY_FILE if seam == "marker-unlink" else resolved_project / "pdfs" / handle.candidate_names[0]
+                    if Path(path) == target:
+                        fail_once(seam)
+                    return real_unlink(path, *args, **kwargs)
+
+                def injected_rmtree(path, *args, **kwargs):
+                    if Path(path) == resolved_project / self.staging_name:
+                        fail_once("staging-rmtree")
+                    return real_rmtree(path, *args, **kwargs)
+
+                if seam == "report-write":
+                    failure_patch = patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json", side_effect=injected_json)
+                elif seam == "included-write":
+                    failure_patch = patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_jsonl", side_effect=injected_jsonl)
+                elif seam == "ledger-write":
+                    failure_patch = patch("reviewpilot_core.retrieval_retry_transaction.save_workflow_state", side_effect=injected_ledger)
+                elif seam in {"candidate-unlink", "marker-unlink"}:
+                    failure_patch = patch.object(Path, "unlink", autospec=True, side_effect=injected_unlink)
+                else:
+                    failure_patch = patch("reviewpilot_core.retrieval_retry_transaction.shutil.rmtree", side_effect=injected_rmtree)
+
+                if recovery_mode == "reconcile":
+                    abandon_retry_transaction(self.project)
+                    recover = reconcile_retry_transaction
+                else:
+                    recover = abort_retry_transaction
+                with failure_patch:
+                    with self.assertRaises(ValueError) as caught:
+                        recover(self.project)
+                self.assertTrue(failed["once"])
+                self.assertNotIn(str(self.project), str(caught.exception))
+                self.assertTrue(marker.exists())
+
+                # The marker is the durable promise that a partially completed
+                # rollback can be repeated until every authoritative fact wins.
+                self.assertTrue(reconcile_retry_transaction(self.project))
+                self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before_report)
+                self.assertEqual([json.loads(line) for line in (self.project / "filtered" / "included_papers.jsonl").read_text().splitlines()], before_included)
+                self.assertEqual(load_workflow_state(self.project), before_ledger)
+                self.assertFalse(candidate.exists())
+                self.assertFalse(staging.exists())
+                self.assertFalse(marker.exists())
+                self.assertEqual(keep.read_bytes(), b"keep")
+
+    def test_active_reservations_are_isolated_by_project(self):
+        with tempfile.TemporaryDirectory() as second_temp:
+            second_project = Path(second_temp) / "project"
+            second_project.mkdir()
+            retryable_project(second_project)
+            second_preparation = preparation(second_project)
+            second_staging = ".retrieval_retry_staging_second"
+            try:
+                first = begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                second = begin_retry_transaction(second_project, second_preparation, second_staging, second_project / second_staging)
+                first_marker = first.marker_path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "cannot begin safely|already active"):
+                    begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                self.assertEqual(first.marker_path.read_bytes(), first_marker)
+                self.assertTrue(second.marker_path.exists())
+                self.assertFalse(reconcile_retry_transaction(self.project))
+                self.assertFalse(reconcile_retry_transaction(second_project))
+
+                abandon_retry_transaction(self.project)
+                abandon_retry_transaction(second_project)
+                self.assertTrue(reconcile_retry_transaction(self.project))
+                self.assertTrue(reconcile_retry_transaction(second_project))
+            finally:
+                abandon_retry_transaction(self.project)
+                abandon_retry_transaction(second_project)
 
     def test_malformed_or_symlink_marker_and_unsafe_staging_fail_closed(self):
         marker = self.project / PENDING_RETRY_FILE
