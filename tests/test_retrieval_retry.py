@@ -166,7 +166,8 @@ class RetrievalRetryTests(unittest.TestCase):
             self.assertEqual(outcome.selected_ids, tuple(selected))
             self.assertEqual([row["id"] for row in outcome.updated_rows], ["failed-2", "failed-1"])
             self.assertEqual(len(outcome.successful_pdfs), 1)
-            self.assertTrue(outcome.staging_path.exists())
+            self.assertTrue(outcome.staging_root.exists())
+            self.assertEqual(outcome.staging_project_path.parent, outcome.staging_root)
             self.assertEqual(authoritative_fingerprint(project), before)
             with self.assertRaises(TypeError): outcome.updated_rows[0]["id"] = "changed"
             with self.assertRaises(TypeError): outcome.report["success"] = 9
@@ -179,6 +180,48 @@ class RetrievalRetryTests(unittest.TestCase):
                     project / ".retrieval_retry_staging_case", fake_download(flags))
                 self.assertEqual(outcome.report["success"], sum(flags))
                 self.assertEqual(len(outcome.successful_pdfs), sum(flags))
+
+    def test_staging_canonicalizes_success_failure_and_report_classification_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"; two_failure_project(project)
+            outcome = run_retry_staging(project, confirmed_preparation(project),
+                project / ".retrieval_retry_staging_case", fake_download([True, False]))
+            success, failed = outcome.updated_rows
+            self.assertEqual(success["retrieval_status"], "downloaded")
+            self.assertFalse(any(key in success for key in ("pdf_failure_class", "pdf_failure_detail",
+                "pdf_failure_classes", "pdf_error", "web_search_fallback_pending", "web_search_fallback_eligible")))
+            self.assertEqual(failed["retrieval_status"], "unavailable")
+            self.assertIs(failed["web_search_fallback_pending"], True)
+            self.assertIs(failed["web_search_fallback_eligible"], True)
+            failed_detail = outcome.report["failed_papers"][0]
+            self.assertEqual(failed_detail["retrieval_status"], "unavailable")
+            self.assertEqual(outcome.report["web_search_fallback_candidates"], (failed_detail,))
+            self.assertEqual(outcome.report["unavailable_papers"], (failed_detail,))
+            self.assertEqual(outcome.report["subscribed_papers"], ())
+
+    def test_staging_rejects_noncanonical_success_failure_and_classification_lists(self):
+        def success_row(staging, rows, report):
+            rows[0].update(retrieval_status="unavailable", pdf_failure_class="download_failed")
+            write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)
+        def success_report(staging, rows, report):
+            report["downloaded"][0].update(retrieval_status="unavailable", web_search_fallback_pending=False)
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def failed_report(staging, rows, report):
+            report["failed_papers"][0].update(retrieval_status="downloaded", web_search_fallback_pending=False)
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def wrong_list_member(staging, rows, report):
+            report["unavailable_papers"] = [{"id": "unknown", "failure_class": "download_failed"}]
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def wrong_list_facts(staging, rows, report):
+            report["web_search_fallback_candidates"] = [{**report["failed_papers"][0], "web_search_fallback_eligible": False}]
+            write_json(staging / "pdfs" / "download_report.json", report)
+        for mutation in (success_row, success_report, failed_report, wrong_list_member, wrong_list_facts):
+            with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); staging = project / ".retrieval_retry_staging_case"
+                with self.assertRaises(ValueError):
+                    run_retry_staging(project, confirmed_preparation(project), staging,
+                        fake_download([True, False], mutate=mutation))
+                self.assertFalse(staging.exists())
 
     def test_staging_rejects_invalid_location_and_cleans_its_own_failures(self):
         for kind in ("wrong-name", "nested", "existing", "symlink"):
@@ -330,20 +373,33 @@ class RetrievalRetryTests(unittest.TestCase):
                 project = Path(tmp) / "project"; two_failure_project(project)
                 authoritative_pdf = project / "pdfs" / "existing.pdf"; authoritative_pdf.write_bytes(b"%PDF-existing")
                 staging = project / ".retrieval_retry_staging_case"; callback = Mock(side_effect=fake_download([True, False]))
-                original = Path.read_bytes; reads = 0
-                def guarded(path):
+                original = Path.open; reads = 0
+                def guarded(path, *args, **kwargs):
                     nonlocal reads
-                    if path == authoritative_pdf:
+                    if path == authoritative_pdf and (args[0] if args else kwargs.get("mode", "r")) == "rb":
                         reads += 1
                         if phase == "before" or reads > 1:
                             raise OSError(str(authoritative_pdf))
-                    return original(path)
-                with patch.object(Path, "read_bytes", guarded):
+                    return original(path, *args, **kwargs)
+                with patch.object(Path, "open", guarded):
                     with self.assertRaisesRegex(ValueError, "^Authoritative retry facts are unavailable$") as raised:
                         run_retry_staging(project, confirmed_preparation(project), staging, callback)
                 self.assertNotIn(str(project), str(raised.exception))
                 self.assertEqual(callback.call_count, 0 if phase == "before" else 1)
                 self.assertFalse(staging.exists())
+
+    def test_authoritative_pdf_fingerprint_streams_without_read_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"; two_failure_project(project)
+            authoritative_pdf = project / "pdfs" / "existing.pdf"; authoritative_pdf.write_bytes(b"%PDF-existing")
+            original = Path.read_bytes
+            def guarded(path):
+                if path == authoritative_pdf: raise AssertionError("authoritative PDF read_bytes must not be used")
+                return original(path)
+            with patch.object(Path, "read_bytes", guarded):
+                outcome = run_retry_staging(project, confirmed_preparation(project),
+                    project / ".retrieval_retry_staging_case", fake_download([True, False]))
+            self.assertTrue(outcome.staging_project_path.exists())
 
     def test_staging_pdf_header_validation_does_not_load_entire_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

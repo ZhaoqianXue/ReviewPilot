@@ -176,7 +176,8 @@ class StagedRetryPdf:
 
 @dataclass(frozen=True)
 class StagedRetryOutcome:
-    staging_path: Path
+    staging_root: Path
+    staging_project_path: Path
     selected_ids: tuple[str, ...]
     updated_rows: tuple[Mapping[str, Any], ...]
     report: Mapping[str, Any]
@@ -335,6 +336,7 @@ def _normalize_staged_retry(
         if any(isinstance(detail.get(field), str) and detail[field].strip() for field in ("id", "doi", "url")):
             if stable_retry_id(detail) != success_by_path[path]:
                 raise ValueError("Staged retry success identity does not match report")
+        _canonicalize_success(row, detail)
     failed_by_id = {stable_retry_id(detail): detail for detail in failed_rows}
     for retry_id in actual_failed:
         row = rows_by_id[retry_id]
@@ -344,9 +346,35 @@ def _normalize_staged_retry(
         report_failure = detail.get("failure_class")
         if not _same_nonempty_text(row_failure, report_failure):
             raise ValueError("Staged retry failure classifications conflict")
-        expected_status = "subscribed_unavailable" if _is_subscription_failure(row_failure) else "unavailable"
+        canonical_class = row_failure.strip().casefold()
+        expected_status = "subscribed_unavailable" if _is_subscription_failure(canonical_class) else "unavailable"
         if row.get("retrieval_status") != expected_status:
-            raise ValueError("Staged retry failure status is inconsistent")
+            if "retrieval_status" in row:
+                raise ValueError("Staged retry failure status is inconsistent")
+        _validate_optional_fact(detail, "retrieval_status", expected_status)
+        _validate_optional_fact(row, "web_search_fallback_pending", True)
+        _validate_optional_fact(row, "web_search_fallback_eligible", True)
+        _validate_optional_fact(detail, "web_search_fallback_pending", True)
+        _validate_optional_fact(detail, "web_search_fallback_eligible", True)
+        row.update(pdf_failure_class=canonical_class, retrieval_status=expected_status,
+            web_search_fallback_pending=True, web_search_fallback_eligible=True)
+        detail.update(failure_class=canonical_class, retrieval_status=expected_status,
+            web_search_fallback_pending=True, web_search_fallback_eligible=True)
+
+    canonical_failed = list(failed_rows)
+    subscribed = [detail for detail in canonical_failed if detail["retrieval_status"] == "subscribed_unavailable"]
+    unavailable = [detail for detail in canonical_failed if detail["retrieval_status"] == "unavailable"]
+    classifications = {
+        "subscribed_papers": subscribed,
+        "unavailable_papers": unavailable,
+        "web_search_fallback_candidates": canonical_failed,
+    }
+    for key, expected in classifications.items():
+        if key in report:
+            actual = report[key]
+            if not isinstance(actual, list) or not all(isinstance(item, dict) for item in actual) or actual != expected:
+                raise ValueError("Staged retry classification facts are inconsistent")
+        report[key] = deepcopy(expected)
 
     disk_pdfs: set[Path] = set()
     for path in (staging_project / "pdfs").iterdir():
@@ -361,7 +389,8 @@ def _normalize_staged_retry(
     report_copy = deepcopy(report)
     rows_copy = deepcopy(rows)
     return StagedRetryOutcome(
-        staging_path=staging_project,
+        staging_root=staging_root,
+        staging_project_path=staging_project,
         selected_ids=preparation.selected_ids,
         updated_rows=tuple(_freeze_json(row) for row in rows_copy),
         report=_freeze_json(report_copy),
@@ -407,10 +436,18 @@ def _authoritative_fingerprint(project: Path) -> tuple[bytes, bytes, bytes, tupl
                 continue
             if path.is_symlink() or not path.is_file():
                 raise ValueError
-            pdfs.append((path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+            pdfs.append((path.name, _sha256_file(path)))
         return fixed[0].read_bytes(), fixed[1].read_bytes(), fixed[2].read_bytes(), tuple(sorted(pdfs))
     except (OSError, RuntimeError, ValueError) as exc:
         raise ValueError("Authoritative retry facts are unavailable") from exc
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _remove_staging(staging: Path) -> None:
@@ -450,6 +487,30 @@ def _has_identity_value(value: Any) -> bool:
 def _is_subscription_failure(value: str) -> bool:
     normalized = value.casefold()
     return any(marker in normalized for marker in ("paywall", "subscrib", "subscription", "closed"))
+
+
+def _canonicalize_success(row: dict[str, Any], detail: dict[str, Any]) -> None:
+    failure_fields = ("pdf_failure_class", "pdf_failure_detail", "pdf_failure_classes", "pdf_error")
+    report_failure_fields = ("failure_class", "failure_detail", "failure_classes", "error", *failure_fields)
+    for container, fields in ((row, failure_fields), (detail, report_failure_fields)):
+        if "retrieval_status" in container and container["retrieval_status"] != "downloaded":
+            raise ValueError("Successful staged retry status is inconsistent")
+        if any(_has_meaningful_fact(container.get(key)) for key in fields if key in container):
+            raise ValueError("Successful staged retry contains failure facts")
+        if any(key in container for key in ("web_search_fallback_pending", "web_search_fallback_eligible")):
+            raise ValueError("Successful staged retry contains fallback facts")
+        for key in (*fields, "web_search_fallback_pending", "web_search_fallback_eligible"):
+            container.pop(key, None)
+        container["retrieval_status"] = "downloaded"
+
+
+def _has_meaningful_fact(value: Any) -> bool:
+    return value not in (None, "", (), [], {})
+
+
+def _validate_optional_fact(container: dict[str, Any], key: str, expected: Any) -> None:
+    if key in container and container[key] != expected:
+        raise ValueError("Staged retry optional fact is inconsistent")
 
 
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
