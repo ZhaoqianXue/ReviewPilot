@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,6 +28,32 @@ from .model_policy import (
     PROMPT_MODEL,
     SEARCH_CONDITION_MODEL,
 )
+
+
+_SAFE_SOURCE_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _strict_jsonl_rows(root: Path, filename: str) -> list[dict[str, Any]]:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Invalid artifact root")
+    path = root / filename
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Invalid JSONL artifact")
+    try:
+        if path.resolve().parent != root.resolve():
+            raise ValueError("Invalid JSONL artifact location")
+        rows = []
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("JSONL artifact rows must be objects")
+                rows.append(row)
+        return rows
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid JSONL artifact") from exc
 
 
 def _contract_value(sources: list[dict[str, Any]], keys: tuple[str, ...], label: str) -> Any:
@@ -189,7 +216,15 @@ class CollectionAgentContract:
         return {"status": "collection_done", "total": 0, "platform_stats": {}, "platform_errors": {}, "collected_folder": str(collected_dir)}
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
-        collected_dir = Path(result.get("collected_folder") or project_path / "collected")
+        collected_dir = project_path / "collected"
+        reported_dir = result.get("collected_folder")
+        try:
+            if collected_dir.is_symlink() or not collected_dir.is_dir():
+                raise ValueError("Invalid collection artifact root")
+            if reported_dir is not None and Path(reported_dir).resolve() != collected_dir.resolve():
+                raise ValueError("Collection artifact root does not match project")
+        except (OSError, RuntimeError, TypeError) as exc:
+            raise ValueError("Invalid collection artifact root") from exc
         summary_path = collected_dir / "summary.json"
         summary = read_json(summary_path, {}) or {}
         sources = _contract_sources(result, result.get("summary"), summary)
@@ -199,22 +234,10 @@ class CollectionAgentContract:
         normalized = {"total": total, "platform_stats": platform_stats, "platform_errors": platform_errors}
         structured_action_outcome("collect", normalized)
         for platform, expected_count in platform_stats.items():
-            source_path = collected_dir / f"{platform}.jsonl"
-            if not source_path.is_file():
-                raise ValueError(f"Missing {platform} collection artifact")
-            actual_count = 0
-            try:
-                for line in source_path.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    row = json.loads(line)
-                    if not isinstance(row, dict):
-                        raise ValueError(f"Invalid {platform} collection artifact row")
-                    actual_count += 1
-            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-                raise ValueError(f"Invalid {platform} collection artifact") from exc
-            if actual_count != expected_count:
-                raise ValueError(f"{platform} artifact row count does not match collection contract")
+            if _SAFE_SOURCE_NAME.fullmatch(platform) is None:
+                raise ValueError("Invalid collection source name")
+            if len(_strict_jsonl_rows(collected_dir, f"{platform}.jsonl")) != expected_count:
+                raise ValueError("Collection artifact row count does not match contract")
         if summary_path.exists() and isinstance(summary, dict) and "platform_stats" not in summary:
             summary["platform_stats"] = platform_stats
             atomic_write_json(summary_path, summary, indent=None)
@@ -410,14 +433,23 @@ class ExtractionAgentContract:
         return self._normalize_result(project_path, result)
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
-        output_file = project_path / "extraction" / "extraction_results.jsonl"
-        rows = read_jsonl(output_file)
+        extraction_dir = project_path / "extraction"
+        output_file = extraction_dir / "extraction_results.jsonl"
+        rows = _strict_jsonl_rows(extraction_dir, output_file.name)
         stats = read_json(project_path / "extraction" / "extraction_stats.json", {}) or {}
         sources = _contract_sources(result, stats)
         processed = _contract_count(sources, ("processed", "success"), "extraction processed")
         errors = _contract_count(sources, ("errors", "failed"), "extraction errors")
-        successful_rows = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"", "success"})
-        failed_rows = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"})
+        successful_rows = 0
+        failed_rows = 0
+        for row in rows:
+            status = str(row.get("extraction_status") or "").strip().lower()
+            if status in {"", "success"}:
+                successful_rows += 1
+            elif status in {"error", "failed"}:
+                failed_rows += 1
+            else:
+                raise ValueError("Invalid extraction status")
         if (successful_rows, failed_rows) != (processed, errors):
             raise ValueError("Extraction artifact row counts do not match contract")
         structured_action_outcome("run-extraction", {"processed": processed, "errors": errors})

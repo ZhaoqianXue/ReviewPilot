@@ -28,6 +28,126 @@ from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 
 
 class WorkflowActionAdapterTests(unittest.TestCase):
+    def test_collection_contract_rejects_unsafe_source_names_and_external_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for index, source in enumerate(("../secret", str(base / "absolute"), r"C:\private\papers", "C:/private/papers", r"..\secret", ".", "..", "nested/source")):
+                with self.subTest(source=source):
+                    project = base / f"unsafe-{index}"
+                    collected = project / "collected"
+                    collected.mkdir(parents=True)
+                    summary = {"total_papers": 0, "platform_stats": {source: 0}, "platform_errors": {}}
+                    (collected / "summary.json").write_text(json.dumps(summary))
+                    candidate = collected / f"{source}.jsonl"
+                    candidate.parent.mkdir(parents=True, exist_ok=True)
+                    candidate.write_text("")
+                    with self.assertRaises(ValueError):
+                        CollectionAgentContract()._normalize_result(project, {"total": 0, "platform_stats": {source: 0}, "platform_errors": {}})
+
+            project = base / "external-root-project"
+            (project / "collected").mkdir(parents=True)
+            external = base / "external-collected"
+            external.mkdir()
+            summary = {"total_papers": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}}
+            (external / "summary.json").write_text(json.dumps(summary))
+            (external / "pubmed.jsonl").write_text("")
+            with self.assertRaises(ValueError) as caught:
+                CollectionAgentContract()._normalize_result(project, {**summary, "total": 0, "collected_folder": str(external)})
+            self.assertNotIn(str(external), str(caught.exception))
+
+    def test_collection_contract_rejects_symlinked_root_and_source_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            summary = {"total_papers": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}}
+            with self.subTest(case="root-symlink"):
+                project = base / "root-link-project"
+                project.mkdir()
+                external = base / "external"
+                external.mkdir()
+                (external / "summary.json").write_text(json.dumps(summary))
+                (external / "pubmed.jsonl").write_text("")
+                (project / "collected").symlink_to(external, target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    CollectionAgentContract()._normalize_result(project, {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}})
+
+            with self.subTest(case="file-symlink"):
+                project = base / "file-link-project"
+                collected = project / "collected"
+                collected.mkdir(parents=True)
+                (collected / "summary.json").write_text(json.dumps(summary))
+                target = base / "outside.jsonl"
+                target.write_text("")
+                (collected / "pubmed.jsonl").symlink_to(target)
+                with self.assertRaises(ValueError):
+                    CollectionAgentContract()._normalize_result(project, {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}})
+
+    def test_collection_contract_accepts_safe_ascii_source_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            collected = project / "collected"
+            collected.mkdir(parents=True)
+            sources = ("pubmed", "arxiv", "openalex", "custom_source", "source-v2")
+            stats = {source: 1 for source in sources}
+            summary = {"total_papers": len(sources), "platform_stats": stats, "platform_errors": {}}
+            (collected / "summary.json").write_text(json.dumps(summary))
+            for source in sources:
+                (collected / f"{source}.jsonl").write_text(json.dumps({"source": source}) + "\n")
+            result = CollectionAgentContract()._normalize_result(project, {"total": len(sources), "platform_stats": stats, "platform_errors": {}})
+            self.assertEqual(result["total"], len(sources))
+
+    def test_extraction_contract_rejects_unsafe_or_invalid_jsonl_artifacts(self):
+        invalid_cases = (
+            ("missing", None),
+            ("malformed", "not-json\n"),
+            ("nonobject", json.dumps(["row"]) + "\n"),
+            ("unknown-status", json.dumps({"extraction_status": "pending"}) + "\n"),
+        )
+        for case, content in invalid_cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "demo"
+                extraction = project / "extraction"
+                extraction.mkdir(parents=True)
+                if content is not None:
+                    (extraction / "extraction_results.jsonl").write_text(content)
+                with self.assertRaises(ValueError):
+                    ExtractionAgentContract()._normalize_result(project, {"processed": 0, "errors": 0})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with self.subTest(case="root-symlink"):
+                project = base / "root-link-project"
+                project.mkdir()
+                external = base / "external-extraction"
+                external.mkdir()
+                (external / "extraction_results.jsonl").write_text("")
+                (project / "extraction").symlink_to(external, target_is_directory=True)
+                with self.assertRaises(ValueError):
+                    ExtractionAgentContract()._normalize_result(project, {"processed": 0, "errors": 0})
+
+            with self.subTest(case="file-symlink"):
+                project = base / "file-link-project"
+                extraction = project / "extraction"
+                extraction.mkdir(parents=True)
+                target = base / "outside-extraction.jsonl"
+                target.write_text("")
+                (extraction / "extraction_results.jsonl").symlink_to(target)
+                with self.assertRaises(ValueError):
+                    ExtractionAgentContract()._normalize_result(project, {"processed": 0, "errors": 0})
+
+    def test_extraction_contract_accepts_empty_and_normalized_terminal_statuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "empty"
+            extraction = project / "extraction"
+            extraction.mkdir(parents=True)
+            (extraction / "extraction_results.jsonl").write_text("")
+            result = ExtractionAgentContract()._normalize_result(project, {"processed": 0, "errors": 0})
+            self.assertEqual((result["processed"], result["errors"]), (0, 0))
+
+            rows = ({}, {"extraction_status": " SUCCESS "}, {"extraction_status": " Error "}, {"extraction_status": "FAILED"})
+            (extraction / "extraction_results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            result = ExtractionAgentContract()._normalize_result(project, {"processed": 2, "errors": 2})
+            self.assertEqual((result["processed"], result["errors"]), (2, 2))
+
     def test_collection_contract_requires_exact_valid_jsonl_for_every_named_source(self):
         invalid_cases = (
             ("successful-zero-stale", {}, json.dumps({"title": "stale"}) + "\n"),
