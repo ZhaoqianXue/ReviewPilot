@@ -2755,10 +2755,10 @@ class RetryPdfPublicationTests(unittest.TestCase):
         marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
         self.plan.pdfs[0].destination_path.write_bytes(b"invalid")
         from reviewpilot_core import retrieval_retry_transaction as transaction
-        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target",
-                   side_effect=AssertionError("authority write must not occur")):
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target") as writer:
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be rolled forward$"):
                 transaction._roll_forward_retry_transaction(self.project, marker)
+        writer.assert_not_called()
         self.assertTrue(marker_path.exists())
         self.assertEqual(_classify_retry_authorities(self.project, marker).kinds, ("before", "before", "before"))
 
@@ -2787,6 +2787,77 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be rolled forward$"):
                 transaction._roll_forward_retry_transaction(self.project, marker)
         self.assertFalse(marker_path.exists()); self.assertEqual(destination.read_bytes(), before)
+
+    def test_apply_finish_reenters_after_second_authority_write_failure(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._write_retry_authority_target
+        def fail_second(project, current, expected, index):
+            if index == 1: raise OSError("second authority")
+            return original(project, current, expected, index)
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=fail_second):
+            with self.assertRaises(ValueError): transaction._roll_forward_retry_transaction(self.project, marker)
+        self.assertTrue(marker_path.exists())
+        self.assertEqual(_classify_retry_authorities(self.project, marker).kinds, ("target", "before", "before"))
+        self.assertTrue(transaction._roll_forward_retry_transaction(self.project, marker))
+        self.assertFalse(marker_path.exists())
+
+    def test_apply_finish_rejects_marker_aba_immediately_before_unlink(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        staging = self.project / self.staging
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; foreign_identity = None
+        def swap_after_pre_unlink_fsync(path):
+            nonlocal foreign_identity
+            result = original(path)
+            if (Path(path) == self.project.resolve() and not staging.exists()
+                    and marker_path.exists() and foreign_identity is None):
+                replacement = self.project / "foreign-marker"
+                replacement.write_bytes(marker_path.read_bytes()); os.replace(replacement, marker_path)
+                info = marker_path.lstat(); foreign_identity = (info.st_dev, info.st_ino)
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=swap_after_pre_unlink_fsync):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be rolled forward$"):
+                transaction._roll_forward_retry_transaction(self.project, marker)
+        info = marker_path.lstat()
+        self.assertEqual((info.st_dev, info.st_ino), foreign_identity)
+
+    def test_apply_finish_reenters_after_marker_unlink_failure(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = type(marker_path).unlink
+        def fail_marker(path, *args, **kwargs):
+            if path.name == PENDING_RETRY_FILE: raise OSError("unlink")
+            return original(path, *args, **kwargs)
+        with patch.object(type(marker_path), "unlink", autospec=True, side_effect=fail_marker):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be rolled forward$"):
+                transaction._roll_forward_retry_transaction(self.project, marker)
+        self.assertTrue(marker_path.exists()); self.assertFalse((self.project / self.staging).exists())
+        self.assertEqual(_classify_retry_authorities(self.project, marker).kinds, ("target", "target", "target"))
+        self.assertTrue(transaction._roll_forward_retry_transaction(self.project, marker))
+
+    def test_apply_finish_preserves_two_published_destinations(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        included_path = self.project / "filtered/included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows.append({"id": "failed-2", "title": "Failed 2"}); atomic_write_jsonl(included_path, rows)
+        report_path = self.project / "pdfs/download_report.json"; report = json.loads(report_path.read_text())
+        report["failed"] = 2; report["failed_papers"].append(
+            {"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(self.project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(self.project, ledger)
+        self.prepared = preparation(self.project); begin_retry_transaction(
+            self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        publish_retry_transaction_pdfs(self.project); marker = self.decoded_apply_marker()
+        before = {pdf.destination_path: pdf.destination_path.read_bytes() for pdf in self.plan.pdfs}
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        self.assertTrue(transaction._roll_forward_retry_transaction(self.project, marker))
+        self.assertEqual(len(before), 2)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        self.assertFalse((self.project / self.staging).exists()); self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
     def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
         marker = self.decoded_apply_marker(); included = self.project / self.staging / "retry/filtered/included_papers.jsonl"
