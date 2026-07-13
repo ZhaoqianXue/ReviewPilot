@@ -15,13 +15,12 @@ from typing import Any
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import RetryPreparation, current_retry_snapshot, retrieval_report_revision, stable_retry_id
-from .workflow_state import _validate as _validate_workflow_state
+from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state
 from .workflow_state import load_workflow_state, save_workflow_state
 
 
 PENDING_RETRY_FILE = ".retrieval_retry_pending.json"
 _STAGING_PREFIX = ".retrieval_retry_staging_"
-_ABSOLUTE_TAG = "$reviewpilot_absolute_path"
 _GUARD = Lock()
 _ACTIVE: set[Path] = set()
 _LOCKS: dict[Path, RLock] = {}
@@ -68,30 +67,35 @@ def _digest(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
-def _encode(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: _encode(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_encode(item) for item in value]
-    if isinstance(value, str) and Path(value).is_absolute():
-        return {_ABSOLUTE_TAG: base64.b64encode(value.encode("utf-8")).decode("ascii")}
-    return value
+def _encode_before(value: dict[str, Any]) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return base64.b64encode(raw).decode("ascii")
 
 
-def _decode(value: Any) -> Any:
-    if isinstance(value, dict):
-        if set(value) == {_ABSOLUTE_TAG} and isinstance(value[_ABSOLUTE_TAG], str):
-            try:
-                decoded = base64.b64decode(value[_ABSOLUTE_TAG], validate=True).decode("utf-8")
-            except (ValueError, UnicodeDecodeError) as exc:
-                raise ValueError from exc
-            if not Path(decoded).is_absolute():
-                raise ValueError
-            return decoded
-        return {key: _decode(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_decode(item) for item in value]
-    return value
+def _decode_before(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str):
+        raise ValueError
+    try:
+        raw = base64.b64decode(value, validate=True)
+        if base64.b64encode(raw).decode("ascii") != value:
+            raise ValueError
+        decoded = json.loads(raw.decode("utf-8"), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError from exc
+    if not isinstance(decoded, dict):
+        raise ValueError
+    canonical = json.dumps(decoded, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if raw != canonical:
+        raise ValueError
+    return decoded
+
+
+def _direct_regular(path: Path, parent: Path) -> bool:
+    try:
+        info = path.lstat()
+        return stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and path.resolve(strict=True).parent == parent
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def begin_retry_transaction(
@@ -115,6 +119,11 @@ def begin_retry_transaction(
         if type(preparation) is not RetryPreparation or preparation._project_identity != project:
             raise ValueError("Retry transaction preparation is stale")
         try:
+            authorities = ((project / "pdfs" / "download_report.json", project / "pdfs"),
+                (project / "filtered" / "included_papers.jsonl", project / "filtered"),
+                (project / "workflow_state.json", project))
+            if any(not _direct_regular(path, parent) for path, parent in authorities):
+                raise ValueError
             current = current_retry_snapshot(project)
             before_report, before_included, before_stage = preparation.snapshot.mutable_fact_copies()
             before_ledger = load_workflow_state(project)
@@ -143,7 +152,7 @@ def begin_retry_transaction(
             "selected_ids": list(preparation.selected_ids),
             "staging_name": staging_name,
             "candidate_names": list(candidates),
-            "before": _encode({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
+            "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
         }
         try:
             atomic_write_json(marker, data)
@@ -157,11 +166,11 @@ def begin_retry_transaction(
 def _read_marker(project: Path) -> dict[str, Any]:
     marker = project / PENDING_RETRY_FILE
     try:
-        if marker.is_symlink() or not marker.is_file() or marker.resolve(strict=True).parent != project:
+        if not _direct_regular(marker, project):
             raise ValueError
         data = json.loads(marker.read_text(encoding="utf-8"))
-        expected = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before"}
-        if not isinstance(data, dict) or set(data) != expected or data["version"] != 1 or data["phase"] != "abort":
+        expected = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
+        if not isinstance(data, dict) or set(data) != expected or type(data["version"]) is not int or data["version"] != 1 or data["phase"] != "abort":
             raise ValueError
         revision, ids = data["expected_revision"], data["selected_ids"]
         if not _digest(revision) or not isinstance(ids, list) or not ids or any(not _digest(item) for item in ids) or len(set(ids)) != len(ids):
@@ -169,11 +178,15 @@ def _read_marker(project: Path) -> dict[str, Any]:
         expected_candidates = [f"retry-{revision}-{item}.pdf" for item in ids]
         if data["candidate_names"] != expected_candidates or not _basename(data["staging_name"], _STAGING_PREFIX):
             raise ValueError
-        before = _decode(data["before"])
+        before = _decode_before(data["before_json_b64"])
         if not isinstance(before, dict) or set(before) != {"report", "included", "ledger"} or not isinstance(before["report"], dict) or not isinstance(before["included"], list) or not isinstance(before["ledger"], dict):
             raise ValueError
         if any(not isinstance(row, dict) for row in before["included"]):
             raise ValueError
+        stages = before["ledger"].get("stages")
+        if not isinstance(stages, dict) or set(stages) != set(STAGE_NAMES):
+            raise ValueError
+        before["ledger"]["stages"] = {name: stages[name] for name in STAGE_NAMES}
         _validate_workflow_state(before["ledger"])
         stage = before["ledger"]["stages"]["retrieval"]
         if retrieval_report_revision(before["report"], stage) != revision:
@@ -194,11 +207,11 @@ def _restore(project: Path) -> bool:
         for path, parent in ((project / "pdfs" / "download_report.json", project / "pdfs"),
                 (project / "filtered" / "included_papers.jsonl", project / "filtered"),
                 (project / "workflow_state.json", project)):
-            if path.is_symlink() or not path.is_file() or path.resolve(strict=True).parent != parent:
+            if not _direct_regular(path, parent):
                 raise ValueError
         for name in data["candidate_names"]:
             path = project / "pdfs" / name
-            if _lexists(path) and not stat.S_ISREG(path.lstat().st_mode):
+            if _lexists(path) and not _direct_regular(path, project / "pdfs"):
                 raise ValueError
         staging = project / data["staging_name"]
         if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
@@ -210,8 +223,7 @@ def _restore(project: Path) -> bool:
             path = project / "pdfs" / name
             if not _lexists(path):
                 continue
-            mode = path.lstat().st_mode
-            if path.parent != project / "pdfs" or not stat.S_ISREG(mode):
+            if not _direct_regular(path, project / "pdfs"):
                 raise ValueError
             path.unlink()
         if _lexists(staging):

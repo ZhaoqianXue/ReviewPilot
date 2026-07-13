@@ -1,4 +1,6 @@
+import base64
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +62,73 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
         self.assertEqual(marker, json.loads(handle.marker_path.read_text()))
         self.assertEqual(original[2], self.preparation.snapshot.mutable_fact_copies()[2])
+
+    def test_marker_round_trips_sentinel_shaped_values_and_absolute_keys_without_raw_paths(self):
+        report_path = self.project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text())
+        report["opaque"] = [
+            {"$reviewpilot_absolute_path": "L3RtcA=="},
+            {"$reviewpilot_absolute_path": "not-base64!"},
+            {str(self.project / "absolute-key"): str(self.project / "absolute-value")},
+        ]
+        atomic_write_json(report_path, report)
+        prepared = preparation(self.project)
+        before = prepared.snapshot.mutable_fact_copies()
+        begin_retry_transaction(self.project, prepared, self.staging_name, self.project / self.staging_name)
+        raw = (self.project / PENDING_RETRY_FILE).read_text()
+        self.assertNotIn(str(self.project), raw)
+        atomic_write_json(report_path, {"mutated": True})
+        self.assertTrue(abort_retry_transaction(self.project))
+        self.assertEqual(json.loads(report_path.read_text()), before[0])
+
+    def test_marker_version_requires_exact_integer_one(self):
+        for invalid in (True, 1.0, "1"):
+            with self.subTest(invalid=invalid):
+                begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                abandon_retry_transaction(self.project)
+                marker = self.project / PENDING_RETRY_FILE
+                data = json.loads(marker.read_text()); data["version"] = invalid
+                marker.write_text(json.dumps(data))
+                with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+                marker.unlink()
+
+    def test_marker_rejects_noncanonical_duplicate_before_keys(self):
+        begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        abandon_retry_transaction(self.project)
+        marker = self.project / PENDING_RETRY_FILE
+        data = json.loads(marker.read_text())
+        raw = base64.b64decode(data["before_json_b64"])
+        before = json.loads(raw)
+        raw = raw[:-1] + b',"report":' + json.dumps(before["report"], sort_keys=True, separators=(",", ":")).encode() + b"}"
+        data["before_json_b64"] = base64.b64encode(raw).decode()
+        marker.write_text(json.dumps(data))
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+
+    def test_begin_rejects_hardlinked_authoritative_files(self):
+        paths = [self.project / "pdfs" / "download_report.json", self.project / "filtered" / "included_papers.jsonl", self.project / "workflow_state.json"]
+        for index, path in enumerate(paths):
+            with self.subTest(path=path.name):
+                link = self.project / f"authority-link-{index}"
+                os.link(path, link)
+                with self.assertRaises(ValueError):
+                    begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                link.unlink()
+
+    def test_reconcile_rejects_hardlinked_marker_authority_and_candidate_without_deleting_links(self):
+        handle = begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        abandon_retry_transaction(self.project)
+        marker_link = self.project / "marker-link"; os.link(handle.marker_path, marker_link)
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(handle.marker_path.exists()); self.assertTrue(marker_link.exists()); marker_link.unlink()
+
+        authority = self.project / "workflow_state.json"; authority_link = self.project / "authority-link"; os.link(authority, authority_link)
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(authority.exists()); self.assertTrue(authority_link.exists()); authority_link.unlink()
+
+        candidate = self.project / "pdfs" / handle.candidate_names[0]; candidate.write_bytes(b"%PDF-new")
+        candidate_link = self.project / "candidate-link"; os.link(candidate, candidate_link)
+        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(candidate.exists()); self.assertTrue(candidate_link.exists())
 
     def test_begin_revalidates_and_rejects_every_collision_kind(self):
         name = f"retry-{self.preparation.snapshot.report_revision}-{self.preparation.selected_ids[0]}.pdf"
