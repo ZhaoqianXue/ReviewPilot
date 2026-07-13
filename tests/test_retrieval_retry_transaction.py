@@ -27,6 +27,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     abort_retry_transaction,
     begin_retry_transaction,
     reconcile_retry_transaction,
+    publish_retry_transaction_pdfs,
     record_retry_transaction_target,
     run_retry_transaction_staging,
     _project_file_lock,
@@ -2028,6 +2029,99 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertEqual((project / PENDING_RETRY_FILE).read_bytes(), before)
         record_retry_transaction_target(project, plan, ledger)
         self.assertTrue(abort_retry_transaction(project))
+
+
+class RetryPdfPublicationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.project = Path(self.temp.name) / "project"
+        self.project.mkdir(); retryable_project(self.project); self.prepared = preparation(self.project)
+        self.staging = ".retrieval_retry_staging_publish"; begin_retry_transaction(
+            self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+
+    def tearDown(self):
+        abandon_retry_transaction(self.project); self.temp.cleanup()
+
+    def authority_bytes(self):
+        return tuple((self.project / name).read_bytes() for name in (
+            "pdfs/download_report.json", "filtered/included_papers.jsonl", "workflow_state.json"))
+
+    def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
+        destination = self.plan.pdfs[0].destination_path
+        destination.write_bytes(b"%PDF-foreign")
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
+            publish_retry_transaction_pdfs(self.project)
+
+        self.assertEqual(destination.read_bytes(), b"%PDF-foreign")
+        self.assertEqual(json.loads((self.project / PENDING_RETRY_FILE).read_text())["phase"], "abort")
+
+    def test_interrupted_partial_destination_is_abort_cleanable(self):
+        original_write = os.write
+        wrote = False
+
+        def interrupt(descriptor, payload):
+            nonlocal wrote
+            if not wrote:
+                wrote = True; original_write(descriptor, payload[:5]); raise OSError("crash")
+            return original_write(descriptor, payload)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.write", side_effect=interrupt):
+            with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
+        destination = self.plan.pdfs[0].destination_path
+        self.assertTrue(destination.exists()); self.assertNotEqual(destination.read_bytes(), self.plan.pdfs[0].source_path.read_bytes())
+        self.assertTrue(abort_retry_transaction(self.project)); self.assertFalse(destination.exists())
+
+    def test_publish_rejects_source_mutation(self):
+        source = self.plan.pdfs[0].source_path
+        source.write_bytes(source.read_bytes() + b"changed")
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
+            publish_retry_transaction_pdfs(self.project)
+        self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
+        before = self.authority_bytes()
+        publish_retry_transaction_pdfs(self.project)
+        destination = self.plan.pdfs[0].destination_path; first = destination.read_bytes()
+        publish_retry_transaction_pdfs(self.project)
+        self.assertEqual(destination.read_bytes(), first)
+        self.assertEqual(self.authority_bytes(), before)
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        self.assertEqual(marker["phase"], "abort"); self.assertIn("target_json_b64", marker)
+
+    def test_multi_pdf_retry_accepts_first_complete_target_and_publishes_second(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        included = json.loads((self.project / "filtered/included_papers.jsonl").read_text().splitlines()[1])
+        included_rows = [json.loads(line) for line in (self.project / "filtered/included_papers.jsonl").read_text().splitlines()]
+        included_rows.append({**included, "id": "failed-2", "title": "Failed 2"})
+        atomic_write_jsonl(self.project / "filtered/included_papers.jsonl", included_rows)
+        report = json.loads((self.project / "pdfs/download_report.json").read_text()); report["failed"] = 2
+        report["failed_papers"].append({"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(self.project / "pdfs/download_report.json", report)
+        ledger = load_workflow_state(self.project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(self.project, ledger)
+        self.prepared = preparation(self.project); begin_retry_transaction(
+            self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        original = __import__("reviewpilot_core.retrieval_retry_transaction", fromlist=["_publish_one_pdf"])._publish_one_pdf
+        calls = 0
+
+        def stop_after_first(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 2: raise OSError("crash")
+            return original(*args)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._publish_one_pdf", side_effect=stop_after_first):
+            with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
+        self.assertTrue(self.plan.pdfs[0].destination_path.exists()); self.assertFalse(self.plan.pdfs[1].destination_path.exists())
+        publish_retry_transaction_pdfs(self.project)
+        self.assertTrue(all(pdf.destination_path.exists() for pdf in self.plan.pdfs))
+        self.plan.pdfs[0].destination_path.unlink()
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
+            publish_retry_transaction_pdfs(self.project)
 
 
 if __name__ == "__main__": unittest.main()

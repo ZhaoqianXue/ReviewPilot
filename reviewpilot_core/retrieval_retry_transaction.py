@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -1067,3 +1068,136 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             _replace_marker_cas(project, marker, raw)
         except Exception as exc:
             raise ValueError("Retry transaction target is invalid") from exc
+
+
+def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any]) -> None:
+    source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+    destination_parent = project / "pdfs"
+    source = source_parent / pdf["source_name"]
+    destination = destination_parent / pdf["destination_name"]
+    before_info = source.lstat()
+    size, digest, identity = _publication_pdf_fingerprint(source, source_parent)
+    if (size, digest) != (pdf["size"], pdf["sha256"]):
+        raise ValueError
+    if _lexists(destination):
+        if not _direct_regular(destination, destination_parent):
+            raise ValueError
+        existing_size, existing_digest, _ = _publication_pdf_fingerprint(destination, destination_parent)
+        if (existing_size, existing_digest) != (pdf["size"], pdf["sha256"]):
+            raise ValueError
+        return
+
+    source_descriptor = destination_descriptor = None
+    try:
+        source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        source_descriptor = os.open(source, source_flags)
+        opened = os.fstat(source_descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != identity
+                or _file_identity(opened) != _file_identity(before_info)):
+            raise ValueError
+        destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        destination_descriptor = os.open(destination, destination_flags, 0o600)
+        copied_size = 0
+        copied_digest = hashlib.sha256()
+        while chunk := os.read(source_descriptor, 64 * 1024):
+            copied_digest.update(chunk); copied_size += len(chunk)
+            offset = 0
+            while offset < len(chunk):
+                written = os.write(destination_descriptor, chunk[offset:])
+                if written <= 0:
+                    raise OSError
+                offset += written
+        os.fsync(destination_descriptor)
+        after_open = os.fstat(source_descriptor)
+        after_path = source.lstat()
+        if (_file_identity(after_open) != _file_identity(opened)
+                or _file_identity(after_path) != _file_identity(opened)
+                or (copied_size, copied_digest.hexdigest()) != (pdf["size"], pdf["sha256"])):
+            raise ValueError
+    finally:
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+    after_size, after_digest, after_identity = _publication_pdf_fingerprint(source, source_parent)
+    destination_size, destination_digest, _ = _publication_pdf_fingerprint(destination, destination_parent)
+    if ((after_size, after_digest, after_identity) != (pdf["size"], pdf["sha256"], identity)
+            or (destination_size, destination_digest) != (pdf["size"], pdf["sha256"])):
+        raise ValueError
+    directory = os.open(destination_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _validate_before_with_published_pdfs(project: Path, marker: dict[str, Any]) -> None:
+    expected_pdfs = [(pdf["name"], pdf["sha256"]) for pdf in marker["pdf_baseline"]["pdfs"]]
+    missing_seen = False
+    for pdf in marker["target"]["pdfs"]:
+        destination = project / "pdfs" / pdf["destination_name"]
+        if not _lexists(destination):
+            missing_seen = True
+            continue
+        if missing_seen:
+            raise ValueError
+        if not _direct_regular(destination, project / "pdfs"):
+            raise ValueError
+        size, digest, _ = _publication_pdf_fingerprint(destination, project / "pdfs")
+        if (size, digest) != (pdf["size"], pdf["sha256"]):
+            raise ValueError
+        expected_pdfs.append((pdf["destination_name"], digest))
+    pdf_names = tuple(pdf["name"] for pdf in marker["pdf_baseline"]["pdfs"])
+    expected_identities = _baseline_identities(marker["pdf_baseline"])
+    identity_before = _capture_authority_identities(project, pdf_names)
+    before_fingerprint = _authoritative_fingerprint(project)
+    current = current_retry_snapshot(project)
+    report, included, retrieval = current.mutable_fact_copies()
+    ledger = load_workflow_state(project)
+    after_fingerprint = _authoritative_fingerprint(project)
+    identity_after = _capture_authority_identities(project, pdf_names)
+    selected_ids = set(marker["selected_ids"])
+    canonical_selected = tuple(item.retry_id for item in current.items if item.retry_id in selected_ids)
+    expected = tuple(sorted(expected_pdfs))
+    if (identity_before != expected_identities or identity_after != expected_identities
+            or after_fingerprint[:3] != before_fingerprint[:3]
+            or before_fingerprint[3] != expected or after_fingerprint[3] != expected
+            or current.report_revision != marker["expected_revision"]
+            or canonical_selected != tuple(marker["selected_ids"])
+            or _encode_before({"report": report, "included": included, "ledger": ledger})
+                != _encode_before(marker["before"])
+            or _encode_before(retrieval)
+                != _encode_before(marker["before"]["ledger"]["stages"]["retrieval"])):
+        raise ValueError
+
+
+def publish_retry_transaction_pdfs(project_path: Path | str) -> None:
+    """Publish only target-declared PDFs while retaining abort-phase recovery authority."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            with _GUARD:
+                active_id = _ACTIVE.get(project)
+                if active_id is None:
+                    raise ValueError
+            marker = _read_marker(project)
+            if (marker["transaction_id"] != active_id or marker["phase"] != "abort"
+                    or "sources" not in marker or "target" not in marker):
+                raise ValueError
+            _validate_before_with_published_pdfs(project, marker)
+            _assert_marker_generation(project, marker)
+            _validate_committed_source_set(project, marker)
+            for pdf in marker["target"]["pdfs"]:
+                _validate_before_with_published_pdfs(project, marker)
+                _assert_marker_generation(project, marker)
+                _validate_committed_source_set(project, marker)
+                _publish_one_pdf(project, marker, pdf)
+                _assert_marker_generation(project, marker)
+                _validate_committed_source_set(project, marker)
+                _validate_before_with_published_pdfs(project, marker)
+            _validate_before_with_published_pdfs(project, marker)
+            _validate_committed_source_set(project, marker)
+            _assert_marker_generation(project, marker)
+        except Exception as exc:
+            raise ValueError("Retry transaction PDFs could not be published") from exc
