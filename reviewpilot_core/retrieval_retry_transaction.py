@@ -1406,6 +1406,35 @@ def publish_retry_transaction_pdfs(project_path: Path | str) -> None:
             raise ValueError("Retry transaction PDFs could not be published") from exc
 
 
+def _validate_retry_staging_hierarchy(project: Path, marker: dict[str, Any]) -> None:
+    staging = project / marker["staging_name"]
+    retry = staging / "retry"; pdfs = retry / "pdfs"; filtered = retry / "filtered"
+
+    def direct_directory(path: Path, parent: Path) -> None:
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or path.is_symlink()
+                or path.resolve(strict=True).parent != parent):
+            raise ValueError
+
+    direct_directory(staging, project); direct_directory(retry, staging)
+    direct_directory(pdfs, retry); direct_directory(filtered, retry)
+    if ({path.name for path in staging.iterdir()} != {"retry"}
+            or {path.name for path in retry.iterdir()} != {"pdfs", "filtered"}
+            or {path.name for path in filtered.iterdir()} != {"included_papers.jsonl"}):
+        raise ValueError
+    if not _direct_regular(filtered / "included_papers.jsonl", filtered): raise ValueError
+    source_names = {source["source_name"] for source in marker["sources"]["pdfs"]}
+    quarantine_names = {receipt["quarantine_name"] for receipt in marker["published"]["pdfs"]}
+    if {path.name for path in pdfs.iterdir()} != source_names | quarantine_names | {"download_report.json"}:
+        raise ValueError
+    if not _direct_regular(pdfs / "download_report.json", pdfs): raise ValueError
+    for name in source_names:
+        if not _direct_regular(pdfs / name, pdfs): raise ValueError
+    for receipt in marker["published"]["pdfs"]:
+        quarantine = _validate_quarantine(project, marker, receipt)
+        if quarantine is None or any(quarantine.iterdir()): raise ValueError
+
+
 def _validate_retry_apply_readiness(project_path: Path | str) -> dict[str, Any]:
     """Return the stable active abort marker only when authority apply may begin."""
     project = _project_path(project_path)
@@ -1426,6 +1455,7 @@ def _validate_retry_apply_readiness(project_path: Path | str) -> dict[str, Any]:
 
             def validate_complete_publication() -> None:
                 source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+                _validate_retry_staging_hierarchy(project, marker)
                 for receipt in marker["published"]["pdfs"]:
                     quarantine = _validate_quarantine(project, marker, receipt)
                     if quarantine is None or any(quarantine.iterdir()): raise ValueError

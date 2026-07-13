@@ -2360,6 +2360,55 @@ class RetryPdfPublicationTests(unittest.TestCase):
         unknown = self.project / "pdfs/unknown.pdf"; unknown.write_bytes(b"%PDF-unknown")
         with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
 
+    def test_apply_readiness_rejects_unknown_staging_sibling_kinds(self):
+        publish_retry_transaction_pdfs(self.project)
+        parent = self.project / self.staging / "retry" / "pdfs"
+        for kind in ("file", "directory", "symlink", "hardlink"):
+            path = parent / f"foreign-{kind}"
+            if kind == "file": path.write_bytes(b"foreign")
+            elif kind == "directory": path.mkdir()
+            elif kind == "symlink": path.symlink_to(self.project / "workflow_state.json")
+            else: os.link(parent / "download_report.json", path)
+            with self.subTest(kind=kind):
+                with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+            path.unlink() if not path.is_dir() or path.is_symlink() else path.rmdir()
+
+    def test_apply_readiness_rejects_staging_drift_between_aggregate_passes(self):
+        publish_retry_transaction_pdfs(self.project)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._validate_retry_staging_hierarchy; calls = 0
+
+        def drift_after_first(*args):
+            nonlocal calls
+            result = original(*args); calls += 1
+            if calls == 1:
+                (self.project / self.staging / "retry" / "pdfs" / "foreign.bin").write_bytes(b"foreign")
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_retry_staging_hierarchy", side_effect=drift_after_first):
+            with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_zero_success_readiness_validates_empty_staging_hierarchy(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        self.prepared = preparation(self.project); begin_retry_transaction(
+            self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging, succeeds=False)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        marker = transaction._read_marker(self.project.resolve()); raw = json.loads(marker["_raw_marker_bytes"].decode())
+        raw["published_json_b64"] = base64.b64encode(b'{"pdfs":[]}').decode()
+        transaction._replace_marker_cas(self.project.resolve(), marker, raw)
+        self.assertEqual(_validate_retry_apply_readiness(self.project)["published"]["pdfs"], [])
+        retry = self.project / self.staging / "retry"; filtered = retry / "filtered"; held = retry / "held"
+        filtered.rename(held)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        held.rename(filtered)
+        pdfs = retry / "pdfs"; saved = retry / "saved-pdfs"; pdfs.rename(saved); pdfs.symlink_to(saved, target_is_directory=True)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        pdfs.unlink(); saved.rename(pdfs)
+        foreign = pdfs / "foreign.bin"; foreign.write_bytes(b"foreign")
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
     def test_apply_readiness_rejects_destination_source_authority_and_marker_drift(self):
         publish_retry_transaction_pdfs(self.project); destination = self.plan.pdfs[0].destination_path
         original = destination.read_bytes(); destination.write_bytes(b"%PDF-x" + b"x" * (len(original) - 6))
