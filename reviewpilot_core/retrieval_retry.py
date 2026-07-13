@@ -178,6 +178,7 @@ class StagedRetryPdf:
 class StagedRetryOutcome:
     staging_root: Path
     staging_project_path: Path
+    report_revision: str
     selected_ids: tuple[str, ...]
     updated_rows: tuple[Mapping[str, Any], ...]
     report: Mapping[str, Any]
@@ -229,7 +230,9 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
         raise ValueError("Retry snapshot report counts are inconsistent")
     expected_base_status, expected_base_counts = structured_action_outcome(
         "download-pdfs", {"success": base_success, "failed": base_failed})
-    if (ledger.get("status") != expected_base_status or _thaw_json(ledger.get("counts")) != expected_base_counts):
+    _validate_current_stage(ledger, expected_base_status, base_failed)
+    if (_thaw_json(ledger.get("counts")) != expected_base_counts
+            or type(ledger.get("attempt")) is not int or ledger["attempt"] < 0):
         raise ValueError("Retry snapshot ledger is inconsistent")
 
     included_by_id: dict[str, int] = {}
@@ -244,8 +247,9 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
         if retry_id in failure_by_id or retry_id not in included_by_id:
             raise ValueError("Retry snapshot failure identities are inconsistent")
         failure_by_id[retry_id] = detail
-    if (len(snapshot.items) != len(base_failures) or not all(isinstance(item, RetryItem) for item in snapshot.items)
-            or tuple(item.retry_id for item in snapshot.items) != tuple(failure_by_id)):
+    expected_items = tuple(RetryItem(stable_retry_id(detail), _safe_label(detail), _safe_failure_class(detail),
+        index, included_by_id[stable_retry_id(detail)]) for index, detail in enumerate(base_failures))
+    if snapshot.items != expected_items:
         raise ValueError("Retry snapshot items are inconsistent")
 
     selected = preparation.selected_ids
@@ -264,6 +268,22 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
                 or stable_retry_id(_thaw_json(row)) != retry_id
                 or _thaw_json(row) != included[item.included_index]):
             raise ValueError("Prepared retry facts are inconsistent")
+    for retry_id, detail in failure_by_id.items():
+        if retry_id in selected:
+            continue
+        included_row = included[included_by_id[retry_id]]
+        report_class, row_class = detail.get("failure_class"), included_row.get("pdf_failure_class")
+        if (_has_meaningful_fact(report_class) and _has_meaningful_fact(row_class)
+                and not _same_nonempty_text(report_class, row_class)):
+            raise ValueError("Unselected retry failure classes conflict")
+        for container, failure_class in ((detail, report_class), (included_row, row_class)):
+            expected_status = "subscribed_unavailable" if _is_subscription_failure(
+                str(failure_class or report_class or row_class or "")) else "unavailable"
+            if "retrieval_status" in container and container["retrieval_status"] != expected_status:
+                raise ValueError("Unselected retry failure status is inconsistent")
+            for key in ("web_search_fallback_pending", "web_search_fallback_eligible"):
+                if key in container and container[key] is not True:
+                    raise ValueError("Unselected retry fallback fact is inconsistent")
 
     root = staged_outcome.staging_root
     staged_project = staged_outcome.staging_project_path
@@ -272,12 +292,16 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
             or not isinstance(staged_outcome.selected_ids, tuple) or not isinstance(staged_outcome.updated_rows, tuple)
             or not isinstance(staged_outcome.report, Mapping) or not isinstance(staged_outcome.successful_pdfs, tuple)
             or not root.name.startswith(".retrieval_retry_staging_") or root.parent != project
-            or staged_project != root / _STAGING_PROJECT_ID or staged_outcome.selected_ids != selected):
+            or staged_project != root / _STAGING_PROJECT_ID or staged_outcome.selected_ids != selected
+            or staged_outcome.report_revision != snapshot.report_revision):
         raise ValueError("Staged retry belongs to a different preparation")
     rows, staged_report = staged_outcome.mutable_copies()
     row_ids = tuple(stable_retry_id(row) for row in rows)
     if row_ids != selected:
         raise ValueError("Staged retry rows are not in request order")
+    for source, updated in zip(preparation.included_rows, rows):
+        if _fresh_retry_row(_thaw_json(source)) != _fresh_retry_row(deepcopy(updated)):
+            raise ValueError("Staged retry changed source paper fields")
     staged_success = _count(staged_report, "success")
     staged_failed = _count(staged_report, "failed")
     staged_downloaded = _detail_rows(staged_report, "downloaded")
@@ -319,6 +343,7 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
     expected_failed_ids = set(selected) - set(success_ids)
     if set(failed_detail_by_id) != expected_failed_ids:
         raise ValueError("Staged retry failures do not match selection")
+    _validate_canonical_merge_stage(rows, staged_report, source_by_id, detail_by_source, failed_detail_by_id)
     for retry_id, row in zip(selected, rows):
         flag = row.get("pdf_downloaded")
         if type(flag) is not bool or flag is not (retry_id in source_by_id):
@@ -387,19 +412,71 @@ def _logical_report_path(value: Any, staged_project: Path) -> Path:
 
 _ROW_SECONDARY_DIAGNOSTICS = {"pdf_failure_detail", "pdf_failure_classes", "pdf_error"}
 _REPORT_SECONDARY_DIAGNOSTICS = {
+    "failure_detail", "failure_classes", "error", "pdf_failure_class", "pdf_failure_detail",
+    "pdf_failure_classes", "pdf_error",
+}
+_STAGED_DETAIL_ALLOWED_FIELDS = {
+    *_IDENTITY_FIELDS, "paper_id", "pmid", "authors", "year", "journal", "source", "method", "pdf_method",
+    "path", "pdf_path", "pdf_downloaded", "retrieval_status", "failure_class", "pdf_failure_class",
     "failure_detail", "failure_classes", "error", "pdf_failure_detail", "pdf_failure_classes", "pdf_error",
+    "web_search_fallback_pending", "web_search_fallback_eligible",
 }
 
 
-def _strip_retry_metadata(container: dict[str, Any]) -> None:
-    for key in tuple(container):
-        if key == "retry_id" or key.startswith("_retry") or key.startswith("staging_"):
-            container.pop(key)
+def _validate_canonical_merge_stage(
+    rows: list[dict[str, Any]],
+    report: dict[str, Any],
+    source_by_id: dict[str, Path],
+    detail_by_source: dict[Path, dict[str, Any]],
+    failed_detail_by_id: dict[str, dict[str, Any]],
+) -> None:
+    for detail in (*detail_by_source.values(), *failed_detail_by_id.values()):
+        if not set(detail).issubset(_STAGED_DETAIL_ALLOWED_FIELDS):
+            raise ValueError("Staged retry report contains unknown metadata")
+    for row in rows:
+        retry_id = stable_retry_id(row)
+        if retry_id in source_by_id:
+            detail = detail_by_source[source_by_id[retry_id]]
+            if row.get("pdf_downloaded") is not True or row.get("retrieval_status") != "downloaded":
+                raise ValueError("Staged retry success row is not canonical")
+            if _logical_report_path(row.get("pdf_path"), Path(".")) != source_by_id[retry_id]:
+                raise ValueError("Staged retry success row path is inconsistent")
+            forbidden = (*_ROW_SECONDARY_DIAGNOSTICS, "pdf_failure_class",
+                "web_search_fallback_pending", "web_search_fallback_eligible")
+            if any(key in row for key in forbidden):
+                raise ValueError("Staged retry success row contains failure facts")
+            if (detail.get("pdf_downloaded") is not True or detail.get("retrieval_status") != "downloaded"
+                    or any(key in detail for key in (*_REPORT_SECONDARY_DIAGNOSTICS, "failure_class",
+                        "pdf_failure_class", "web_search_fallback_pending", "web_search_fallback_eligible"))):
+                raise ValueError("Staged retry success detail is not canonical")
+        else:
+            detail = failed_detail_by_id[retry_id]
+            row_class, detail_class = row.get("pdf_failure_class"), detail.get("failure_class")
+            if not _same_nonempty_text(row_class, detail_class):
+                raise ValueError("Staged retry failure classifications conflict")
+            if "pdf_failure_class" in detail and not _same_nonempty_text(detail_class, detail["pdf_failure_class"]):
+                raise ValueError("Staged retry failure class alias conflicts")
+            expected_status = "subscribed_unavailable" if _is_subscription_failure(row_class.strip().casefold()) else "unavailable"
+            for container in (row, detail):
+                if (container.get("pdf_downloaded") is not False or container.get("retrieval_status") != expected_status
+                        or container.get("web_search_fallback_pending") is not True
+                        or container.get("web_search_fallback_eligible") is not True
+                        or any(key in container for key in ("path", "pdf_path", "method", "pdf_method"))):
+                    raise ValueError("Staged retry failure detail is not canonical")
+    failures = list(failed_detail_by_id.values())
+    expected = {
+        "subscribed_papers": [row for row in failures if row["retrieval_status"] == "subscribed_unavailable"],
+        "unavailable_papers": [row for row in failures if row["retrieval_status"] == "unavailable"],
+        "web_search_fallback_candidates": failures,
+    }
+    for key, value in expected.items():
+        actual = report.get(key)
+        if not isinstance(actual, list) or actual != value:
+            raise ValueError("Staged retry classification facts are inconsistent")
 
 
 def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dict[str, Any]:
     row = deepcopy(source)
-    _strip_retry_metadata(row)
     for key in _ROW_SECONDARY_DIAGNOSTICS:
         row.pop(key, None)
     if destination is not None:
@@ -415,7 +492,6 @@ def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dic
 
 def _clean_selected_success_detail(source: dict[str, Any], destination: Path) -> dict[str, Any]:
     detail = deepcopy(source)
-    _strip_retry_metadata(detail)
     for key in (*_REPORT_SECONDARY_DIAGNOSTICS, "failure_class", "pdf_failure_class",
             "web_search_fallback_pending", "web_search_fallback_eligible"):
         detail.pop(key, None)
@@ -425,7 +501,6 @@ def _clean_selected_success_detail(source: dict[str, Any], destination: Path) ->
 
 def _clean_selected_failure_detail(source: dict[str, Any]) -> dict[str, Any]:
     detail = deepcopy(source)
-    _strip_retry_metadata(detail)
     for key in _REPORT_SECONDARY_DIAGNOSTICS:
         detail.pop(key, None)
     for key in ("path", "pdf_path", "pdf_method"):
@@ -652,6 +727,14 @@ def _normalize_staged_retry(
                 raise ValueError("Staged retry classification facts are inconsistent")
         report[key] = deepcopy(expected)
 
+    _validate_canonical_merge_stage(
+        rows,
+        report,
+        {item.retry_id: item.source_path for item in successes},
+        dict(zip(downloaded_paths, downloaded)),
+        failed_by_id,
+    )
+
     disk_pdfs: set[Path] = set()
     for path in (staging_project / "pdfs").iterdir():
         if path.name == "download_report.json":
@@ -667,6 +750,7 @@ def _normalize_staged_retry(
     return StagedRetryOutcome(
         staging_root=staging_root,
         staging_project_path=staging_project,
+        report_revision=preparation.snapshot.report_revision,
         selected_ids=preparation.selected_ids,
         updated_rows=tuple(_freeze_json(row) for row in rows_copy),
         report=_freeze_json(report_copy),
