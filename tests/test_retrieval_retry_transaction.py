@@ -14,7 +14,7 @@ from reviewpilot_core.retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
     RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
     merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
-    run_retry_staging, stable_retry_id,
+    run_retry_staging, stable_retry_id, _validate_detail_provenance,
 )
 from reviewpilot_core.retrieval_retry_transaction import (
     PENDING_RETRY_FILE,
@@ -812,6 +812,49 @@ class RetryTargetTransactionTests(unittest.TestCase):
         record_retry_transaction_target(self.project, plan, self.ledger)
 
         self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_rejects_equal_but_differently_typed_detail_provenance(self):
+        cases = (
+            ("integer-bool", "rank", 1, True),
+            ("integer-float", "score", 1, 1.0),
+            ("nested-dict", "metadata", {"rank": 1}, {"rank": True}),
+            ("identity", "url", 1, True),
+            ("present-identity", "doi", None, ""),
+        )
+        self.assertTrue(abort_retry_transaction(self.project))
+        for index, (label, key, row_value, detail_value) in enumerate(cases):
+            with self.subTest(label=label):
+                project = Path(self.temp.name).resolve() / f"exact-provenance-{index}"
+                project.mkdir(); retryable_project(project)
+                rows_path = project / "filtered" / "included_papers.jsonl"
+                rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+                next(row for row in rows if row.get("id") == "failed")[key] = row_value
+                atomic_write_jsonl(rows_path, rows)
+                prepared = preparation(project)
+                begin_retry_transaction(
+                    project, prepared, self.staging_name, project / self.staging_name)
+                plan = publication(project, prepared, self.staging_name)
+                ledger = target_ledger(project, plan)
+                report, included = plan.merged_facts.mutable_copies()
+                report["downloaded"][-1][key] = detail_value
+                forged = self.refreeze_plan(report, included, base_plan=plan)
+                marker = project / PENDING_RETRY_FILE
+                before = marker.read_bytes()
+
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+                    record_retry_transaction_target(project, forged, ledger)
+
+                self.assertNotIn(str(project), str(caught.exception))
+                self.assertEqual(marker.read_bytes(), before)
+                self.assertFalse(reconcile_retry_transaction(project))
+                self.assertTrue(abort_retry_transaction(project))
+
+    def test_detail_provenance_compares_nested_lists_and_dicts_exactly(self):
+        row = {"metadata": [{"rank": 1}, {"score": 1}]}
+        detail = {"metadata": [{"rank": True}, {"score": 1.0}]}
+
+        with self.assertRaisesRegex(ValueError, "no paper provenance"):
+            _validate_detail_provenance(row, detail)
 
     def test_partial_delta_preserves_unselected_failure_order_and_nested_facts(self):
         self.assertTrue(abort_retry_transaction(self.project))

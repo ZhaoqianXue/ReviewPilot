@@ -830,9 +830,11 @@ def _validate_canonical_merge_stage(
 def _validate_detail_provenance(row: dict[str, Any], detail: dict[str, Any]) -> None:
     for key, value in detail.items():
         if key in _IDENTITY_FIELDS:
-            if (key in row and row[key] != value) or (key not in row and value != ""):
+            if ((key in row and not _exact_json(row[key], value))
+                    or (key not in row and (type(value) is not str or value != ""))):
                 raise ValueError("Staged retry identity metadata has no paper provenance")
-        elif key not in _OUTCOME_DERIVED_DETAIL_FIELDS and (key not in row or row[key] != value):
+        elif key not in _OUTCOME_DERIVED_DETAIL_FIELDS and (
+                key not in row or not _exact_json(row[key], value)):
             raise ValueError("Staged retry report metadata has no paper provenance")
 
 
