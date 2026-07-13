@@ -360,16 +360,6 @@ def abandon_retry_transaction(project_path: Path | str) -> None:
         _ACTIVE.discard(project)
 
 
-def _contains(value: Any, expected: str) -> bool:
-    if type(value) is str:
-        return value == expected
-    if type(value) is dict:
-        return any(_contains(item, expected) for item in value.values())
-    if type(value) is list:
-        return any(_contains(item, expected) for item in value)
-    return False
-
-
 def _contains_text(value: Any, needle: str) -> bool:
     if type(value) is str:
         return needle in value
@@ -378,6 +368,56 @@ def _contains_text(value: Any, needle: str) -> bool:
     if type(value) is list:
         return any(_contains_text(item, needle) for item in value)
     return False
+
+
+def _validate_target_provenance(project: Path, marker: dict[str, Any], report: dict[str, Any],
+                                included: list[dict[str, Any]], pdfs: list[dict[str, Any]]) -> None:
+    """Bind each selected success to its canonical row, detail, and candidate."""
+    downloaded = report.get("downloaded")
+    if type(downloaded) is not list or any(type(detail) is not dict for detail in downloaded):
+        raise ValueError
+    candidates = dict(zip(marker["selected_ids"], marker["candidate_names"]))
+    pdf_ids = [pdf["retry_id"] for pdf in pdfs]
+    if (len(pdf_ids) != len(set(pdf_ids))
+            or pdf_ids != [retry_id for retry_id in marker["selected_ids"] if retry_id in set(pdf_ids)]):
+        raise ValueError
+
+    rows_by_id: dict[str, list[dict[str, Any]]] = {retry_id: [] for retry_id in marker["selected_ids"]}
+    details_by_id: dict[str, list[dict[str, Any]]] = {retry_id: [] for retry_id in marker["selected_ids"]}
+    for row in included:
+        try:
+            retry_id = stable_retry_id(row)
+        except ValueError:
+            continue
+        if retry_id in rows_by_id:
+            rows_by_id[retry_id].append(row)
+    for detail in downloaded:
+        try:
+            retry_id = stable_retry_id(detail)
+        except ValueError:
+            continue
+        if retry_id in details_by_id:
+            details_by_id[retry_id].append(detail)
+
+    success_ids = set(pdf_ids)
+    for retry_id in marker["selected_ids"]:
+        rows = rows_by_id[retry_id]
+        details = details_by_id[retry_id]
+        if len(rows) != 1:
+            raise ValueError
+        row = rows[0]
+        destination = str(project / "pdfs" / candidates[retry_id])
+        if retry_id in success_ids:
+            if (row.get("pdf_downloaded") is not True or row.get("retrieval_status") != "downloaded"
+                    or row.get("pdf_path") != destination or len(details) != 1):
+                raise ValueError
+            detail = details[0]
+            if (detail.get("pdf_downloaded") is not True or detail.get("retrieval_status") != "downloaded"
+                    or detail.get("path") != destination or detail.get("pdf_path") != destination):
+                raise ValueError
+        elif (details or row.get("pdf_downloaded") is True or row.get("retrieval_status") == "downloaded"
+                or row.get("pdf_path") not in (None, "")):
+            raise ValueError
 
 
 def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicationPlan,
@@ -429,14 +469,12 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
         if (len(payload) != pdf.source_size or hashlib.sha256(payload).hexdigest() != pdf.source_sha256
                 or not payload.startswith(b"%PDF-")):
             raise ValueError
-        destination = str(pdf.destination_path)
-        if not _contains(report, destination) or not _contains(included, destination):
-            raise ValueError
         successful_names.append(name)
         pdfs.append({"destination_name": name, "retry_id": pdf.retry_id,
             "size": pdf.source_size, "sha256": pdf.source_sha256})
     if successful_names != [name for name in marker["candidate_names"] if name in set(successful_names)]:
         raise ValueError
+    _validate_target_provenance(project, marker, report, included, pdfs)
     if (_contains_text(report, str(project / marker["staging_name"]))
             or _contains_text(included, str(project / marker["staging_name"]))):
         raise ValueError
@@ -482,11 +520,9 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
                 or not _digest(pdf["retry_id"]) or type(pdf["size"]) is not int or pdf["size"] < 0 or not _digest(pdf["sha256"])):
             raise ValueError
         names.append(pdf["destination_name"])
-        destination = str(project / "pdfs" / pdf["destination_name"])
-        if not _contains(report, destination) or not _contains(target["included"], destination):
-            raise ValueError
     if len(names) != len(set(names)) or names != [name for name in marker["candidate_names"] if name in set(names)]:
         raise ValueError
+    _validate_target_provenance(project, marker, report, target["included"], target["pdfs"])
     staging = str(project / marker["staging_name"])
     if _contains_text(report, staging) or _contains_text(target["included"], staging):
         raise ValueError

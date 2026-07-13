@@ -13,7 +13,7 @@ from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
 from reviewpilot_core.retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPreparation, RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
     merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
-    run_retry_staging,
+    run_retry_staging, stable_retry_id,
 )
 from reviewpilot_core.retrieval_retry_transaction import (
     PENDING_RETRY_FILE,
@@ -55,22 +55,25 @@ def publication(project: Path, prepared: RetryPreparation, staging_name: str, *,
     def download(root: Path, project_id: str):
         staged = root / project_id
         rows = [json.loads(line) for line in (staged / "filtered" / "included_papers.jsonl").read_text().splitlines()]
-        pdf = staged / "pdfs" / "retry.pdf"
+        downloaded = []; failed = []
         if succeeds:
-            pdf.write_bytes(b"%PDF-1.7\nretry")
-            rows[0].update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
-            downloaded = [{"title": rows[0].get("title", ""), "path": str(pdf)}]; failed = []
+            for index, row in enumerate(rows):
+                pdf = staged / "pdfs" / f"retry-{index}.pdf"
+                pdf.write_bytes(b"%PDF-1.7\nretry")
+                row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
+                downloaded.append({"id": row.get("id", ""), "title": row.get("title", ""), "path": str(pdf)})
         else:
-            rows[0].update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
-            downloaded = []; failed = [{"id": rows[0]["id"], "title": rows[0].get("title", ""),
-                "doi": "", "url": "", "failure_class": "download_failed"}]
+            for row in rows:
+                row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
+                failed.append({"id": row["id"], "title": row.get("title", ""),
+                    "doi": "", "url": "", "failure_class": "download_failed"})
         atomic_write_jsonl(staged / "filtered" / "included_papers.jsonl", rows)
         atomic_write_json(staged / "pdfs" / "download_report.json", {
-            "success": int(succeeds), "failed": int(not succeeds), "downloaded": downloaded,
-            "failed_papers": failed, "pdf_count": int(succeeds), "attempted": 1,
+            "success": len(downloaded), "failed": len(failed), "downloaded": downloaded,
+            "failed_papers": failed, "pdf_count": len(downloaded), "attempted": len(rows),
         })
-        return {"success": int(succeeds), "failed": int(not succeeds),
-            "stats": {"success": int(succeeds), "failed": int(not succeeds)}}
+        return {"success": len(downloaded), "failed": len(failed),
+            "stats": {"success": len(downloaded), "failed": len(failed)}}
     outcome = run_retry_staging(project, prepared, project / staging_name, download)
     merged = merge_staged_retry_facts(prepared, outcome)
     return prepare_retry_publication(project, prepared, outcome, merged)
@@ -466,6 +469,22 @@ class RetryTargetTransactionTests(unittest.TestCase):
         ledger["stages"]["retrieval"].update(status=status, counts=counts, stale=False, error=None)
         return plan, ledger
 
+    def refreeze_plan(self, report, included, pdfs=None, planned_pdfs=None, base_plan=None):
+        def freeze(value):
+            if type(value) is dict:
+                return MappingProxyType({key: freeze(item) for key, item in value.items()})
+            if type(value) is list:
+                return tuple(freeze(item) for item in value)
+            return value
+
+        base = self.plan if base_plan is None else base_plan
+        merged = base.merged_facts
+        forged = RetryMergedFacts(
+            merged.report_revision, freeze(report), tuple(freeze(row) for row in included),
+            merged.status, merged.counts, merged.planned_pdfs if planned_pdfs is None else planned_pdfs,
+        )
+        return RetryPublicationPlan(base.report_revision, forged, base.pdfs if pdfs is None else pdfs)
+
     def test_recorded_target_is_path_safe_immutable_and_abort_still_restores(self):
         before = self.prepared.snapshot.mutable_fact_copies()
         record_retry_transaction_target(self.project, self.plan, self.ledger)
@@ -487,6 +506,66 @@ class RetryTargetTransactionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target is invalid") as caught:
             record_retry_transaction_target(self.project, self.plan, bad)
         self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+
+    def test_record_rejects_foreign_business_paths_hidden_by_opaque_destination(self):
+        report, included = self.plan.merged_facts.mutable_copies()
+        destination = str(self.plan.pdfs[0].destination_path)
+        foreign = "/tmp/foreign.pdf"
+        selected = self.prepared.selected_ids[0]
+        row = next(row for row in included if row.get("id") == "failed")
+        detail = next(detail for detail in report["downloaded"] if detail.get("id") == "failed")
+        row.update(pdf_path=foreign, opaque={"claimed_destination": destination})
+        detail.update(path=foreign, pdf_path=foreign, opaque={"claimed_destination": destination})
+        self.assertEqual(stable_retry_id(row), selected)
+        self.assertEqual(stable_retry_id(detail), selected)
+        forged = self.refreeze_plan(report, included)
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+            record_retry_transaction_target(self.project, forged, self.ledger)
+
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_rejects_success_facts_when_pdf_subset_is_empty(self):
+        report, included = self.plan.merged_facts.mutable_copies()
+        forged = self.refreeze_plan(report, included, pdfs=(), planned_pdfs=())
+        before = (self.project / PENDING_RETRY_FILE).read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+            record_retry_transaction_target(self.project, forged, self.ledger)
+
+        self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_rejects_duplicate_and_out_of_order_success_pdf_ids(self):
+        project = Path(self.temp.name).resolve() / "two-failures"
+        project.mkdir(); retryable_project(project)
+        included_path = project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows.append({"id": "failed-2", "title": "Failed 2"}); atomic_write_jsonl(included_path, rows)
+        report_path = project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text()); report["failed"] = 2
+        report["failed_papers"].append({"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(project, ledger)
+        prepared = preparation(project); staging_name = ".retrieval_retry_staging_two"
+        begin_retry_transaction(project, prepared, staging_name, project / staging_name)
+        plan = publication(project, prepared, staging_name); ledger = target_ledger(project, plan)
+        before = (project / PENDING_RETRY_FILE).read_bytes()
+
+        duplicate = self.refreeze_plan(*plan.merged_facts.mutable_copies(), base_plan=plan,
+            pdfs=(plan.pdfs[0], plan.pdfs[0]), planned_pdfs=(plan.merged_facts.planned_pdfs[0],) * 2)
+        reversed_plan = self.refreeze_plan(*plan.merged_facts.mutable_copies(), base_plan=plan,
+            pdfs=tuple(reversed(plan.pdfs)), planned_pdfs=tuple(reversed(plan.merged_facts.planned_pdfs)))
+        for label, forged in (("duplicate", duplicate), ("out-of-order", reversed_plan)):
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                    record_retry_transaction_target(project, forged, ledger)
+                self.assertEqual((project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(project))
 
     def test_record_rejects_every_target_that_recovery_cannot_decode_before_writing_marker(self):
         cases = (
