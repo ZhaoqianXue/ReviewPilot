@@ -55,6 +55,12 @@ class RetryTransactionHandle:
     transaction_id: str
 
 
+@dataclass(frozen=True)
+class RetryAuthorityClassification:
+    kinds: tuple[str, str, str]
+    identities: tuple[tuple[int, int, int, int, int, int], ...]
+
+
 def _lock(project: Path) -> RLock:
     with _GUARD:
         return _LOCKS.setdefault(project, RLock())
@@ -1498,3 +1504,63 @@ def _validate_retry_apply_readiness(project_path: Path | str) -> dict[str, Any]:
             return marker
         except Exception as exc:
             raise ValueError("Retry transaction is not ready to apply") from exc
+
+
+def _classify_retry_authorities(project_path: Path | str,
+                                marker: dict[str, Any]) -> RetryAuthorityClassification:
+    """Stably classify apply-phase authorities as exact target or exact before facts."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            if (type(marker) is not dict or marker.get("phase") != "apply"
+                    or "before" not in marker or "target" not in marker
+                    or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker):
+                raise ValueError
+            _assert_marker_generation(project, marker)
+            authorities = (
+                (project / "pdfs/download_report.json", project / "pdfs", "report", False),
+                (project / "filtered/included_papers.jsonl", project / "filtered", "included", True),
+                (project / "workflow_state.json", project, "ledger", False),
+            )
+            def strict_json(raw: str) -> Any:
+                def object_pairs(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result: raise ValueError
+                        result[key] = value
+                    return result
+                return json.loads(raw, object_pairs_hook=object_pairs,
+                    parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+
+            kinds: list[str] = []; identities: list[tuple[int, int, int, int, int, int]] = []
+            for path, parent, key, jsonl in authorities:
+                before = path.lstat()
+                if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                        or path.resolve(strict=True).parent != parent):
+                    raise ValueError
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+                try:
+                    opened = os.fstat(descriptor)
+                    if _file_identity(opened) != _file_identity(before): raise ValueError
+                    chunks = bytearray()
+                    while chunk := os.read(descriptor, 64 * 1024): chunks.extend(chunk)
+                    after_fd = os.fstat(descriptor); after_path = path.lstat()
+                    if (_file_identity(after_fd) != _file_identity(opened)
+                            or _file_identity(after_path) != _file_identity(opened)
+                            or path.resolve(strict=True).parent != parent):
+                        raise ValueError
+                finally:
+                    os.close(descriptor)
+                raw = bytes(chunks)
+                if jsonl:
+                    value = [strict_json(line) for line in raw.decode("utf-8").splitlines()]
+                else:
+                    value = strict_json(raw.decode("utf-8"))
+                if _same_loaded_fact(value, marker["target"][key]): kind = "target"
+                elif _same_loaded_fact(value, marker["before"][key]): kind = "before"
+                else: raise ValueError
+                kinds.append(kind); identities.append(_file_identity(opened))
+            _assert_marker_generation(project, marker)
+            return RetryAuthorityClassification(tuple(kinds), tuple(identities))
+        except Exception as exc:
+            raise ValueError("Retry transaction authorities cannot be classified") from exc

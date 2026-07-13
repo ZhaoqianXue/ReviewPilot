@@ -34,6 +34,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _project_file_lock,
     _publication_pdf_fingerprint,
     _validate_retry_apply_readiness,
+    _classify_retry_authorities,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2196,6 +2197,70 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
             reconcile_retry_transaction(self.project)
         self.assertEqual(marker.read_bytes(), before); self.assertEqual(destination.read_bytes(), pdf_before); self.assertTrue(staging.exists())
+
+    def decoded_apply_marker(self):
+        self.promote_marker_raw_for_test()
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        return transaction._read_marker(self.project.resolve())
+
+    def test_apply_authority_classifier_covers_all_before_target_combinations(self):
+        marker = self.decoded_apply_marker(); paths = (
+            self.project / "pdfs/download_report.json", self.project / "filtered/included_papers.jsonl",
+            self.project / "workflow_state.json")
+        keys = ("report", "included", "ledger")
+        for mask in range(8):
+            expected = []
+            for index, (path, key) in enumerate(zip(paths, keys)):
+                kind = "target" if mask & (1 << index) else "before"; expected.append(kind)
+                value = marker[kind][key]
+                atomic_write_jsonl(path, value) if key == "included" else atomic_write_json(path, value)
+            classified = _classify_retry_authorities(self.project, marker)
+            self.assertEqual(classified.kinds, tuple(expected))
+            self.assertEqual(len(classified.identities), 3)
+
+    def test_apply_authority_classifier_is_read_only_and_rejects_wrong_phase(self):
+        marker = self.decoded_apply_marker(); before = {str(path.relative_to(self.project)):
+            (path.lstat().st_ino, path.lstat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in self.project.rglob("*")}
+        _classify_retry_authorities(self.project, marker)
+        after = {str(path.relative_to(self.project)):
+            (path.lstat().st_ino, path.lstat().st_mtime_ns, path.read_bytes() if path.is_file() else None)
+            for path in self.project.rglob("*")}
+        self.assertEqual(after, before)
+        forged = dict(marker); forged["phase"] = "abort"
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, forged)
+
+    def test_apply_authority_classifier_rejects_semantic_and_path_forgeries(self):
+        marker = self.decoded_apply_marker(); report = self.project / "pdfs/download_report.json"
+        included = self.project / "filtered/included_papers.jsonl"; ledger = self.project / "workflow_state.json"
+        forged = deepcopy(marker["target"]["report"]); forged["success"] = True; atomic_write_json(report, forged)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+        forged = deepcopy(marker["target"]["report"]); forged["extra"] = 1; atomic_write_json(report, forged)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+        atomic_write_json(report, marker["target"]["report"]); atomic_write_jsonl(included, reversed(marker["target"]["included"]))
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+        included.write_text("{malformed\n")
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+        atomic_write_jsonl(included, marker["target"]["included"]); saved = self.project / "saved-report"
+        report.replace(saved); report.symlink_to(saved)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+        report.unlink(); saved.replace(report); link = self.project / "ledger-link"; os.link(ledger, link)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
+
+    def test_apply_authority_classifier_rejects_same_bytes_inode_swap_during_read(self):
+        marker = self.decoded_apply_marker(); report = self.project / "pdfs/download_report.json"
+        original_read = os.read; swapped = False
+
+        def swap_after_read(descriptor, size):
+            nonlocal swapped
+            chunk = original_read(descriptor, size)
+            if chunk and not swapped:
+                swapped = True; replacement = self.project / "same-report"; replacement.write_bytes(report.read_bytes())
+                os.replace(replacement, report)
+            return chunk
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.read", side_effect=swap_after_read):
+            with self.assertRaises(ValueError): _classify_retry_authorities(self.project, marker)
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
