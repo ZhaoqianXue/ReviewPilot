@@ -796,6 +796,37 @@ def _receipt_paths(project: Path, marker: dict[str, Any], receipt: dict[str, Any
     return tuple(path for path in candidates if _lexists(path))
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try: os.fsync(descriptor)
+    finally: os.close(descriptor)
+
+
+def _validate_receipt_path(path: Path, receipt: dict[str, Any], links: int) -> None:
+    descriptor = None
+    try:
+        before = path.lstat()
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != links
+                or (before.st_dev, before.st_ino) != (receipt["device"], receipt["inode"])
+                or path.resolve(strict=True).parent != path.parent):
+            raise ValueError
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+        opened = os.fstat(descriptor)
+        if _file_identity(opened) != _file_identity(before): raise ValueError
+        digest = hashlib.sha256(); size = 0; header = bytearray()
+        while chunk := os.read(descriptor, 64 * 1024):
+            if len(header) < 1024: header.extend(chunk[:1024 - len(header)])
+            digest.update(chunk); size += len(chunk)
+        after_fd = os.fstat(descriptor); after_path = path.lstat()
+        if (_file_identity(after_fd) != _file_identity(opened)
+                or _file_identity(after_path) != _file_identity(opened)
+                or (size, digest.hexdigest()) != (receipt["size"], receipt["sha256"])
+                or not bytes(header).lstrip().startswith(b"%PDF-")):
+            raise ValueError
+    finally:
+        if descriptor is not None: os.close(descriptor)
+
+
 def _validate_receipt_group(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> tuple[Path, ...]:
     paths = _receipt_paths(project, marker, receipt)
     if not paths:
@@ -803,31 +834,30 @@ def _validate_receipt_group(project: Path, marker: dict[str, Any], receipt: dict
     if len(paths) not in (1, 2):
         raise ValueError
     for path in paths:
-        parent = path.parent
-        descriptor = None
-        try:
-            before = path.lstat()
-            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != len(paths)
-                    or (before.st_dev, before.st_ino) != (receipt["device"], receipt["inode"])
-                    or path.resolve(strict=True).parent != parent):
-                raise ValueError
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
-            opened = os.fstat(descriptor)
-            if _file_identity(opened) != _file_identity(before):
-                raise ValueError
-            digest = hashlib.sha256(); size = 0; header = bytearray()
-            while chunk := os.read(descriptor, 64 * 1024):
-                if len(header) < 1024: header.extend(chunk[:1024 - len(header)])
-                digest.update(chunk); size += len(chunk)
-            after_fd = os.fstat(descriptor); after_path = path.lstat()
-            if (_file_identity(after_fd) != _file_identity(opened)
-                    or _file_identity(after_path) != _file_identity(opened)
-                    or (size, digest.hexdigest()) != (receipt["size"], receipt["sha256"])
-                    or not bytes(header).lstrip().startswith(b"%PDF-")):
-                raise ValueError
-        finally:
-            if descriptor is not None: os.close(descriptor)
+        _validate_receipt_path(path, receipt, len(paths))
     return paths
+
+
+def _quarantine_owned_path(project: Path, marker: dict[str, Any], receipt: dict[str, Any], path: Path) -> None:
+    quarantine_parent = project / marker["staging_name"] / "retry" / "pdfs"
+    quarantine = quarantine_parent / f".{marker['transaction_id']}.{secrets.token_hex(32)}.quarantine"
+    if _lexists(quarantine): raise ValueError
+    _assert_marker_generation(project, marker)
+    os.rename(path, quarantine)
+    _fsync_directory(path.parent); _fsync_directory(quarantine_parent)
+    remaining_links = 1 + len(_receipt_paths(project, marker, receipt))
+    try:
+        _validate_receipt_path(quarantine, receipt, remaining_links)
+    except Exception:
+        try:
+            os.link(quarantine, path, follow_symlinks=False)
+            _fsync_directory(path.parent)
+            quarantine.unlink(); _fsync_directory(quarantine_parent)
+        except OSError:
+            pass
+        raise
+    _assert_marker_generation(project, marker)
+    quarantine.unlink(); _fsync_directory(quarantine_parent)
 
 
 def _restore(project: Path, data: dict[str, Any]) -> bool:
@@ -855,13 +885,16 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
                 for path in _receipt_paths(project, data, receipt):
                     _assert_marker_generation(project, data)
                     _validate_receipt_group(project, data, receipt)
-                    path.unlink()
+                    _quarantine_owned_path(project, data, receipt, path)
+            _fsync_directory(project / "pdfs")
             _assert_marker_generation(project, data)
             if _lexists(staging):
                 _assert_marker_generation(project, data)
                 shutil.rmtree(staging)
+                _fsync_directory(project)
             _assert_marker_generation(project, data)
             (project / PENDING_RETRY_FILE).unlink()
+            _fsync_directory(project)
             return True
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc

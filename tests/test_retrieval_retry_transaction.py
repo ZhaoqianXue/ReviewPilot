@@ -2144,6 +2144,39 @@ class RetryPdfPublicationTests(unittest.TestCase):
 
         self.assertEqual(destination.read_bytes(), foreign); self.assertTrue(marker_path.exists())
 
+    def test_abort_quarantine_preserves_foreign_swapped_after_validation(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        destination = self.plan.pdfs[0].destination_path; foreign = b"%PDF-race-foreign"
+        original_rename = os.rename; injected = False
+
+        def swap_then_rename(source, target, *args, **kwargs):
+            nonlocal injected
+            if Path(source) == destination and not injected:
+                injected = True; destination.unlink(); destination.write_bytes(foreign)
+            return original_rename(source, target, *args, **kwargs)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.rename", side_effect=swap_then_rename):
+            with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+                reconcile_retry_transaction(self.project)
+        self.assertTrue(injected); self.assertEqual(destination.read_bytes(), foreign)
+        self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
+
+    def test_abort_pdf_directory_fsync_failure_keeps_marker_and_is_retryable(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; failed = False
+
+        def fail_once(path):
+            nonlocal failed
+            if Path(path) == self.project.resolve() / "pdfs" and not failed:
+                failed = True; raise OSError("pdfs fsync")
+            return original(path)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_once):
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(failed); self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
+        self.assertTrue(reconcile_retry_transaction(self.project))
+
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
         publish_retry_transaction_pdfs(self.project)
