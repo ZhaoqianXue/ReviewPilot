@@ -1386,3 +1386,42 @@ def publish_retry_transaction_pdfs(project_path: Path | str) -> None:
             _assert_marker_generation(project, marker)
         except Exception as exc:
             raise ValueError("Retry transaction PDFs could not be published") from exc
+
+
+def _validate_retry_apply_readiness(project_path: Path | str) -> dict[str, Any]:
+    """Return the stable active abort marker only when authority apply may begin."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            marker_path = project / PENDING_RETRY_FILE
+            marker_info = marker_path.lstat()
+            if not stat.S_ISREG(marker_info.st_mode) or marker_info.st_nlink != 1:
+                raise ValueError
+            with _GUARD:
+                active_id = _ACTIVE.get(project)
+                if active_id is None: raise ValueError
+            marker = _read_marker(project)
+            if (marker["transaction_id"] != active_id or marker["phase"] != "abort"
+                    or "sources" not in marker or "target" not in marker or "published" not in marker
+                    or len(marker["published"]["pdfs"]) != len(marker["target"]["pdfs"])):
+                raise ValueError
+
+            def validate_complete_publication() -> None:
+                source_parent = project / marker["staging_name"] / "retry" / "pdfs"
+                for receipt in marker["published"]["pdfs"]:
+                    quarantine = _validate_quarantine(project, marker, receipt)
+                    if quarantine is None or any(quarantine.iterdir()): raise ValueError
+                    if _lexists(source_parent / receipt["temp_name"]): raise ValueError
+                    destination = project / "pdfs" / receipt["destination_name"]
+                    if not _lexists(destination): raise ValueError
+                    _validate_receipt_path(destination, receipt, 1)
+
+            for _ in range(2):
+                _assert_marker_generation(project, marker)
+                _validate_before_with_published_pdfs(project, marker)
+                _validate_committed_source_set(project, marker)
+                validate_complete_publication()
+                _assert_marker_generation(project, marker)
+            return marker
+        except Exception as exc:
+            raise ValueError("Retry transaction is not ready to apply") from exc

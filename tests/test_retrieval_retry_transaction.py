@@ -32,6 +32,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     run_retry_transaction_staging,
     _project_file_lock,
     _publication_pdf_fingerprint,
+    _validate_retry_apply_readiness,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2265,6 +2266,83 @@ class RetryPdfPublicationTests(unittest.TestCase):
             with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
         self.assertTrue(reconcile_retry_transaction(self.project))
 
+    def test_apply_readiness_is_read_only_for_complete_publication(self):
+        publish_retry_transaction_pdfs(self.project)
+        before = {str(path.relative_to(self.project)): (path.lstat().st_ino, path.lstat().st_mtime_ns,
+            path.read_bytes() if path.is_file() else None) for path in self.project.rglob("*")}
+        marker = _validate_retry_apply_readiness(self.project)
+        after = {str(path.relative_to(self.project)): (path.lstat().st_ino, path.lstat().st_mtime_ns,
+            path.read_bytes() if path.is_file() else None) for path in self.project.rglob("*")}
+        self.assertEqual(marker["phase"], "abort"); self.assertEqual(after, before)
+
+    def test_apply_readiness_rejects_incomplete_receipts_and_staging_residue(self):
+        publish_retry_transaction_pdfs(self.project); marker_path = self.project / PENDING_RETRY_FILE
+        valid = json.loads(marker_path.read_text())
+        forged = deepcopy(valid); published = json.loads(base64.b64decode(forged["published_json_b64"])); published["pdfs"] = []
+        forged["published_json_b64"] = base64.b64encode(
+            json.dumps(published, sort_keys=True, separators=(",", ":")).encode()).decode()
+        atomic_write_json(marker_path, forged)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        atomic_write_json(marker_path, valid)
+        receipt = json.loads(base64.b64decode(valid["published_json_b64"]))["pdfs"][0]
+        qdir = self.project / self.staging / "retry" / "pdfs" / receipt["quarantine_name"]
+        for name in ("temp", "unknown"):
+            residue = qdir / name; residue.write_bytes(b"%PDF-residue")
+            with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+            residue.unlink()
+        publication_temp = qdir.parent / receipt["temp_name"]
+        os.link(self.plan.pdfs[0].destination_path, publication_temp)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        publication_temp.unlink()
+        unknown = self.project / "pdfs/unknown.pdf"; unknown.write_bytes(b"%PDF-unknown")
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_destination_source_authority_and_marker_drift(self):
+        publish_retry_transaction_pdfs(self.project); destination = self.plan.pdfs[0].destination_path
+        original = destination.read_bytes(); destination.write_bytes(b"%PDF-x" + b"x" * (len(original) - 6))
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        destination.write_bytes(original); link = self.project / "destination-link"; os.link(destination, link)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+        link.unlink()
+        source = self.plan.pdfs[0].source_path; source.write_bytes(source.read_bytes() + b"drift")
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_missing_destination_and_authority_drift(self):
+        publish_retry_transaction_pdfs(self.project); self.plan.pdfs[0].destination_path.unlink()
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_swapped_destination(self):
+        publish_retry_transaction_pdfs(self.project); destination = self.plan.pdfs[0].destination_path
+        baseline = self.project / "pdfs/original.pdf"; temporary = self.project / "swap.tmp"
+        destination.replace(temporary); baseline.replace(destination); temporary.replace(baseline)
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_fixed_authority_drift(self):
+        publish_retry_transaction_pdfs(self.project)
+        report = self.project / "pdfs/download_report.json"; report.write_bytes(report.read_bytes() + b" ")
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_baseline_pdf_drift(self):
+        publish_retry_transaction_pdfs(self.project)
+        (self.project / "pdfs/original.pdf").write_bytes(b"%PDF-baseline-drift")
+        with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
+    def test_apply_readiness_rejects_same_bytes_new_inode_marker_during_validation(self):
+        publish_retry_transaction_pdfs(self.project); marker = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._validate_committed_source_set; swapped = False
+
+        def swap_marker(*args):
+            nonlocal swapped
+            result = original(*args)
+            if not swapped:
+                swapped = True; replacement = self.project / ".replacement"; replacement.write_bytes(marker.read_bytes())
+                os.replace(replacement, marker)
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_committed_source_set", side_effect=swap_marker):
+            with self.assertRaises(ValueError): _validate_retry_apply_readiness(self.project)
+
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
         publish_retry_transaction_pdfs(self.project)
@@ -2305,6 +2383,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertTrue(self.plan.pdfs[0].destination_path.exists()); self.assertFalse(self.plan.pdfs[1].destination_path.exists())
         publish_retry_transaction_pdfs(self.project)
         self.assertTrue(all(pdf.destination_path.exists() for pdf in self.plan.pdfs))
+        self.assertEqual(len(_validate_retry_apply_readiness(self.project)["published"]["pdfs"]), 2)
         self.plan.pdfs[0].destination_path.unlink()
         with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
             publish_retry_transaction_pdfs(self.project)
