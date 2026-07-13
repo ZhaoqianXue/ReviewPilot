@@ -1033,6 +1033,7 @@ def run_retry_staging(
     project = Path(project_path)
     staging = Path(staging_path)
     created = False
+    staging_identity: tuple[int, int] | None = None
     before = _authoritative_fingerprint(project)
     try:
         resolved_project = project.resolve(strict=True)
@@ -1048,6 +1049,8 @@ def run_retry_staging(
             raise ValueError("Invalid retry staging location")
         staging.mkdir()
         created = True
+        created_info = staging.lstat()
+        staging_identity = (created_info.st_dev, created_info.st_ino)
         staging_project = staging / _STAGING_PROJECT_ID
         filtered = staging_project / "filtered"
         pdfs = staging_project / "pdfs"
@@ -1066,11 +1069,11 @@ def run_retry_staging(
         return outcome
     except OSError as exc:
         if created:
-            _remove_staging(staging)
+            _remove_staging(staging, staging_identity)
         raise ValueError("Retry staging setup failed") from exc
     except Exception:
         if created:
-            _remove_staging(staging)
+            _remove_staging(staging, staging_identity)
         raise
 
 
@@ -1292,8 +1295,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _remove_staging(staging: Path) -> None:
+def _remove_staging(staging: Path, expected_identity: tuple[int, int] | None = None) -> None:
     try:
+        if expected_identity is not None and staging.exists():
+            current = staging.lstat()
+            if ((current.st_dev, current.st_ino) != expected_identity
+                    and stat_module.S_ISDIR(current.st_mode)):
+                return
         if staging.is_symlink():
             staging.unlink()
         elif staging.is_dir():

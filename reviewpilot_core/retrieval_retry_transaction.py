@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import secrets
 import shutil
 import stat
 from threading import Lock, RLock
@@ -29,8 +30,9 @@ from .workflow_state import load_workflow_state, save_workflow_state
 PENDING_RETRY_FILE = ".retrieval_retry_pending.json"
 _STAGING_PREFIX = ".retrieval_retry_staging_"
 _GUARD = Lock()
-_ACTIVE: set[Path] = set()
+_ACTIVE: dict[Path, str] = {}
 _LOCKS: dict[Path, RLock] = {}
+_RAW_MARKER_BYTES = "_raw_marker_bytes"
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class RetryTransactionHandle:
     marker_path: Path
     staging_name: str
     candidate_names: tuple[str, ...]
+    transaction_id: str
 
 
 def _lock(project: Path) -> RLock:
@@ -261,13 +264,14 @@ def begin_retry_transaction(
                 raise ValueError
         except Exception as exc:
             raise ValueError("Retry transaction preparation is stale") from exc
+        transaction_id = secrets.token_hex(32)
         with _GUARD:
             if project in _ACTIVE:
                 raise ValueError("Retry transaction is already active")
-            _ACTIVE.add(project)
+            _ACTIVE[project] = transaction_id
         try:
             data = {
-                "version": 1, "phase": "abort",
+                "version": 2, "phase": "abort", "transaction_id": transaction_id,
                 "expected_revision": current.report_revision,
                 "selected_ids": list(trusted.selected_ids),
                 "staging_name": staging_name,
@@ -277,9 +281,10 @@ def begin_retry_transaction(
             atomic_write_json(marker, data)
         except Exception as exc:
             with _GUARD:
-                _ACTIVE.discard(project)
+                if _ACTIVE.get(project) == transaction_id:
+                    _ACTIVE.pop(project)
             raise ValueError("Retry transaction marker could not be written") from exc
-        return RetryTransactionHandle(marker, staging_name, candidates)
+        return RetryTransactionHandle(marker, staging_name, candidates, transaction_id)
 
 
 def _read_marker(project: Path) -> dict[str, Any]:
@@ -287,13 +292,15 @@ def _read_marker(project: Path) -> dict[str, Any]:
     try:
         if not _direct_regular(marker, project):
             raise ValueError
-        data = json.loads(marker.read_text(encoding="utf-8"))
-        base = {"version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
+        raw_marker_bytes = marker.read_bytes()
+        data = json.loads(raw_marker_bytes.decode("utf-8"))
+        base = {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64"}
         phase = data.get("phase") if type(data) is dict else None
         optional = {key for key in ("sources_json_b64", "target_json_b64") if key in data}
         expected = base | optional
         if (type(data) is not dict or set(data) != expected or type(data["version"]) is not int
-                or data["version"] != 1 or type(phase) is not str or phase != "abort"):
+                or data["version"] != 2 or type(phase) is not str or phase != "abort"
+                or not _digest(data["transaction_id"])):
             raise ValueError
         revision, ids = data["expected_revision"], data["selected_ids"]
         if not _digest(revision) or not isinstance(ids, list) or not ids or any(not _digest(item) for item in ids) or len(set(ids)) != len(ids):
@@ -322,9 +329,31 @@ def _read_marker(project: Path) -> dict[str, Any]:
             data["sources"] = _decode_sources(data["sources_json_b64"], data)
         if "target_json_b64" in data:
             data["target"] = _decode_target(data["target_json_b64"], data, project)
+        data[_RAW_MARKER_BYTES] = raw_marker_bytes
         return data
     except (OSError, RuntimeError, TypeError, KeyError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc
+
+
+def _replace_marker_cas(project: Path, marker: dict[str, Any], replacement: dict[str, Any]) -> None:
+    """Replace only the marker generation read by the current transaction."""
+    with _lock(project):
+        transaction_id = marker.get("transaction_id")
+        if (not _digest(transaction_id) or replacement.get("transaction_id") != transaction_id
+                or _RAW_MARKER_BYTES not in marker or _RAW_MARKER_BYTES in replacement):
+            raise ValueError
+        with _GUARD:
+            if _ACTIVE.get(project) != transaction_id:
+                raise ValueError
+        marker_path = project / PENDING_RETRY_FILE
+        if not _direct_regular(marker_path, project):
+            raise ValueError
+        current = _read_marker(project)
+        if (current["transaction_id"] != transaction_id
+                or current[_RAW_MARKER_BYTES] != marker[_RAW_MARKER_BYTES]
+                or marker_path.read_bytes() != marker[_RAW_MARKER_BYTES]):
+            raise ValueError
+        atomic_write_json(marker_path, replacement)
 
 
 def _decode_sources(encoded: Any, marker: dict[str, Any]) -> dict[str, Any]:
@@ -380,9 +409,12 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
     with _lock(project):
         try:
             with _GUARD:
-                if project not in _ACTIVE:
+                active_id = _ACTIVE.get(project)
+                if active_id is None:
                     raise ValueError
             marker = _read_marker(project)
+            if marker["transaction_id"] != active_id:
+                raise ValueError
             if "sources" in marker or "target" in marker:
                 raise ValueError
             trusted = _trusted_preparation(preparation, project)
@@ -438,12 +470,12 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             sources = _decode_sources(encoded, marker)
             if _encode_before(sources) != encoded:
                 raise ValueError
-            raw_keys = ("version", "phase", "expected_revision", "selected_ids", "staging_name",
+            raw_keys = ("version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name",
                 "candidate_names", "before_json_b64")
             raw = {key: marker[key] for key in raw_keys}; raw["sources_json_b64"] = encoded
             _validate_current_before(project, marker)
             _validate_committed_source_set(project, {**marker, "sources": sources})
-            atomic_write_json(project / PENDING_RETRY_FILE, raw)
+            _replace_marker_cas(project, marker, raw)
             return outcome
         except Exception as exc:
             raise ValueError("Retry transaction staging failed") from exc
@@ -495,25 +527,33 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
         return _restore(project)
 
 
-def abort_retry_transaction(project_path: Path | str) -> bool:
+def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:
     project = _project_path(project_path)
-    try:
-        with _lock(project):
-            if not _lexists(project / PENDING_RETRY_FILE):
-                return False
+    released_id = expected_transaction_id
+    with _lock(project):
+        if not _lexists(project / PENDING_RETRY_FILE):
+            return False
+        marker = _read_marker(project)
+        transaction_id = marker["transaction_id"]
+        if expected_transaction_id is not None and transaction_id != expected_transaction_id:
+            return False
+        released_id = transaction_id
+        try:
             return _restore(project)
-    finally:
-        with _GUARD:
-            _ACTIVE.discard(project)
+        finally:
+            with _GUARD:
+                if _ACTIVE.get(project) == released_id:
+                    _ACTIVE.pop(project)
 
 
-def abandon_retry_transaction(project_path: Path | str) -> None:
+def abandon_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> None:
     try:
         project = Path(project_path).resolve()
     except (OSError, RuntimeError, TypeError):
         return
     with _GUARD:
-        _ACTIVE.discard(project)
+        if expected_transaction_id is None or _ACTIVE.get(project) == expected_transaction_id:
+            _ACTIVE.pop(project, None)
 
 
 def _contains_text(value: Any, needle: str) -> bool:
@@ -699,9 +739,12 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
     project = _project_path(project_path)
     with _lock(project):
         with _GUARD:
-            if project not in _ACTIVE:
+            active_id = _ACTIVE.get(project)
+            if active_id is None:
                 raise ValueError("Retry transaction is not active")
         marker = _read_marker(project)
+        if marker["transaction_id"] != active_id:
+            raise ValueError("Retry transaction is not active")
         if marker["phase"] != "abort" or "target" in marker:
             raise ValueError("Retry transaction target cannot be recorded")
         try:
@@ -710,12 +753,12 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             encoded = _encode_before(target)
             if _encode_before(_decode_target(encoded, marker, project)) != encoded:
                 raise ValueError
-            raw = {key: marker[key] for key in ("version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
+            raw = {key: marker[key] for key in ("version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
             if "sources_json_b64" in marker:
                 raw["sources_json_b64"] = marker["sources_json_b64"]
             raw["target_json_b64"] = encoded
             _validate_current_before(project, marker)
             _validate_committed_source_set(project, marker)
-            atomic_write_json(project / PENDING_RETRY_FILE, raw)
+            _replace_marker_cas(project, marker, raw)
         except Exception as exc:
             raise ValueError("Retry transaction target is invalid") from exc

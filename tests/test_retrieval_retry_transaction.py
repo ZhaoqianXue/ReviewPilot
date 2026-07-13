@@ -107,7 +107,9 @@ class RetryAbortTransactionTests(unittest.TestCase):
         original = self.preparation.snapshot.mutable_fact_copies()
         handle = begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
         marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
-        self.assertEqual((marker["version"], marker["phase"]), (1, "abort"))
+        self.assertEqual((marker["version"], marker["phase"]), (2, "abort"))
+        self.assertRegex(marker["transaction_id"], r"^[0-9a-f]{64}$")
+        self.assertEqual(handle.transaction_id, marker["transaction_id"])
         self.assertNotIn(str(self.project), json.dumps(marker))
         self.assertEqual(marker["candidate_names"], [f"retry-{self.preparation.snapshot.report_revision}-{self.preparation.selected_ids[0]}.pdf"])
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
@@ -249,13 +251,23 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads(report_path.read_text()), before[0])
 
-    def test_marker_version_requires_exact_integer_one(self):
-        for invalid in (True, 1.0, "1"):
+    def test_marker_version_requires_exact_integer_two_and_transaction_id_schema(self):
+        for invalid in (True, 2.0, "2", 1):
             with self.subTest(invalid=invalid):
                 begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
                 abandon_retry_transaction(self.project)
                 marker = self.project / PENDING_RETRY_FILE
                 data = json.loads(marker.read_text()); data["version"] = invalid
+                marker.write_text(json.dumps(data))
+                with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+                marker.unlink()
+
+        for invalid in (None, "", "0" * 63, "g" * 64, 1):
+            with self.subTest(transaction_id=invalid):
+                begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+                abandon_retry_transaction(self.project)
+                marker = self.project / PENDING_RETRY_FILE
+                data = json.loads(marker.read_text()); data["transaction_id"] = invalid
                 marker.write_text(json.dumps(data))
                 with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
                 marker.unlink()
@@ -536,6 +548,44 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertEqual(outcome.successful_pdfs, ())
         self.assertEqual(self.decoded_sources()[1], {"pdfs": []})
 
+    def test_outer_generation_cannot_overwrite_or_release_reentrant_aba_transaction(self):
+        first_marker = self.project / PENDING_RETRY_FILE
+        first = json.loads(first_marker.read_text())
+        first_id = first["transaction_id"]
+        download = self.download(1)
+        replacement = {}
+
+        def replace_with_same_business_transaction(root, project_id):
+            result = download(root, project_id)
+            saved = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            self.assertTrue(abort_retry_transaction(self.project, first_id))
+            handle = begin_retry_transaction(
+                self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+            for relative, payload in saved.items():
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(payload)
+            replacement["handle"] = handle
+            replacement["marker"] = handle.marker_path.read_bytes()
+            replacement["staging"] = saved
+            return result
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$"):
+            run_retry_transaction_staging(self.project, self.prepared, replace_with_same_business_transaction)
+
+        second = replacement["handle"]
+        self.assertNotEqual(second.transaction_id, first_id)
+        self.assertEqual(second.marker_path.read_bytes(), replacement["marker"])
+        self.assertEqual(
+            {path.relative_to(self.project / self.staging_name): path.read_bytes()
+                for path in (self.project / self.staging_name).rglob("*") if path.is_file()},
+            replacement["staging"],
+        )
+        self.assertFalse(abort_retry_transaction(self.project, first_id))
+        abandon_retry_transaction(self.project, first_id)
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project, second.transaction_id))
+
     def test_malformed_source_commit_fails_recovery_closed(self):
         run_retry_transaction_staging(self.project, self.prepared, self.download(1))
         abandon_retry_transaction(self.project)
@@ -699,7 +749,7 @@ class RetryTargetTransactionTests(unittest.TestCase):
         marker_path = self.project / PENDING_RETRY_FILE
         raw = marker_path.read_text(); marker = json.loads(raw)
         self.assertEqual(marker["phase"], "abort"); self.assertNotIn(str(self.project), raw)
-        self.assertEqual(set(marker), {"version", "phase", "expected_revision", "selected_ids", "staging_name",
+        self.assertEqual(set(marker), {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name",
             "candidate_names", "before_json_b64", "sources_json_b64", "target_json_b64"})
         target = json.loads(base64.b64decode(marker["target_json_b64"]))
         self.assertEqual(target["pdfs"][0]["source_name"], self.plan.pdfs[0].source_path.name)
