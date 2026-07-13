@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
 from reviewpilot_core.retrieval_retry import (
-    RetryItem, RetryPreparation, RetrySnapshot, current_retry_snapshot,
+    RetryItem, RetryMergedFacts, RetryPreparation, RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
     merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
     run_retry_staging,
 )
@@ -444,6 +444,28 @@ class RetryTargetTransactionTests(unittest.TestCase):
         atomic_write_jsonl(self.project / "filtered" / "included_papers.jsonl", included)
         save_workflow_state(self.project, self.ledger)
 
+    def forged_target(self, mutate_report):
+        def freeze(value):
+            if type(value) is dict:
+                return MappingProxyType({key: freeze(item) for key, item in value.items()})
+            if type(value) is list:
+                return tuple(freeze(item) for item in value)
+            return value
+
+        report, _ = self.plan.merged_facts.mutable_copies()
+        mutate_report(report)
+        success, failed = report["success"], report["failed"]
+        status = "partial" if success and failed else "completed" if success else "failed"
+        counts = {"succeeded": success, "failed": failed}
+        merged = RetryMergedFacts(
+            self.plan.merged_facts.report_revision, freeze(report), self.plan.merged_facts.included,
+            status, MappingProxyType(counts), self.plan.merged_facts.planned_pdfs,
+        )
+        plan = RetryPublicationPlan(self.plan.report_revision, merged, self.plan.pdfs)
+        ledger = deepcopy(self.ledger)
+        ledger["stages"]["retrieval"].update(status=status, counts=counts, stale=False, error=None)
+        return plan, ledger
+
     def test_recorded_target_is_path_safe_immutable_and_abort_still_restores(self):
         before = self.prepared.snapshot.mutable_fact_copies()
         record_retry_transaction_target(self.project, self.plan, self.ledger)
@@ -465,6 +487,30 @@ class RetryTargetTransactionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "target is invalid") as caught:
             record_retry_transaction_target(self.project, self.plan, bad)
         self.assertNotIn(str(self.project), str(caught.exception)); self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+
+    def test_record_rejects_every_target_that_recovery_cannot_decode_before_writing_marker(self):
+        cases = (
+            ("success-count", lambda report: report.update(success=999)),
+            ("failed-count", lambda report: report.update(failed=1)),
+            ("downloaded-type", lambda report: report.update(downloaded=report["downloaded"][-1])),
+            ("failed-papers-type", lambda report: report.update(failed_papers={})),
+        )
+        for index, (label, mutate) in enumerate(cases):
+            with self.subTest(label=label):
+                plan, ledger = self.forged_target(mutate)
+                self.assertIs(type(plan), RetryPublicationPlan)
+                self.assertIs(type(plan.merged_facts), RetryMergedFacts)
+                before = (self.project / PENDING_RETRY_FILE).read_bytes()
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+                    record_retry_transaction_target(self.project, plan, ledger)
+                self.assertNotIn(str(self.project), str(caught.exception))
+                self.assertEqual((self.project / PENDING_RETRY_FILE).read_bytes(), before)
+                self.assertTrue(abort_retry_transaction(self.project))
+                if index + 1 < len(cases):
+                    self.handle = begin_retry_transaction(
+                        self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                    self.plan = publication(self.project, self.prepared, self.staging_name)
+                    self.ledger = target_ledger(self.project, self.plan)
 
     def test_all_failure_target_records_an_empty_pdf_set_and_remains_abortable(self):
         self.assertTrue(abort_retry_transaction(self.project))

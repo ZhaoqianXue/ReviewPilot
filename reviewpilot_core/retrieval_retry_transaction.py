@@ -505,8 +505,11 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             raise ValueError("Retry transaction target cannot be recorded")
         try:
             target = _trusted_target(project, marker, publication_plan, target_ledger)
+            encoded = _encode_before(target)
+            if _encode_before(_decode_target(encoded, marker, project)) != encoded:
+                raise ValueError
             raw = {key: marker[key] for key in ("version", "phase", "expected_revision", "selected_ids", "staging_name", "candidate_names", "before_json_b64")}
-            raw["target_json_b64"] = _encode_before(target)
+            raw["target_json_b64"] = encoded
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
         except Exception as exc:
             raise ValueError("Retry transaction target is invalid") from exc
