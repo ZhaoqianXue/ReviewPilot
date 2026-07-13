@@ -38,6 +38,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _write_retry_authority_target,
     _roll_forward_retry_authorities,
     _validate_apply_pdf_commit,
+    _validate_apply_staging_subset,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2605,6 +2606,48 @@ class RetryPdfPublicationTests(unittest.TestCase):
         transaction._replace_marker_cas(self.project.resolve(), current, raw)
         apply_marker = transaction._read_marker(self.project.resolve())
         self.assertEqual(_validate_apply_pdf_commit(self.project, apply_marker).receipt_identities, ())
+
+    def test_apply_staging_subset_is_read_only_and_accepts_monotonic_partial_cleanup(self):
+        marker = self.decoded_apply_marker(); staging = self.project / self.staging
+        before = {str(path.relative_to(staging)): (path.lstat().st_ino, path.lstat().st_mtime_ns)
+            for path in staging.rglob("*")}
+        forged = dict(marker); forged["phase"] = "abort"; forged["sources"] = {"pdfs": []}
+        self.assertTrue(_validate_apply_staging_subset(self.project, forged).signature)
+        self.assertEqual({str(path.relative_to(staging)): (path.lstat().st_ino, path.lstat().st_mtime_ns)
+            for path in staging.rglob("*")}, before)
+        receipt = marker["published"]["pdfs"][0]; pdfs = staging / "retry/pdfs"; filtered = staging / "retry/filtered"
+        for path in (pdfs / receipt["quarantine_name"], self.plan.pdfs[0].source_path,
+                pdfs / "download_report.json", filtered / "included_papers.jsonl", filtered, pdfs,
+                staging / "retry"):
+            path.rmdir() if path.is_dir() else path.unlink()
+            _validate_apply_staging_subset(self.project, marker)
+
+    def test_apply_staging_subset_rejects_unknown_children_at_every_level(self):
+        marker = self.decoded_apply_marker(); staging = self.project / self.staging
+        parents = (staging, staging / "retry", staging / "retry/pdfs", staging / "retry/filtered")
+        for index, parent in enumerate(parents):
+            foreign = parent / f"foreign-{index}"; foreign.write_bytes(b"foreign")
+            with self.assertRaises(ValueError): _validate_apply_staging_subset(self.project, marker)
+            foreign.unlink()
+
+    def test_apply_staging_subset_rejects_symlink_hardlink_source_drift_and_bad_qdir(self):
+        marker = self.decoded_apply_marker(); staging = self.project / self.staging; pdfs = staging / "retry/pdfs"
+        source = self.plan.pdfs[0].source_path; link = pdfs / "source-link"; os.link(source, link)
+        with self.assertRaises(ValueError): _validate_apply_staging_subset(self.project, marker)
+        link.unlink(); source.write_bytes(source.read_bytes() + b"drift")
+        with self.assertRaises(ValueError): _validate_apply_staging_subset(self.project, marker)
+
+    def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
+        marker = self.decoded_apply_marker(); included = self.project / self.staging / "retry/filtered/included_papers.jsonl"
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._validate_apply_staging_subset; calls = 0
+        def remove_after_first(*args):
+            nonlocal calls
+            result = original(*args); calls += 1
+            if calls == 1: included.unlink()
+            return result
+        with patch("reviewpilot_core.retrieval_retry_transaction._validate_apply_staging_subset", side_effect=remove_after_first):
+            with self.assertRaises(ValueError): _validate_apply_pdf_commit(self.project, marker)
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path

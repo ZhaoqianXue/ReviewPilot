@@ -65,6 +65,12 @@ class RetryAuthorityClassification:
 class RetryPdfCommitSnapshot:
     baseline_identities: tuple[tuple[int, int, int, int, int, int], ...]
     receipt_identities: tuple[tuple[int, int, int, int, int, int], ...]
+    staging_signature: tuple[tuple[str, tuple[int, int, int, int, int, int]], ...]
+
+
+@dataclass(frozen=True)
+class RetryStagingSubsetSnapshot:
+    signature: tuple[tuple[str, tuple[int, int, int, int, int, int]], ...]
 
 
 def _lock(project: Path) -> RLock:
@@ -1653,6 +1659,69 @@ def _roll_forward_retry_authorities(project_path: Path | str,
             raise ValueError("Retry transaction authorities could not be rolled forward") from exc
 
 
+def _validate_apply_staging_subset(project_path: Path | str,
+                                   marker: dict[str, Any]) -> RetryStagingSubsetSnapshot:
+    """Read-only proof that remaining apply staging is a safe cleanup subset."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply": raise ValueError
+            entries = []
+            def directory(path: Path, parent: Path, relative: str) -> None:
+                before = path.lstat()
+                if (not stat.S_ISDIR(before.st_mode) or path.is_symlink()
+                        or path.resolve(strict=True).parent != parent
+                        or _file_identity(path.lstat()) != _file_identity(before)): raise ValueError
+                entries.append((relative, _file_identity(before)))
+            def regular(path: Path, parent: Path, relative: str) -> None:
+                before = path.lstat()
+                if not _direct_regular(path, parent) or _file_identity(path.lstat()) != _file_identity(before):
+                    raise ValueError
+                entries.append((relative, _file_identity(before)))
+
+            staging = project / current["staging_name"]
+            if not _lexists(staging):
+                _assert_marker_generation(project, current)
+                return RetryStagingSubsetSnapshot(())
+            directory(staging, project, "."); retry = staging / "retry"
+            if {path.name for path in staging.iterdir()} - {"retry"}: raise ValueError
+            if _lexists(retry):
+                directory(retry, staging, "retry")
+                if {path.name for path in retry.iterdir()} - {"pdfs", "filtered"}: raise ValueError
+                filtered = retry / "filtered"
+                if _lexists(filtered):
+                    directory(filtered, retry, "retry/filtered")
+                    if {path.name for path in filtered.iterdir()} - {"included_papers.jsonl"}: raise ValueError
+                    included = filtered / "included_papers.jsonl"
+                    if _lexists(included): regular(included, filtered, "retry/filtered/included_papers.jsonl")
+                pdfs = retry / "pdfs"
+                if _lexists(pdfs):
+                    directory(pdfs, retry, "retry/pdfs")
+                    sources = {item["source_name"]: item for item in current["sources"]["pdfs"]}
+                    receipts = {item["quarantine_name"]: item for item in current["published"]["pdfs"]}
+                    allowed = set(sources) | set(receipts) | {"download_report.json"}
+                    if {path.name for path in pdfs.iterdir()} - allowed: raise ValueError
+                    report = pdfs / "download_report.json"
+                    if _lexists(report): regular(report, pdfs, "retry/pdfs/download_report.json")
+                    for name, source in sources.items():
+                        path = pdfs / name
+                        if not _lexists(path): continue
+                        regular(path, pdfs, f"retry/pdfs/{name}")
+                        size, digest, _ = _publication_pdf_fingerprint(path, pdfs)
+                        if (size, digest) != (source["size"], source["sha256"]): raise ValueError
+                    for name, receipt in receipts.items():
+                        path = pdfs / name
+                        if not _lexists(path): continue
+                        quarantine = _validate_quarantine(project, current, receipt)
+                        if quarantine is None or any(quarantine.iterdir()): raise ValueError
+                        entries.append((f"retry/pdfs/{name}", _file_identity(quarantine.lstat())))
+            _assert_marker_generation(project, current)
+            return RetryStagingSubsetSnapshot(tuple(sorted(entries)))
+        except Exception as exc:
+            raise ValueError("Retry transaction staging subset is invalid") from exc
+
+
 def _validate_apply_pdf_commit(project_path: Path | str,
                                marker: dict[str, Any]) -> RetryPdfCommitSnapshot:
     """Read-only proof that an apply marker's exact committed PDF set is stable."""
@@ -1692,17 +1761,9 @@ def _validate_apply_pdf_commit(project_path: Path | str,
                     _validate_receipt_path(destination, receipt, 1)
                     receipt_identities.append(_file_identity(destination.lstat()))
 
-                staging = project / current["staging_name"]
-                if _lexists(staging):
-                    direct_directory(staging, project); retry = staging / "retry"; direct_directory(retry, staging)
-                    source_parent = retry / "pdfs"; direct_directory(source_parent, retry)
-                    for receipt in receipts:
-                        if _lexists(source_parent / receipt["temp_name"]): raise ValueError
-                        quarantine = source_parent / receipt["quarantine_name"]
-                        if _lexists(quarantine):
-                            validated = _validate_quarantine(project, current, receipt)
-                            if validated is None or any(validated.iterdir()): raise ValueError
-                return RetryPdfCommitSnapshot(tuple(baseline_identities), tuple(receipt_identities))
+                staging_snapshot = _validate_apply_staging_subset(project, current)
+                return RetryPdfCommitSnapshot(tuple(baseline_identities), tuple(receipt_identities),
+                    staging_snapshot.signature)
 
             snapshots = []
             for _ in range(2):
