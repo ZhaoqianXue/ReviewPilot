@@ -1,4 +1,4 @@
-"""Durable abort-only recovery for failed-retrieval retry publication."""
+"""Durable recovery and target recording for failed-retrieval retry publication."""
 
 from __future__ import annotations
 
