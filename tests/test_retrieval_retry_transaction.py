@@ -24,6 +24,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     reconcile_retry_transaction,
     record_retry_transaction_target,
     run_retry_transaction_staging,
+    _publication_pdf_fingerprint,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -577,6 +578,32 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertFalse(reconcile_retry_transaction(self.project))
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_source_commit_rejects_earlier_source_changed_while_later_source_is_fingerprinted(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+        before = marker_path.read_bytes()
+        real_fingerprint = _publication_pdf_fingerprint
+        seen = []
+
+        def mutate_after_second(path, parent):
+            result = real_fingerprint(path, parent)
+            seen.append(path)
+            if len(seen) == 4:
+                seen[0].write_bytes(b"%PDF-1.7\nchanged-after-first-fingerprint")
+            return result
+
+        with patch(
+                "reviewpilot_core.retrieval_retry_transaction._publication_pdf_fingerprint",
+                side_effect=mutate_after_second):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$") as caught:
+                run_retry_transaction_staging(self.project, self.prepared, self.download(2))
+
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertGreaterEqual(len(seen), 5)
+        self.assertEqual(marker_path.read_bytes(), before)
+        self.assertNotIn("sources_json_b64", json.loads(marker_path.read_text()))
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
 
 class RetryTargetTransactionTests(unittest.TestCase):
     def setUp(self):
@@ -719,6 +746,77 @@ class RetryTargetTransactionTests(unittest.TestCase):
                         self.project, self.prepared, self.staging_name, self.project / self.staging_name)
                     self.plan = publication(self.project, self.prepared, self.staging_name)
                     self.ledger = target_ledger(self.project, self.plan)
+
+    def test_record_rejects_authority_changed_during_final_ledger_load(self):
+        marker = self.project / PENDING_RETRY_FILE
+        before = marker.read_bytes()
+        report_path = self.project / "pdfs" / "download_report.json"
+        real_load = load_workflow_state
+        calls = 0
+
+        def mutate_during_final_load(project):
+            nonlocal calls
+            ledger = real_load(project)
+            calls += 1
+            if calls == 2:
+                report = json.loads(report_path.read_text())
+                report["failed_papers"][0]["title"] = "changed-during-final-ledger-load"
+                atomic_write_json(report_path, report)
+            return ledger
+
+        with patch(
+                "reviewpilot_core.retrieval_retry_transaction.load_workflow_state",
+                side_effect=mutate_during_final_load):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+                record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+        self.assertEqual(calls, 2)
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_target_record_rejects_earlier_source_changed_while_later_source_is_fingerprinted(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        project = Path(self.temp.name).resolve() / "two-source-target"
+        project.mkdir(); retryable_project(project)
+        included_path = project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows.append({"id": "failed-two", "title": "Failed Two"})
+        atomic_write_jsonl(included_path, rows)
+        report_path = project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text()); report["failed"] = 2
+        report["failed_papers"].append(
+            {"id": "failed-two", "title": "Failed Two", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        ledger["stages"]["retrieval"]["last_valid"]["counts"]["failed"] = 2
+        save_workflow_state(project, ledger)
+        prepared = preparation(project); staging = ".retrieval_retry_staging_two_source_target"
+        begin_retry_transaction(project, prepared, staging, project / staging)
+        plan = publication(project, prepared, staging); target = target_ledger(project, plan)
+        marker = project / PENDING_RETRY_FILE; before = marker.read_bytes()
+        real_fingerprint = _publication_pdf_fingerprint
+        seen = []
+
+        def mutate_after_second(path, parent):
+            result = real_fingerprint(path, parent)
+            seen.append(path)
+            if len(seen) == 4:
+                seen[0].write_bytes(b"%PDF-1.7\nchanged-after-first-fingerprint")
+            return result
+
+        with patch(
+                "reviewpilot_core.retrieval_retry_transaction._publication_pdf_fingerprint",
+                side_effect=mutate_after_second):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+                record_retry_transaction_target(project, plan, target)
+
+        self.assertNotIn(str(project), str(caught.exception))
+        self.assertGreaterEqual(len(seen), 5)
+        self.assertEqual(marker.read_bytes(), before)
+        self.assertFalse(reconcile_retry_transaction(project))
+        self.assertTrue(abort_retry_transaction(project))
 
     def test_record_rejects_retry_when_screening_is_not_terminal(self):
         self.assert_screening_prerequisite_rejected(status="ready")

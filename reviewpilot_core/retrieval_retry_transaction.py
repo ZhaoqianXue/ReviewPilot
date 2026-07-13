@@ -19,7 +19,7 @@ from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import (
     RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
     RetryPublicationPlan, RetrySnapshot, StagedRetryOutcome, StagedRetryPdf, current_retry_snapshot,
-    _publication_pdf_fingerprint, _validate_merged_retry_delta,
+    _authoritative_fingerprint, _publication_pdf_fingerprint, _validate_merged_retry_delta,
     retrieval_report_revision, run_retry_staging, stable_retry_id,
 )
 from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
@@ -194,12 +194,15 @@ def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnap
     )
     if any(not _direct_regular(path, parent) for path, parent in authorities):
         raise ValueError
+    before_fingerprint = _authoritative_fingerprint(project)
     current = current_retry_snapshot(project)
     report, included, retrieval = current.mutable_fact_copies()
     ledger = load_workflow_state(project)
+    after_fingerprint = _authoritative_fingerprint(project)
     selected_ids = set(marker["selected_ids"])
     canonical_selected = tuple(item.retry_id for item in current.items if item.retry_id in selected_ids)
-    if (current.report_revision != marker["expected_revision"]
+    if (after_fingerprint != before_fingerprint
+            or current.report_revision != marker["expected_revision"]
             or canonical_selected != tuple(marker["selected_ids"])
             or _encode_before({"report": report, "included": included, "ledger": ledger})
                 != _encode_before(marker["before"])
@@ -344,6 +347,32 @@ def _decode_sources(encoded: Any, marker: dict[str, Any]) -> dict[str, Any]:
     return sources
 
 
+def _validate_committed_source_set(project: Path, marker_or_sources: dict[str, Any]) -> None:
+    """Bind the complete committed source set to two stable aggregate reads."""
+    if type(marker_or_sources) is not dict or "sources" not in marker_or_sources:
+        raise ValueError
+    sources = marker_or_sources["sources"]
+    if _decode_sources(_encode_before(sources), marker_or_sources) != sources:
+        raise ValueError
+    source_parent = project / marker_or_sources["staging_name"] / "retry" / "pdfs"
+    first_round: tuple[tuple[str, int, str, tuple[int, int]], ...] | None = None
+    for _ in range(2):
+        identities: set[tuple[int, int]] = set()
+        current_round: list[tuple[str, int, str, tuple[int, int]]] = []
+        for committed in sources["pdfs"]:
+            size, digest, identity = _publication_pdf_fingerprint(
+                source_parent / committed["source_name"], source_parent)
+            if (size != committed["size"] or digest != committed["sha256"] or identity in identities):
+                raise ValueError
+            identities.add(identity)
+            current_round.append((committed["source_name"], size, digest, identity))
+        aggregate = tuple(current_round)
+        if first_round is None:
+            first_round = aggregate
+        elif aggregate != first_round:
+            raise ValueError
+
+
 def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPreparation,
                                   run_download) -> StagedRetryOutcome:
     """Stage one retry and commit portable source bindings before exposing it."""
@@ -406,12 +435,14 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
                     or ids != [retry_id for retry_id in marker["selected_ids"] if retry_id in set(ids)]):
                 raise ValueError
             encoded = _encode_before({"pdfs": pdfs})
-            if _encode_before(_decode_sources(encoded, marker)) != encoded:
+            sources = _decode_sources(encoded, marker)
+            if _encode_before(sources) != encoded:
                 raise ValueError
             raw_keys = ("version", "phase", "expected_revision", "selected_ids", "staging_name",
                 "candidate_names", "before_json_b64")
             raw = {key: marker[key] for key in raw_keys}; raw["sources_json_b64"] = encoded
             _validate_current_before(project, marker)
+            _validate_committed_source_set(project, {**marker, "sources": sources})
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
             return outcome
         except Exception as exc:
@@ -684,6 +715,7 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
                 raw["sources_json_b64"] = marker["sources_json_b64"]
             raw["target_json_b64"] = encoded
             _validate_current_before(project, marker)
+            _validate_committed_source_set(project, marker)
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
         except Exception as exc:
             raise ValueError("Retry transaction target is invalid") from exc
