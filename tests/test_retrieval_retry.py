@@ -222,6 +222,7 @@ class RetrievalRetryTests(unittest.TestCase):
             "row reorder": lambda staging, rows, report: write_jsonl(staging / "filtered" / "included_papers.jsonl", list(reversed(rows))),
             "source mutation": lambda staging, rows, report: (rows[0].update(title="changed"), write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)),
             "unknown pdf mutation": lambda staging, rows, report: (rows[0].update(pdf_unexpected="forged"), write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)),
+            "unknown web fallback mutation": lambda staging, rows, report: (rows[0].update(web_search_fallback_internal_path="/private"), write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
@@ -322,6 +323,27 @@ class RetrievalRetryTests(unittest.TestCase):
                     run_retry_staging(project, confirmed_preparation(project), staging, Mock())
             self.assertNotIn(str(project), str(raised.exception))
             self.assertFalse(staging.exists())
+
+    def test_authoritative_fingerprint_io_errors_are_path_free_before_and_after_callback(self):
+        for phase in ("before", "after"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project)
+                authoritative_pdf = project / "pdfs" / "existing.pdf"; authoritative_pdf.write_bytes(b"%PDF-existing")
+                staging = project / ".retrieval_retry_staging_case"; callback = Mock(side_effect=fake_download([True, False]))
+                original = Path.read_bytes; reads = 0
+                def guarded(path):
+                    nonlocal reads
+                    if path == authoritative_pdf:
+                        reads += 1
+                        if phase == "before" or reads > 1:
+                            raise OSError(str(authoritative_pdf))
+                    return original(path)
+                with patch.object(Path, "read_bytes", guarded):
+                    with self.assertRaisesRegex(ValueError, "^Authoritative retry facts are unavailable$") as raised:
+                        run_retry_staging(project, confirmed_preparation(project), staging, callback)
+                self.assertNotIn(str(project), str(raised.exception))
+                self.assertEqual(callback.call_count, 0 if phase == "before" else 1)
+                self.assertFalse(staging.exists())
 
     def test_staging_pdf_header_validation_does_not_load_entire_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:

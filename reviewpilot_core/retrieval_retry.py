@@ -196,6 +196,8 @@ _DERIVED_RETRY_FIELDS = {
     "pdf_failure_classes",
     "pdf_error",
     "retrieval_status",
+    "web_search_fallback_pending",
+    "web_search_fallback_eligible",
 }
 
 
@@ -252,7 +254,7 @@ def run_retry_staging(
 
 def _fresh_retry_row(row: dict[str, Any]) -> dict[str, Any]:
     for key in tuple(row):
-        if key in _DERIVED_RETRY_FIELDS or key.startswith("web_search_fallback_"):
+        if key in _DERIVED_RETRY_FIELDS:
             row.pop(key)
     return row
 
@@ -396,16 +398,19 @@ def _staged_pdf_path(value: Any, staging_project: Path, resolved_pdfs: Path) -> 
 
 
 def _authoritative_fingerprint(project: Path) -> tuple[bytes, bytes, bytes, tuple[tuple[str, str], ...]]:
-    _validate_authoritative_paths(project)
-    fixed = (project / "pdfs" / "download_report.json", project / "filtered" / "included_papers.jsonl", project / "workflow_state.json")
-    pdfs = []
-    for path in (project / "pdfs").iterdir():
-        if path.name == "download_report.json":
-            continue
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("Authoritative retry facts are unavailable")
-        pdfs.append((path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
-    return fixed[0].read_bytes(), fixed[1].read_bytes(), fixed[2].read_bytes(), tuple(sorted(pdfs))
+    try:
+        _validate_authoritative_paths(project)
+        fixed = (project / "pdfs" / "download_report.json", project / "filtered" / "included_papers.jsonl", project / "workflow_state.json")
+        pdfs = []
+        for path in (project / "pdfs").iterdir():
+            if path.name == "download_report.json":
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError
+            pdfs.append((path.name, hashlib.sha256(path.read_bytes()).hexdigest()))
+        return fixed[0].read_bytes(), fixed[1].read_bytes(), fixed[2].read_bytes(), tuple(sorted(pdfs))
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("Authoritative retry facts are unavailable") from exc
 
 
 def _remove_staging(staging: Path) -> None:
