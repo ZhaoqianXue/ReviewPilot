@@ -27,6 +27,20 @@ from .model_policy import (
 )
 
 
+def _contract_count(*sources_and_keys, default: int = 0) -> int:
+    *sources, keys = sources_and_keys
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            if key in source:
+                value = source[key]
+                if type(value) is not int or value < 0:
+                    raise ValueError(f"Invalid contract count: {key}")
+                return value
+    return default
+
+
 class SubAgentContract(Protocol):
     action: str
     agent_name: str
@@ -151,15 +165,15 @@ class CollectionAgentContract:
             "total_papers": 0,
         }
         atomic_write_json(collected_dir / "summary.json", summary, indent=None)
-        return {"status": "collection_done", "total": 0, "platform_stats": {}, "collected_folder": str(collected_dir)}
+        return {"status": "collection_done", "total": 0, "platform_stats": {}, "platform_errors": {}, "collected_folder": str(collected_dir)}
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
         collected_dir = Path(result.get("collected_folder") or project_path / "collected")
         summary_path = collected_dir / "summary.json"
         summary = read_json(summary_path, {}) or {}
-        platform_stats = result.get("platform_stats") or summary.get("platform_stats") or summary.get("results") or {}
-        platform_errors = result.get("platform_errors") or summary.get("platform_errors") or {}
-        total = int(result.get("total") or result.get("total_papers") or summary.get("total_papers") or 0)
+        platform_stats = result["platform_stats"] if "platform_stats" in result else summary.get("platform_stats", summary.get("results", {}))
+        platform_errors = result["platform_errors"] if "platform_errors" in result else summary.get("platform_errors", {})
+        total = _contract_count(result, summary, ("total", "total_papers"))
         if summary_path.exists() and isinstance(summary, dict) and "platform_stats" not in summary:
             summary["platform_stats"] = platform_stats
             atomic_write_json(summary_path, summary, indent=None)
@@ -317,8 +331,8 @@ class DownloadAgentContract:
         return {
             **result,
             "status": "download_done",
-            "success": int(report.get("success") or result.get("success") or result.get("pdf_count") or 0),
-            "failed": int(report.get("failed") or result.get("failed") or 0),
+            "success": _contract_count(report, result, ("success", "successful", "pdf_count")),
+            "failed": _contract_count(report, result, ("failed",)),
             "download_folder": str(project_path / "pdfs"),
         }
 
@@ -346,11 +360,20 @@ class ExtractionAgentContract:
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
         output_file = project_path / "extraction" / "extraction_results.jsonl"
+        rows = read_jsonl(output_file)
+        processed = _contract_count(result, ("processed",), default=-1)
+        if processed == -1:
+            processed = sum(
+                1 for row in rows if str(row.get("extraction_status") or "").lower() == "success"
+            )
+        errors = _contract_count(result, ("errors", "failed"), default=-1)
+        if errors == -1:
+            errors = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"})
         return {
             **result,
             "status": "extraction_done",
-            "processed": int(result.get("processed") or count_jsonl(output_file)),
-            "errors": int(result.get("errors") or 0),
+            "processed": processed,
+            "errors": errors,
             "output_file": str(output_file),
         }
 

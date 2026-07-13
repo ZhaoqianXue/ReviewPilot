@@ -890,7 +890,7 @@ class LeadAgentTests(unittest.TestCase):
                             json.dumps({"title": "Paper A", "key_findings": "Finding"}) + "\n",
                             encoding="utf-8",
                         )
-                        return {"status": "extraction_done", "processed": 1}
+                        return {"status": "extraction_done", "processed": 1, "errors": 0}
                     raise AssertionError(action)
 
             def fake_llm_query(*args, **kwargs):

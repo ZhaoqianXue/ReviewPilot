@@ -12,3 +12,8 @@ _ABSOLUTE_PATH_MARKER = re.compile(
 def contains_absolute_path(value: str) -> bool:
     text = str(value)
     return Path(text.strip()).is_absolute() or PureWindowsPath(text.strip()).is_absolute() or _ABSOLUTE_PATH_MARKER.search(text) is not None
+
+
+def safe_display_text(value: str, *, fallback: str = "Sensitive path details hidden.") -> str:
+    text = str(value).strip()
+    return fallback if contains_absolute_path(text) else text

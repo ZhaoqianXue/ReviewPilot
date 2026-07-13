@@ -134,7 +134,7 @@ class SetupRevisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, _ = self._project(root)
             for action in ("screen", "download-pdfs", "run-extraction"):
-                start_action(project, action); complete_action(project, action, {"processed": 1})
+                start_action(project, action); complete_action(project, action, {"processed": 1, "errors": 0} if action == "run-extraction" else {})
             (project / "extraction").mkdir(exist_ok=True)
             (project / "extraction" / "extraction_results.jsonl").write_text('{"title":"old","legacy":"secret"}\n')
             mark_stages_stale(project, ["extraction"])
@@ -152,7 +152,7 @@ class SetupRevisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, _ = self._project(root)
             for action in ("screen", "download-pdfs", "run-extraction", "categorize"):
-                start_action(project, action); complete_action(project, action, {"processed": 1})
+                start_action(project, action); complete_action(project, action, {"processed": 1, "errors": 0} if action == "run-extraction" else {})
             cat = project / "categorization"; cat.mkdir(exist_ok=True)
             (cat / "categorization_mapping.json").write_text(json.dumps({"categories": ["Old"], "mapping": {"P": "Old"}}))
             mark_stages_stale(project, ["categorization"])

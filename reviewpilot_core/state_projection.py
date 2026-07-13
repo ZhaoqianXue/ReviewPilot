@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from html import unescape
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -14,7 +15,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
-from .safe_text import contains_absolute_path
+from .safe_text import contains_absolute_path, safe_display_text
 from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
 
@@ -230,13 +231,16 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     included = _unescape_strings(read_jsonl(path / "filtered" / "included_papers.jsonl"))
     download_report = _unescape_strings(read_json(path / "pdfs" / "download_report.json", {}) or {})
     schema = _unescape_strings(load_schema_draft(path))
-    extraction_rows = _unescape_strings(read_jsonl(path / "extraction" / "extraction_results.jsonl", limit=200))
+    extraction_rows, extraction_failed_items = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
+    extraction_rows = _unescape_strings(extraction_rows)
+    extraction_failed_items = _unescape_strings(extraction_failed_items)
     extraction_results = extraction_rows[:1]
     categorization = _unescape_strings(read_json(path / "categorization" / "categorization_mapping.json", {}) or {})
     categorization_suggestions = _unescape_strings(read_json(path / "categorization" / "suggested_categories.json", {}) or {})
     categorized_rows = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl", limit=200))
 
     workflow_state = reconcile_orphaned_running(path, active_action=active_action)
+    workflow_notices = _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_failed_items)
     setup_update_pending = (path / ".setup_update_pending.json").exists()
     if setup_update_pending:
         for stage in workflow_state["stages"].values():
@@ -275,7 +279,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "setup": _setup(config),
         "setupRevision": setup_revision(config),
         "stageState": workflow_state["stages"],
-        "workflowNotices": _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_rows),
+        "workflowNotices": workflow_notices,
         "steps": _steps(path, workflow_state, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
         "optionalCapabilities": [],
         "fields": fields,
@@ -295,8 +299,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "exportPackage": _export_package(path),
         "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
         "previewPaper": _preview_paper(extraction_results[0] if extraction_results else {}, included),
-        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
-        "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state),
+        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, workflow_notices=workflow_notices, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
+        "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state, workflow_notices),
         "quietLabels": _quiet_labels(path, workflow_state),
         "quietActions": _quiet_actions(path, workflow_state),
         "ctxLabels": _ctx_labels(current_step),
@@ -311,6 +315,30 @@ def _format_mtime(path: Path) -> str:
         return datetime.now().strftime("%b %d, %Y")
 
 
+def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str]]:
+    """Read extraction output once, bounding retained display and recovery data."""
+    rows: list[dict] = []
+    failed_items: list[str] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if len(rows) < 200:
+                    rows.append(row)
+                if len(failed_items) < 10 and str(row.get("extraction_status") or "").lower() in {"error", "failed"}:
+                    failed_items.append(_safe_failed_item(row))
+                if len(rows) >= 200 and len(failed_items) >= 10:
+                    break
+    except OSError:
+        pass
+    return rows, failed_items
+
+
 def _unescape_strings(value: Any) -> Any:
     if isinstance(value, str):
         return unescape(value)
@@ -323,12 +351,12 @@ def _unescape_strings(value: Any) -> Any:
 
 def _current_step(workflow_state: dict) -> int:
     stages = workflow_state["stages"]
-    stale = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["stale"]]
-    if stale:
-        return stale[0]
     exceptional = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"running", "failed"}]
     if exceptional:
         return exceptional[-1]
+    stale = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["stale"]]
+    if stale:
+        return stale[0]
     completed = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"completed", "partial"}]
     return min((max(completed) + 1) if completed else 1, len(STAGE_NAMES))
 
@@ -361,14 +389,14 @@ def _steps(
     for index, (key, label, fallback_sub) in enumerate(STEP_DEFS, start=1):
         stage_name = STAGE_NAMES[index - 1]
         stage_state = workflow_state["stages"][stage_name]
-        if stage_state["stale"]:
+        if stage_state["status"] == "failed":
+            status = "failed"
+        elif stage_state["stale"]:
             status = "stale"
         elif stage_state["status"] == "completed":
             status = "done"
         elif stage_state["status"] == "partial":
             status = "partial"
-        elif stage_state["status"] == "failed":
-            status = "failed"
         elif index == current_step:
             status = "active"
         else:
@@ -406,6 +434,8 @@ def _platform_stats(path: Path, config: dict, collected_summary: dict, *, allow_
 
 
 def _platform_label(key: str) -> str:
+    if contains_absolute_path(str(key)):
+        return "Unknown source"
     labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "Openalex"}
     return labels.get(key, str(key).replace("_", " ").title())
 
@@ -415,12 +445,12 @@ def _platform_issues(platform_errors: dict) -> list[dict[str, str]]:
         return []
     issues = []
     for platform, message in platform_errors.items():
-        text = str(message).strip()
+        text = safe_display_text(str(message), fallback="Source error details hidden.")
         if not text:
             continue
         issues.append(
             {
-                "platform": str(platform),
+                "platform": safe_display_text(str(platform), fallback="unknown"),
                 "label": _platform_label(str(platform)),
                 "message": text,
                 "severity": "warning",
@@ -1084,6 +1114,7 @@ def _messages(
     extraction_results: list[dict],
     categorization: dict,
     *,
+    workflow_notices: dict[str, dict[str, Any]] | None = None,
     extraction_stale: bool = False,
     extraction_status: str = "not_started",
 ) -> list[dict]:
@@ -1100,16 +1131,38 @@ def _messages(
                 "text": str(config.get("lead_agent_reply")),
             }
         )
+    messages.extend(_workflow_outcome_messages(workflow_notices or {}))
+    has_extraction_outcome = "extraction" in (workflow_notices or {})
     if categorization:
         messages.append({"step": 5, "role": "a", "text": "The final Categorization & Analysis report is ready."})
-    elif extraction_status == "failed":
+    elif extraction_status == "failed" and not has_extraction_outcome:
         messages.append({"step": 4, "role": "a", "text": "Information Extraction failed with no successful outputs. Recover the failed items before continuing."})
-    elif extraction_status == "partial":
+    elif extraction_status == "partial" and not has_extraction_outcome:
         messages.append({"step": 4, "role": "a", "text": "Information Extraction partially completed. Successful outputs are available for Categorization & Analysis; failed items remain recoverable."})
+    elif has_extraction_outcome:
+        pass
     elif extraction_results or (not extraction_stale and (path / "extraction" / "extraction_results.jsonl").exists()):
         messages.append({"step": 5, "role": "a", "text": "Extraction is complete. Choose a field to categorize for final analysis."})
     messages.extend(_stored_chat_messages(path))
     return _dedupe_messages(messages)
+
+
+def _workflow_outcome_messages(notices: dict[str, dict[str, Any]]) -> list[dict]:
+    labels = {"collection": "Collection", "retrieval": "Full-Text Retrieval", "extraction": "Information Extraction"}
+    steps = {"collection": 1, "retrieval": 3, "extraction": 4}
+    messages = []
+    for stage_name in ("collection", "retrieval", "extraction"):
+        notice = notices.get(stage_name)
+        if not notice:
+            continue
+        outcome = "partially completed" if notice["status"] == "partial" else "failed"
+        text = f"{labels[stage_name]} {outcome}: {notice['succeeded']} completed, {notice['failed']} failed."
+        if notice.get("nextAction"):
+            text += f" Next action: {notice['nextAction']}. Failed items remain retryable in the recovery step."
+        else:
+            text += " This stage is blocked until its failed items are recovered."
+        messages.append({"step": steps[stage_name], "role": "a", "text": text})
+    return messages
 
 
 def _initial_user_topic(path: Path, config: dict) -> str:
@@ -1153,7 +1206,8 @@ def _stored_chat_messages(path: Path) -> list[dict]:
             continue
         if role == "a" and row.get("source") == "canvas_action":
             continue
-        message = {"step": int(row.get("step") or 1), "role": role, "text": str(text)}
+        visible_text = safe_display_text(str(text), fallback="Message details hidden because they contained a local path.") if role == "a" else str(text)
+        message = {"step": int(row.get("step") or 1), "role": role, "text": visible_text}
         messages.append((index, message))
     messages.sort(key=lambda item: item[0])
     return [message for _, message in messages]
@@ -1190,6 +1244,7 @@ def _activity_by_step(
     fields: list[list[Any]],
     categorization: dict,
     workflow_state: dict,
+    notices: dict[str, dict[str, Any]],
 ) -> dict:
     search_activity = [{"t": "--:--:--", "tag": "collection", "msg": f"{collected_summary.get('total_papers', 0)} records"}]
     search_activity.extend(_platform_error_activity(collected_summary.get("platform_errors") or {}))
@@ -1200,24 +1255,23 @@ def _activity_by_step(
         "extraction": [{"t": "--:--:--", "tag": "schema", "msg": f"{len(fields)} fields"}],
         "categorize": [{"t": "--:--:--", "tag": "categorize", "msg": f"{_categorization_summary(categorization)['groups']} groups"}],
     }
-    notices = _workflow_notices(path, workflow_state, collected_summary, download_report, read_jsonl(path / "extraction" / "extraction_results.jsonl", limit=200))
     for stage_name, notice in notices.items():
         step_key = {"collection": "search", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorization": "categorize"}[stage_name]
         activity[step_key].append({"t": "--:--:--", "tag": notice["status"], "msg": f"{notice['succeeded']} completed · {notice['failed']} failed · {notice['nextAction'] or 'recovery required'}"})
     for step_key, line in _canvas_action_activity(path):
         stage_name = {"search": "collection", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorize": "categorization"}.get(step_key)
-        if stage_name and workflow_state["stages"][stage_name]["stale"]:
+        if stage_name and (workflow_state["stages"][stage_name]["stale"] or stage_name in notices):
             continue
         activity.setdefault(step_key, []).append(line)
     return activity
 
 
-def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict, download_report: dict, extraction_rows: list[dict]) -> dict[str, dict[str, Any]]:
+def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict, download_report: dict, extraction_failed_items: list[str]) -> dict[str, dict[str, Any]]:
     notices: dict[str, dict[str, Any]] = {}
     next_actions = {"collection": "Paper Screening", "retrieval": "Information Extraction", "extraction": "Categorization & Analysis"}
     for stage_name in ("collection", "retrieval", "extraction"):
         stage = workflow_state["stages"][stage_name]
-        if stage["status"] not in {"partial", "failed"}:
+        if stage["stale"] or stage["status"] not in {"partial", "failed"}:
             continue
         if stage_name == "collection":
             errors = collected_summary.get("platform_errors") if isinstance(collected_summary.get("platform_errors"), dict) else {}
@@ -1225,7 +1279,7 @@ def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict,
         elif stage_name == "retrieval":
             failed_items = [_safe_failed_item(row) for row in (download_report.get("failed_papers") or []) if isinstance(row, dict)]
         else:
-            failed_items = [_safe_failed_item(row) for row in extraction_rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"}]
+            failed_items = extraction_failed_items
         notices[stage_name] = {
             "status": stage["status"],
             "succeeded": int(stage["counts"].get("succeeded", 0)),
@@ -1307,15 +1361,14 @@ def _activity_time(row: dict[str, Any]) -> str:
 
 def _activity_text(text: str) -> str:
     value = re.sub(r"\s+", " ", text).strip()
-    value = re.sub(r"/[^\s,]+/ReviewPilot/output/[^\s,]+", "project output", value)
-    return value
+    return safe_display_text(value, fallback="Workflow action details hidden because they contained a local path.")
 
 
 def _platform_error_activity(platform_errors: dict) -> list[dict[str, str]]:
     if not isinstance(platform_errors, dict):
         return []
     return [
-        {"t": "--:--:--", "tag": str(platform), "msg": str(message)}
+        {"t": "--:--:--", "tag": safe_display_text(str(platform), fallback="unknown"), "msg": safe_display_text(str(message), fallback="Source error details hidden.")}
         for platform, message in platform_errors.items()
         if str(message).strip()
     ]

@@ -187,13 +187,29 @@ class FilteringAgent(BaseAgent):
         }
 
     def _load_all_papers(self, collected_folder: Path) -> List[Dict]:
-        """Load all papers from collected JSONL files."""
+        """Load papers only from sources in the current collection summary."""
         papers = []
+        summary = load_json(str(collected_folder / "summary.json")) or {}
+        platform_stats = summary.get("platform_stats")
+        if not isinstance(platform_stats, dict):
+            return papers
+        platform_errors = summary.get("platform_errors") or {}
+        if not isinstance(platform_errors, dict):
+            raise ValueError("Collection summary platform_errors must be an object")
 
-        for jsonl_file in collected_folder.glob("*.jsonl"):
-            if jsonl_file.name == "summary.json":
+        for platform, expected_count in platform_stats.items():
+            if not isinstance(platform, str) or not platform or Path(platform).name != platform:
+                raise ValueError("Collection summary contains an invalid source name")
+            if type(expected_count) is not int or expected_count < 0:
+                raise ValueError(f"Collection summary has an invalid count for {platform}")
+            if expected_count == 0 or platform in platform_errors:
                 continue
+            jsonl_file = collected_folder / f"{platform}.jsonl"
+            if not jsonl_file.is_file():
+                raise ValueError(f"Current collection artifact is missing for {platform}")
             file_papers = read_jsonl(str(jsonl_file))
+            if len(file_papers) != expected_count:
+                raise ValueError(f"{platform} artifact does not match current collection summary")
             papers.extend(file_papers)
             self.log(f"Loaded {len(file_papers)} papers from {jsonl_file.name}")
 

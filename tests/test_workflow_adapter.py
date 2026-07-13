@@ -28,6 +28,20 @@ from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 
 
 class WorkflowActionAdapterTests(unittest.TestCase):
+    def test_extraction_contract_preserves_explicit_zero_and_counts_only_success_rows_when_missing(self):
+        from reviewpilot_core.sub_agent_contracts import ExtractionAgentContract
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"; output = project / "extraction" / "extraction_results.jsonl"; output.parent.mkdir(parents=True)
+            output.write_text(json.dumps({"title":"A","extraction_status":"error"}) + "\n" + json.dumps({"title":"B","extraction_status":"error"}) + "\n")
+            contract = ExtractionAgentContract(); explicit = contract._normalize_result(project, {"processed": 0, "errors": 2}); missing = contract._normalize_result(project, {"errors": 2})
+        self.assertEqual(explicit["processed"], 0); self.assertEqual(missing["processed"], 0)
+
+    def test_builtin_contract_normalizers_reject_malformed_explicit_counts(self):
+        from reviewpilot_core.sub_agent_contracts import DownloadAgentContract, ExtractionAgentContract
+        with tempfile.TemporaryDirectory() as tmp:
+            project=Path(tmp)/"demo"; (project/"pdfs").mkdir(parents=True); (project/"extraction").mkdir()
+            for contract, result in ((DownloadAgentContract(), {"success":"1","failed":0}), (DownloadAgentContract(), {"success":True,"failed":0}), (ExtractionAgentContract(), {"processed":"0","errors":2}), (ExtractionAgentContract(), {"processed":0,"errors":-1})):
+                with self.subTest(contract=type(contract).__name__, result=result), self.assertRaises(ValueError): contract._normalize_result(project,result)
     def test_sub_agent_normalization_outputs_use_shared_atomic_writers(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

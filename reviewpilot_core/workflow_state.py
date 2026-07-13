@@ -110,6 +110,7 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         state = load_workflow_state(project_path)
         stage_name = _action_stage(action)
         stage = state["stages"][stage_name]
+        is_rerun = stage["last_valid"] is not None
         result = result or {}
         status, outcome_counts = structured_action_outcome(action, result)
         counts = outcome_counts or _counts(result)
@@ -120,7 +121,16 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         if status in {"completed", "partial"}:
             stage["stale"] = False
             stage["last_valid"] = {"status": status, "attempt": stage["attempt"], "updated_at": stage["updated_at"], "counts": counts}
+        elif status == "failed":
+            # A structured terminal report is authoritative for this attempt even
+            # when every item failed. Only outputs from later stages are obsolete.
+            stage["stale"] = False
         next_index = STAGE_NAMES.index(stage_name) + 1
+        if is_rerun:
+            for downstream_name in STAGE_NAMES[next_index:]:
+                downstream = state["stages"][downstream_name]
+                if downstream["last_valid"] is not None or downstream["attempt"] > 0:
+                    downstream["stale"] = True
         if status in {"completed", "partial"} and next_index < len(STAGE_NAMES):
             next_stage = state["stages"][STAGE_NAMES[next_index]]
             if next_stage["status"] == "not_started":
@@ -131,28 +141,48 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
 
 def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str, dict[str, int]]:
     """Classify terminal outcomes from structured agent contracts only."""
-    nested = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+    if not isinstance(result, dict):
+        raise ValueError("Structured action result must be an object")
+    if "stats" in result and not isinstance(result["stats"], dict):
+        raise ValueError("Structured action stats must be an object")
+    nested = result.get("stats") or {}
     if action == "collect":
-        stats = result.get("platform_stats") if isinstance(result.get("platform_stats"), dict) else nested.get("platform_stats")
-        errors = result.get("platform_errors") if isinstance(result.get("platform_errors"), dict) else nested.get("platform_errors")
-        if not isinstance(errors, dict) or not errors:
+        stats, stats_present = _field(result, nested, "platform_stats")
+        errors, errors_present = _field(result, nested, "platform_errors")
+        if not stats_present and not errors_present:
             return "completed", {}
-        succeeded = len(stats) if isinstance(stats, dict) else 0
-        collected = _first_nonnegative_int(result, nested, "total", "total_papers")
-        if collected is None and isinstance(stats, dict):
-            collected = sum(value for value in stats.values() if _nonnegative_int(value))
+        if not isinstance(stats, dict) or not all(isinstance(key, str) and key and _nonnegative_int(value) for key, value in stats.items()):
+            raise ValueError("Invalid collection platform_stats")
+        if not isinstance(errors, dict) or not all(isinstance(key, str) and key and isinstance(value, str) for key, value in errors.items()):
+            raise ValueError("Invalid collection platform_errors")
+        succeeded = len(set(stats) - set(errors))
+        collected = _optional_count(result, nested, "total", "total_papers")
+        if collected is None:
+            collected = sum(stats.values())
         failed = len(errors)
     elif action == "download-pdfs":
-        failed = _first_nonnegative_int(result, nested, "failed")
+        failed, failed_present = _count_field(result, nested, "failed")
+        success, success_present = _count_field(result, nested, "success", "successful", "pdf_count")
+        if not failed_present and not success_present:
+            return "completed", {}
+        if not failed_present or not success_present:
+            raise ValueError("Incomplete retrieval result counts")
         if not failed:
             return "completed", {}
-        succeeded = _first_nonnegative_int(result, nested, "success", "successful", "pdf_count") or 0
+        succeeded = success
     elif action == "run-extraction":
-        failed = _first_nonnegative_int(result, nested, "errors", "failed")
+        failed, failed_present = _count_field(result, nested, "errors", "failed")
+        processed, processed_present = _count_field(result, nested, "processed", "success")
+        if not failed_present and not processed_present:
+            return "completed", {}
+        if not failed_present or not processed_present:
+            raise ValueError("Incomplete extraction result counts")
         if not failed:
             return "completed", {}
-        succeeded = _first_nonnegative_int(result, nested, "processed", "success") or 0
+        succeeded = processed
     else:
+        return "completed", {}
+    if not failed:
         return "completed", {}
     counts = {"succeeded": int(succeeded or 0), "failed": int(failed)}
     if action == "collect":
@@ -160,21 +190,45 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
     return ("partial" if counts["succeeded"] > 0 else "failed"), counts
 
 
-def _first_nonnegative_int(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> int | None:
+def _field(primary: dict[str, Any], secondary: dict[str, Any], key: str) -> tuple[Any, bool]:
+    if key in primary:
+        return primary[key], True
+    if key in secondary:
+        return secondary[key], True
+    return None, False
+
+
+def _count_field(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> tuple[int, bool]:
     for source in (primary, secondary):
         for key in keys:
-            value = source.get(key)
-            if _nonnegative_int(value):
-                return value
-    return None
+            if key in source:
+                value = source[key]
+                if not _nonnegative_int(value):
+                    raise ValueError(f"Invalid structured count: {key}")
+                return value, True
+    return 0, False
+
+
+def _optional_count(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> int | None:
+    value, present = _count_field(primary, secondary, *keys)
+    return value if present else None
 
 
 def fail_action(project_path: Path | str, action: str, error: BaseException | str) -> dict[str, Any]:
     with _project_lock(project_path):
         state = load_workflow_state(project_path)
-        stage = state["stages"][_action_stage(action)]
+        stage_name = _action_stage(action)
+        stage = state["stages"][stage_name]
+        had_material_output = stage["last_valid"] is not None
         name = error.__class__.__name__ if isinstance(error, BaseException) else "Error"
         stage.update(status="failed", updated_at=_now(), error=f"Action failed ({name}).")
+        if had_material_output:
+            stage["stale"] = True
+            next_index = STAGE_NAMES.index(stage_name) + 1
+            for downstream_name in STAGE_NAMES[next_index:]:
+                downstream = state["stages"][downstream_name]
+                if downstream["last_valid"] is not None or downstream["attempt"] > 0:
+                    downstream["stale"] = True
         _write(project_path, state)
         return state
 

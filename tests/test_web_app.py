@@ -44,6 +44,25 @@ class WebAppTests(unittest.TestCase):
                 self.assertEqual(task["status"], expected_status)
                 self.assertEqual(projected["stageState"]["collection"]["status"], expected_status)
                 self.assertEqual(projected["steps"][0]["status"], expected_status)
+
+    def test_malformed_structured_result_escapes_worker_and_marks_task_and_ledger_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/"demo"; project.mkdir(); (project/"search_conditions.json").write_text(json.dumps({"project_name":"demo","search_terms":"x","platforms":["pubmed"]}))
+            from reviewpilot_core.workflow_state import initialize_workflow_state
+            initialize_workflow_state(project)
+            class FakeResult:
+                def to_dict(self): return {"stage":"collection","status":"completed","reply":"bad","data":{"platform_stats":[],"platform_errors":{}}}
+            class FakeLeadAgent:
+                def __init__(self,*_args,**_kwargs): pass
+                def handle_message(self,**_kwargs): return FakeResult()
+            previous=web_app.task_runner
+            try:
+                web_app.task_runner=TaskRunner()
+                with patch.object(web_app,"LeadAgent",FakeLeadAgent): task_id=web_app.submit_project_action(root,"demo","collect")
+                task=web_app.task_runner.wait(task_id,2); ledger=json.loads((project/"workflow_state.json").read_text())
+            finally:
+                web_app.task_runner.shutdown(); web_app.task_runner=previous
+        self.assertEqual(task["status"],"failed"); self.assertEqual(ledger["stages"]["collection"]["status"],"failed")
     def test_submit_rejects_schema_actions_before_ledger_prerequisites_without_entering_running(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
