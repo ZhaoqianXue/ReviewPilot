@@ -15,11 +15,19 @@ from reviewpilot_core.task_runner import TaskRunner
 from web_app import create_project, render_index_html, render_workspace_html
 
 
+def terminal_result(action: str) -> dict:
+    return {
+        "collect": {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}},
+        "download-pdfs": {"success": 0, "failed": 0},
+        "run-extraction": {"processed": 0, "errors": 0},
+    }.get(action, {})
+
+
 class WebAppTests(unittest.TestCase):
     def test_structured_partial_and_zero_success_task_status_match_ledger_and_refresh_projection(self):
         for expected_status, data in (
-            ("partial", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "timeout"}}),
-            ("failed", {"total": 0, "platform_stats": {}, "platform_errors": {"pubmed": "timeout"}}),
+            ("partial", {"total": 1, "platform_stats": {"pubmed": 1, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}}),
+            ("failed", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {"pubmed": "timeout"}}),
         ):
             with self.subTest(expected_status=expected_status), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); project = root / expected_status; project.mkdir()
@@ -120,7 +128,7 @@ class WebAppTests(unittest.TestCase):
 
                 class FakeResult:
                     def to_dict(self):
-                        return {"stage": "collection", "status": "completed", "data": {"total_papers": 9}}
+                        return {"stage": "collection", "status": "completed", "data": {"total_papers": 9, "platform_stats": {"pubmed": 9}, "platform_errors": {}}}
 
                 class FakeLeadAgent:
                     def __init__(self, output_root, llm_query=None):
@@ -141,7 +149,7 @@ class WebAppTests(unittest.TestCase):
                     release.set()
                     self.assertEqual(web_app.task_runner.wait(task_id, 2)["status"], "completed")
                 completed = json.loads((project_dir / "workflow_state.json").read_text(encoding="utf-8"))
-                self.assertEqual(completed["stages"]["collection"]["counts"], {"total_papers": 9})
+                self.assertEqual(completed["stages"]["collection"]["counts"], {"succeeded": 1, "failed": 0, "collected": 9})
 
                 class FailingLeadAgent(FakeLeadAgent):
                     def handle_message(self, **kwargs):
@@ -881,6 +889,7 @@ class WebAppTests(unittest.TestCase):
                         "reply": self.reply,
                         "next_actions": self.next_actions,
                         "artifacts": self.artifacts,
+                        "data": {"total": 0, "platform_stats": {"openalex": 0}, "platform_errors": {}},
                     }
 
             class FakeLeadAgent:
@@ -914,7 +923,7 @@ class WebAppTests(unittest.TestCase):
                 initialize_workflow_state(project_dir)
                 for completed_action in ("collect", "screen", "download-pdfs", "run-extraction"):
                     start_action(project_dir, completed_action)
-                    complete_action(project_dir, completed_action, {})
+                    complete_action(project_dir, completed_action, terminal_result(completed_action))
                 calls = []
 
                 class FakeLeadAgentResult:
@@ -983,7 +992,7 @@ class WebAppTests(unittest.TestCase):
             initialize_workflow_state(project_dir)
             for completed_action in ("collect", "screen"):
                 start_action(project_dir, completed_action)
-                complete_action(project_dir, completed_action, {})
+                complete_action(project_dir, completed_action, terminal_result(completed_action))
 
             def fake_llm(*args, **kwargs):
                 if "Design an extraction schema" in kwargs.get("text_prompt", ""):

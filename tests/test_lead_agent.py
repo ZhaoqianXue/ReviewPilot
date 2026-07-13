@@ -16,7 +16,12 @@ def ledger_through(project: Path, stage: str) -> None:
     stages = ["collection", "screening", "retrieval", "extraction", "categorization"]
     for action in actions[: stages.index(stage) + 1]:
         start_action(project, action)
-        complete_action(project, action, {})
+        result = {
+            "collect": {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}},
+            "download-pdfs": {"success": 1, "failed": 0},
+            "run-extraction": {"processed": 1, "errors": 0},
+        }.get(action, {})
+        complete_action(project, action, result)
 
 
 class LeadAgentTests(unittest.TestCase):
@@ -452,10 +457,15 @@ class LeadAgentTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                     (collected_dir / "summary.json").write_text(
-                        json.dumps({"total_papers": 1, "platform_stats": {"openalex": 1}}),
+                        json.dumps({"total_papers": 1, "platform_stats": {"openalex": 1}, "platform_errors": {}}),
                         encoding="utf-8",
                     )
-                    return {"status": "collection_done", "total": 1}
+                    return {
+                        "status": "collection_done",
+                        "total": 1,
+                        "platform_stats": {"openalex": 1},
+                        "platform_errors": {},
+                    }
 
             def fake_llm_query(*args, **kwargs):
                 return (json.dumps({"reply": "LLM action reply for CollectionAgent."}), {"input_tokens": 20})
@@ -830,10 +840,10 @@ class LeadAgentTests(unittest.TestCase):
                     (project / "prompts" / "relevance_prompt.json").write_text(json.dumps({"task": "screen"}), encoding="utf-8")
                     (project / "collected").mkdir(parents=True, exist_ok=True)
                     (project / "collected" / "summary.json").write_text(
-                        json.dumps({"total_papers": 0, "platform_stats": {}}),
+                        json.dumps({"total_papers": 0, "platform_stats": {}, "platform_errors": {}}),
                         encoding="utf-8",
                     )
-                    return {"status": "collection_done", "total": 0}
+                    return {"status": "collection_done", "total": 0, "platform_stats": {}, "platform_errors": {}}
 
             def fake_llm_query(*args, **kwargs):
                 seen_prompts.append(kwargs["text_prompt"])
@@ -1183,10 +1193,10 @@ class LeadAgentTests(unittest.TestCase):
                     collected_dir = Path(output_root) / project_id / "collected"
                     collected_dir.mkdir(parents=True)
                     (collected_dir / "summary.json").write_text(
-                        json.dumps({"total_papers": 0, "platform_stats": {}}),
+                        json.dumps({"total_papers": 0, "platform_stats": {}, "platform_errors": {}}),
                         encoding="utf-8",
                     )
-                    return {"status": "collection_done", "total": 0}
+                    return {"status": "collection_done", "total": 0, "platform_stats": {}, "platform_errors": {}}
 
             def fake_llm_query(*args, **kwargs):
                 return (json.dumps({"reply": "LLM adapter reply."}), {})

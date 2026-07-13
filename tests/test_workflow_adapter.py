@@ -28,13 +28,24 @@ from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 
 
 class WorkflowActionAdapterTests(unittest.TestCase):
-    def test_extraction_contract_preserves_explicit_zero_and_counts_only_success_rows_when_missing(self):
+    def test_contract_normalizers_reject_alias_disagreement_and_artifact_count_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"; (project / "collected").mkdir(parents=True); (project / "pdfs").mkdir(); (project / "extraction").mkdir()
+            (project / "collected" / "summary.json").write_text(json.dumps({"total_papers": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}}))
+            (project / "collected" / "pubmed.jsonl").write_text("")
+            with self.assertRaises(ValueError): CollectionAgentContract()._normalize_result(project, {"total": 2, "platform_stats": {"pubmed": 2}, "platform_errors": {}})
+            (project / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}))
+            with self.assertRaises(ValueError): DownloadAgentContract()._normalize_result(project, {"success": 2, "failed": 0})
+            (project / "extraction" / "extraction_results.jsonl").write_text(json.dumps({"title": "A", "extraction_status": "error"}) + "\n")
+            with self.assertRaises(ValueError): ExtractionAgentContract()._normalize_result(project, {"processed": 1, "errors": 0})
+    def test_extraction_contract_preserves_explicit_zero_and_requires_both_exact_counts(self):
         from reviewpilot_core.sub_agent_contracts import ExtractionAgentContract
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "demo"; output = project / "extraction" / "extraction_results.jsonl"; output.parent.mkdir(parents=True)
             output.write_text(json.dumps({"title":"A","extraction_status":"error"}) + "\n" + json.dumps({"title":"B","extraction_status":"error"}) + "\n")
-            contract = ExtractionAgentContract(); explicit = contract._normalize_result(project, {"processed": 0, "errors": 2}); missing = contract._normalize_result(project, {"errors": 2})
-        self.assertEqual(explicit["processed"], 0); self.assertEqual(missing["processed"], 0)
+            contract = ExtractionAgentContract(); explicit = contract._normalize_result(project, {"processed": 0, "errors": 2})
+            with self.assertRaises(ValueError): contract._normalize_result(project, {"errors": 2})
+        self.assertEqual(explicit["processed"], 0)
 
     def test_builtin_contract_normalizers_reject_malformed_explicit_counts(self):
         from reviewpilot_core.sub_agent_contracts import DownloadAgentContract, ExtractionAgentContract
@@ -244,13 +255,15 @@ class WorkflowActionAdapterTests(unittest.TestCase):
                     collected_dir = self.project_path / "collected"
                     collected_dir.mkdir(parents=True)
                     (collected_dir / "summary.json").write_text(
-                        json.dumps({"total_papers": 2, "results": {"openalex": 2}}),
+                        json.dumps({"total_papers": 2, "results": {"openalex": 2}, "platform_stats": {"openalex": 2}, "platform_errors": {}}),
                         encoding="utf-8",
                     )
+                    (collected_dir / "openalex.jsonl").write_text(json.dumps({"id": "a"}) + "\n" + json.dumps({"id": "b"}) + "\n", encoding="utf-8")
                     return {
                         "collected_folder": str(collected_dir),
                         "total_papers": 2,
                         "platform_stats": {"openalex": 2},
+                        "platform_errors": {},
                     }
 
             result = CollectionAgentContract(agent_cls=FakeCollectionAgent).run(output_root, "demo")

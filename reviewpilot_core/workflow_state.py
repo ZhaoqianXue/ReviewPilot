@@ -99,8 +99,11 @@ def start_action(project_path: Path | str, action: str) -> dict[str, Any]:
         prerequisite = _ACTION_PREREQUISITES.get(action)
         if prerequisite and (state["stages"][prerequisite]["status"] not in {"completed", "partial"} or state["stages"][prerequisite]["stale"]):
             raise ValueError(f"Action '{action}' requires completed stage '{prerequisite}'")
-        stage = state["stages"][_action_stage(action)]
-        stage.update(status="running", attempt=stage["attempt"] + 1, updated_at=_now(), error=None)
+        stage_name = _action_stage(action)
+        stage = state["stages"][stage_name]
+        if _has_material_output(stage):
+            _stale_material_outputs(state, stage_name, include_current=True)
+        stage.update(status="running", attempt=stage["attempt"] + 1, updated_at=_now(), error=None, counts={})
         _write(project_path, state)
         return state
 
@@ -113,7 +116,7 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         is_rerun = stage["last_valid"] is not None
         result = result or {}
         status, outcome_counts = structured_action_outcome(action, result)
-        counts = outcome_counts or _counts(result)
+        counts = outcome_counts if action in {"collect", "download-pdfs", "run-extraction"} else _counts(result)
         if action in _READY_ACTIONS:
             status = "ready"
         error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
@@ -147,71 +150,57 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
         raise ValueError("Structured action stats must be an object")
     nested = result.get("stats") or {}
     if action == "collect":
-        stats, stats_present = _field(result, nested, "platform_stats")
-        errors, errors_present = _field(result, nested, "platform_errors")
-        if not stats_present and not errors_present:
-            return "completed", {}
+        stats = _consistent_value(result, nested, ("platform_stats",), "collection platform_stats")
+        errors = _consistent_value(result, nested, ("platform_errors",), "collection platform_errors")
+        total = _consistent_count(result, nested, ("total", "total_papers"), "collection total")
         if not isinstance(stats, dict) or not all(isinstance(key, str) and key and _nonnegative_int(value) for key, value in stats.items()):
             raise ValueError("Invalid collection platform_stats")
         if not isinstance(errors, dict) or not all(isinstance(key, str) and key and isinstance(value, str) for key, value in errors.items()):
             raise ValueError("Invalid collection platform_errors")
+        if sum(stats.values()) != total:
+            raise ValueError("Collection total does not match platform_stats")
+        if not set(errors).issubset(stats):
+            raise ValueError("Collection errors must reference reported sources")
+        if any(stats[source] != 0 for source in errors):
+            raise ValueError("Failed collection sources must report zero rows")
         succeeded = len(set(stats) - set(errors))
-        collected = _optional_count(result, nested, "total", "total_papers")
-        if collected is None:
-            collected = sum(stats.values())
         failed = len(errors)
+        counts = {"succeeded": succeeded, "failed": failed, "collected": total}
     elif action == "download-pdfs":
-        failed, failed_present = _count_field(result, nested, "failed")
-        success, success_present = _count_field(result, nested, "success", "successful", "pdf_count")
-        if not failed_present and not success_present:
-            return "completed", {}
-        if not failed_present or not success_present:
-            raise ValueError("Incomplete retrieval result counts")
-        if not failed:
-            return "completed", {}
+        failed = _consistent_count(result, nested, ("failed",), "retrieval failed")
+        success = _consistent_count(result, nested, ("success", "successful"), "retrieval success")
         succeeded = success
+        counts = {"succeeded": succeeded, "failed": failed}
     elif action == "run-extraction":
-        failed, failed_present = _count_field(result, nested, "errors", "failed")
-        processed, processed_present = _count_field(result, nested, "processed", "success")
-        if not failed_present and not processed_present:
-            return "completed", {}
-        if not failed_present or not processed_present:
-            raise ValueError("Incomplete extraction result counts")
-        if not failed:
-            return "completed", {}
+        failed = _consistent_count(result, nested, ("errors", "failed"), "extraction errors")
+        processed = _consistent_count(result, nested, ("processed", "success"), "extraction processed")
         succeeded = processed
+        counts = {"succeeded": succeeded, "failed": failed}
     else:
         return "completed", {}
     if not failed:
-        return "completed", {}
-    counts = {"succeeded": int(succeeded or 0), "failed": int(failed)}
-    if action == "collect":
-        counts["collected"] = int(collected or 0)
+        return "completed", counts
     return ("partial" if counts["succeeded"] > 0 else "failed"), counts
 
 
-def _field(primary: dict[str, Any], secondary: dict[str, Any], key: str) -> tuple[Any, bool]:
-    if key in primary:
-        return primary[key], True
-    if key in secondary:
-        return secondary[key], True
-    return None, False
-
-
-def _count_field(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> tuple[int, bool]:
+def _consistent_value(primary: dict[str, Any], secondary: dict[str, Any], keys: tuple[str, ...], label: str) -> Any:
+    values = []
     for source in (primary, secondary):
         for key in keys:
             if key in source:
-                value = source[key]
-                if not _nonnegative_int(value):
-                    raise ValueError(f"Invalid structured count: {key}")
-                return value, True
-    return 0, False
+                values.append(source[key])
+    if not values:
+        raise ValueError(f"Missing {label}")
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError(f"Conflicting {label}")
+    return values[0]
 
 
-def _optional_count(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> int | None:
-    value, present = _count_field(primary, secondary, *keys)
-    return value if present else None
+def _consistent_count(primary: dict[str, Any], secondary: dict[str, Any], keys: tuple[str, ...], label: str) -> int:
+    value = _consistent_value(primary, secondary, keys, label)
+    if not _nonnegative_int(value):
+        raise ValueError(f"Invalid {label}")
+    return value
 
 
 def fail_action(project_path: Path | str, action: str, error: BaseException | str) -> dict[str, Any]:
@@ -223,12 +212,7 @@ def fail_action(project_path: Path | str, action: str, error: BaseException | st
         name = error.__class__.__name__ if isinstance(error, BaseException) else "Error"
         stage.update(status="failed", updated_at=_now(), error=f"Action failed ({name}).")
         if had_material_output:
-            stage["stale"] = True
-            next_index = STAGE_NAMES.index(stage_name) + 1
-            for downstream_name in STAGE_NAMES[next_index:]:
-                downstream = state["stages"][downstream_name]
-                if downstream["last_valid"] is not None or downstream["attempt"] > 0:
-                    downstream["stale"] = True
+            _stale_material_outputs(state, stage_name, include_current=True)
         _write(project_path, state)
         return state
 
@@ -241,6 +225,9 @@ def reconcile_orphaned_running(project_path: Path | str, active_action: str | No
         for name, stage in state["stages"].items():
             if stage["status"] == "running" and name != active_stage:
                 stage.update(status="failed", updated_at=_now(), error="Action stopped before completion after application restart.")
+                if stage["last_valid"] is not None:
+                    stage["counts"] = {}
+                    _stale_material_outputs(state, name, include_current=True)
                 changed = True
         if changed:
             _write(project_path, state)
@@ -316,6 +303,22 @@ def _counts(result: dict[str, Any]) -> dict[str, int | float]:
         for key, value in result.items()
         if isinstance(value, (int, float)) and not isinstance(value, bool)
     }
+
+
+def _stale_material_outputs(state: dict[str, Any], stage_name: str, *, include_current: bool) -> None:
+    start = STAGE_NAMES.index(stage_name)
+    for index, name in enumerate(STAGE_NAMES[start:], start=start):
+        stage = state["stages"][name]
+        if (index == start and include_current) or _has_material_output(stage):
+            stage["stale"] = True
+
+
+def _has_material_output(stage: dict[str, Any]) -> bool:
+    return (
+        stage["last_valid"] is not None
+        or (stage["status"] == "ready" and stage["attempt"] > 0)
+        or (stage["status"] == "failed" and str(stage.get("error") or "").startswith("Action produced no successful outputs"))
+    )
 
 
 def _action_stage(action: str) -> str:

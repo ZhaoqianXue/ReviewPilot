@@ -7,6 +7,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_failed_task_refreshes_authoritative_state_before_surface_error(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { resolveTaskAndRefresh } = require('./frontend/app.js');
+let refreshes = 0;
+resolveTaskAndRefresh(Promise.reject(new Error('Action failed (RuntimeError).')), 'p', async (id) => {
+  refreshes += 1; assert.equal(id, 'p'); return { project: { id: 'p' }, steps: [{ status: 'failed', stale: true }] };
+}).then((outcome) => {
+  assert.equal(refreshes, 1); assert.equal(outcome.data.steps[0].status, 'failed'); assert.equal(outcome.data.steps[0].stale, true);
+  assert.equal(outcome.error, 'Action failed (RuntimeError).');
+});
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
     def test_partial_stage_keeps_itself_reviewable_while_advancing_navigation_to_ready_downstream(self):
         script = r"""
 const assert = require('node:assert/strict');

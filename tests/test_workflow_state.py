@@ -40,10 +40,97 @@ def _write_valid_legacy(project: Path, through: str) -> None:
         _write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"paper_id": "p1"}])
 
 
+def _terminal_result(action: str) -> dict:
+    return {
+        "collect": {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}},
+        "download-pdfs": {"success": 1, "failed": 0},
+        "run-extraction": {"processed": 1, "errors": 0},
+    }.get(action, {})
+
+
 class WorkflowStateTests(unittest.TestCase):
+    def test_starting_material_rerun_atomically_stales_current_and_downstream_outputs(self):
+        for rerun_action, stage_name in (("collect", "collection"), ("download-pdfs", "retrieval"), ("run-extraction", "extraction")):
+            with self.subTest(action=rerun_action), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); initialize_workflow_state(project)
+                for action in ("collect", "screen", "download-pdfs", "run-extraction", "categorize"):
+                    start_action(project, action); complete_action(project, action, _terminal_result(action))
+                state = start_action(project, rerun_action)
+                index = STAGE_NAMES.index(stage_name)
+                self.assertEqual(state["stages"][stage_name]["status"], "running")
+                self.assertTrue(state["stages"][stage_name]["stale"])
+                self.assertEqual(state["stages"][stage_name]["counts"], {})
+                self.assertIsNone(state["stages"][stage_name]["error"])
+                self.assertTrue(all(state["stages"][name]["stale"] for name in STAGE_NAMES[index + 1:]))
+
+    def test_orphaned_material_rerun_stales_current_and_downstream_but_initial_orphan_does_not(self):
+        from reviewpilot_core.workflow_state import reconcile_orphaned_running
+        for rerun_action, stage_name in (("collect", "collection"), ("download-pdfs", "retrieval"), ("run-extraction", "extraction")):
+            with self.subTest(action=rerun_action), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); initialize_workflow_state(project)
+                for action in ("collect", "screen", "download-pdfs", "run-extraction", "categorize"):
+                    start_action(project, action); complete_action(project, action, _terminal_result(action))
+                start_action(project, rerun_action)
+                state = reconcile_orphaned_running(project)
+                index = STAGE_NAMES.index(stage_name)
+                self.assertEqual(state["stages"][stage_name]["status"], "failed")
+                self.assertTrue(state["stages"][stage_name]["stale"])
+                self.assertTrue(all(state["stages"][name]["stale"] for name in STAGE_NAMES[index + 1:]))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); initialize_workflow_state(project); start_action(project, "collect")
+            initial = reconcile_orphaned_running(project)
+        self.assertFalse(initial["stages"]["collection"]["stale"])
+
+    def test_exception_failure_preserves_safe_detail_without_reusing_previous_counts(self):
+        from reviewpilot_core.workflow_state import fail_action
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); initialize_workflow_state(project)
+            start_action(project, "collect"); complete_action(project, "collect", _terminal_result("collect"))
+            running = start_action(project, "collect")
+            self.assertEqual(running["stages"]["collection"]["counts"], {})
+            state = fail_action(project, "collect", RuntimeError("token=secret https://private.example/patient"))
+        stage = state["stages"]["collection"]
+        self.assertEqual(stage["status"], "failed")
+        self.assertTrue(stage["stale"])
+        self.assertEqual(stage["counts"], {})
+        self.assertEqual(stage["error"], "Action failed (RuntimeError).")
+        self.assertNotIn("secret", stage["error"])
+
+    def test_upstream_rerun_stales_downstream_structured_failure_report_without_last_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); initialize_workflow_state(project)
+            start_action(project, "collect"); complete_action(project, "collect", _terminal_result("collect"))
+            start_action(project, "screen"); complete_action(project, "screen", {})
+            start_action(project, "download-pdfs"); complete_action(project, "download-pdfs", {"success": 0, "failed": 1})
+            self.assertIsNone(load_workflow_state(project)["stages"]["retrieval"]["last_valid"])
+            state = start_action(project, "collect")
+        self.assertTrue(state["stages"]["retrieval"]["stale"])
+
+    def test_terminal_contracts_are_required_exact_and_consistent_across_root_and_nested_aliases(self):
+        from reviewpilot_core.workflow_state import structured_action_outcome
+        valid = [
+            ("collect", {"total": 2, "total_papers": 2, "platform_stats": {"pubmed": 2, "arxiv": 0}, "platform_errors": {"arxiv": "503"}, "stats": {"total": 2, "platform_stats": {"pubmed": 2, "arxiv": 0}, "platform_errors": {"arxiv": "503"}}}),
+            ("download-pdfs", {"success": 2, "pdf_count": 2, "failed": 1, "stats": {"successful": 2, "failed": 1}}),
+            ("run-extraction", {"processed": 2, "success": 2, "errors": 1, "stats": {"processed": 2, "failed": 1}}),
+        ]
+        for action, result in valid:
+            with self.subTest(action=action): self.assertEqual(structured_action_outcome(action, result)[0], "partial")
+        invalid = [
+            ("collect", {}),
+            ("collect", {"total": 2, "platform_stats": {"pubmed": 1}, "platform_errors": {}}),
+            ("collect", {"total": 0, "platform_stats": {}, "platform_errors": {"pubmed": "503"}}),
+            ("collect", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"pubmed": "503"}}),
+            ("collect", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}, "stats": {"total": 2, "platform_stats": {"pubmed": 1}, "platform_errors": {}}}),
+            ("download-pdfs", {}),
+            ("download-pdfs", {"success": 1, "failed": 0, "stats": {"success": 2, "failed": 0}}),
+            ("run-extraction", {}),
+            ("run-extraction", {"processed": 1, "errors": 0, "stats": {"processed": 1, "errors": 1}}),
+        ]
+        for action, result in invalid:
+            with self.subTest(action=action, result=result), self.assertRaises(ValueError): structured_action_outcome(action, result)
     def test_structured_partial_outcomes_preserve_success_and_unlock_the_next_stage(self):
         cases = [
-            ("collect", {"total": 3, "platform_stats": {"pubmed": 3}, "platform_errors": {"arxiv": "timeout"}}, "collection", "screening", {"succeeded": 1, "failed": 1, "collected": 3}),
+            ("collect", {"total": 3, "platform_stats": {"pubmed": 3, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}}, "collection", "screening", {"succeeded": 1, "failed": 1, "collected": 3}),
             ("download-pdfs", {"success": 2, "failed": 1}, "retrieval", "extraction", {"succeeded": 2, "failed": 1}),
             ("run-extraction", {"processed": 2, "errors": 1}, "extraction", "categorization", {"succeeded": 2, "failed": 1}),
         ]
@@ -52,7 +139,7 @@ class WorkflowStateTests(unittest.TestCase):
                 project = Path(tmp); initialize_workflow_state(project)
                 prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
                 for prerequisite in prerequisites:
-                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                    start_action(project, prerequisite); complete_action(project, prerequisite, _terminal_result(prerequisite))
                 start_action(project, action)
                 state = complete_action(project, action, result)
                 stage = state["stages"][stage_name]
@@ -63,7 +150,7 @@ class WorkflowStateTests(unittest.TestCase):
 
     def test_structured_zero_success_failures_block_the_next_stage(self):
         cases = [
-            ("collect", {"total": 0, "platform_stats": {}, "platform_errors": {"pubmed": "timeout"}}, "collection", "screening"),
+            ("collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {"pubmed": "timeout"}}, "collection", "screening"),
             ("download-pdfs", {"success": 0, "failed": 2}, "retrieval", "extraction"),
             ("run-extraction", {"processed": 0, "errors": 2}, "extraction", "categorization"),
         ]
@@ -72,7 +159,7 @@ class WorkflowStateTests(unittest.TestCase):
                 project = Path(tmp); initialize_workflow_state(project)
                 prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
                 for prerequisite in prerequisites:
-                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                    start_action(project, prerequisite); complete_action(project, prerequisite, _terminal_result(prerequisite))
                 start_action(project, action)
                 state = complete_action(project, action, result)
                 self.assertEqual(state["stages"][stage_name]["status"], "failed")
@@ -83,21 +170,21 @@ class WorkflowStateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp); initialize_workflow_state(project)
             start_action(project, "collect")
-            complete_action(project, "collect", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "timeout"}})
+            complete_action(project, "collect", {"total": 1, "platform_stats": {"pubmed": 1, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}})
             state = start_action(project, "screen")
         self.assertEqual(state["stages"]["screening"]["status"], "running")
 
     def test_collection_partial_is_based_on_source_outcomes_even_when_successful_source_returns_zero_papers(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp); initialize_workflow_state(project); start_action(project, "collect")
-            state = complete_action(project, "collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {"arxiv": "timeout"}})
+            state = complete_action(project, "collect", {"total": 0, "platform_stats": {"pubmed": 0, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}})
         stage = state["stages"]["collection"]
         self.assertEqual(stage["status"], "partial")
         self.assertEqual(stage["counts"], {"succeeded": 1, "failed": 1, "collected": 0})
 
     def test_real_nested_stats_variants_drive_the_same_deterministic_outcomes(self):
         from reviewpilot_core.workflow_state import structured_action_outcome
-        self.assertEqual(structured_action_outcome("collect", {"stats": {"platform_stats": {"pubmed": 0}, "platform_errors": {"arxiv": "timeout"}, "total_papers": 0}}), ("partial", {"succeeded": 1, "failed": 1, "collected": 0}))
+        self.assertEqual(structured_action_outcome("collect", {"stats": {"platform_stats": {"pubmed": 0, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}, "total_papers": 0}}), ("partial", {"succeeded": 1, "failed": 1, "collected": 0}))
         self.assertEqual(structured_action_outcome("download-pdfs", {"stats": {"success": 2, "failed": 1}}), ("partial", {"succeeded": 2, "failed": 1}))
         self.assertEqual(structured_action_outcome("run-extraction", {"stats": {"processed": 0, "errors": 2}}), ("failed", {"succeeded": 0, "failed": 2}))
 
@@ -111,16 +198,16 @@ class WorkflowStateTests(unittest.TestCase):
         cases = [("collect", {"platform_stats": "bad", "platform_errors": {"pubmed": "503"}}), ("collect", {"platform_stats": {"pubmed": -1}, "platform_errors": {}}), ("collect", {"platform_stats": {"pubmed": True}, "platform_errors": {}}), ("collect", {"platform_stats": {}, "platform_errors": []}), ("download-pdfs", {"success": 0, "failed": "2"}), ("download-pdfs", {"success": False, "failed": 1}), ("run-extraction", {"processed": -1, "errors": 2}), ("run-extraction", {"processed": 0, "errors": ["bad"]}), ("run-extraction", {"stats": "bad"})]
         for action, result in cases:
             with self.subTest(action=action, result=result), self.assertRaises(ValueError): structured_action_outcome(action, result)
-        self.assertEqual(structured_action_outcome("download-pdfs", {}), ("completed", {}))
+        with self.assertRaises(ValueError): structured_action_outcome("download-pdfs", {})
 
     def test_terminal_rerun_invalidates_existing_downstream_and_failed_rerun_hides_current_output(self):
         for rerun_action, stage_name in (("collect", "collection"), ("download-pdfs", "retrieval"), ("run-extraction", "extraction")):
             for terminal_result, expected_status in (({"success": 1, "failed": 1}, "partial"), ({"success": 0, "failed": 1}, "failed"), ({"success": 2, "failed": 0}, "completed")):
                 with self.subTest(action=rerun_action, status=expected_status), tempfile.TemporaryDirectory() as tmp:
                     project = Path(tmp); initialize_workflow_state(project)
-                    for action in ("collect", "screen", "download-pdfs", "run-extraction", "categorize"): start_action(project, action); complete_action(project, action, {})
+                    for action in ("collect", "screen", "download-pdfs", "run-extraction", "categorize"): start_action(project, action); complete_action(project, action, _terminal_result(action))
                     start_action(project, rerun_action); result = dict(terminal_result)
-                    if rerun_action == "collect": result = {"total": terminal_result["success"], "platform_stats": ({"pubmed": terminal_result["success"]} if terminal_result["success"] else {}), "platform_errors": ({"arxiv": "503"} if terminal_result["failed"] else {})}
+                    if rerun_action == "collect": result = {"total": terminal_result["success"], "platform_stats": {**({"pubmed": terminal_result["success"]} if terminal_result["success"] else {}), **({"arxiv": 0} if terminal_result["failed"] else {})}, "platform_errors": ({"arxiv": "503"} if terminal_result["failed"] else {})}
                     elif rerun_action == "run-extraction": result = {"processed": terminal_result["success"], "errors": terminal_result["failed"]}
                     state = complete_action(project, rerun_action, result); index = STAGE_NAMES.index(stage_name)
                     self.assertEqual(state["stages"][stage_name]["status"], expected_status)
@@ -138,7 +225,7 @@ class WorkflowStateTests(unittest.TestCase):
         from reviewpilot_core.workflow_state import fail_action
         with tempfile.TemporaryDirectory() as tmp:
             project=Path(tmp); initialize_workflow_state(project)
-            for action in ("collect","screen","download-pdfs","run-extraction"): start_action(project,action); complete_action(project,action,{})
+            for action in ("collect","screen","download-pdfs","run-extraction"): start_action(project,action); complete_action(project,action,_terminal_result(action))
             start_action(project,"download-pdfs"); state=fail_action(project,"download-pdfs",ValueError("bad"))
         self.assertTrue(state["stages"]["retrieval"]["stale"]); self.assertTrue(state["stages"]["extraction"]["stale"])
     def test_new_ledger_has_exact_versioned_state_contract_and_uses_atomic_writer(self):
@@ -169,7 +256,7 @@ class WorkflowStateTests(unittest.TestCase):
             initialize_workflow_state(project)
             for prerequisite_action in ("collect", "screen"):
                 start_action(project, prerequisite_action)
-                complete_action(project, prerequisite_action, {})
+                complete_action(project, prerequisite_action, _terminal_result(prerequisite_action))
             start_action(project, "generate-schema")
             state = complete_action(project, "generate-schema", {"field_count": 7})
             self.assertEqual(state["stages"]["extraction"]["status"], "ready")
@@ -180,7 +267,7 @@ class WorkflowStateTests(unittest.TestCase):
             project = Path(tmp)
             initialize_workflow_state(project)
             start_action(project, "collect")
-            complete_action(project, "collect", {"total_papers": 12})
+            complete_action(project, "collect", {"total_papers": 12, "platform_stats": {"pubmed": 12}, "platform_errors": {}})
             start_action(project, "collect")
             from reviewpilot_core.workflow_state import fail_action
             state = fail_action(project, "collect", RuntimeError("/Users/private/secret"))
@@ -188,7 +275,7 @@ class WorkflowStateTests(unittest.TestCase):
         stage = state["stages"]["collection"]
         self.assertEqual(stage["status"], "failed")
         self.assertEqual(stage["attempt"], 2)
-        self.assertEqual(stage["last_valid"]["counts"], {"total_papers": 12})
+        self.assertEqual(stage["last_valid"]["counts"], {"succeeded": 1, "failed": 0, "collected": 12})
         self.assertNotIn("private", stage["error"])
 
     def test_ready_only_action_preserves_stale_terminal_last_valid(self):
@@ -197,7 +284,7 @@ class WorkflowStateTests(unittest.TestCase):
             initialize_workflow_state(project)
             for action in ("collect", "screen", "download-pdfs", "run-extraction"):
                 start_action(project, action)
-                complete_action(project, action, {"processed": 2, "errors": 0} if action == "run-extraction" else {})
+                complete_action(project, action, _terminal_result(action))
             from reviewpilot_core.workflow_state import mark_stages_stale
             before = mark_stages_stale(project, ["extraction"])["stages"]["extraction"]["last_valid"]
             start_action(project, "generate-schema")

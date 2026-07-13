@@ -22,7 +22,7 @@ class SetupRevisionTests(unittest.TestCase):
         config = web_app._setup_config({"project_name": "Demo", "description": "Question", "platforms": ["pubmed"], "max_results": 10})
         (project / "search_conditions.json").write_text(json.dumps(config), encoding="utf-8")
         initialize_workflow_state(project)
-        complete_action(project, "collect", {"total_papers": 2})
+        complete_action(project, "collect", {"total_papers": 2, "platform_stats": {"pubmed": 2}, "platform_errors": {}})
         return project, config
 
     def test_revision_is_stable_for_equivalent_normalized_setup(self):
@@ -134,7 +134,8 @@ class SetupRevisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, _ = self._project(root)
             for action in ("screen", "download-pdfs", "run-extraction"):
-                start_action(project, action); complete_action(project, action, {"processed": 1, "errors": 0} if action == "run-extraction" else {})
+                result = {"download-pdfs": {"success": 1, "failed": 0}, "run-extraction": {"processed": 1, "errors": 0}}.get(action, {})
+                start_action(project, action); complete_action(project, action, result)
             (project / "extraction").mkdir(exist_ok=True)
             (project / "extraction" / "extraction_results.jsonl").write_text('{"title":"old","legacy":"secret"}\n')
             mark_stages_stale(project, ["extraction"])
@@ -152,7 +153,8 @@ class SetupRevisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, _ = self._project(root)
             for action in ("screen", "download-pdfs", "run-extraction", "categorize"):
-                start_action(project, action); complete_action(project, action, {"processed": 1, "errors": 0} if action == "run-extraction" else {})
+                result = {"download-pdfs": {"success": 1, "failed": 0}, "run-extraction": {"processed": 1, "errors": 0}}.get(action, {})
+                start_action(project, action); complete_action(project, action, result)
             cat = project / "categorization"; cat.mkdir(exist_ok=True)
             (cat / "categorization_mapping.json").write_text(json.dumps({"categories": ["Old"], "mapping": {"P": "Old"}}))
             mark_stages_stale(project, ["categorization"])
@@ -190,7 +192,7 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertEqual(raised.exception.stages, ["collection"])
 
             class Result:
-                def to_dict(self): return {"data": {"total_papers": 3}}
+                def to_dict(self): return {"data": {"total_papers": 3, "platform_stats": {"pubmed": 3}, "platform_errors": {}}}
             class Agent:
                 def __init__(self, *args, **kwargs): pass
                 def handle_message(self, **kwargs): return Result()

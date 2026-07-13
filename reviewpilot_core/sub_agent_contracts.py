@@ -16,6 +16,7 @@ from agents.search_condition_agent import SearchConditionAgent
 from .atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from .categorization_analysis import CategorizationAnalysis
 from .project_store import count_jsonl, read_json, read_jsonl
+from .workflow_state import structured_action_outcome
 from .model_policy import (
     CATEGORIZATION_MODEL,
     COLLECTION_MODEL,
@@ -27,18 +28,37 @@ from .model_policy import (
 )
 
 
-def _contract_count(*sources_and_keys, default: int = 0) -> int:
-    *sources, keys = sources_and_keys
+def _contract_value(sources: list[dict[str, Any]], keys: tuple[str, ...], label: str) -> Any:
+    values = []
     for source in sources:
         if not isinstance(source, dict):
             continue
         for key in keys:
             if key in source:
-                value = source[key]
-                if type(value) is not int or value < 0:
-                    raise ValueError(f"Invalid contract count: {key}")
-                return value
-    return default
+                values.append(source[key])
+    if not values:
+        raise ValueError(f"Missing {label}")
+    if any(value != values[0] for value in values[1:]):
+        raise ValueError(f"Conflicting {label}")
+    return values[0]
+
+
+def _contract_count(sources: list[dict[str, Any]], keys: tuple[str, ...], label: str) -> int:
+    value = _contract_value(sources, keys, label)
+    if type(value) is not int or value < 0:
+        raise ValueError(f"Invalid {label}")
+    return value
+
+
+def _contract_sources(*sources: Any) -> list[dict[str, Any]]:
+    expanded = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        expanded.append(source)
+        if isinstance(source.get("stats"), dict):
+            expanded.append(source["stats"])
+    return expanded
 
 
 class SubAgentContract(Protocol):
@@ -171,9 +191,17 @@ class CollectionAgentContract:
         collected_dir = Path(result.get("collected_folder") or project_path / "collected")
         summary_path = collected_dir / "summary.json"
         summary = read_json(summary_path, {}) or {}
-        platform_stats = result["platform_stats"] if "platform_stats" in result else summary.get("platform_stats", summary.get("results", {}))
-        platform_errors = result["platform_errors"] if "platform_errors" in result else summary.get("platform_errors", {})
-        total = _contract_count(result, summary, ("total", "total_papers"))
+        sources = _contract_sources(result, result.get("summary"), summary)
+        platform_stats = _contract_value(sources, ("platform_stats", "results"), "collection platform_stats")
+        platform_errors = _contract_value(sources, ("platform_errors",), "collection platform_errors")
+        total = _contract_count(sources, ("total", "total_papers"), "collection total")
+        normalized = {"total": total, "platform_stats": platform_stats, "platform_errors": platform_errors}
+        structured_action_outcome("collect", normalized)
+        for platform, expected_count in platform_stats.items():
+            if platform in platform_errors or expected_count == 0:
+                continue
+            if len(read_jsonl(collected_dir / f"{platform}.jsonl")) != expected_count:
+                raise ValueError(f"{platform} artifact row count does not match collection contract")
         if summary_path.exists() and isinstance(summary, dict) and "platform_stats" not in summary:
             summary["platform_stats"] = platform_stats
             atomic_write_json(summary_path, summary, indent=None)
@@ -328,11 +356,15 @@ class DownloadAgentContract:
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
         report = read_json(project_path / "pdfs" / "download_report.json", {}) or {}
+        sources = _contract_sources(result, report)
+        success = _contract_count(sources, ("success", "successful"), "retrieval success")
+        failed = _contract_count(sources, ("failed",), "retrieval failed")
+        structured_action_outcome("download-pdfs", {"success": success, "failed": failed})
         return {
             **result,
             "status": "download_done",
-            "success": _contract_count(report, result, ("success", "successful", "pdf_count")),
-            "failed": _contract_count(report, result, ("failed",)),
+            "success": success,
+            "failed": failed,
             "download_folder": str(project_path / "pdfs"),
         }
 
@@ -361,14 +393,15 @@ class ExtractionAgentContract:
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
         output_file = project_path / "extraction" / "extraction_results.jsonl"
         rows = read_jsonl(output_file)
-        processed = _contract_count(result, ("processed",), default=-1)
-        if processed == -1:
-            processed = sum(
-                1 for row in rows if str(row.get("extraction_status") or "").lower() == "success"
-            )
-        errors = _contract_count(result, ("errors", "failed"), default=-1)
-        if errors == -1:
-            errors = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"})
+        stats = read_json(project_path / "extraction" / "extraction_stats.json", {}) or {}
+        sources = _contract_sources(result, stats)
+        processed = _contract_count(sources, ("processed", "success"), "extraction processed")
+        errors = _contract_count(sources, ("errors", "failed"), "extraction errors")
+        successful_rows = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"", "success"})
+        failed_rows = sum(1 for row in rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"})
+        if (successful_rows, failed_rows) != (processed, errors):
+            raise ValueError("Extraction artifact row counts do not match contract")
+        structured_action_outcome("run-extraction", {"processed": processed, "errors": errors})
         return {
             **result,
             "status": "extraction_done",

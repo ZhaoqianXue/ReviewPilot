@@ -20,6 +20,14 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     )
 
 
+def terminal_result(action: str) -> dict:
+    return {
+        "collect": {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}},
+        "download-pdfs": {"success": 0, "failed": 0},
+        "run-extraction": {"processed": 0, "errors": 0},
+    }.get(action, {})
+
+
 def write_legacy_stage_chain(project: Path, through: str) -> None:
     order = ["collection", "screening", "retrieval", "extraction", "categorization"]
     if order.index(through) >= 0:
@@ -35,6 +43,68 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_running_reruns_block_current_and_downstream_exports_and_projected_artifacts(self):
+        cases = [("collect", "relevance-prompt", "included-papers"), ("download-pdfs", "download-report", "extraction-results"), ("run-extraction", "extraction-results", "categorization-mapping")]
+        for action, current_export, downstream_export in cases:
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); project = root / "p"; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"]})
+                write_json(project / "prompts" / "relevance_prompt.json", {"task": "old"}); write_json(project / "collected" / "summary.json", {"total_papers": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}})
+                write_jsonl(project / "filtered" / "included_papers.jsonl", [{"title": "Old paper"}]); write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 0})
+                write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"title": "Old paper", "extraction_status": "success"}]); write_json(project / "categorization" / "categorization_mapping.json", {"categories": ["Old"], "mapping": {"Old paper": "Old"}})
+                initialize_workflow_state(project)
+                results = {"collect": {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}}, "download-pdfs": {"success": 1, "failed": 0}, "run-extraction": {"processed": 1, "errors": 0}}
+                for first in ("collect", "screen", "download-pdfs", "run-extraction", "categorize"):
+                    start_action(project, first); complete_action(project, first, results.get(first, {}))
+                start_action(project, action); data = build_rp_data(root, "p", active_action=action)
+                self.assertIsNone(export_artifact_path(project, current_export)); self.assertIsNone(export_artifact_path(project, downstream_export))
+                self.assertEqual(data["categorizationWorkflow"]["metrics"]["papersExtracted"], 0); self.assertEqual(data["evidenceMatrix"], []); self.assertEqual(data["groups"], [])
+                if action == "collect": self.assertEqual(data["retrieved"], [])
+                if action == "download-pdfs": self.assertEqual(data["retrievalSummary"]["retrieved"], 0)
+
+    def test_exception_notice_uses_safe_generic_recovery_without_fake_zero_counts(self):
+        from reviewpilot_core.workflow_state import fail_action
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "p"; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"]}); initialize_workflow_state(project)
+            start_action(project, "collect"); complete_action(project, "collect", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}})
+            start_action(project, "collect"); fail_action(project, "collect", RuntimeError("token=secret https://private.example/patient")); data = build_rp_data(root, "p")
+        notice = data["workflowNotices"]["collection"]
+        self.assertEqual(notice["kind"], "exception"); self.assertNotIn("succeeded", notice); self.assertNotIn("failed", notice)
+        self.assertEqual(notice["error"], "Action failed (RuntimeError)."); self.assertNotIn("secret", json.dumps(data)); self.assertEqual(data["steps"][0]["status"], "failed"); self.assertTrue(data["steps"][0]["stale"])
+        self.assertNotIn("0 completed", json.dumps(data["messages"])); self.assertIn("recovery", json.dumps(data["messages"]).lower())
+
+    def test_rerunning_initial_structured_failure_blocks_current_report_during_running_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "p"; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"]}); write_json(project / "pdfs" / "download_report.json", {"success": 0, "failed": 1})
+            initialize_workflow_state(project)
+            for action, result in (("collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}}), ("screen", {})):
+                start_action(project, action); complete_action(project, action, result)
+            start_action(project, "download-pdfs"); complete_action(project, "download-pdfs", {"success": 0, "failed": 1})
+            self.assertIsNotNone(export_artifact_path(project, "download-report"))
+            start_action(project, "download-pdfs")
+            self.assertIsNone(export_artifact_path(project, "download-report"))
+            data = build_rp_data(root, "p", active_action="download-pdfs")
+        self.assertEqual(data["retrievalSummary"]["retrieved"], 0); self.assertTrue(data["stageState"]["retrieval"]["stale"])
+
+    def test_extraction_error_rows_never_enter_success_metrics_evidence_or_categorization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "p"; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"]}); initialize_workflow_state(project)
+            for action, result in (("collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {}}), ("screen", {}), ("download-pdfs", {"success": 0, "failed": 0})):
+                start_action(project, action); complete_action(project, action, result)
+            write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"title": "Failed A", "extraction_status": "error", "finding": "must not surface"}, {"title": "Failed B", "extraction_status": "failed", "finding": "must not surface"}])
+            start_action(project, "run-extraction"); complete_action(project, "run-extraction", {"processed": 0, "errors": 2}); data = build_rp_data(root, "p")
+        self.assertEqual({item["label"]: item["value"] for item in data["resultOverview"]}["Extracted"], "0")
+        self.assertEqual(data["categorizationWorkflow"]["metrics"]["papersExtracted"], 0); self.assertEqual(data["evidenceMatrix"], [])
+        self.assertEqual(data["categorizationWorkflow"]["fullResults"]["rows"], []); self.assertEqual(data["workflowNotices"]["extraction"]["failedItems"], ["Failed A", "Failed B"])
+
+    def test_generated_messages_redact_all_absolute_path_variants_but_user_messages_remain_verbatim(self):
+        variants = ["/Users/a/secret", "C:\\secret\\key", "\\\\server\\share\\key", "file:///tmp/key", "///tmp/key"]
+        for value in variants:
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); project = root / "p"; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": "p", "platforms": ["pubmed"], "lead_agent_reply": f"generated {value}"})
+                write_jsonl(project / "chat" / "messages.jsonl", [{"step": 1, "role": "u", "text": f"user {value}"}, {"step": 1, "role": "a", "text": f"assistant {value}"}]); data = build_rp_data(root, "p")
+                assistant_payload = "\n".join(message["text"] for message in data["messages"] if message["role"] == "a")
+                user_payload = "\n".join(message["text"] for message in data["messages"] if message["role"] == "u")
+                self.assertNotIn(value, assistant_payload); self.assertIn(value, user_payload)
     def test_partial_retrieval_projection_agrees_across_canvas_activity_and_recovery_notice_after_refresh(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project = root / "partial"; project.mkdir()
@@ -43,7 +113,7 @@ class StateProjectionTests(unittest.TestCase):
             write_json(project / "pdfs" / "download_report.json", {"success": 2, "failed": 1, "failed_papers": [{"id": "c", "title": "C", "failure_class": "paywall"}]})
             initialize_workflow_state(project)
             for action in ("collect", "screen"):
-                start_action(project, action); complete_action(project, action, {})
+                start_action(project, action); complete_action(project, action, terminal_result(action))
             start_action(project, "download-pdfs"); complete_action(project, "download-pdfs", {"success": 2, "failed": 1})
             data = build_rp_data(root, "partial")
             refreshed = build_rp_data(root, "partial")
@@ -60,7 +130,7 @@ class StateProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cases = {
-                "collection": ({"total_papers": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "/Users/alice/token timed out"}}, "collect", "arXiv"),
+                "collection": ({"total_papers": 1, "platform_stats": {"pubmed": 1, "arxiv": 0}, "platform_errors": {"arxiv": "/Users/alice/token timed out"}}, "collect", "arXiv"),
                 "retrieval": ({"success": 1, "failed": 1, "failed_papers": [{"title": "Paper B", "failure_detail": "/Users/alice/private.pdf"}]}, "download-pdfs", "Paper B"),
                 "extraction": ({"processed": 1, "errors": 1}, "run-extraction", "Paper C"),
             }
@@ -69,7 +139,7 @@ class StateProjectionTests(unittest.TestCase):
                 initialize_workflow_state(project)
                 prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
                 for prerequisite in prerequisites:
-                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                    start_action(project, prerequisite); complete_action(project, prerequisite, terminal_result(prerequisite))
                 if name == "collection": write_json(project / "collected" / "summary.json", artifact)
                 elif name == "retrieval": write_json(project / "pdfs" / "download_report.json", artifact)
                 else:
@@ -96,13 +166,13 @@ class StateProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cases = [
-                ("collection", "collect", {"total":1,"platform_stats":{"pubmed":1},"platform_errors":{"arxiv":"503"}}, lambda p: write_json(p/"collected"/"summary.json", {"total_papers":1,"platform_stats":{"pubmed":1},"platform_errors":{"arxiv":"503"}}), "partially completed"),
+                ("collection", "collect", {"total":1,"platform_stats":{"pubmed":1,"arxiv":0},"platform_errors":{"arxiv":"503"}}, lambda p: write_json(p/"collected"/"summary.json", {"total_papers":1,"platform_stats":{"pubmed":1,"arxiv":0},"platform_errors":{"arxiv":"503"}}), "partially completed"),
                 ("retrieval", "download-pdfs", {"success":1,"failed":1}, lambda p: write_json(p/"pdfs"/"download_report.json", {"success":1,"failed":1,"failed_papers":[{"title":"B"}]}), "partially completed"),
                 ("extraction", "run-extraction", {"processed":0,"errors":1}, lambda p: write_jsonl(p/"extraction"/"extraction_results.jsonl", [{"title":"C","extraction_status":"error"}]), "failed"),
             ]
             for name, action, result, artifact_writer, expected in cases:
                 project=root/name; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":name,"platforms":["pubmed"]}); initialize_workflow_state(project)
-                for prerequisite in {"collect":(),"download-pdfs":("collect","screen"),"run-extraction":("collect","screen","download-pdfs")}[action]: start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                for prerequisite in {"collect":(),"download-pdfs":("collect","screen"),"run-extraction":("collect","screen","download-pdfs")}[action]: start_action(project, prerequisite); complete_action(project, prerequisite, terminal_result(prerequisite))
                 artifact_writer(project); start_action(project, action); complete_action(project, action, result)
                 write_jsonl(project/"chat"/"messages.jsonl", [{"step":1,"role":"a","source":"canvas_action","stage":name,"text":"LLM says completed /Users/alice/private.txt"}])
                 payload = json.dumps(build_rp_data(root, name))
@@ -120,7 +190,7 @@ class StateProjectionTests(unittest.TestCase):
     def test_extraction_failed_items_scan_past_two_hundred_success_rows_using_one_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]}); initialize_workflow_state(project)
-            for action in ("collect","screen","download-pdfs"): start_action(project,action); complete_action(project,action,{})
+            for action in ("collect","screen","download-pdfs"): start_action(project,action); complete_action(project,action,terminal_result(action))
             rows=[{"title":f"S{i}","extraction_status":"success"} for i in range(200)] + [{"title":"Late failure","extraction_status":"error"}]
             write_jsonl(project/"extraction"/"extraction_results.jsonl", rows); start_action(project,"run-extraction"); complete_action(project,"run-extraction", {"processed":200,"errors":1})
             data=build_rp_data(root,"p")
@@ -128,16 +198,16 @@ class StateProjectionTests(unittest.TestCase):
 
     def test_terminal_rerun_stale_policy_blocks_mismatched_current_and_downstream_exports(self):
         cases = [
-            ("collect", "collection", "relevance-prompt", "included-papers", {"total":1,"platform_stats":{"pubmed":1},"platform_errors":{"arxiv":"503"}}),
+            ("collect", "collection", "relevance-prompt", "included-papers", {"total":1,"platform_stats":{"pubmed":1,"arxiv":0},"platform_errors":{"arxiv":"503"}}),
             ("download-pdfs", "retrieval", "download-report", "extraction-results", {"success":1,"failed":1}),
             ("run-extraction", "extraction", "extraction-results", "categorization-mapping", {"processed":1,"errors":1}),
         ]
         for action, stage_name, current_export, downstream_export, partial_result in cases:
-            for result, current_should_export in ((partial_result, True), ({**partial_result, **({"total":0,"platform_stats":{},"platform_errors":{"pubmed":"503"}} if action=="collect" else ({"success":0,"failed":1} if action=="download-pdfs" else {"processed":0,"errors":1}))}, True), ({**partial_result, **({"platform_errors":{}} if action=="collect" else ({"failed":0} if action=="download-pdfs" else {"errors":0}))}, True)):
+            for result, current_should_export in ((partial_result, True), ({**partial_result, **({"total":0,"platform_stats":{"pubmed":0},"platform_errors":{"pubmed":"503"}} if action=="collect" else ({"success":0,"failed":1} if action=="download-pdfs" else {"processed":0,"errors":1}))}, True), ({**partial_result, **({"platform_errors":{}} if action=="collect" else ({"failed":0} if action=="download-pdfs" else {"errors":0}))}, True)):
                 with self.subTest(action=action, result=result), tempfile.TemporaryDirectory() as tmp:
                     root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]}); initialize_workflow_state(project)
                     write_json(project/"prompts"/"relevance_prompt.json", {"task":"x"}); write_jsonl(project/"filtered"/"included_papers.jsonl", [{"title":"A"}]); write_json(project/"pdfs"/"download_report.json", {"success":1,"failed":0}); write_jsonl(project/"extraction"/"extraction_results.jsonl", [{"title":"A","extraction_status":"success"}]); write_json(project/"categorization"/"categorization_mapping.json", {"categories":["A"],"mapping":{"A":"A"}})
-                    for first in ("collect","screen","download-pdfs","run-extraction","categorize"): start_action(project,first); complete_action(project,first,{})
+                    for first in ("collect","screen","download-pdfs","run-extraction","categorize"): start_action(project,first); complete_action(project,first,terminal_result(first))
                     start_action(project,action); complete_action(project,action,result); data=build_rp_data(root,"p")
                     self.assertEqual(export_artifact_path(project,current_export) is not None, current_should_export)
                     self.assertIsNone(export_artifact_path(project,downstream_export))
@@ -151,11 +221,11 @@ class StateProjectionTests(unittest.TestCase):
             write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1, "failed_papers": [{"title": "Old failure"}]})
             initialize_workflow_state(project)
             for action in ("collect", "screen", "download-pdfs"):
-                start_action(project, action); complete_action(project, action, {"success": 1, "failed": 1} if action == "download-pdfs" else {})
+                start_action(project, action); complete_action(project, action, {"success": 1, "failed": 1} if action == "download-pdfs" else terminal_result(action))
             start_action(project, "download-pdfs"); fail_action(project, "download-pdfs", RuntimeError("crashed"))
             data = build_rp_data(root, "p")
 
-        self.assertNotIn("retrieval", data["workflowNotices"])
+        self.assertEqual(data["workflowNotices"]["retrieval"]["kind"], "exception")
         self.assertNotIn("Old failure", json.dumps(data))
     def test_stale_activity_does_not_recount_pdfs_or_replay_old_canvas_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,7 +233,7 @@ class StateProjectionTests(unittest.TestCase):
             (project / "search_conditions.json").write_text(json.dumps({"project_name":"stale-activity","description":"Q","platforms":["pubmed"]}))
             initialize_workflow_state(project)
             for action in ("collect", "screen", "download-pdfs"):
-                start_action(project, action); complete_action(project, action, {})
+                start_action(project, action); complete_action(project, action, terminal_result(action))
             (project / "pdfs").mkdir(); (project / "pdfs" / "old.pdf").write_bytes(b"old")
             (project / "chat").mkdir(); (project / "chat" / "messages.jsonl").write_text(json.dumps({"role":"a","source":"canvas_action","stage":"download","text":"Download completed: 9 PDFs"}) + "\n")
             from reviewpilot_core.workflow_state import mark_stages_stale
@@ -180,7 +250,7 @@ class StateProjectionTests(unittest.TestCase):
 
             before = build_rp_data(output_root, "ledger-project")
             start_action(project_dir, "collect")
-            complete_action(project_dir, "collect", {"total_papers": 3})
+            complete_action(project_dir, "collect", {"total_papers": 3, "platform_stats": {"pubmed": 3}, "platform_errors": {}})
             (project_dir / "categorization" / "categorization_mapping.json").unlink()
             after = build_rp_data(output_root, "ledger-project")
 

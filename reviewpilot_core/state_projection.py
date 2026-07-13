@@ -294,7 +294,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "categorizationSummary": _categorization_summary(categorization),
         "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
-        "evidenceMatrix": _evidence_matrix(extraction_rows, included, categorized_rows),
+        "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
         "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
@@ -328,9 +328,10 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str]]:
                     continue
                 if not isinstance(row, dict):
                     continue
-                if len(rows) < 200:
+                status = str(row.get("extraction_status") or "").lower()
+                if status in {"", "success"} and len(rows) < 200:
                     rows.append(row)
-                if len(failed_items) < 10 and str(row.get("extraction_status") or "").lower() in {"error", "failed"}:
+                if len(failed_items) < 10 and status in {"error", "failed"}:
                     failed_items.append(_safe_failed_item(row))
                 if len(rows) >= 200 and len(failed_items) >= 10:
                     break
@@ -407,6 +408,7 @@ def _steps(
                 "key": key,
                 "label": label,
                 "status": status,
+                "stale": bool(stage_state["stale"]),
                 "sub": "Needs rerun" if stage_state["stale"] else (subs.get(key) or fallback_sub),
                 "desc": "",
             }
@@ -1128,7 +1130,7 @@ def _messages(
             {
                 "step": 1,
                 "role": "a",
-                "text": str(config.get("lead_agent_reply")),
+                "text": safe_display_text(str(config.get("lead_agent_reply")), fallback="Generated message details hidden because they contained a local path."),
             }
         )
     messages.extend(_workflow_outcome_messages(workflow_notices or {}))
@@ -1154,6 +1156,10 @@ def _workflow_outcome_messages(notices: dict[str, dict[str, Any]]) -> list[dict]
     for stage_name in ("collection", "retrieval", "extraction"):
         notice = notices.get(stage_name)
         if not notice:
+            continue
+        if notice.get("kind") == "exception":
+            text = f"{labels[stage_name]} failed unexpectedly. {notice['error']} Recovery is required before retrying this stage."
+            messages.append({"step": steps[stage_name], "role": "a", "text": text})
             continue
         outcome = "partially completed" if notice["status"] == "partial" else "failed"
         text = f"{labels[stage_name]} {outcome}: {notice['succeeded']} completed, {notice['failed']} failed."
@@ -1257,7 +1263,10 @@ def _activity_by_step(
     }
     for stage_name, notice in notices.items():
         step_key = {"collection": "search", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorization": "categorize"}[stage_name]
-        activity[step_key].append({"t": "--:--:--", "tag": notice["status"], "msg": f"{notice['succeeded']} completed · {notice['failed']} failed · {notice['nextAction'] or 'recovery required'}"})
+        if notice.get("kind") == "exception":
+            activity[step_key].append({"t": "--:--:--", "tag": "failed", "msg": f"{notice['error']} Recovery required."})
+        else:
+            activity[step_key].append({"t": "--:--:--", "tag": notice["status"], "msg": f"{notice['succeeded']} completed · {notice['failed']} failed · {notice['nextAction'] or 'recovery required'}"})
     for step_key, line in _canvas_action_activity(path):
         stage_name = {"search": "collection", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorize": "categorization"}.get(step_key)
         if stage_name and (workflow_state["stages"][stage_name]["stale"] or stage_name in notices):
@@ -1271,6 +1280,16 @@ def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict,
     next_actions = {"collection": "Paper Screening", "retrieval": "Information Extraction", "extraction": "Categorization & Analysis"}
     for stage_name in ("collection", "retrieval", "extraction"):
         stage = workflow_state["stages"][stage_name]
+        is_exception = stage["status"] == "failed" and bool(stage.get("error")) and not str(stage["error"]).startswith("Action produced no successful outputs")
+        if is_exception:
+            notices[stage_name] = {
+                "kind": "exception",
+                "status": "failed",
+                "error": safe_display_text(str(stage["error"]), fallback="Workflow action failed. Failure details were hidden."),
+                "retryable": True,
+                "nextAction": "",
+            }
+            continue
         if stage["stale"] or stage["status"] not in {"partial", "failed"}:
             continue
         if stage_name == "collection":
@@ -1281,6 +1300,7 @@ def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict,
         else:
             failed_items = extraction_failed_items
         notices[stage_name] = {
+            "kind": "structured",
             "status": stage["status"],
             "succeeded": int(stage["counts"].get("succeeded", 0)),
             "failed": int(stage["counts"].get("failed", 0)),

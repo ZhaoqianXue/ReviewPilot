@@ -98,6 +98,9 @@ function workflowProgressIndexForSteps(steps) {
 function workflowOutcomeBanner(notice) {
   if (!notice || !['partial', 'failed'].includes(notice.status)) return '';
   const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  if (notice.kind === 'exception') {
+    return `<div data-ui="workflow-outcome-error" style="border:1px solid;border-radius:9px;padding:10px 11px;margin-bottom:14px;line-height:1.45;border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;"><strong>Workflow action failed.</strong> ${escapeText(notice.error || 'The action stopped unexpectedly.')} Recovery is required before retrying this stage.</div>`;
+  }
   const failedItems = (notice.failedItems || []).map(escapeText).join(', ');
   const recovery = notice.status === 'failed'
     ? 'This stage is blocked. Failed items remain retryable in the recovery step.'
@@ -108,8 +111,19 @@ function workflowOutcomeBanner(notice) {
   return `<div data-ui="workflow-outcome-${kind}" style="border:1px solid;border-radius:9px;padding:10px 11px;margin-bottom:14px;line-height:1.45;${colors}"><strong>${notice.succeeded} completed · ${notice.failed} failed.</strong>${failedItems ? ` Failed items: ${failedItems}.` : ''} ${recovery}${next}</div>`;
 }
 
+async function resolveTaskAndRefresh(taskPromise, projectId, fetchProjectStateFn) {
+  let error = '';
+  try {
+    await taskPromise;
+  } catch (err) {
+    error = err && err.message ? err.message : String(err);
+  }
+  const data = await fetchProjectStateFn(projectId);
+  return { data, error };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
 }
 
 /* ReviewPilot workspace UI.
@@ -555,11 +569,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       && ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation, taskId)
     );
     try {
-      await waitForActiveTaskOnce(taskId, key);
+      const outcome = await resolveTaskAndRefresh(waitForActiveTaskOnce(taskId, key), projectId, fetchProjectState);
       if (!ownsTask()) return;
-      const refreshedData = await fetchProjectState(projectId);
-      if (!ownsTask()) return;
-      setData(refreshedData, false, { preserveView: true });
+      setData(outcome.data, false, { preserveView: true });
+      state.actionError = outcome.error;
       paintWorkspace();
     } catch (err) {
       if (!ownsTask()) return;
