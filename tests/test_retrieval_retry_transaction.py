@@ -2189,7 +2189,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
                 with self.assertRaises(ValueError): transaction._read_marker(self.project.resolve())
                 self.assertEqual(marker.read_bytes(), before)
 
-    def test_abort_and_reconcile_fail_closed_for_valid_apply_marker(self):
+    def test_abort_refuses_but_inactive_reconcile_finishes_valid_apply_marker(self):
         marker, _ = self.promote_marker_raw_for_test(); before = marker.read_bytes()
         destination = self.plan.pdfs[0].destination_path; pdf_before = destination.read_bytes()
         staging = self.project / self.staging; transaction_id = json.loads(before)["transaction_id"]
@@ -2199,9 +2199,8 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertEqual(transaction._ACTIVE[self.project.resolve()], transaction_id)
         self.assertEqual(marker.read_bytes(), before); self.assertEqual(destination.read_bytes(), pdf_before); self.assertTrue(staging.exists())
         abandon_retry_transaction(self.project)
-        with self.assertRaisesRegex(ValueError, r"^Pending retry transaction cannot be recovered safely$"):
-            reconcile_retry_transaction(self.project)
-        self.assertEqual(marker.read_bytes(), before); self.assertEqual(destination.read_bytes(), pdf_before); self.assertTrue(staging.exists())
+        self.assertTrue(reconcile_retry_transaction(self.project))
+        self.assertFalse(marker.exists()); self.assertEqual(destination.read_bytes(), pdf_before); self.assertFalse(staging.exists())
 
     def decoded_apply_marker(self):
         self.promote_marker_raw_for_test()
@@ -2613,7 +2612,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertEqual(_validate_apply_pdf_commit(self.project, apply_marker).receipt_identities, ())
         _roll_forward_retry_authorities(self.project, apply_marker)
         self.assertTrue(_cleanup_apply_staging(self.project, apply_marker)); self.assertFalse((self.project / self.staging).exists())
-        self.assertTrue(transaction._roll_forward_retry_transaction(self.project, apply_marker))
+        abandon_retry_transaction(self.project); self.assertTrue(reconcile_retry_transaction(self.project))
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
     def test_apply_staging_subset_is_read_only_and_accepts_monotonic_partial_cleanup(self):
@@ -2862,11 +2861,51 @@ class RetryPdfPublicationTests(unittest.TestCase):
         record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
         publish_retry_transaction_pdfs(self.project); marker = self.decoded_apply_marker()
         before = {pdf.destination_path: pdf.destination_path.read_bytes() for pdf in self.plan.pdfs}
-        from reviewpilot_core import retrieval_retry_transaction as transaction
-        self.assertTrue(transaction._roll_forward_retry_transaction(self.project, marker))
+        abandon_retry_transaction(self.project); self.assertTrue(reconcile_retry_transaction(self.project))
         self.assertEqual(len(before), 2)
         self.assertEqual({path: path.read_bytes() for path in before}, before)
         self.assertFalse((self.project / self.staging).exists()); self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+
+    def test_reconcile_dispatches_inactive_apply_marker_to_marker_last_finish(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        staging = self.project / self.staging; destination = self.plan.pdfs[0].destination_path
+        before = destination.read_bytes()
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(marker_path.exists()); self.assertTrue(staging.exists())
+        abandon_retry_transaction(self.project)
+        self.assertTrue(reconcile_retry_transaction(self.project))
+        self.assertFalse(marker_path.exists()); self.assertFalse(staging.exists())
+        self.assertEqual(destination.read_bytes(), before)
+
+    def test_reconcile_resumes_mixed_apply_authorities(self):
+        marker = self.decoded_apply_marker()
+        snapshot = _classify_retry_authorities(self.project, marker)
+        snapshot = _write_retry_authority_target(self.project, marker, snapshot, 0)
+        self.assertEqual(snapshot.kinds, ("target", "before", "before"))
+        abandon_retry_transaction(self.project)
+        self.assertTrue(reconcile_retry_transaction(self.project))
+        self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+
+    def test_reconcile_invalid_apply_pdf_never_writes_authority(self):
+        marker = self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        self.plan.pdfs[0].destination_path.write_bytes(b"invalid"); abandon_retry_transaction(self.project)
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target") as writer:
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        writer.assert_not_called(); self.assertTrue(marker_path.exists())
+        self.assertEqual(_classify_retry_authorities(self.project, marker).kinds, ("before", "before", "before"))
+
+    def test_reconcile_reenters_after_apply_finish_failure(self):
+        self.decoded_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        abandon_retry_transaction(self.project)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._roll_forward_retry_transaction; failed = False
+        def fail_once(*args):
+            nonlocal failed
+            if not failed: failed = True; raise ValueError("finish")
+            return original(*args)
+        with patch("reviewpilot_core.retrieval_retry_transaction._roll_forward_retry_transaction", side_effect=fail_once):
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(marker_path.exists()); self.assertTrue(reconcile_retry_transaction(self.project))
 
     def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
         marker = self.decoded_apply_marker(); included = self.project / self.staging / "retry/filtered/included_papers.jsonl"

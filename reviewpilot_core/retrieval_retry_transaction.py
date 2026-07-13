@@ -1002,7 +1002,9 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
             if project in _ACTIVE:
                 return False
         marker_data = _read_marker(project)
-        return _restore(project, marker_data)
+        if marker_data["phase"] == "abort": return _restore(project, marker_data)
+        if marker_data["phase"] == "apply": return _roll_forward_retry_transaction(project, marker_data)
+        raise ValueError("Pending retry transaction cannot be recovered safely")
 
 
 def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:
