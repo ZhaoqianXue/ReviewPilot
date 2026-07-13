@@ -686,8 +686,8 @@ class FrontendContractTests(unittest.TestCase):
         compute_vals = source[source.index("steps: steps.map") : source.index("stepTitle: cur.label")]
 
         self.assertIn("noRight: i === arr.length - 1", compute_vals)
-        self.assertIn("rightNavy: i < arr.length - 1 && s.status === 'done'", compute_vals)
-        self.assertNotIn("rightNavy: s.status === 'done'", compute_vals)
+        self.assertIn("rightNavy: i < arr.length - 1 && ['done', 'partial'].includes(s.status)", compute_vals)
+        self.assertNotIn("rightNavy: ['done', 'partial'].includes(s.status)", compute_vals)
 
     def test_completed_analysis_renders_accessible_existing_export_links_without_paths(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")

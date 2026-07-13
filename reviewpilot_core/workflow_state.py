@@ -97,7 +97,7 @@ def start_action(project_path: Path | str, action: str) -> dict[str, Any]:
     with _project_lock(project_path):
         state = load_workflow_state(project_path)
         prerequisite = _ACTION_PREREQUISITES.get(action)
-        if prerequisite and (state["stages"][prerequisite]["status"] != "completed" or state["stages"][prerequisite]["stale"]):
+        if prerequisite and (state["stages"][prerequisite]["status"] not in {"completed", "partial"} or state["stages"][prerequisite]["stale"]):
             raise ValueError(f"Action '{action}' requires completed stage '{prerequisite}'")
         stage = state["stages"][_action_stage(action)]
         stage.update(status="running", attempt=stage["attempt"] + 1, updated_at=_now(), error=None)
@@ -110,19 +110,63 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         state = load_workflow_state(project_path)
         stage_name = _action_stage(action)
         stage = state["stages"][stage_name]
-        counts = _counts(result or {})
-        status = "ready" if action in _READY_ACTIONS else "completed"
-        stage.update(status=status, updated_at=_now(), error=None, counts=counts)
-        if status == "completed":
+        result = result or {}
+        status, outcome_counts = structured_action_outcome(action, result)
+        counts = outcome_counts or _counts(result)
+        if action in _READY_ACTIONS:
+            status = "ready"
+        error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
+        stage.update(status=status, updated_at=_now(), error=error, counts=counts)
+        if status in {"completed", "partial"}:
             stage["stale"] = False
             stage["last_valid"] = {"status": status, "attempt": stage["attempt"], "updated_at": stage["updated_at"], "counts": counts}
         next_index = STAGE_NAMES.index(stage_name) + 1
-        if status == "completed" and next_index < len(STAGE_NAMES):
+        if status in {"completed", "partial"} and next_index < len(STAGE_NAMES):
             next_stage = state["stages"][STAGE_NAMES[next_index]]
             if next_stage["status"] == "not_started":
                 next_stage.update(status="ready", updated_at=_now())
         _write(project_path, state)
         return state
+
+
+def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str, dict[str, int]]:
+    """Classify terminal outcomes from structured agent contracts only."""
+    nested = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+    if action == "collect":
+        stats = result.get("platform_stats") if isinstance(result.get("platform_stats"), dict) else nested.get("platform_stats")
+        errors = result.get("platform_errors") if isinstance(result.get("platform_errors"), dict) else nested.get("platform_errors")
+        if not isinstance(errors, dict) or not errors:
+            return "completed", {}
+        succeeded = len(stats) if isinstance(stats, dict) else 0
+        collected = _first_nonnegative_int(result, nested, "total", "total_papers")
+        if collected is None and isinstance(stats, dict):
+            collected = sum(value for value in stats.values() if _nonnegative_int(value))
+        failed = len(errors)
+    elif action == "download-pdfs":
+        failed = _first_nonnegative_int(result, nested, "failed")
+        if not failed:
+            return "completed", {}
+        succeeded = _first_nonnegative_int(result, nested, "success", "successful", "pdf_count") or 0
+    elif action == "run-extraction":
+        failed = _first_nonnegative_int(result, nested, "errors", "failed")
+        if not failed:
+            return "completed", {}
+        succeeded = _first_nonnegative_int(result, nested, "processed", "success") or 0
+    else:
+        return "completed", {}
+    counts = {"succeeded": int(succeeded or 0), "failed": int(failed)}
+    if action == "collect":
+        counts["collected"] = int(collected or 0)
+    return ("partial" if counts["succeeded"] > 0 else "failed"), counts
+
+
+def _first_nonnegative_int(primary: dict[str, Any], secondary: dict[str, Any], *keys: str) -> int | None:
+    for source in (primary, secondary):
+        for key in keys:
+            value = source.get(key)
+            if _nonnegative_int(value):
+                return value
+    return None
 
 
 def fail_action(project_path: Path | str, action: str, error: BaseException | str) -> dict[str, Any]:

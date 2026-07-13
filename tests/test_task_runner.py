@@ -7,6 +7,17 @@ from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_structured_workflow_terminal_status_is_not_relabelled_completed(self):
+        runner = TaskRunner()
+        try:
+            partial_id = runner.submit("partial", "collect", lambda: {"status": "partial", "data": {"succeeded": 1, "failed": 1}})
+            failed_id = runner.submit("failed", "collect", lambda: {"status": "failed", "data": {"succeeded": 0, "failed": 1}})
+            self.assertEqual(runner.wait(partial_id, 2)["status"], "partial")
+            failed = runner.wait(failed_id, 2)
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["result"]["data"]["failed"], 1)
+        finally:
+            runner.shutdown()
     def test_setup_mutation_reserves_only_its_project(self):
         runner = TaskRunner(max_workers=1)
         entered, release = Event(), Event()

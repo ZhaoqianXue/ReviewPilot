@@ -35,6 +35,62 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_partial_retrieval_projection_agrees_across_canvas_activity_and_recovery_notice_after_refresh(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "partial"; project.mkdir()
+            write_json(project / "search_conditions.json", {"project_name": "partial", "platforms": ["pubmed"]})
+            write_jsonl(project / "filtered" / "included_papers.jsonl", [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}, {"id": "c", "title": "C"}])
+            write_json(project / "pdfs" / "download_report.json", {"success": 2, "failed": 1, "failed_papers": [{"id": "c", "title": "C", "failure_class": "paywall"}]})
+            initialize_workflow_state(project)
+            for action in ("collect", "screen"):
+                start_action(project, action); complete_action(project, action, {})
+            start_action(project, "download-pdfs"); complete_action(project, "download-pdfs", {"success": 2, "failed": 1})
+            data = build_rp_data(root, "partial")
+            refreshed = build_rp_data(root, "partial")
+        self.assertEqual(data["stageState"]["retrieval"]["status"], "partial")
+        self.assertEqual(data["steps"][2]["status"], "partial")
+        self.assertEqual(data["steps"][3]["status"], "active")
+        self.assertEqual(data["workflowNotices"]["retrieval"]["failedItems"], ["C"])
+        self.assertEqual(data["workflowNotices"]["retrieval"]["nextAction"], "Information Extraction")
+        self.assertTrue(data["workflowNotices"]["retrieval"]["retryable"])
+        self.assertIn("2 completed", " ".join(line["msg"] for line in data["activityByStep"]["retrieval"]))
+        self.assertEqual(refreshed["workflowNotices"], data["workflowNotices"])
+
+    def test_failed_items_come_from_structured_artifacts_and_redact_local_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = {
+                "collection": ({"total_papers": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "/Users/alice/token timed out"}}, "collect", "arXiv"),
+                "retrieval": ({"success": 1, "failed": 1, "failed_papers": [{"title": "Paper B", "failure_detail": "/Users/alice/private.pdf"}]}, "download-pdfs", "Paper B"),
+                "extraction": ({"processed": 1, "errors": 1}, "run-extraction", "Paper C"),
+            }
+            for name, (artifact, action, expected_item) in cases.items():
+                project = root / name; project.mkdir(); write_json(project / "search_conditions.json", {"project_name": name, "platforms": ["pubmed"]})
+                initialize_workflow_state(project)
+                prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
+                for prerequisite in prerequisites:
+                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                if name == "collection": write_json(project / "collected" / "summary.json", artifact)
+                elif name == "retrieval": write_json(project / "pdfs" / "download_report.json", artifact)
+                else:
+                    write_json(project / "extraction" / "extraction_stats.json", artifact)
+                    write_jsonl(project / "extraction" / "extraction_results.jsonl", [{"title": "Paper A", "extraction_status": "success"}, {"title": "Paper C", "extraction_status": "error", "error_message": "/Users/alice/private.pdf"}])
+                start_action(project, action); complete_action(project, action, artifact)
+                projected = build_rp_data(root, name)
+                notice = projected["workflowNotices"][name]
+                self.assertIn(expected_item, notice["failedItems"])
+                self.assertNotIn("/Users", json.dumps(notice))
+                if name == "extraction":
+                    self.assertNotIn("Extraction is complete", json.dumps(projected["messages"]))
+
+    def test_failed_item_labels_reject_every_supported_absolute_path_form_but_keep_doi_and_title(self):
+        from reviewpilot_core.state_projection import _safe_failed_item
+        unsafe = ["/home/alice/private.pdf", "C:\\secret\\paper.pdf", "\\\\server\\share\\paper.pdf", "file:///tmp/paper.pdf", "//server/share/paper.pdf", "///tmp/paper.pdf"]
+        for value in unsafe:
+            with self.subTest(value=value):
+                self.assertEqual(_safe_failed_item({"title": value}), "Unidentified item")
+        self.assertEqual(_safe_failed_item({"title": "A valid paper title"}), "A valid paper title")
+        self.assertEqual(_safe_failed_item({"doi": "10.1000/review.42"}), "10.1000/review.42")
     def test_stale_activity_does_not_recount_pdfs_or_replay_old_canvas_actions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project = root / "stale-activity"; project.mkdir()

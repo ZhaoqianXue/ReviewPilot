@@ -16,6 +16,34 @@ from web_app import create_project, render_index_html, render_workspace_html
 
 
 class WebAppTests(unittest.TestCase):
+    def test_structured_partial_and_zero_success_task_status_match_ledger_and_refresh_projection(self):
+        for expected_status, data in (
+            ("partial", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "timeout"}}),
+            ("failed", {"total": 0, "platform_stats": {}, "platform_errors": {"pubmed": "timeout"}}),
+        ):
+            with self.subTest(expected_status=expected_status), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); project = root / expected_status; project.mkdir()
+                (project / "search_conditions.json").write_text(json.dumps({"project_name": expected_status, "search_terms": "x", "platforms": ["pubmed"]}))
+                from reviewpilot_core.workflow_state import initialize_workflow_state
+                initialize_workflow_state(project)
+                class FakeResult:
+                    def to_dict(self):
+                        return {"stage": "collection", "status": expected_status, "reply": "structured", "data": data}
+                class FakeLeadAgent:
+                    def __init__(self, *_args, **_kwargs): pass
+                    def handle_message(self, **_kwargs): return FakeResult()
+                runner_before = web_app.task_runner
+                try:
+                    web_app.task_runner = TaskRunner()
+                    with patch.object(web_app, "LeadAgent", FakeLeadAgent):
+                        task_id = web_app.submit_project_action(root, expected_status, "collect")
+                        task = web_app.task_runner.wait(task_id, 2)
+                    projected = build_rp_data(root, expected_status)
+                finally:
+                    web_app.task_runner.shutdown(); web_app.task_runner = runner_before
+                self.assertEqual(task["status"], expected_status)
+                self.assertEqual(projected["stageState"]["collection"]["status"], expected_status)
+                self.assertEqual(projected["steps"][0]["status"], expected_status)
     def test_submit_rejects_schema_actions_before_ledger_prerequisites_without_entering_running(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
@@ -1203,7 +1231,7 @@ class WebAppTests(unittest.TestCase):
                     for action in ["collect", "screen", "generate-schema", "finalize-schema", "download-pdfs", "run-extraction", "categorize"]:
                         task_id = web_app.submit_project_action(output_root, project_id, action, llm_query=fake_llm)
                         task = web_app.task_runner.wait(task_id, timeout=5)
-                        self.assertEqual(task["status"], "completed", task.get("error"))
+                        self.assertEqual(task["status"], "partial" if action == "download-pdfs" else "completed", task.get("error"))
                         stages.append(task["result"]["stage"])
 
                 state = build_rp_data(output_root, project_id)

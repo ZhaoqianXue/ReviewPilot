@@ -7,6 +7,40 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_partial_stage_keeps_itself_reviewable_while_advancing_navigation_to_ready_downstream(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowProgressIndexForSteps } = require('./frontend/app.js');
+const steps = [{key:'retrieval',status:'partial'}, {key:'extraction',status:'active'}, {key:'categorize',status:'todo'}];
+assert.equal(workflowProgressIndexForSteps(steps), 1);
+assert.ok(0 <= workflowProgressIndexForSteps(steps));
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_partial_outcome_banner_shows_counts_failures_retryability_and_next_action(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowOutcomeBanner } = require('./frontend/app.js');
+const html = workflowOutcomeBanner({ status:'partial', succeeded:2, failed:1, failedItems:['Paper C'], retryable:true, nextAction:'Information Extraction' });
+assert.match(html, /data-ui="workflow-outcome-warning"/);
+assert.match(html, /2 completed/); assert.match(html, /1 failed/); assert.match(html, /Paper C/);
+assert.match(html, /recovery step/); assert.match(html, /Information Extraction/);
+assert.doesNotMatch(html, /data-action="retry-failed/);
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_failed_outcome_banner_and_progress_show_blocked_stage_without_next_action(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowOutcomeBanner, workflowProgressIndexForSteps } = require('./frontend/app.js');
+const html = workflowOutcomeBanner({status:'failed',succeeded:0,failed:2,failedItems:['A','B'],retryable:true,nextAction:''});
+assert.match(html, /workflow-outcome-error/); assert.match(html, /0 completed/); assert.match(html, /2 failed/);
+assert.match(html, /blocked/); assert.doesNotMatch(html, /Next action/);
+assert.equal(workflowProgressIndexForSteps([{status:'done'},{status:'failed'},{status:'todo'}]), 1);
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
     def test_stale_step_progress_remains_navigable_after_visiting_previous_step(self):
         script = r"""
 const assert = require('node:assert/strict');

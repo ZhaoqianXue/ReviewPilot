@@ -20,6 +20,20 @@ def ledger_through(project: Path, stage: str) -> None:
 
 
 class LeadAgentTests(unittest.TestCase):
+    def test_partial_and_failed_replies_are_deterministic_and_do_not_ask_the_llm_to_classify_outcomes(self):
+        def forbidden_llm(**_kwargs):
+            raise AssertionError("outcome replies must not use the LLM")
+        agent = LeadAgent(Path("/tmp"), llm_query=forbidden_llm)
+        partial = agent._stage_reply("download", {"success": 2, "failed": 1, "outcome": "partial"}, action="download-pdfs")
+        failed = agent._stage_reply("extraction", {"processed": 0, "errors": 2, "outcome": "failed"}, action="run-extraction")
+        self.assertIn("2 available", partial)
+        self.assertIn("1 failed", partial)
+        self.assertIn("Next action: Information Extraction", partial)
+        self.assertIn("recovery step", partial)
+        self.assertIn("0 processed", failed)
+        self.assertIn("2 errors", failed)
+        self.assertIn("blocked", failed.lower())
+        self.assertNotIn("Next action: Categorization", failed)
     def test_completed_stage_requirement_uses_ledger_before_artifact_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "demo"
@@ -780,13 +794,15 @@ class LeadAgentTests(unittest.TestCase):
                 seen_prompts.append(kwargs["text_prompt"])
                 return (json.dumps({"reply": "Download attempted. Run Information Extraction next."}), {})
 
-            LeadAgent(output_root, workflow_adapter=FakeWorkflowAdapter(), llm_query=fake_llm_query).handle_message(
+            result = LeadAgent(output_root, workflow_adapter=FakeWorkflowAdapter(), llm_query=fake_llm_query).handle_message(
                 project_id="demo",
                 action="download-pdfs",
             )
 
-        self.assertIn("ExtractionAgent will use web-search fallback", seen_prompts[0])
-        self.assertIn("Do not describe web-search fallback as a separate workflow step", seen_prompts[0])
+        self.assertEqual(seen_prompts, [])
+        self.assertEqual(result.status, "failed")
+        self.assertIn("blocked", result.reply)
+        self.assertIn("ExtractionAgent will use web-search fallback", result.reply)
 
     def test_stage_reply_prompt_pins_next_canvas_action_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -978,14 +994,7 @@ class LeadAgentTests(unittest.TestCase):
             chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
             projected = build_rp_data(output_root, "demo")
 
-        self.assertEqual(len(seen_prompts), 1)
-        self.assertNotIn("private-user", seen_prompts[0])
-        self.assertNotIn("/Users/", seen_prompts[0])
-        self.assertNotIn("C:\\Users\\", seen_prompts[0])
-        self.assertNotIn("Alice Smith", seen_prompts[0])
-        self.assertNotIn("\\\\server\\share", seen_prompts[0])
-        self.assertIn('"processed": 3', seen_prompts[0])
-        self.assertIn('"failed": 1', seen_prompts[0])
+        self.assertEqual(seen_prompts, [])
         self.assertEqual(result.data["output_path"], unix_path)
         self.assertEqual(result.data["details"]["artifacts"][0]["report_file"], windows_path)
         self.assertEqual(result.data["details"]["artifacts"][1]["quoted_report"], unix_path_with_spaces)
@@ -1000,7 +1009,7 @@ class LeadAgentTests(unittest.TestCase):
         )
         self.assertEqual(
             result.reply,
-            "Information Extraction completed: 3 processed, 1 failed. Outcome: partial. Next action: Categorization & Analysis.",
+            "Information Extraction partially completed: 3 processed, 1 failed. Next action: Categorization & Analysis. Failed items remain retryable in the recovery step.",
         )
         self.assertNotIn("private-user", result.reply)
         self.assertNotIn("Alice Smith", result.reply)
@@ -1017,7 +1026,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(chat_rows[-1]["text"], result.reply)
         self.assertIn("3 processed", result.reply)
         self.assertIn("1 failed", result.reply)
-        self.assertIn("Outcome: partial", result.reply)
+        self.assertIn("recovery step", result.reply)
         self.assertIn("3 processed", chat_rows[-1]["text"])
         self.assertIn("1 failed", chat_rows[-1]["text"])
         projected_activity = json.dumps(projected["activityByStep"])
@@ -1027,7 +1036,8 @@ class LeadAgentTests(unittest.TestCase):
         self.assertNotIn("private-tail", projected_activity)
         self.assertIn("3 processed", projected_activity)
         self.assertIn("1 failed", projected_activity)
-        self.assertIn("Outcome: partial", projected_activity)
+        self.assertIn("partially completed", projected_activity)
+        self.assertIn("recovery step", projected_activity)
         self.assertIn("Next action: Categorization & Analysis", projected_activity)
 
     def test_unsafe_stage_reply_shapes_all_fall_back_to_structured_summary(self):

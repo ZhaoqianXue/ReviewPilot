@@ -85,6 +85,8 @@ function materialSetupValues(data) {
 function workflowProgressIndexForSteps(steps) {
   const activeIndex = steps.findIndex((step) => step.status === 'active');
   if (activeIndex >= 0) return activeIndex;
+  const failedIndex = steps.findIndex((step) => step.status === 'failed');
+  if (failedIndex >= 0) return failedIndex;
   const staleIndex = steps.findIndex((step) => step.status === 'stale');
   if (staleIndex >= 0) return staleIndex;
   for (let index = steps.length - 1; index >= 0; index -= 1) {
@@ -93,8 +95,21 @@ function workflowProgressIndexForSteps(steps) {
   return 0;
 }
 
+function workflowOutcomeBanner(notice) {
+  if (!notice || !['partial', 'failed'].includes(notice.status)) return '';
+  const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const failedItems = (notice.failedItems || []).map(escapeText).join(', ');
+  const recovery = notice.status === 'failed'
+    ? 'This stage is blocked. Failed items remain retryable in the recovery step.'
+    : (notice.retryable ? 'Failed items remain retryable in the recovery step.' : 'Review the failed items before continuing.');
+  const next = notice.nextAction ? ` Next action: ${escapeText(notice.nextAction)}.` : '';
+  const kind = notice.status === 'partial' ? 'warning' : 'error';
+  const colors = kind === 'warning' ? 'border-color:#f1d39b;background:#fff8e8;color:#7a4b00;' : 'border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;';
+  return `<div data-ui="workflow-outcome-${kind}" style="border:1px solid;border-radius:9px;padding:10px 11px;margin-bottom:14px;line-height:1.45;${colors}"><strong>${notice.succeeded} completed · ${notice.failed} failed.</strong>${failedItems ? ` Failed items: ${failedItems}.` : ''} ${recovery}${next}</div>`;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner };
 }
 
 /* ReviewPilot workspace UI.
@@ -298,6 +313,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       setup: data.setup || {},
       setupRevision: data.setupRevision || '',
       stageState: data.stageState || {},
+      workflowNotices: data.workflowNotices || {},
       steps: data.steps || [],
       fields: data.fields || [],
       schemaWorkbench: data.schemaWorkbench || { status: 'missing', primary_action: 'Generate Schema', can_finalize: false },
@@ -694,7 +710,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const res = await fetch(`/tasks/${encodeURIComponent(taskId)}`);
       if (!res.ok) throw new Error(`Task lookup failed: ${res.status}`);
       const task = await res.json();
-      if (task.status === 'completed') return task;
+      if (['completed', 'partial'].includes(task.status)) return task;
+      if (task.status === 'failed' && task.result) return task;
       if (task.status === 'failed') throw new Error(task.error || 'Task failed');
       await new Promise((resolve) => setTimeout(resolve, TASK_POLL_INTERVAL_MS));
     }
@@ -794,15 +811,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         active: s.key === step,
         notActive: s.key !== step,
         isDone: s.status === 'done',
+        isPartial: s.status === 'partial',
+        isFailed: s.status === 'failed',
         isActive: s.status === 'active',
         isTodo: s.status === 'todo',
         isStale: s.status === 'stale',
         noLeft: i === 0,
-        leftNavy: i > 0 && arr[i - 1].status === 'done',
-        leftGray: i > 0 && arr[i - 1].status !== 'done',
+        leftNavy: i > 0 && ['done', 'partial'].includes(arr[i - 1].status),
+        leftGray: i > 0 && !['done', 'partial'].includes(arr[i - 1].status),
         noRight: i === arr.length - 1,
-        rightNavy: i < arr.length - 1 && s.status === 'done',
-        rightGray: i < arr.length - 1 && s.status !== 'done',
+        rightNavy: i < arr.length - 1 && ['done', 'partial'].includes(s.status),
+        rightGray: i < arr.length - 1 && !['done', 'partial'].includes(s.status),
       })),
       stepTitle: cur.label,
       isSearch: step === 'search',
@@ -836,6 +855,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       canvasActionElapsedLabel,
       historyGroups: historyGroupsForView(D.history),
       actionError: state.actionError,
+      workflowNotice: D.workflowNotices[({search:'collection',screening:'screening',retrieval:'retrieval',extraction:'extraction',categorize:'categorization'})[step]] || null,
       screeningMetrics: D.screeningMetrics,
       retrievalSummary: D.retrievalSummary,
       retrievalDashOffset: (144.5 - ((144.5 * retrievalPct) / 100)).toFixed(1),
@@ -1045,6 +1065,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     ${workspaceHeader(v)}
     <div class="rp-scroll rp-main-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:20px 22px;">
       ${actionErrorBanner(v)}
+      ${workflowOutcomeBanner(v.workflowNotice)}
       ${v.isSearch ? searchCanvas(v) : ''}
       ${v.isScreening ? screeningCanvas(v) : ''}
       ${v.isRetrieval ? retrievalCanvas(v) : ''}
@@ -1100,6 +1121,8 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         ${s.leftGray ? '<span style="flex:1;height:2px;background:#e3e8ef;"></span>' : ''}
         <span style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin:0 7px;">
           ${s.isDone ? '<i class="ph-fill ph-check-circle" style="font-size:19px;color:#1a365d;"></i>' : ''}
+          ${s.isPartial ? '<i class="ph-fill ph-warning-circle" aria-label="Partially completed" style="font-size:19px;color:#b45309;"></i>' : ''}
+          ${s.isFailed ? '<i class="ph-fill ph-x-circle" aria-label="Failed" style="font-size:19px;color:#b42318;"></i>' : ''}
           ${s.isActive ? '<span style="width:18px;height:18px;border-radius:999px;border:2px solid #1a365d;display:flex;align-items:center;justify-content:center;background:#fffefc;"><span style="width:7px;height:7px;border-radius:999px;background:#1a365d;"></span></span>' : ''}
           ${s.isTodo ? '<span style="width:16px;height:16px;border-radius:999px;border:1.5px solid #cdd5e0;background:#fffefc;"></span>' : ''}
           ${s.isStale ? '<i class="ph ph-arrow-counter-clockwise" aria-label="Needs rerun" style="font-size:19px;color:#b45309;"></i>' : ''}
@@ -1111,6 +1134,8 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       <div style="text-align:center;margin-top:2px;">
         <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;white-space:nowrap;">${s.label}</div>
         ${s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
+        ${s.isPartial ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Partial · review failures</div>' : ''}
+        ${s.isFailed ? '<div style="font-size:10px;color:#b42318;margin-top:2px;">Failed · recovery required</div>' : ''}
       </div>
       ${s.active ? '<span style="position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:#1a365d;"></span>' : ''}
     </div>`;

@@ -14,6 +14,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
+from .safe_text import contains_absolute_path
 from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
 
@@ -167,6 +168,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
         },
         "setupRevision": "",
         "stageState": new_workflow_state()["stages"],
+        "workflowNotices": {},
         "steps": [
             {"n": 1, "key": "search", "label": "Search Setup", "status": "active", "sub": "3 sources", "desc": ""},
             {"n": 2, "key": "screening", "label": "Paper Screening", "status": "todo", "sub": "0 / 0", "desc": ""},
@@ -273,6 +275,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "setup": _setup(config),
         "setupRevision": setup_revision(config),
         "stageState": workflow_state["stages"],
+        "workflowNotices": _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_rows),
         "steps": _steps(path, workflow_state, current_step, config, collected_summary, screening_stats, included, download_report, fields, categorization),
         "optionalCapabilities": [],
         "fields": fields,
@@ -292,7 +295,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "exportPackage": _export_package(path),
         "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
         "previewPaper": _preview_paper(extraction_results[0] if extraction_results else {}, included),
-        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, extraction_stale=workflow_state["stages"]["extraction"]["stale"]),
+        "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
         "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state),
         "quietLabels": _quiet_labels(path, workflow_state),
         "quietActions": _quiet_actions(path, workflow_state),
@@ -323,10 +326,10 @@ def _current_step(workflow_state: dict) -> int:
     stale = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["stale"]]
     if stale:
         return stale[0]
-    exceptional = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"running", "partial", "failed"}]
+    exceptional = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"running", "failed"}]
     if exceptional:
         return exceptional[-1]
-    completed = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] == "completed"]
+    completed = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] in {"completed", "partial"}]
     return min((max(completed) + 1) if completed else 1, len(STAGE_NAMES))
 
 
@@ -362,6 +365,10 @@ def _steps(
             status = "stale"
         elif stage_state["status"] == "completed":
             status = "done"
+        elif stage_state["status"] == "partial":
+            status = "partial"
+        elif stage_state["status"] == "failed":
+            status = "failed"
         elif index == current_step:
             status = "active"
         else:
@@ -1078,6 +1085,7 @@ def _messages(
     categorization: dict,
     *,
     extraction_stale: bool = False,
+    extraction_status: str = "not_started",
 ) -> list[dict]:
     description = _initial_user_topic(path, config)
     messages = [
@@ -1094,6 +1102,10 @@ def _messages(
         )
     if categorization:
         messages.append({"step": 5, "role": "a", "text": "The final Categorization & Analysis report is ready."})
+    elif extraction_status == "failed":
+        messages.append({"step": 4, "role": "a", "text": "Information Extraction failed with no successful outputs. Recover the failed items before continuing."})
+    elif extraction_status == "partial":
+        messages.append({"step": 4, "role": "a", "text": "Information Extraction partially completed. Successful outputs are available for Categorization & Analysis; failed items remain recoverable."})
     elif extraction_results or (not extraction_stale and (path / "extraction" / "extraction_results.jsonl").exists()):
         messages.append({"step": 5, "role": "a", "text": "Extraction is complete. Choose a field to categorize for final analysis."})
     messages.extend(_stored_chat_messages(path))
@@ -1188,12 +1200,49 @@ def _activity_by_step(
         "extraction": [{"t": "--:--:--", "tag": "schema", "msg": f"{len(fields)} fields"}],
         "categorize": [{"t": "--:--:--", "tag": "categorize", "msg": f"{_categorization_summary(categorization)['groups']} groups"}],
     }
+    notices = _workflow_notices(path, workflow_state, collected_summary, download_report, read_jsonl(path / "extraction" / "extraction_results.jsonl", limit=200))
+    for stage_name, notice in notices.items():
+        step_key = {"collection": "search", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorization": "categorize"}[stage_name]
+        activity[step_key].append({"t": "--:--:--", "tag": notice["status"], "msg": f"{notice['succeeded']} completed · {notice['failed']} failed · {notice['nextAction'] or 'recovery required'}"})
     for step_key, line in _canvas_action_activity(path):
         stage_name = {"search": "collection", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorize": "categorization"}.get(step_key)
         if stage_name and workflow_state["stages"][stage_name]["stale"]:
             continue
         activity.setdefault(step_key, []).append(line)
     return activity
+
+
+def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict, download_report: dict, extraction_rows: list[dict]) -> dict[str, dict[str, Any]]:
+    notices: dict[str, dict[str, Any]] = {}
+    next_actions = {"collection": "Paper Screening", "retrieval": "Information Extraction", "extraction": "Categorization & Analysis"}
+    for stage_name in ("collection", "retrieval", "extraction"):
+        stage = workflow_state["stages"][stage_name]
+        if stage["status"] not in {"partial", "failed"}:
+            continue
+        if stage_name == "collection":
+            errors = collected_summary.get("platform_errors") if isinstance(collected_summary.get("platform_errors"), dict) else {}
+            failed_items = [_platform_label(str(item)) for item in errors]
+        elif stage_name == "retrieval":
+            failed_items = [_safe_failed_item(row) for row in (download_report.get("failed_papers") or []) if isinstance(row, dict)]
+        else:
+            failed_items = [_safe_failed_item(row) for row in extraction_rows if str(row.get("extraction_status") or "").lower() in {"error", "failed"}]
+        notices[stage_name] = {
+            "status": stage["status"],
+            "succeeded": int(stage["counts"].get("succeeded", 0)),
+            "failed": int(stage["counts"].get("failed", 0)),
+            "failedItems": [item for item in failed_items if item][:10],
+            "retryable": int(stage["counts"].get("failed", 0)) > 0,
+            "nextAction": next_actions.get(stage_name, "") if stage["status"] == "partial" else "",
+        }
+    return notices
+
+
+def _safe_failed_item(row: dict[str, Any]) -> str:
+    for key in ("title", "id", "doi", "paper_id"):
+        value = str(row.get(key) or "").strip()
+        if value and not contains_absolute_path(value):
+            return value[:160]
+    return "Unidentified item"
 
 
 def _canvas_action_activity(path: Path) -> list[tuple[str, dict[str, str]]]:

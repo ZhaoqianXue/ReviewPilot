@@ -114,6 +114,9 @@ class TaskRunner:
         else:
             with self._registry_lock:
                 task = self._tasks[task_id]
-                task["status"] = "completed"
+                structured_status = result.get("status") if isinstance(result, dict) else None
+                task["status"] = structured_status if structured_status in {"partial", "failed"} else "completed"
                 task["result"] = result
+                if structured_status == "failed":
+                    task["error"] = "Workflow action failed with no successful outputs."
                 task["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")

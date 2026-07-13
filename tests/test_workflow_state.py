@@ -41,6 +41,65 @@ def _write_valid_legacy(project: Path, through: str) -> None:
 
 
 class WorkflowStateTests(unittest.TestCase):
+    def test_structured_partial_outcomes_preserve_success_and_unlock_the_next_stage(self):
+        cases = [
+            ("collect", {"total": 3, "platform_stats": {"pubmed": 3}, "platform_errors": {"arxiv": "timeout"}}, "collection", "screening", {"succeeded": 1, "failed": 1, "collected": 3}),
+            ("download-pdfs", {"success": 2, "failed": 1}, "retrieval", "extraction", {"succeeded": 2, "failed": 1}),
+            ("run-extraction", {"processed": 2, "errors": 1}, "extraction", "categorization", {"succeeded": 2, "failed": 1}),
+        ]
+        for action, result, stage_name, next_stage, expected_counts in cases:
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); initialize_workflow_state(project)
+                prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
+                for prerequisite in prerequisites:
+                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                start_action(project, action)
+                state = complete_action(project, action, result)
+                stage = state["stages"][stage_name]
+                self.assertEqual(stage["status"], "partial")
+                self.assertEqual(stage["counts"], expected_counts)
+                self.assertEqual(stage["last_valid"]["status"], "partial")
+                self.assertEqual(state["stages"][next_stage]["status"], "ready")
+
+    def test_structured_zero_success_failures_block_the_next_stage(self):
+        cases = [
+            ("collect", {"total": 0, "platform_stats": {}, "platform_errors": {"pubmed": "timeout"}}, "collection", "screening"),
+            ("download-pdfs", {"success": 0, "failed": 2}, "retrieval", "extraction"),
+            ("run-extraction", {"processed": 0, "errors": 2}, "extraction", "categorization"),
+        ]
+        for action, result, stage_name, next_stage in cases:
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); initialize_workflow_state(project)
+                prerequisites = {"collect": (), "download-pdfs": ("collect", "screen"), "run-extraction": ("collect", "screen", "download-pdfs")}[action]
+                for prerequisite in prerequisites:
+                    start_action(project, prerequisite); complete_action(project, prerequisite, {})
+                start_action(project, action)
+                state = complete_action(project, action, result)
+                self.assertEqual(state["stages"][stage_name]["status"], "failed")
+                self.assertEqual(state["stages"][stage_name]["last_valid"], None)
+                self.assertEqual(state["stages"][next_stage]["status"], "not_started")
+
+    def test_partial_prerequisite_is_valid_because_successful_outputs_are_authoritative(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); initialize_workflow_state(project)
+            start_action(project, "collect")
+            complete_action(project, "collect", {"total": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {"arxiv": "timeout"}})
+            state = start_action(project, "screen")
+        self.assertEqual(state["stages"]["screening"]["status"], "running")
+
+    def test_collection_partial_is_based_on_source_outcomes_even_when_successful_source_returns_zero_papers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); initialize_workflow_state(project); start_action(project, "collect")
+            state = complete_action(project, "collect", {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": {"arxiv": "timeout"}})
+        stage = state["stages"]["collection"]
+        self.assertEqual(stage["status"], "partial")
+        self.assertEqual(stage["counts"], {"succeeded": 1, "failed": 1, "collected": 0})
+
+    def test_real_nested_stats_variants_drive_the_same_deterministic_outcomes(self):
+        from reviewpilot_core.workflow_state import structured_action_outcome
+        self.assertEqual(structured_action_outcome("collect", {"stats": {"platform_stats": {"pubmed": 0}, "platform_errors": {"arxiv": "timeout"}, "total_papers": 0}}), ("partial", {"succeeded": 1, "failed": 1, "collected": 0}))
+        self.assertEqual(structured_action_outcome("download-pdfs", {"stats": {"success": 2, "failed": 1}}), ("partial", {"succeeded": 2, "failed": 1}))
+        self.assertEqual(structured_action_outcome("run-extraction", {"stats": {"processed": 0, "errors": 2}}), ("failed", {"succeeded": 0, "failed": 2}))
     def test_new_ledger_has_exact_versioned_state_contract_and_uses_atomic_writer(self):
         with tempfile.TemporaryDirectory() as tmp, patch(
             "reviewpilot_core.workflow_state.atomic_write_json"

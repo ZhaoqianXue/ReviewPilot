@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from agents.prompt_agent import PromptAgent
@@ -22,16 +22,12 @@ from reviewpilot_core.extraction_schema import (
     schema_paths,
 )
 from reviewpilot_core.model_policy import LEAD_AGENT_DEV_MODEL
+from reviewpilot_core.safe_text import contains_absolute_path
 from reviewpilot_core.sub_agent_contracts import default_sub_agent_contracts
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
-from reviewpilot_core.workflow_state import load_workflow_state
+from reviewpilot_core.workflow_state import load_workflow_state, structured_action_outcome
 from utils.jsonl_handler import append_jsonl
 from utils.llm import query_llm
-
-
-_ABSOLUTE_PATH_MARKER = re.compile(
-    r"(?i:\bfile:(?=/{1,3}|[A-Za-z]:[\\/]))|(?<![:/])/{2,}(?=[^/])|(?<![\w./])/(?!/)|(?<![\w])[A-Za-z]:[\\/]|(?<![\\\w])\\\\(?=[^\\])"
-)
 
 
 @dataclass(frozen=True)
@@ -445,11 +441,14 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
 
     def _action_result(self, project_path: Path, stage: str, result: dict[str, Any], artifacts: list[str], action: str) -> LeadAgentResult:
         data = dict(result)
+        outcome, counts = structured_action_outcome(action, data)
+        data["outcome"] = outcome
+        data.update(counts)
         contract = self.workflow_adapter.contract_for(action)
         data.setdefault("sub_agent", contract.agent_name)
         data.setdefault("contract_stage", contract.stage)
         data.setdefault("model", contract.model)
-        reply = self._stage_reply(stage, result, action=action)
+        reply = self._stage_reply(stage, data, action=action)
         append_jsonl(
             str(project_path / "chat" / "messages.jsonl"),
             {
@@ -465,10 +464,10 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
         )
         return LeadAgentResult(
             stage=stage,
-            status="completed",
+            status=outcome,
             reply=reply,
             artifacts=artifacts,
-            next_actions=self._next_actions(stage, action=action),
+            next_actions=self._next_actions(stage, action=action) if outcome != "failed" else [],
             data=data,
         )
 
@@ -486,6 +485,8 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
         }.get(stage, 1)
 
     def _stage_reply(self, stage: str, result: dict[str, Any], action: str | None = None) -> str:
+        if result.get("outcome") in {"partial", "failed"}:
+            return self._safe_stage_reply(stage, result)
         if action == "suggest-categories":
             field = self._sanitize_prompt_value(str(result.get("field") or "selected field"))
             category_count = result.get("categories")
@@ -541,14 +542,13 @@ Return ONLY valid JSON:
         if isinstance(value, (list, tuple)):
             return [self._sanitize_prompt_value(item) for item in value]
         if isinstance(value, str):
-            stripped = value.strip()
-            if Path(stripped).is_absolute() or PureWindowsPath(stripped).is_absolute() or self._contains_absolute_path(value):
+            if contains_absolute_path(value):
                 return "project artifact"
             return value
         return value
 
     def _contains_absolute_path(self, value: str) -> bool:
-        return _ABSOLUTE_PATH_MARKER.search(str(value)) is not None
+        return contains_absolute_path(value)
 
     def _safe_stage_reply(self, stage: str, result: dict[str, Any]) -> str:
         def count(*keys: str) -> int | None:
@@ -602,21 +602,24 @@ Return ONLY valid JSON:
             "extraction": "Information Extraction",
             "categorization": "Categorization & Analysis",
         }.get(stage, stage.replace("_", " ").title())
-        reply = f"{stage_name} completed"
+        outcome = str(result.get("outcome") or "completed")
+        outcome_label = {"completed": "completed", "partial": "partially completed", "failed": "failed"}.get(outcome, "completed")
+        reply = f"{stage_name} {outcome_label}"
         if details:
             reply += f": {', '.join(details)}"
         reply += "."
-        outcome = result.get("outcome")
-        if isinstance(outcome, str) and re.fullmatch(r"[A-Za-z0-9 _-]{1,80}", outcome):
-            reply += f" Outcome: {outcome}."
         next_action = {
             "collection": "Paper Screening",
             "filtering": "Full-Text Retrieval",
             "download": "Information Extraction",
             "extraction": "Categorization & Analysis",
         }.get(stage)
-        if next_action:
+        if next_action and outcome in {"completed", "partial"}:
             reply += f" Next action: {next_action}."
+        if outcome == "partial":
+            reply += " Failed items remain retryable in the recovery step."
+        elif outcome == "failed":
+            reply += " This stage is blocked until its failed items are recovered."
         if stage == "download":
             download_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
             fallback_candidates = result.get("web_search_fallback_candidates") or download_stats.get("web_search_fallback_candidates")
@@ -659,7 +662,7 @@ Return ONLY valid JSON:
             "categorization": "categorization",
         }.get(required_stage)
         state = load_workflow_state(project_path)
-        if ledger_stage is None or state["stages"][ledger_stage]["status"] != "completed":
+        if ledger_stage is None or state["stages"][ledger_stage]["status"] not in {"completed", "partial"}:
             raise ValueError(f"Action '{action}' requires completed stage '{required_stage}'")
         try:
             self._verify_stage_artifacts(project_path, required_stage)
