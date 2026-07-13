@@ -336,7 +336,11 @@ def _normalize_staged_retry(
         if any(isinstance(detail.get(field), str) and detail[field].strip() for field in ("id", "doi", "url")):
             if stable_retry_id(detail) != success_by_path[path]:
                 raise ValueError("Staged retry success identity does not match report")
-        _canonicalize_success(row, detail)
+        if "pdf_downloaded" in detail and (type(detail["pdf_downloaded"]) is not bool or detail["pdf_downloaded"] is not True):
+            raise ValueError("Staged retry success flag is inconsistent")
+        if "pdf_path" in detail and _staged_pdf_path(detail["pdf_path"], staging_project, pdfs) != path:
+            raise ValueError("Staged retry success path alias is inconsistent")
+        _canonicalize_success(row, detail, path)
     failed_by_id = {stable_retry_id(detail): detail for detail in failed_rows}
     for retry_id in actual_failed:
         row = rows_by_id[retry_id]
@@ -356,6 +360,8 @@ def _normalize_staged_retry(
         _validate_optional_fact(row, "web_search_fallback_eligible", True)
         _validate_optional_fact(detail, "web_search_fallback_pending", True)
         _validate_optional_fact(detail, "web_search_fallback_eligible", True)
+        _canonicalize_failed_schema(row)
+        _canonicalize_failed_schema(detail)
         row.update(pdf_failure_class=canonical_class, retrieval_status=expected_status,
             web_search_fallback_pending=True, web_search_fallback_eligible=True)
         detail.update(failure_class=canonical_class, retrieval_status=expected_status,
@@ -372,7 +378,12 @@ def _normalize_staged_retry(
     for key, expected in classifications.items():
         if key in report:
             actual = report[key]
-            if not isinstance(actual, list) or not all(isinstance(item, dict) for item in actual) or actual != expected:
+            if not isinstance(actual, list) or not all(isinstance(item, dict) for item in actual):
+                raise ValueError("Staged retry classification facts are inconsistent")
+            normalized_actual = deepcopy(actual)
+            for item in normalized_actual:
+                _canonicalize_failed_schema(item)
+            if normalized_actual != expected:
                 raise ValueError("Staged retry classification facts are inconsistent")
         report[key] = deepcopy(expected)
 
@@ -489,7 +500,7 @@ def _is_subscription_failure(value: str) -> bool:
     return any(marker in normalized for marker in ("paywall", "subscrib", "subscription", "closed"))
 
 
-def _canonicalize_success(row: dict[str, Any], detail: dict[str, Any]) -> None:
+def _canonicalize_success(row: dict[str, Any], detail: dict[str, Any], path: Path) -> None:
     failure_fields = ("pdf_failure_class", "pdf_failure_detail", "pdf_failure_classes", "pdf_error")
     report_failure_fields = ("failure_class", "failure_detail", "failure_classes", "error", *failure_fields)
     for container, fields in ((row, failure_fields), (detail, report_failure_fields)):
@@ -502,6 +513,9 @@ def _canonicalize_success(row: dict[str, Any], detail: dict[str, Any]) -> None:
         for key in (*fields, "web_search_fallback_pending", "web_search_fallback_eligible"):
             container.pop(key, None)
         container["retrieval_status"] = "downloaded"
+    canonical_path = str(path)
+    row.update(pdf_downloaded=True, pdf_path=canonical_path)
+    detail.update(pdf_downloaded=True, path=canonical_path, pdf_path=canonical_path)
 
 
 def _has_meaningful_fact(value: Any) -> bool:
@@ -511,6 +525,16 @@ def _has_meaningful_fact(value: Any) -> bool:
 def _validate_optional_fact(container: dict[str, Any], key: str, expected: Any) -> None:
     if key in container and container[key] != expected:
         raise ValueError("Staged retry optional fact is inconsistent")
+
+
+def _canonicalize_failed_schema(container: dict[str, Any]) -> None:
+    if "pdf_downloaded" in container and (type(container["pdf_downloaded"]) is not bool or container["pdf_downloaded"] is not False):
+        raise ValueError("Staged retry failure flag is inconsistent")
+    if any(_has_meaningful_fact(container.get(key)) for key in ("path", "pdf_path", "pdf_method") if key in container):
+        raise ValueError("Staged retry failure contains success facts")
+    for key in ("path", "pdf_path", "pdf_method"):
+        container.pop(key, None)
+    container["pdf_downloaded"] = False
 
 
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:

@@ -223,6 +223,46 @@ class RetrievalRetryTests(unittest.TestCase):
                         fake_download([True, False], mutate=mutation))
                 self.assertFalse(staging.exists())
 
+    def test_staging_enforces_symmetric_success_and_failure_schema(self):
+        def success_flag(staging, rows, report):
+            report["downloaded"][0]["pdf_downloaded"] = False
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def success_path(staging, rows, report):
+            report["downloaded"][0]["pdf_path"] = str(staging / "pdfs" / "other.pdf")
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def failed_flag(staging, rows, report):
+            report["failed_papers"][0]["pdf_downloaded"] = True
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def failed_path(staging, rows, report):
+            report["failed_papers"][0]["path"] = "/forged.pdf"
+            write_json(staging / "pdfs" / "download_report.json", report)
+        def failed_method(staging, rows, report):
+            rows[1]["pdf_method"] = "forged"; report["failed_papers"][0]["pdf_method"] = "forged"
+            write_jsonl(staging / "filtered" / "included_papers.jsonl", rows)
+            write_json(staging / "pdfs" / "download_report.json", report)
+        for mutation in (success_flag, success_path, failed_flag, failed_path, failed_method):
+            with self.subTest(mutation=mutation.__name__), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "project"; two_failure_project(project); staging = project / ".retrieval_retry_staging_case"
+                with self.assertRaises(ValueError):
+                    run_retry_staging(project, confirmed_preparation(project), staging,
+                        fake_download([True, False], mutate=mutation))
+                self.assertFalse(staging.exists())
+
+    def test_staging_accepts_matching_success_aliases_and_failed_false_or_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"; two_failure_project(project)
+            def aliases(staging, rows, report):
+                report["downloaded"][0].update(pdf_downloaded=True, pdf_path=report["downloaded"][0]["path"])
+                report["failed_papers"][0]["pdf_downloaded"] = False
+                write_json(staging / "pdfs" / "download_report.json", report)
+            outcome = run_retry_staging(project, confirmed_preparation(project),
+                project / ".retrieval_retry_staging_case", fake_download([True, False], mutate=aliases))
+            success = outcome.report["downloaded"][0]; failed = outcome.report["failed_papers"][0]
+            self.assertIs(success["pdf_downloaded"], True)
+            self.assertEqual(success["pdf_path"], success["path"])
+            self.assertIs(failed["pdf_downloaded"], False)
+            self.assertNotIn("path", failed); self.assertNotIn("pdf_path", failed); self.assertNotIn("pdf_method", failed)
+
     def test_staging_rejects_invalid_location_and_cleans_its_own_failures(self):
         for kind in ("wrong-name", "nested", "existing", "symlink"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
