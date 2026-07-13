@@ -31,12 +31,11 @@ from .workflow_state import load_workflow_state, save_workflow_state
 
 
 PENDING_RETRY_FILE = ".retrieval_retry_pending.json"
-_RETRY_LOCK_FILE = ".retrieval_retry.lock"
 _STAGING_PREFIX = ".retrieval_retry_staging_"
 _GUARD = Lock()
 _ACTIVE: dict[Path, str] = {}
 _LOCKS: dict[Path, RLock] = {}
-_FILE_LOCKS: dict[Path, tuple[int, int]] = {}
+_FILE_LOCKS: dict[Path, tuple[int, int, int]] = {}
 _RAW_MARKER_BYTES = "_raw_marker_bytes"
 _MARKER_IDENTITY = "_marker_identity"
 _FIXED_AUTHORITIES = (
@@ -63,11 +62,16 @@ def _lock(project: Path) -> RLock:
 @contextmanager
 def _project_file_lock(project: Path) -> Iterator[None]:
     """Serialize retry marker operations across cooperating processes."""
+    process_id = os.getpid()
     with _GUARD:
         held = _FILE_LOCKS.get(project)
+        if held is not None and held[0] != process_id:
+            _, inherited_descriptor, _ = _FILE_LOCKS.pop(project)
+            os.close(inherited_descriptor)
+            held = None
         if held is not None:
-            descriptor, depth = held
-            _FILE_LOCKS[project] = (descriptor, depth + 1)
+            _, descriptor, depth = held
+            _FILE_LOCKS[project] = (process_id, descriptor, depth + 1)
         else:
             descriptor = -1
     if held is not None:
@@ -75,30 +79,31 @@ def _project_file_lock(project: Path) -> Iterator[None]:
             yield
         finally:
             with _GUARD:
-                current_descriptor, depth = _FILE_LOCKS[project]
+                current_process, current_descriptor, depth = _FILE_LOCKS[project]
+                if current_process != process_id:
+                    raise RuntimeError("Retry transaction file lock owner is invalid")
                 if depth == 1:
                     _FILE_LOCKS.pop(project)
                 else:
-                    _FILE_LOCKS[project] = (current_descriptor, depth - 1)
+                    _FILE_LOCKS[project] = (process_id, current_descriptor, depth - 1)
         return
 
-    lock_path = project / _RETRY_LOCK_FILE
-    flags = os.O_RDWR | os.O_CREAT
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(lock_path, flags, 0o600)
+        descriptor = os.open(project, flags)
         fcntl.flock(descriptor, fcntl.LOCK_EX)
         opened = os.fstat(descriptor)
-        current = lock_path.lstat()
-        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+        current = project.lstat()
+        if (not stat.S_ISDIR(opened.st_mode)
                 or _file_identity(opened) != _file_identity(current)
-                or lock_path.resolve(strict=True).parent != project):
+                or project.resolve(strict=True) != project):
             raise ValueError
         with _GUARD:
             if project in _FILE_LOCKS:
                 raise ValueError
-            _FILE_LOCKS[project] = (descriptor, 1)
+            _FILE_LOCKS[project] = (process_id, descriptor, 1)
     except (OSError, RuntimeError, ValueError) as exc:
         if descriptor >= 0:
             try:
@@ -110,8 +115,8 @@ def _project_file_lock(project: Path) -> Iterator[None]:
         yield
     finally:
         with _GUARD:
-            current_descriptor, depth = _FILE_LOCKS.get(project, (-1, 0))
-            if current_descriptor != descriptor or depth != 1:
+            current_process, current_descriptor, depth = _FILE_LOCKS.get(project, (-1, -1, 0))
+            if current_process != process_id or current_descriptor != descriptor or depth != 1:
                 raise RuntimeError("Retry transaction file lock state is invalid")
             _FILE_LOCKS.pop(project)
         try:
@@ -407,9 +412,41 @@ def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
 
 
+def _repair_interrupted_marker_publish(project: Path, marker: Path,
+                                       marker_info: os.stat_result) -> os.stat_result:
+    """Remove the one owned temp link left by a crash after no-clobber publish."""
+    if not stat.S_ISREG(marker_info.st_mode) or marker_info.st_nlink != 2:
+        return marker_info
+    prefix = f".{PENDING_RETRY_FILE}."
+    matches: list[Path] = []
+    with os.scandir(project) as entries:
+        for entry in entries:
+            if not entry.name.startswith(prefix) or not entry.name.endswith(".tmp"):
+                continue
+            info = entry.stat(follow_symlinks=False)
+            if (stat.S_ISREG(info.st_mode) and info.st_dev == marker_info.st_dev
+                    and info.st_ino == marker_info.st_ino and info.st_nlink == 2):
+                matches.append(project / entry.name)
+    if len(matches) != 1 or marker.resolve(strict=True).parent != project:
+        raise ValueError
+    matches[0].unlink()
+    directory = os.open(project, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    repaired = marker.lstat()
+    if (not stat.S_ISREG(repaired.st_mode) or repaired.st_nlink != 1
+            or repaired.st_dev != marker_info.st_dev or repaired.st_ino != marker_info.st_ino
+            or repaired.st_size != marker_info.st_size or repaired.st_mtime_ns != marker_info.st_mtime_ns):
+        raise ValueError
+    return repaired
+
+
 def _read_marker_generation(project: Path) -> tuple[bytes, tuple[int, int, int, int, int, int]]:
     marker = project / PENDING_RETRY_FILE
     before = marker.lstat()
+    before = _repair_interrupted_marker_publish(project, marker, before)
     if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
         raise ValueError
     with marker.open("rb") as stream:

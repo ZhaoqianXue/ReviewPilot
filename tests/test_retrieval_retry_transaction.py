@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 from types import MappingProxyType
 from unittest.mock import patch
@@ -28,6 +29,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     reconcile_retry_transaction,
     record_retry_transaction_target,
     run_retry_transaction_staging,
+    _project_file_lock,
     _publication_pdf_fingerprint,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
@@ -108,14 +110,14 @@ def marker_lock_contender(project: Path, marker_bytes: bytes):
         "import fcntl, os, pathlib, sys; "
         "lock, marker, replacement, started, acquired = map(pathlib.Path, sys.argv[1:]); "
         "started.write_text('1'); "
-        "fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600); "
+        "fd = os.open(lock, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)); "
         "fcntl.flock(fd, fcntl.LOCK_EX); "
         "acquired.write_text('1'); "
         "os.replace(replacement, marker); "
         "fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)"
     )
     process = subprocess.Popen([sys.executable, "-c", code,
-        str(project / ".retrieval_retry.lock"), str(marker), str(replacement),
+        str(project), str(marker), str(replacement),
         str(started), str(acquired)])
     deadline = time.monotonic() + 2
     while not started.exists() and time.monotonic() < deadline:
@@ -173,6 +175,68 @@ class RetryAbortTransactionTests(unittest.TestCase):
 
         self.assertEqual(marker.read_bytes(), foreign)
         marker.unlink()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires fork")
+    def test_forked_child_cannot_treat_parent_file_lock_as_reentrant(self):
+        project = self.project.resolve()
+        read_descriptor, write_descriptor = os.pipe()
+        child = None
+        try:
+            with _project_file_lock(project):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    child = os.fork()
+                if child == 0:
+                    os.close(read_descriptor)
+                    try:
+                        with _project_file_lock(project):
+                            os.write(write_descriptor, b"entered")
+                    finally:
+                        os.close(write_descriptor)
+                    os._exit(0)
+                os.close(write_descriptor)
+                write_descriptor = -1
+                time.sleep(0.2)
+                os.set_blocking(read_descriptor, False)
+                with self.assertRaises(BlockingIOError):
+                    os.read(read_descriptor, 7)
+                os.set_blocking(read_descriptor, True)
+            self.assertEqual(os.read(read_descriptor, 7), b"entered")
+            _, status = os.waitpid(child, 0)
+            child = None
+            self.assertEqual(status, 0)
+        finally:
+            if write_descriptor >= 0:
+                os.close(write_descriptor)
+            os.close(read_descriptor)
+            if child is not None:
+                os.kill(child, 9)
+                os.waitpid(child, 0)
+
+    def test_recovery_repairs_crash_between_marker_link_and_temp_unlink(self):
+        marker = self.project.resolve() / PENDING_RETRY_FILE
+        real_unlink = Path.unlink
+
+        def fail_publish_temp(path, *args, **kwargs):
+            target = Path(path)
+            if (target.parent == marker.parent
+                    and target.name.startswith(f".{PENDING_RETRY_FILE}.")
+                    and target.name.endswith(".tmp")):
+                raise OSError("publish temp unlink crash seam")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", autospec=True, side_effect=fail_publish_temp):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be written$"):
+                begin_retry_transaction(self.project, self.preparation,
+                    self.staging_name, self.project / self.staging_name)
+
+        temporary_links = list(marker.parent.glob(f".{PENDING_RETRY_FILE}.*.tmp"))
+        self.assertTrue(marker.exists())
+        self.assertEqual(marker.stat().st_nlink, 2)
+        self.assertEqual(len(temporary_links), 1)
+        self.assertTrue(reconcile_retry_transaction(self.project))
+        self.assertFalse(marker.exists())
+        self.assertFalse(temporary_links[0].exists())
 
     def test_marker_requires_canonical_path_safe_sorted_pdf_baseline(self):
         (self.project / "pdfs" / "z.pdf").write_bytes(b"%PDF-z")
