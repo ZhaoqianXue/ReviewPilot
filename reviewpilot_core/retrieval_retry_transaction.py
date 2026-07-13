@@ -185,6 +185,30 @@ def _direct_regular(path: Path, parent: Path) -> bool:
         return False
 
 
+def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnapshot:
+    """Re-read every authoritative retry fact and bind it to the abort marker."""
+    authorities = (
+        (project / "pdfs" / "download_report.json", project / "pdfs"),
+        (project / "filtered" / "included_papers.jsonl", project / "filtered"),
+        (project / "workflow_state.json", project),
+    )
+    if any(not _direct_regular(path, parent) for path, parent in authorities):
+        raise ValueError
+    current = current_retry_snapshot(project)
+    report, included, retrieval = current.mutable_fact_copies()
+    ledger = load_workflow_state(project)
+    selected_ids = set(marker["selected_ids"])
+    canonical_selected = tuple(item.retry_id for item in current.items if item.retry_id in selected_ids)
+    if (current.report_revision != marker["expected_revision"]
+            or canonical_selected != tuple(marker["selected_ids"])
+            or _encode_before({"report": report, "included": included, "ledger": ledger})
+                != _encode_before(marker["before"])
+            or _encode_before(retrieval)
+                != _encode_before(marker["before"]["ledger"]["stages"]["retrieval"])):
+        raise ValueError
+    return current
+
+
 def begin_retry_transaction(
     project_path: Path | str,
     preparation: RetryPreparation,
@@ -336,7 +360,7 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             if (trusted.snapshot.report_revision != marker["expected_revision"]
                     or trusted.selected_ids != tuple(marker["selected_ids"])):
                 raise ValueError
-            current = current_retry_snapshot(project)
+            current = _validate_current_before(project, marker)
             current_report, current_included, _ = current.mutable_fact_copies()
             trusted_report, trusted_included, trusted_ledger, trusted_rows = _trusted_json((
                 trusted.snapshot.report, trusted.snapshot.included, trusted.snapshot.ledger, trusted.included_rows))
@@ -387,6 +411,7 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
             raw_keys = ("version", "phase", "expected_revision", "selected_ids", "staging_name",
                 "candidate_names", "before_json_b64")
             raw = {key: marker[key] for key in raw_keys}; raw["sources_json_b64"] = encoded
+            _validate_current_before(project, marker)
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
             return outcome
         except Exception as exc:
@@ -649,6 +674,7 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
         if marker["phase"] != "abort" or "target" in marker:
             raise ValueError("Retry transaction target cannot be recorded")
         try:
+            _validate_current_before(project, marker)
             target = _trusted_target(project, marker, publication_plan, target_ledger)
             encoded = _encode_before(target)
             if _encode_before(_decode_target(encoded, marker, project)) != encoded:
@@ -657,6 +683,7 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             if "sources_json_b64" in marker:
                 raw["sources_json_b64"] = marker["sources_json_b64"]
             raw["target_json_b64"] = encoded
+            _validate_current_before(project, marker)
             atomic_write_json(project / PENDING_RETRY_FILE, raw)
         except Exception as exc:
             raise ValueError("Retry transaction target is invalid") from exc

@@ -552,6 +552,31 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertTrue((self.project / self.staging_name).exists())
         self.assertTrue(abort_retry_transaction(self.project)); self.assertFalse((self.project / self.staging_name).exists())
 
+    def test_wrapper_rejects_authority_changed_when_callback_result_is_released(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+        before = marker_path.read_bytes()
+        report_path = self.project / "pdfs" / "download_report.json"
+
+        class MutatingResult(dict):
+            def __del__(self):
+                report = json.loads(report_path.read_text())
+                report["failed_papers"][0]["title"] = "drift-after-staging"
+                atomic_write_json(report_path, report)
+
+        download = self.download(1)
+
+        def mutating_download(root, project_id):
+            return MutatingResult(download(root, project_id))
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$") as caught:
+            run_retry_transaction_staging(self.project, self.prepared, mutating_download)
+
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertEqual(marker_path.read_bytes(), before)
+        self.assertNotIn("sources_json_b64", json.loads(marker_path.read_text()))
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
 
 class RetryTargetTransactionTests(unittest.TestCase):
     def setUp(self):
@@ -657,6 +682,43 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_record_rejects_each_live_authority_drift_without_marker_mutation(self):
+        def mutate_report():
+            path = self.project / "pdfs" / "download_report.json"
+            report = json.loads(path.read_text())
+            report["failed_papers"][0]["title"] = "drift-before-record"
+            atomic_write_json(path, report)
+
+        def mutate_included():
+            path = self.project / "filtered" / "included_papers.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            rows[-1]["drift"] = True
+            atomic_write_jsonl(path, rows)
+
+        def mutate_ledger():
+            ledger = load_workflow_state(self.project)
+            ledger["stages"]["collection"]["counts"]["drift"] = 1
+            save_workflow_state(self.project, ledger)
+
+        for index, mutate in enumerate((mutate_report, mutate_included, mutate_ledger)):
+            with self.subTest(authority=index):
+                marker = self.project / PENDING_RETRY_FILE
+                before = marker.read_bytes()
+                mutate()
+
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+                    record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+                self.assertNotIn(str(self.project), str(caught.exception))
+                self.assertEqual(marker.read_bytes(), before)
+                self.assertFalse(reconcile_retry_transaction(self.project))
+                self.assertTrue(abort_retry_transaction(self.project))
+                if index < 2:
+                    begin_retry_transaction(
+                        self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                    self.plan = publication(self.project, self.prepared, self.staging_name)
+                    self.ledger = target_ledger(self.project, self.plan)
 
     def test_record_rejects_retry_when_screening_is_not_terminal(self):
         self.assert_screening_prerequisite_rejected(status="ready")
