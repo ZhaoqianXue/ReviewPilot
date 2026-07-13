@@ -123,6 +123,22 @@ class RetryAbortTransactionTests(unittest.TestCase):
             begin_retry_transaction(self.project, forged, self.staging_name, self.project / self.staging_name)
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
+    def test_begin_releases_reservation_when_marker_encoding_fails(self):
+        ledger = load_workflow_state(self.project)
+        ledger["opaque"] = float("nan")
+        save_workflow_state(self.project, ledger)
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be written$") as caught:
+            begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        self.assertNotIn(str(self.project), str(caught.exception))
+        self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+
+        ledger = load_workflow_state(self.project)
+        ledger.pop("opaque")
+        save_workflow_state(self.project, ledger)
+        begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        self.assertTrue(abort_retry_transaction(self.project))
+
     def test_marker_round_trips_sentinel_shaped_values_and_absolute_keys_without_raw_paths(self):
         report_path = self.project / "pdfs" / "download_report.json"
         report = json.loads(report_path.read_text())

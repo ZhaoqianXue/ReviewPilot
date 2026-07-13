@@ -215,15 +215,15 @@ def begin_retry_transaction(
             if project in _ACTIVE:
                 raise ValueError("Retry transaction is already active")
             _ACTIVE.add(project)
-        data = {
-            "version": 1, "phase": "abort",
-            "expected_revision": current.report_revision,
-            "selected_ids": list(trusted.selected_ids),
-            "staging_name": staging_name,
-            "candidate_names": list(candidates),
-            "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
-        }
         try:
+            data = {
+                "version": 1, "phase": "abort",
+                "expected_revision": current.report_revision,
+                "selected_ids": list(trusted.selected_ids),
+                "staging_name": staging_name,
+                "candidate_names": list(candidates),
+                "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
+            }
             atomic_write_json(marker, data)
         except Exception as exc:
             with _GUARD:
