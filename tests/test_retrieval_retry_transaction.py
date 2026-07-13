@@ -171,6 +171,48 @@ class RetryAbortTransactionTests(unittest.TestCase):
             begin_retry_transaction(self.project, forged, self.staging_name, self.project / self.staging_name)
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
+    def test_begin_compares_nested_selected_facts_without_frozen_container_false_staleness(self):
+        included_path = self.project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows[1]["authors"] = [{"name": "Ada", "aliases": ["A. Lovelace"]}]
+        rows[1]["keywords"] = ["retrieval", {"topic": ["pdf", "retry"]}]
+        atomic_write_jsonl(included_path, rows)
+        prepared = preparation(self.project)
+
+        begin_retry_transaction(self.project, prepared, self.staging_name, self.project / self.staging_name)
+
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_begin_rejects_python_equal_but_json_distinct_selected_facts(self):
+        included_path = self.project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows[1]["opaque_numeric"] = 1
+        atomic_write_jsonl(included_path, rows)
+        prepared = preparation(self.project)
+        item = prepared.items[0]
+
+        for forged_value in (True, 1.0):
+            with self.subTest(forged_value=forged_value):
+                forged_row = MappingProxyType({**prepared.snapshot.included[item.included_index],
+                    "opaque_numeric": forged_value})
+                forged_included = tuple(forged_row if index == item.included_index else row
+                    for index, row in enumerate(prepared.snapshot.included))
+                forged_snapshot = RetrySnapshot(prepared.snapshot.report_revision, prepared.snapshot.report,
+                    forged_included, prepared.snapshot.ledger, prepared.snapshot.items)
+                forged = RetryPreparation(forged_snapshot, prepared.selected_ids, prepared.items,
+                    (forged_row,), prepared._project_identity)
+
+                try:
+                    with self.assertRaisesRegex(ValueError, r"^Retry transaction preparation is stale$"):
+                        begin_retry_transaction(self.project, forged, self.staging_name, self.project / self.staging_name)
+                finally:
+                    if (self.project / PENDING_RETRY_FILE).exists():
+                        abort_retry_transaction(self.project)
+                self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
+
+                begin_retry_transaction(self.project, prepared, self.staging_name, self.project / self.staging_name)
+                self.assertTrue(abort_retry_transaction(self.project))
+
     def test_begin_releases_reservation_when_marker_encoding_fails(self):
         ledger = load_workflow_state(self.project)
         ledger["opaque"] = float("nan")

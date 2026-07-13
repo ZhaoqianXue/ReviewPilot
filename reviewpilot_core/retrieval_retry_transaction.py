@@ -213,15 +213,19 @@ def begin_retry_transaction(
             current = current_retry_snapshot(project)
             before_report, before_included, before_stage = current.mutable_fact_copies()
             before_ledger = load_workflow_state(project)
-            trusted_report, trusted_included, trusted_stage = trusted.snapshot.mutable_fact_copies()
+            trusted_report, trusted_included, trusted_stage, trusted_selected_rows = _trusted_json((
+                trusted.snapshot.report, trusted.snapshot.included, trusted.snapshot.ledger, trusted.included_rows,
+            ))
             current_items = {item.retry_id: item for item in current.items}
             if (current.report_revision != trusted.snapshot.report_revision
-                    or (before_report, before_included, before_stage) != (trusted_report, trusted_included, trusted_stage)
+                    or _encode_before({"report": before_report, "included": before_included, "stage": before_stage})
+                    != _encode_before({"report": trusted_report, "included": trusted_included, "stage": trusted_stage})
                     or before_ledger.get("stages", {}).get("retrieval") != before_stage
                     or current.items != trusted.snapshot.items
                     or tuple(item.retry_id for item in trusted.items) != trusted.selected_ids
                     or trusted.items != tuple(current_items[retry_id] for retry_id in trusted.selected_ids)
-                    or [before_included[item.included_index] for item in trusted.items] != list(trusted.included_rows)):
+                    or _encode_before({"rows": [before_included[item.included_index] for item in trusted.items]})
+                    != _encode_before({"rows": trusted_selected_rows})):
                 raise ValueError
             candidates = tuple(f"retry-{current.report_revision}-{retry_id}.pdf" for retry_id in trusted.selected_ids)
             if not candidates or len(set(candidates)) != len(candidates) or any(not _basename(name, "retry-") for name in candidates):
