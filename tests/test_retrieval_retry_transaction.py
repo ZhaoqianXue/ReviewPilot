@@ -1257,6 +1257,8 @@ class RetryTargetTransactionTests(unittest.TestCase):
 
     def test_marker_cas_fsyncs_temp_before_replace_then_project_before_reread(self):
         events = []; original_fsync = os.fsync; original_replace = os.replace
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original_read = transaction._read_marker
 
         def track_fsync(descriptor):
             events.append("dir-fsync" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file-fsync")
@@ -1266,11 +1268,17 @@ class RetryTargetTransactionTests(unittest.TestCase):
             if Path(destination).name == PENDING_RETRY_FILE: events.append("replace")
             return original_replace(source, destination)
 
+        def track_read(*args):
+            if "replace" in events: events.append("reread")
+            return original_read(*args)
+
         with patch("reviewpilot_core.retrieval_retry_transaction.os.fsync", side_effect=track_fsync), \
-                patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=track_replace):
+                patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=track_replace), \
+                patch("reviewpilot_core.retrieval_retry_transaction._read_marker", side_effect=track_read):
             record_retry_transaction_target(self.project, self.plan, self.ledger)
         self.assertLess(events.index("file-fsync"), events.index("replace"))
         self.assertLess(events.index("replace"), events.index("dir-fsync"))
+        self.assertLess(events.index("dir-fsync"), events.index("reread"))
 
     def test_marker_cas_rejects_same_bytes_new_inode_after_temp_fsync(self):
         marker = self.project / PENDING_RETRY_FILE; before = marker.read_bytes(); old_inode = marker.stat().st_ino
@@ -1308,6 +1316,38 @@ class RetryTargetTransactionTests(unittest.TestCase):
         with patch("reviewpilot_core.retrieval_retry_transaction.os.replace", side_effect=replace_then_foreign):
             with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
         self.assertEqual(marker.read_bytes(), foreign)
+
+    def test_marker_cas_rejects_exact_new_raw_on_different_post_replace_inode(self):
+        marker = self.project / PENDING_RETRY_FILE
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; foreign_inode = None
+
+        def swap_after_directory_fsync(path):
+            nonlocal foreign_inode
+            result = original(path); replacement = self.project / ".exact-foreign"
+            replacement.write_bytes(marker.read_bytes()); os.replace(replacement, marker)
+            foreign_inode = marker.stat().st_ino
+            return result
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=swap_after_directory_fsync):
+            with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertEqual(marker.stat().st_ino, foreign_inode)
+        self.assertIn("target_json_b64", json.loads(marker.read_text()))
+
+    def test_marker_cas_fdopen_failure_closes_descriptor_and_cleans_only_temp(self):
+        marker = self.project / PENDING_RETRY_FILE; before = marker.read_bytes()
+        original_mkstemp = tempfile.mkstemp; captured = {}
+
+        def capture_temp(*args, **kwargs):
+            descriptor, name = original_mkstemp(*args, **kwargs)
+            if kwargs.get("prefix") == f".{PENDING_RETRY_FILE}.": captured.update(fd=descriptor, path=Path(name))
+            return descriptor, name
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.tempfile.mkstemp", side_effect=capture_temp), \
+                patch("reviewpilot_core.retrieval_retry_transaction.os.fdopen", side_effect=OSError("fdopen")):
+            with self.assertRaises(ValueError): record_retry_transaction_target(self.project, self.plan, self.ledger)
+        with self.assertRaises(OSError): os.fstat(captured["fd"])
+        self.assertFalse(captured["path"].exists()); self.assertEqual(marker.read_bytes(), before)
 
     def test_record_rejects_each_live_authority_drift_without_marker_mutation(self):
         def mutate_report():

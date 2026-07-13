@@ -672,16 +672,31 @@ def _replace_marker_cas(project: Path, marker: dict[str, Any], replacement: dict
             prefix=f".{PENDING_RETRY_FILE}.", suffix=".tmp", dir=project)
         temporary = Path(temporary_name)
         replaced = False
+        descriptor_owned = True
+        stream = None
         try:
-            with os.fdopen(descriptor, "wb") as stream:
+            try:
+                stream = os.fdopen(descriptor, "wb"); descriptor_owned = False
                 stream.write(raw); stream.flush(); os.fsync(stream.fileno())
-            _assert_marker_generation(project, marker)
-            os.replace(temporary, marker_path); replaced = True
-            _fsync_directory(project)
-            updated = _read_marker(project)
-            if (updated["transaction_id"] != transaction_id
-                    or updated[_RAW_MARKER_BYTES] != raw):
-                raise ValueError
+                before_replace_identity = _file_identity(os.fstat(stream.fileno()))
+                _assert_marker_generation(project, marker)
+                os.replace(temporary, marker_path); replaced = True
+                _fsync_directory(project)
+                temporary_identity = _file_identity(os.fstat(stream.fileno()))
+                if (temporary_identity[:4] != before_replace_identity[:4]
+                        or temporary_identity[5] != before_replace_identity[5]):
+                    raise ValueError
+                updated = _read_marker(project)
+                if (updated["transaction_id"] != transaction_id
+                        or updated[_RAW_MARKER_BYTES] != raw
+                        or updated[_MARKER_IDENTITY] != temporary_identity):
+                    raise ValueError
+            finally:
+                if stream is not None:
+                    stream.close()
+                elif descriptor_owned:
+                    try: os.close(descriptor)
+                    except OSError: pass
         finally:
             if not replaced:
                 temporary.unlink(missing_ok=True)
