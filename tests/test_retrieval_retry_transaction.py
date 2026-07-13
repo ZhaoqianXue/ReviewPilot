@@ -114,8 +114,13 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertNotIn(str(self.project), json.dumps(marker))
         self.assertEqual(marker["candidate_names"], [f"retry-{self.preparation.snapshot.report_revision}-{self.preparation.selected_ids[0]}.pdf"])
         baseline = json.loads(base64.b64decode(marker["pdf_baseline_json_b64"]))
-        self.assertEqual(baseline, {"pdfs": [{"name": "original.pdf",
-            "sha256": hashlib.sha256(b"%PDF-old").hexdigest()}]})
+        self.assertEqual([item["name"] for item in baseline["fixed"]], [
+            "pdfs/download_report.json", "filtered/included_papers.jsonl", "workflow_state.json"])
+        self.assertEqual(baseline["pdfs"][0]["name"], "original.pdf")
+        self.assertEqual(baseline["pdfs"][0]["sha256"], hashlib.sha256(b"%PDF-old").hexdigest())
+        for item in baseline["fixed"] + baseline["pdfs"]:
+            for key in ("device", "inode", "size", "mtime_ns", "ctime_ns"):
+                self.assertIs(type(item[key]), int)
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
         self.assertEqual(marker, json.loads(handle.marker_path.read_text()))
         self.assertEqual(original[2], self.preparation.snapshot.mutable_fact_copies()[2])
@@ -129,12 +134,15 @@ class RetryAbortTransactionTests(unittest.TestCase):
         marker = json.loads(valid)
         baseline = json.loads(base64.b64decode(marker["pdf_baseline_json_b64"]))
         self.assertEqual([pdf["name"] for pdf in baseline["pdfs"]], ["original.pdf", "z.pdf"])
-        invalid = (
-            {"pdfs": list(reversed(baseline["pdfs"]))},
-            {"pdfs": [{**baseline["pdfs"][0], "name": "../original.pdf"}, baseline["pdfs"][1]]},
-            {"pdfs": [{**baseline["pdfs"][0], "extra": True}, baseline["pdfs"][1]]},
-            {"pdfs": [baseline["pdfs"][0], baseline["pdfs"][0]]},
-        )
+        invalid = []
+        invalid.append({**baseline, "fixed": list(reversed(baseline["fixed"]))})
+        invalid.append({**baseline, "fixed": [{**baseline["fixed"][0], "name": "/tmp/report"}, *baseline["fixed"][1:]]})
+        invalid.append({**baseline, "fixed": [{**baseline["fixed"][0], "inode": True}, *baseline["fixed"][1:]]})
+        invalid.append({**baseline, "fixed": [{**baseline["fixed"][0], "size": 1.0}, *baseline["fixed"][1:]]})
+        invalid.append({**baseline, "pdfs": list(reversed(baseline["pdfs"]))})
+        invalid.append({**baseline, "pdfs": [{**baseline["pdfs"][0], "name": "../original.pdf"}, baseline["pdfs"][1]]})
+        invalid.append({**baseline, "pdfs": [{**baseline["pdfs"][0], "extra": True}, baseline["pdfs"][1]]})
+        invalid.append({**baseline, "pdfs": [baseline["pdfs"][0], baseline["pdfs"][0]]})
         for forged in invalid:
             with self.subTest(forged=forged):
                 raw = dict(marker)
@@ -302,11 +310,11 @@ class RetryAbortTransactionTests(unittest.TestCase):
 
                 with patch("reviewpilot_core.retrieval_retry_transaction._authoritative_fingerprint",
                            side_effect=raced_fingerprint):
-                    with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be validated$"):
+                    with self.assertRaisesRegex(ValueError, r"^Retry transaction preparation is stale$"):
                         begin_retry_transaction(self.project, self.preparation,
                             self.staging_name, self.project / self.staging_name)
 
-                self.assertGreaterEqual(calls, 3)
+                self.assertGreaterEqual(calls, 2)
                 self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
                 self.assertEqual(path.read_bytes(), concurrent_bytes)
                 fresh = preparation(self.project)
@@ -743,6 +751,52 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertFalse(reconcile_retry_transaction(self.project))
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_wrapper_rejects_same_bytes_new_inode_for_existing_pdf(self):
+        marker_path = self.project / PENDING_RETRY_FILE
+        before = marker_path.read_bytes()
+        original = self.project / "pdfs" / "original.pdf"
+        old_inode = original.stat().st_ino
+        download = self.download(1)
+
+        class ReplacingResult(dict):
+            def __del__(self):
+                replacement = original.with_name("same-bytes.tmp")
+                replacement.write_bytes(original.read_bytes())
+                os.replace(replacement, original)
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$"):
+            run_retry_transaction_staging(
+                self.project, self.prepared, lambda root, project_id: ReplacingResult(download(root, project_id)))
+
+        self.assertNotEqual(original.stat().st_ino, old_inode)
+        self.assertEqual(marker_path.read_bytes(), before)
+        self.assertNotIn("sources_json_b64", json.loads(marker_path.read_text()))
+        self.assertFalse(reconcile_retry_transaction(self.project))
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_source_commit_rejects_same_bytes_new_inode_for_each_fixed_authority(self):
+        for relative in ("pdfs/download_report.json", "filtered/included_papers.jsonl", "workflow_state.json"):
+            with self.subTest(relative=relative):
+                marker_path = self.project / PENDING_RETRY_FILE
+                before = marker_path.read_bytes()
+                authority = self.project / relative
+                download = self.download(1)
+
+                class ReplacingResult(dict):
+                    def __del__(self):
+                        replacement = authority.with_name(authority.name + ".tmp")
+                        replacement.write_bytes(authority.read_bytes())
+                        os.replace(replacement, authority)
+
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction staging failed$"):
+                    run_retry_transaction_staging(
+                        self.project, self.prepared, lambda root, project_id: ReplacingResult(download(root, project_id)))
+                self.assertEqual(marker_path.read_bytes(), before)
+                self.assertNotIn("sources_json_b64", json.loads(marker_path.read_text()))
+                self.assertTrue(abort_retry_transaction(self.project))
+                self.prepared = preparation(self.project)
+                begin_retry_transaction(self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+
     def test_wrapper_rejects_existing_pdf_changed_after_inner_validation(self):
         original = self.project / "pdfs" / "original.pdf"
         original_bytes = original.read_bytes()
@@ -835,6 +889,28 @@ class RetryTargetTransactionTests(unittest.TestCase):
 
         self.assertEqual(marker.read_bytes(), before)
         self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_record_rejects_same_bytes_new_inode_for_each_fixed_authority(self):
+        for relative in ("pdfs/download_report.json", "filtered/included_papers.jsonl", "workflow_state.json"):
+            with self.subTest(relative=relative):
+                marker = self.project / PENDING_RETRY_FILE
+                before = marker.read_bytes()
+                authority = self.project / relative
+                replacement = authority.with_name(authority.name + ".tmp")
+                replacement.write_bytes(authority.read_bytes())
+                os.replace(replacement, authority)
+
+                with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
+                    record_retry_transaction_target(self.project, self.plan, self.ledger)
+
+                self.assertEqual(marker.read_bytes(), before)
+                self.assertNotIn("target_json_b64", json.loads(marker.read_text()))
+                self.assertTrue(abort_retry_transaction(self.project))
+                self.prepared = preparation(self.project)
+                self.handle = begin_retry_transaction(
+                    self.project, self.prepared, self.staging_name, self.project / self.staging_name)
+                self.plan = publication(self.project, self.prepared, self.staging_name)
+                self.ledger = target_ledger(self.project, self.plan)
 
     def forged_target(self, mutate_report):
         def freeze(value):

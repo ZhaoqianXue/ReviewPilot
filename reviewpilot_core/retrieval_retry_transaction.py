@@ -33,6 +33,12 @@ _GUARD = Lock()
 _ACTIVE: dict[Path, str] = {}
 _LOCKS: dict[Path, RLock] = {}
 _RAW_MARKER_BYTES = "_raw_marker_bytes"
+_FIXED_AUTHORITIES = (
+    ("pdfs/download_report.json", "pdfs"),
+    ("filtered/included_papers.jsonl", "filtered"),
+    ("workflow_state.json", ""),
+)
+_IDENTITY_KEYS = {"device", "inode", "size", "mtime_ns", "ctime_ns"}
 
 
 @dataclass(frozen=True)
@@ -182,13 +188,23 @@ def _decode_before(value: Any) -> dict[str, Any]:
 
 def _decode_pdf_baseline(value: Any) -> dict[str, Any]:
     baseline = _decode_before(value)
-    if type(baseline) is not dict or set(baseline) != {"pdfs"} or type(baseline["pdfs"]) is not list:
+    if (type(baseline) is not dict or set(baseline) != {"fixed", "pdfs"}
+            or type(baseline["fixed"]) is not list or type(baseline["pdfs"]) is not list):
         raise ValueError
+    fixed_names = [name for name, _ in _FIXED_AUTHORITIES]
+    if len(baseline["fixed"]) != len(fixed_names):
+        raise ValueError
+    for item, name in zip(baseline["fixed"], fixed_names):
+        if type(item) is not dict or set(item) != {"name"} | _IDENTITY_KEYS or item["name"] != name:
+            raise ValueError
+        if any(type(item[key]) is not int or item[key] < 0 for key in _IDENTITY_KEYS):
+            raise ValueError
     names: list[str] = []
     for pdf in baseline["pdfs"]:
-        if (type(pdf) is not dict or set(pdf) != {"name", "sha256"}
+        if (type(pdf) is not dict or set(pdf) != {"name", "sha256"} | _IDENTITY_KEYS
                 or not _basename(pdf["name"]) or not pdf["name"].endswith(".pdf")
-                or not _digest(pdf["sha256"])):
+                or not _digest(pdf["sha256"])
+                or any(type(pdf[key]) is not int or pdf[key] < 0 for key in _IDENTITY_KEYS)):
             raise ValueError
         names.append(pdf["name"])
     if names != sorted(names) or len(names) != len(set(names)):
@@ -204,6 +220,33 @@ def _direct_regular(path: Path, parent: Path) -> bool:
         return False
 
 
+def _capture_authority_identities(project: Path, pdf_names: tuple[str, ...]) -> dict[str, Any]:
+    """Capture path-safe identities for every fixed authority and existing PDF."""
+    if (type(pdf_names) is not tuple or any(not _basename(name) or not name.endswith(".pdf") for name in pdf_names)
+            or list(pdf_names) != sorted(pdf_names) or len(set(pdf_names)) != len(pdf_names)):
+        raise ValueError
+
+    def capture(name: str, path: Path, parent: Path) -> dict[str, Any]:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or path.resolve(strict=True).parent != parent):
+            raise ValueError
+        return {"name": name, "device": info.st_dev, "inode": info.st_ino, "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns}
+
+    fixed = [capture(name, project / name, project / parent if parent else project)
+        for name, parent in _FIXED_AUTHORITIES]
+    pdfs = [capture(name, project / "pdfs" / name, project / "pdfs") for name in pdf_names]
+    return {"fixed": fixed, "pdfs": pdfs}
+
+
+def _baseline_identities(baseline: dict[str, Any]) -> dict[str, Any]:
+    return {"fixed": [{key: item[key] for key in ("name", "device", "inode", "size", "mtime_ns", "ctime_ns")}
+            for item in baseline["fixed"]],
+        "pdfs": [{key: item[key] for key in ("name", "device", "inode", "size", "mtime_ns", "ctime_ns")}
+            for item in baseline["pdfs"]]}
+
+
 def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnapshot:
     """Re-read every authoritative retry fact and bind it to the abort marker."""
     authorities = (
@@ -213,15 +256,20 @@ def _validate_current_before(project: Path, marker: dict[str, Any]) -> RetrySnap
     )
     if any(not _direct_regular(path, parent) for path, parent in authorities):
         raise ValueError
+    pdf_names = tuple(pdf["name"] for pdf in marker["pdf_baseline"]["pdfs"])
+    expected_identities = _baseline_identities(marker["pdf_baseline"])
+    identity_before = _capture_authority_identities(project, pdf_names)
     before_fingerprint = _authoritative_fingerprint(project)
     current = current_retry_snapshot(project)
     report, included, retrieval = current.mutable_fact_copies()
     ledger = load_workflow_state(project)
     after_fingerprint = _authoritative_fingerprint(project)
+    identity_after = _capture_authority_identities(project, pdf_names)
     baseline = tuple((pdf["name"], pdf["sha256"]) for pdf in marker["pdf_baseline"]["pdfs"])
     selected_ids = set(marker["selected_ids"])
     canonical_selected = tuple(item.retry_id for item in current.items if item.retry_id in selected_ids)
-    if (after_fingerprint[:3] != before_fingerprint[:3]
+    if (identity_before != expected_identities or identity_after != expected_identities
+            or after_fingerprint[:3] != before_fingerprint[:3]
             or before_fingerprint[3] != baseline or after_fingerprint[3] != baseline
             or current.report_revision != marker["expected_revision"]
             or canonical_selected != tuple(marker["selected_ids"])
@@ -307,6 +355,8 @@ def begin_retry_transaction(
             if any(not _direct_regular(path, parent) for path, parent in authorities):
                 raise ValueError
             authority_before = _authoritative_fingerprint(project)
+            pdf_names = tuple(name for name, _ in authority_before[3])
+            identity_before = _capture_authority_identities(project, pdf_names)
             trusted = _trusted_preparation(preparation, project)
             current = current_retry_snapshot(project)
             before_report, before_included, before_stage = current.mutable_fact_copies()
@@ -331,13 +381,15 @@ def begin_retry_transaction(
             if any(_lexists(project / "pdfs" / name) for name in candidates):
                 raise ValueError
             authority_after = _authoritative_fingerprint(project)
-            if (authority_after != authority_before
+            identity_after = _capture_authority_identities(project, pdf_names)
+            if (authority_after != authority_before or identity_after != identity_before
                     or not _fingerprint_matches_before(
                         authority_after, before_report, before_included, before_ledger)):
                 raise ValueError
             pdf_fingerprint = authority_after[3]
-            pdf_baseline_json_b64 = _encode_before({"pdfs": [
-                {"name": name, "sha256": digest} for name, digest in pdf_fingerprint]})
+            digests = dict(pdf_fingerprint)
+            pdf_baseline_json_b64 = _encode_before({"fixed": identity_after["fixed"], "pdfs": [
+                {**item, "sha256": digests[item["name"]]} for item in identity_after["pdfs"]]})
             _decode_pdf_baseline(pdf_baseline_json_b64)
         except Exception as exc:
             raise ValueError("Retry transaction preparation is stale") from exc
