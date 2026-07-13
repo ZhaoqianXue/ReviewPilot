@@ -4,7 +4,10 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import MappingProxyType
@@ -95,6 +98,34 @@ def target_ledger(project: Path, plan) -> dict:
         })
 
 
+def marker_lock_contender(project: Path, marker_bytes: bytes):
+    marker = project / PENDING_RETRY_FILE
+    replacement = project / ".retry-contender-marker"
+    started = project / ".retry-contender-started"
+    acquired = project / ".retry-contender-acquired"
+    replacement.write_bytes(marker_bytes)
+    code = (
+        "import fcntl, os, pathlib, sys; "
+        "lock, marker, replacement, started, acquired = map(pathlib.Path, sys.argv[1:]); "
+        "started.write_text('1'); "
+        "fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600); "
+        "fcntl.flock(fd, fcntl.LOCK_EX); "
+        "acquired.write_text('1'); "
+        "os.replace(replacement, marker); "
+        "fcntl.flock(fd, fcntl.LOCK_UN); os.close(fd)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", code,
+        str(project / ".retrieval_retry.lock"), str(marker), str(replacement),
+        str(started), str(acquired)])
+    deadline = time.monotonic() + 2
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not started.exists():
+        process.kill(); process.wait()
+        raise AssertionError("marker lock contender did not start")
+    return process, acquired
+
+
 class RetryAbortTransactionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.project = Path(self.temp.name) / "project"
@@ -124,6 +155,24 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.preparation.snapshot.mutable_fact_copies()[0]["success"] = 999
         self.assertEqual(marker, json.loads(handle.marker_path.read_text()))
         self.assertEqual(original[2], self.preparation.snapshot.mutable_fact_copies()[2])
+
+    def test_begin_never_overwrites_marker_created_after_preflight(self):
+        resolved_project = self.project.resolve()
+        marker = resolved_project / PENDING_RETRY_FILE
+        foreign = b'{"foreign":"transaction"}'
+
+        def race_after_preflight(_):
+            marker.write_bytes(foreign)
+            return "a" * 64
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.secrets.token_hex",
+                   side_effect=race_after_preflight):
+            with self.assertRaisesRegex(ValueError, r"^Retry transaction marker could not be written$"):
+                begin_retry_transaction(self.project, self.preparation,
+                    self.staging_name, self.project / self.staging_name)
+
+        self.assertEqual(marker.read_bytes(), foreign)
+        marker.unlink()
 
     def test_marker_requires_canonical_path_safe_sorted_pdf_baseline(self):
         (self.project / "pdfs" / "z.pdf").write_bytes(b"%PDF-z")
@@ -520,6 +569,35 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertTrue((self.project / "pdfs" / handle.candidate_names[0]).exists())
         self.assertFalse(reconcile_retry_transaction(self.project))
         self.assertTrue(abort_retry_transaction(self.project, handle.transaction_id))
+
+    def test_abort_holds_cross_process_lock_through_final_marker_unlink(self):
+        handle = begin_retry_transaction(
+            self.project, self.preparation, self.staging_name, self.project / self.staging_name)
+        resolved_project = self.project.resolve()
+        marker = resolved_project / PENDING_RETRY_FILE
+        marker_bytes = marker.read_bytes()
+        real_unlink = Path.unlink
+        contender = None
+        acquired_during_unlink = False
+
+        def raced_unlink(path, *args, **kwargs):
+            nonlocal contender, acquired_during_unlink
+            if Path(path) == marker:
+                contender, acquired = marker_lock_contender(resolved_project, marker_bytes)
+                try:
+                    contender.wait(timeout=0.2)
+                    acquired_during_unlink = acquired.exists()
+                except subprocess.TimeoutExpired:
+                    acquired_during_unlink = False
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", autospec=True, side_effect=raced_unlink):
+            self.assertTrue(abort_retry_transaction(self.project, handle.transaction_id))
+        self.assertIsNotNone(contender)
+        contender.wait(timeout=2)
+        self.assertFalse(acquired_during_unlink)
+        self.assertTrue(marker.exists())
+        self.assertTrue(reconcile_retry_transaction(self.project))
 
     def test_live_reconcile_skips_but_abandon_allows_restart_recovery(self):
         begin_retry_transaction(self.project, self.preparation, self.staging_name, self.project / self.staging_name)
@@ -1074,6 +1152,33 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertNotEqual(marker_path.stat().st_ino, old_inode)
         self.assertEqual(marker_path.read_bytes(), before)
         self.assertNotIn("target_json_b64", json.loads(marker_path.read_text()))
+        self.assertTrue(abort_retry_transaction(self.project))
+
+    def test_target_replace_holds_cross_process_lock_after_generation_check(self):
+        resolved_project = self.project.resolve()
+        marker = resolved_project / PENDING_RETRY_FILE
+        marker_bytes = marker.read_bytes()
+        contender = None
+        acquired_during_replace = False
+
+        def raced_write(path, data, *args, **kwargs):
+            nonlocal contender, acquired_during_replace
+            if Path(path) == marker:
+                contender, acquired = marker_lock_contender(resolved_project, marker_bytes)
+                try:
+                    contender.wait(timeout=0.2)
+                    acquired_during_replace = acquired.exists()
+                except subprocess.TimeoutExpired:
+                    acquired_during_replace = False
+            return atomic_write_json(path, data, *args, **kwargs)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction.atomic_write_json",
+                   side_effect=raced_write):
+            record_retry_transaction_target(self.project, self.plan, self.ledger)
+        self.assertIsNotNone(contender)
+        contender.wait(timeout=2)
+        self.assertFalse(acquired_during_replace)
+        self.assertEqual(marker.read_bytes(), marker_bytes)
         self.assertTrue(abort_retry_transaction(self.project))
 
     def test_record_rejects_each_live_authority_drift_without_marker_mutation(self):

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
+import fcntl
 import json
 import math
 import os
@@ -13,8 +15,9 @@ import secrets
 import shutil
 import stat
 from threading import Lock, RLock
+import tempfile
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Iterator
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .retrieval_retry import (
@@ -28,10 +31,12 @@ from .workflow_state import load_workflow_state, save_workflow_state
 
 
 PENDING_RETRY_FILE = ".retrieval_retry_pending.json"
+_RETRY_LOCK_FILE = ".retrieval_retry.lock"
 _STAGING_PREFIX = ".retrieval_retry_staging_"
 _GUARD = Lock()
 _ACTIVE: dict[Path, str] = {}
 _LOCKS: dict[Path, RLock] = {}
+_FILE_LOCKS: dict[Path, tuple[int, int]] = {}
 _RAW_MARKER_BYTES = "_raw_marker_bytes"
 _MARKER_IDENTITY = "_marker_identity"
 _FIXED_AUTHORITIES = (
@@ -53,6 +58,66 @@ class RetryTransactionHandle:
 def _lock(project: Path) -> RLock:
     with _GUARD:
         return _LOCKS.setdefault(project, RLock())
+
+
+@contextmanager
+def _project_file_lock(project: Path) -> Iterator[None]:
+    """Serialize retry marker operations across cooperating processes."""
+    with _GUARD:
+        held = _FILE_LOCKS.get(project)
+        if held is not None:
+            descriptor, depth = held
+            _FILE_LOCKS[project] = (descriptor, depth + 1)
+        else:
+            descriptor = -1
+    if held is not None:
+        try:
+            yield
+        finally:
+            with _GUARD:
+                current_descriptor, depth = _FILE_LOCKS[project]
+                if depth == 1:
+                    _FILE_LOCKS.pop(project)
+                else:
+                    _FILE_LOCKS[project] = (current_descriptor, depth - 1)
+        return
+
+    lock_path = project / _RETRY_LOCK_FILE
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        opened = os.fstat(descriptor)
+        current = lock_path.lstat()
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or _file_identity(opened) != _file_identity(current)
+                or lock_path.resolve(strict=True).parent != project):
+            raise ValueError
+        with _GUARD:
+            if project in _FILE_LOCKS:
+                raise ValueError
+            _FILE_LOCKS[project] = (descriptor, 1)
+    except (OSError, RuntimeError, ValueError) as exc:
+        if descriptor >= 0:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+        raise ValueError("Retry transaction project lock is unsafe") from exc
+    try:
+        yield
+    finally:
+        with _GUARD:
+            current_descriptor, depth = _FILE_LOCKS.get(project, (-1, 0))
+            if current_descriptor != descriptor or depth != 1:
+                raise RuntimeError("Retry transaction file lock state is invalid")
+            _FILE_LOCKS.pop(project)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _project_path(value: Path | str) -> Path:
@@ -316,6 +381,28 @@ def _serialized_marker_bytes(data: dict[str, Any]) -> bytes:
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
+def _create_marker_no_clobber(marker: Path, raw: bytes) -> None:
+    """Publish a complete marker only when its name is still unoccupied."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{marker.name}.", suffix=".tmp", dir=marker.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, marker)
+        temporary.unlink()
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory = os.open(marker.parent, directory_flags)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_nlink)
 
@@ -355,8 +442,9 @@ def _assert_marker_generation(project: Path, expected: dict[str, Any]) -> dict[s
 def _remove_owned_begin_marker(marker: Path, project: Path, expected: dict[str, Any]) -> None:
     """Remove only the exact marker generation written by a failed begin."""
     try:
-        _assert_marker_generation(project, expected)
-        marker.unlink()
+        with _project_file_lock(project):
+            _assert_marker_generation(project, expected)
+            marker.unlink()
     except (OSError, RuntimeError, TypeError, ValueError):
         return
 
@@ -369,7 +457,7 @@ def begin_retry_transaction(
 ) -> RetryTransactionHandle:
     """Reserve a project and durably record abort facts before later mutation."""
     project = _project_path(project_path)
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         marker = project / PENDING_RETRY_FILE
         try:
             staging_matches = Path(staging_path).resolve(strict=False) == project / staging_name
@@ -440,7 +528,7 @@ def begin_retry_transaction(
                 "before_json_b64": _encode_before({"report": deepcopy(before_report), "included": deepcopy(before_included), "ledger": deepcopy(before_ledger)}),
             }
             expected_marker_bytes = _serialized_marker_bytes(data)
-            atomic_write_json(marker, data)
+            _create_marker_no_clobber(marker, expected_marker_bytes)
         except Exception as exc:
             with _GUARD:
                 if _ACTIVE.get(project) == transaction_id:
@@ -513,7 +601,7 @@ def _read_marker(project: Path) -> dict[str, Any]:
 
 def _replace_marker_cas(project: Path, marker: dict[str, Any], replacement: dict[str, Any]) -> None:
     """Replace only the marker generation read by the current transaction."""
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         transaction_id = marker.get("transaction_id")
         if (not _digest(transaction_id) or replacement.get("transaction_id") != transaction_id
                 or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker
@@ -576,7 +664,7 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
                                   run_download) -> StagedRetryOutcome:
     """Stage with a trusted internal downloader that may write only the supplied staging tree."""
     project = _project_path(project_path)
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         try:
             with _GUARD:
                 active_id = _ACTIVE.get(project)
@@ -654,48 +742,49 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
 def _restore(project: Path, data: dict[str, Any]) -> bool:
     before = data["before"]
     try:
-        _assert_marker_generation(project, data)
-        for path, parent in ((project / "pdfs" / "download_report.json", project / "pdfs"),
-                (project / "filtered" / "included_papers.jsonl", project / "filtered"),
-                (project / "workflow_state.json", project)):
-            if not _direct_regular(path, parent):
-                raise ValueError
-        for name in data["candidate_names"]:
-            path = project / "pdfs" / name
-            if _lexists(path) and not _direct_regular(path, project / "pdfs"):
-                raise ValueError
-        staging = project / data["staging_name"]
-        if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
-            raise ValueError
-        _assert_marker_generation(project, data)
-        atomic_write_json(project / "pdfs" / "download_report.json", before["report"])
-        _assert_marker_generation(project, data)
-        atomic_write_jsonl(project / "filtered" / "included_papers.jsonl", before["included"])
-        _assert_marker_generation(project, data)
-        save_workflow_state(project, before["ledger"])
-        for name in data["candidate_names"]:
+        with _project_file_lock(project):
             _assert_marker_generation(project, data)
-            path = project / "pdfs" / name
-            if not _lexists(path):
-                continue
-            if not _direct_regular(path, project / "pdfs"):
+            for path, parent in ((project / "pdfs" / "download_report.json", project / "pdfs"),
+                    (project / "filtered" / "included_papers.jsonl", project / "filtered"),
+                    (project / "workflow_state.json", project)):
+                if not _direct_regular(path, parent):
+                    raise ValueError
+            for name in data["candidate_names"]:
+                path = project / "pdfs" / name
+                if _lexists(path) and not _direct_regular(path, project / "pdfs"):
+                    raise ValueError
+            staging = project / data["staging_name"]
+            if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
                 raise ValueError
             _assert_marker_generation(project, data)
-            path.unlink()
-        _assert_marker_generation(project, data)
-        if _lexists(staging):
+            atomic_write_json(project / "pdfs" / "download_report.json", before["report"])
             _assert_marker_generation(project, data)
-            shutil.rmtree(staging)
-        _assert_marker_generation(project, data)
-        (project / PENDING_RETRY_FILE).unlink()
-        return True
+            atomic_write_jsonl(project / "filtered" / "included_papers.jsonl", before["included"])
+            _assert_marker_generation(project, data)
+            save_workflow_state(project, before["ledger"])
+            for name in data["candidate_names"]:
+                _assert_marker_generation(project, data)
+                path = project / "pdfs" / name
+                if not _lexists(path):
+                    continue
+                if not _direct_regular(path, project / "pdfs"):
+                    raise ValueError
+                _assert_marker_generation(project, data)
+                path.unlink()
+            _assert_marker_generation(project, data)
+            if _lexists(staging):
+                _assert_marker_generation(project, data)
+                shutil.rmtree(staging)
+            _assert_marker_generation(project, data)
+            (project / PENDING_RETRY_FILE).unlink()
+            return True
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ValueError("Pending retry transaction cannot be recovered safely") from exc
 
 
 def reconcile_retry_transaction(project_path: Path | str) -> bool:
     project = _project_path(project_path)
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         marker = project / PENDING_RETRY_FILE
         if not _lexists(marker):
             return False
@@ -709,7 +798,7 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
 def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:
     project = _project_path(project_path)
     released_id = expected_transaction_id
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         if not _lexists(project / PENDING_RETRY_FILE):
             return False
         marker = _read_marker(project)
@@ -916,7 +1005,7 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
 def record_retry_transaction_target(project_path: Path | str, publication_plan: RetryPublicationPlan,
                                     target_ledger: dict[str, Any]) -> None:
     project = _project_path(project_path)
-    with _lock(project):
+    with _lock(project), _project_file_lock(project):
         with _GUARD:
             active_id = _ACTIVE.get(project)
             if active_id is None:
