@@ -8,8 +8,10 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import shutil
+import stat as stat_module
 from types import MappingProxyType
 from typing import Any
 
@@ -502,23 +504,45 @@ def _materialize_frozen_json(value: Any) -> Any:
 
 
 def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int, str, tuple[int, int]]:
-    if path.is_symlink() or not path.is_file() or path.resolve(strict=True).parent != resolved_parent:
-        raise ValueError
-    stat = path.stat()
-    if stat.st_nlink != 1:
-        raise ValueError
-    digest = hashlib.sha256()
-    size = 0
-    header = bytearray()
-    with path.open("rb") as handle:
-        while chunk := handle.read(64 * 1024):
+    fd = None
+    try:
+        if not hasattr(os, "O_NOFOLLOW"):
+            raise ValueError
+        resolved_path = path.resolve(strict=True)
+        if resolved_path.parent != resolved_parent:
+            raise ValueError
+        before = path.lstat()
+        if not stat_module.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError
+        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        identity = (opened.st_dev, opened.st_ino)
+        if (not stat_module.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity != (before.st_dev, before.st_ino)):
+            raise ValueError
+        digest = hashlib.sha256()
+        size = 0
+        header = bytearray()
+        while chunk := os.read(fd, 64 * 1024):
             if len(header) < 1024:
                 header.extend(chunk[:1024 - len(header)])
             size += len(chunk)
             digest.update(chunk)
-    if size == 0 or not bytes(header).lstrip().startswith(b"%PDF-"):
-        raise ValueError
-    return size, digest.hexdigest(), (stat.st_dev, stat.st_ino)
+        after_fd = os.fstat(fd)
+        after_path = path.lstat()
+        if (identity != (after_fd.st_dev, after_fd.st_ino)
+                or identity != (after_path.st_dev, after_path.st_ino)
+                or not stat_module.S_ISREG(after_path.st_mode) or after_path.st_nlink != 1
+                or path.resolve(strict=True) != resolved_path
+                or size == 0 or not bytes(header).lstrip().startswith(b"%PDF-")):
+            raise ValueError
+        return size, digest.hexdigest(), identity
+    except (OSError, ValueError):
+        raise ValueError from None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: StagedRetryOutcome) -> RetryMergedFacts:

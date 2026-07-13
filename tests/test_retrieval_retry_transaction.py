@@ -549,35 +549,24 @@ class RetryTargetTransactionTests(unittest.TestCase):
             self.project, self.prepared, self.staging_name, pdf_payload=payload)
         self.ledger = target_ledger(self.project, self.plan)
         source = self.plan.pdfs[0].source_path
-        original_open = Path.open
         original_read_bytes = Path.read_bytes
+        original_os_read = os.read
+        source_identity = (source.stat().st_dev, source.stat().st_ino)
         read_sizes = []
 
-        class TrackingReader:
-            def __init__(self, handle):
-                self.handle = handle
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                self.handle.close()
-
-            def read(self, size=-1):
+        def tracking_read(fd, size):
+            stat = os.fstat(fd)
+            if (stat.st_dev, stat.st_ino) == source_identity:
                 read_sizes.append(size)
-                return self.handle.read(size)
-
-        def guarded_open(path, *args, **kwargs):
-            handle = original_open(path, *args, **kwargs)
-            mode = args[0] if args else kwargs.get("mode", "r")
-            return TrackingReader(handle) if path == source and mode == "rb" else handle
+            return original_os_read(fd, size)
 
         def guarded_read_bytes(path):
             if path == source:
                 raise AssertionError("record must not call read_bytes for a staged PDF")
             return original_read_bytes(path)
 
-        with patch.object(Path, "open", guarded_open), patch.object(Path, "read_bytes", guarded_read_bytes):
+        with patch("reviewpilot_core.retrieval_retry.os.read", tracking_read), \
+                patch.object(Path, "read_bytes", guarded_read_bytes):
             record_retry_transaction_target(self.project, self.plan, self.ledger)
 
         self.assertGreater(len(read_sizes), 2)

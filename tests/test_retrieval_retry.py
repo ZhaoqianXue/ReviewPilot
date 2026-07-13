@@ -29,6 +29,7 @@ from reviewpilot_core.retrieval_retry import (
     run_retry_staging,
     retrieval_report_revision,
     stable_retry_id,
+    _publication_pdf_fingerprint,
 )
 from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, start_action
 
@@ -473,6 +474,30 @@ class RetrievalRetryTests(unittest.TestCase):
                 outcome = run_retry_staging(project, confirmed_preparation(project),
                     project / ".retrieval_retry_staging_case", fake_download([True, False]))
             self.assertEqual(len(outcome.successful_pdfs), 1)
+
+    def test_publication_pdf_fingerprint_rejects_symlink_swap_before_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "pdfs"; parent.mkdir()
+            source = parent / "source.pdf"; source.write_bytes(b"%PDF-original")
+            external = Path(tmp) / "external.pdf"; external.write_bytes(b"%PDF-external")
+            resolved_parent = parent.resolve(strict=True)
+            original_resolve = Path.resolve
+            swapped = False
+
+            def swap_after_precheck(path, *args, **kwargs):
+                nonlocal swapped
+                resolved = original_resolve(path, *args, **kwargs)
+                if path == source and not swapped:
+                    swapped = True
+                    source.unlink()
+                    source.symlink_to(external)
+                return resolved
+
+            with patch.object(Path, "resolve", swap_after_precheck):
+                with self.assertRaises(ValueError) as raised:
+                    _publication_pdf_fingerprint(source, resolved_parent)
+            self.assertTrue(swapped)
+            self.assertNotIn(str(Path(tmp)), str(raised.exception))
 
     def test_staging_rejects_count_contract_variants_duplicate_paths_and_symlink_boundaries(self):
         for location in ("root", "stats"):
