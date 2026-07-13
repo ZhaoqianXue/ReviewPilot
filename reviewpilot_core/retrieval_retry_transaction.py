@@ -1773,3 +1773,41 @@ def _validate_apply_pdf_commit(project_path: Path | str,
             return snapshots[1]
         except Exception as exc:
             raise ValueError("Retry transaction PDF commit is invalid") from exc
+
+
+def _cleanup_apply_staging(project_path: Path | str, marker: dict[str, Any]) -> bool:
+    """Idempotently remove only validated staging for a fully committed apply marker."""
+    project = _project_path(project_path)
+    with _lock(project), _project_file_lock(project):
+        try:
+            current = _assert_marker_generation(project, marker)
+            if current.get("phase") != "apply": raise ValueError
+
+            def validate_committed() -> None:
+                _assert_marker_generation(project, current)
+                if _classify_retry_authorities(project, current).kinds != ("target", "target", "target"):
+                    raise ValueError
+                _validate_apply_pdf_commit(project, current)
+                _validate_apply_staging_subset(project, current)
+                _assert_marker_generation(project, current)
+
+            validate_committed(); staging = project / current["staging_name"]
+            if not _lexists(staging):
+                validate_committed(); return True
+            source_parent = staging / "retry" / "pdfs"
+            for receipt in current["published"]["pdfs"]:
+                quarantine = source_parent / receipt["quarantine_name"]
+                if not _lexists(quarantine): continue
+                validated = _validate_quarantine(project, current, receipt)
+                if validated is None or any(validated.iterdir()): raise ValueError
+                _assert_marker_generation(project, current)
+                validated.rmdir(); _fsync_directory(source_parent)
+                _assert_marker_generation(project, current)
+            validate_committed()
+            _assert_marker_generation(project, current)
+            shutil.rmtree(staging); _fsync_directory(project)
+            if _lexists(staging): raise ValueError
+            validate_committed()
+            return True
+        except Exception as exc:
+            raise ValueError("Retry transaction staging could not be cleaned") from exc

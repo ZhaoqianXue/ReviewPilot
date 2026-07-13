@@ -39,6 +39,7 @@ from reviewpilot_core.retrieval_retry_transaction import (
     _roll_forward_retry_authorities,
     _validate_apply_pdf_commit,
     _validate_apply_staging_subset,
+    _cleanup_apply_staging,
 )
 from reviewpilot_core.workflow_state import complete_action, load_workflow_state, save_workflow_state, start_action, initialize_workflow_state
 
@@ -2207,6 +2208,10 @@ class RetryPdfPublicationTests(unittest.TestCase):
         from reviewpilot_core import retrieval_retry_transaction as transaction
         return transaction._read_marker(self.project.resolve())
 
+    def committed_apply_marker(self):
+        marker = self.decoded_apply_marker(); _roll_forward_retry_authorities(self.project, marker)
+        return marker
+
     def test_apply_authority_classifier_covers_all_before_target_combinations(self):
         marker = self.decoded_apply_marker(); paths = (
             self.project / "pdfs/download_report.json", self.project / "filtered/included_papers.jsonl",
@@ -2606,6 +2611,8 @@ class RetryPdfPublicationTests(unittest.TestCase):
         transaction._replace_marker_cas(self.project.resolve(), current, raw)
         apply_marker = transaction._read_marker(self.project.resolve())
         self.assertEqual(_validate_apply_pdf_commit(self.project, apply_marker).receipt_identities, ())
+        _roll_forward_retry_authorities(self.project, apply_marker)
+        self.assertTrue(_cleanup_apply_staging(self.project, apply_marker)); self.assertFalse((self.project / self.staging).exists())
 
     def test_apply_staging_subset_is_read_only_and_accepts_monotonic_partial_cleanup(self):
         marker = self.decoded_apply_marker(); staging = self.project / self.staging
@@ -2636,6 +2643,63 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with self.assertRaises(ValueError): _validate_apply_staging_subset(self.project, marker)
         link.unlink(); source.write_bytes(source.read_bytes() + b"drift")
         with self.assertRaises(ValueError): _validate_apply_staging_subset(self.project, marker)
+
+    def test_apply_staging_cleanup_is_idempotent_and_preserves_commit_authorities(self):
+        marker = self.committed_apply_marker(); marker_path = self.project / PENDING_RETRY_FILE
+        destination = self.plan.pdfs[0].destination_path
+        before = (marker_path.read_bytes(), destination.read_bytes(), destination.stat().st_ino)
+        with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target",
+                   side_effect=AssertionError("cleanup must not write authority")):
+            self.assertTrue(_cleanup_apply_staging(self.project, marker))
+        self.assertFalse((self.project / self.staging).exists())
+        self.assertTrue(_cleanup_apply_staging(self.project, marker))
+        self.assertEqual((marker_path.read_bytes(), destination.read_bytes(), destination.stat().st_ino), before)
+
+    def test_apply_staging_cleanup_rejects_uncommitted_authority_and_invalid_pdf_without_cleanup(self):
+        marker = self.decoded_apply_marker(); staging = self.project / self.staging
+        with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
+        self.assertTrue(staging.exists())
+        _roll_forward_retry_authorities(self.project, marker)
+        unknown = self.project / "pdfs/unknown.pdf"; unknown.write_bytes(b"%PDF-unknown")
+        with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
+        self.assertTrue(staging.exists())
+
+    def test_apply_staging_cleanup_reenters_after_qdir_parent_fsync_failure(self):
+        marker = self.committed_apply_marker(); receipt = marker["published"]["pdfs"][0]
+        qdir = self.project / self.staging / "retry/pdfs" / receipt["quarantine_name"]
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; failed = False
+        def fail_once(path):
+            nonlocal failed
+            if not qdir.exists() and not failed: failed = True; raise OSError("qdir fsync")
+            return original(path)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_once):
+            with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
+        self.assertFalse(qdir.exists()); self.assertTrue((self.project / self.staging).exists())
+        self.assertTrue(_cleanup_apply_staging(self.project, marker))
+
+    def test_apply_staging_cleanup_reenters_after_partial_rmtree_failure(self):
+        marker = self.committed_apply_marker(); staging = self.project / self.staging
+        included = staging / "retry/filtered/included_papers.jsonl"
+        def partial(path):
+            included.unlink(); raise OSError("partial rmtree")
+        with patch("reviewpilot_core.retrieval_retry_transaction.shutil.rmtree", side_effect=partial):
+            with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
+        self.assertTrue(staging.exists()); self.assertFalse(included.exists())
+        self.assertTrue(_cleanup_apply_staging(self.project, marker))
+
+    def test_apply_staging_cleanup_reenters_after_project_fsync_failure(self):
+        marker = self.committed_apply_marker(); staging = self.project / self.staging
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; failed = False
+        def fail_after_rmtree(path):
+            nonlocal failed
+            if Path(path) == self.project.resolve() and not staging.exists() and not failed:
+                failed = True; raise OSError("project fsync")
+            return original(path)
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_after_rmtree):
+            with self.assertRaises(ValueError): _cleanup_apply_staging(self.project, marker)
+        self.assertFalse(staging.exists()); self.assertTrue(_cleanup_apply_staging(self.project, marker))
 
     def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
         marker = self.decoded_apply_marker(); included = self.project / self.staging / "retry/filtered/included_papers.jsonl"
