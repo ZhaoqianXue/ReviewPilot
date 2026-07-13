@@ -1007,26 +1007,34 @@ def reconcile_retry_transaction(project_path: Path | str) -> bool:
         raise ValueError("Pending retry transaction cannot be recovered safely")
 
 
-def apply_retry_transaction(project_path: Path | str) -> bool:
+def apply_retry_transaction(project_path: Path | str, expected_transaction_id: str) -> bool:
     """Durably promote one owned complete abort transaction and finish it marker-last."""
     project = None; released_id = None
     try:
+        if not _digest(expected_transaction_id):
+            raise ValueError
         project = _project_path(project_path)
         with _lock(project), _project_file_lock(project):
             initial = _read_marker(project); transaction_id = initial["transaction_id"]
+            if transaction_id != expected_transaction_id:
+                raise ValueError
             with _GUARD:
-                if _ACTIVE.get(project) != transaction_id: raise ValueError
-            released_id = transaction_id
+                if _ACTIVE.get(project) != expected_transaction_id: raise ValueError
+            released_id = expected_transaction_id
             marker = _validate_retry_apply_readiness(project)
-            if _assert_marker_generation(project, initial) != marker: raise ValueError
+            if (_assert_marker_generation(project, initial) != marker
+                    or marker["transaction_id"] != expected_transaction_id):
+                raise ValueError
             with _GUARD:
-                if _ACTIVE.get(project) != transaction_id: raise ValueError
+                if _ACTIVE.get(project) != expected_transaction_id: raise ValueError
             _assert_marker_generation(project, marker)
             replacement = json.loads(marker[_RAW_MARKER_BYTES].decode("utf-8"))
             replacement["phase"] = "apply"
             _replace_marker_cas(project, marker, replacement)
             promoted = _read_marker(project)
-            if promoted["transaction_id"] != transaction_id or promoted["phase"] != "apply": raise ValueError
+            if (promoted["transaction_id"] != expected_transaction_id
+                    or promoted["phase"] != "apply"):
+                raise ValueError
             return _roll_forward_retry_transaction(project, promoted)
     except Exception as exc:
         raise ValueError("Retry transaction could not be applied") from exc
@@ -1034,6 +1042,96 @@ def apply_retry_transaction(project_path: Path | str) -> bool:
         if project is not None and released_id is not None:
             with _GUARD:
                 if _ACTIVE.get(project) == released_id: _ACTIVE.pop(project)
+
+
+def retry_target_is_committed(
+    project_path: Path | str,
+    publication_plan: RetryPublicationPlan,
+    target_ledger: dict[str, Any],
+) -> bool:
+    """Return whether a finished project exactly matches one immutable retry target."""
+    try:
+        project = _project_path(project_path)
+        with _lock(project), _project_file_lock(project):
+            if _lexists(project / PENDING_RETRY_FILE):
+                return False
+            if type(publication_plan) is not RetryPublicationPlan:
+                return False
+            merged = publication_plan.merged_facts
+            if (
+                type(merged) is not RetryMergedFacts
+                or publication_plan.report_revision != merged.report_revision
+                or not _digest(merged.report_revision)
+                or type(publication_plan.pdfs) is not tuple
+                or type(merged.planned_pdfs) is not tuple
+            ):
+                return False
+            report = _trusted_json(merged.report)
+            included = _trusted_json(merged.included)
+            ledger = _plain_json(target_ledger)
+            counts = _trusted_json(merged.counts)
+            _validate_workflow_state(ledger)
+            status, expected_counts = structured_action_outcome(
+                "retry-failed-downloads",
+                {"success": report.get("success"), "failed": report.get("failed")},
+            )
+            if merged.status != status or counts != expected_counts:
+                return False
+            retrieval = ledger["stages"]["retrieval"]
+            if retrieval["status"] != status or retrieval["counts"] != counts:
+                return False
+
+            first = _authoritative_fingerprint(project)
+            second = _authoritative_fingerprint(project)
+            if first != second:
+                return False
+            def strict_json(raw: bytes) -> Any:
+                def object_pairs(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError
+                        result[key] = value
+                    return result
+                return json.loads(
+                    raw.decode("utf-8"),
+                    object_pairs_hook=object_pairs,
+                    parse_constant=lambda _: (_ for _ in ()).throw(ValueError()),
+                )
+            actual = (
+                strict_json(first[0]),
+                [strict_json(line.encode("utf-8")) for line in first[1].decode("utf-8").splitlines()],
+                strict_json(first[2]),
+            )
+            if not all(_same_loaded_fact(observed, expected) for observed, expected in zip(actual, (report, included, ledger))):
+                return False
+
+            if len(publication_plan.pdfs) != len(merged.planned_pdfs):
+                return False
+            fingerprints = dict(first[3])
+            identities: set[tuple[int, int]] = set()
+            for published, planned in zip(publication_plan.pdfs, merged.planned_pdfs):
+                if (
+                    type(published) is not RetryPublicationPdf
+                    or type(planned) is not RetryPlannedPdf
+                    or published.retry_id != planned.retry_id
+                    or published.destination_path != planned.destination_path
+                    or published.destination_path
+                    != project / "pdfs" / f"retry-{merged.report_revision}-{published.retry_id}.pdf"
+                    or published.source_size < 0
+                    or not _digest(published.source_sha256)
+                    or fingerprints.get(published.destination_path.name) != published.source_sha256
+                ):
+                    return False
+                size, digest, identity = _publication_pdf_fingerprint(
+                    published.destination_path, project / "pdfs"
+                )
+                if (size, digest) != (published.source_size, published.source_sha256) or identity in identities:
+                    return False
+                identities.add(identity)
+            return not _lexists(project / PENDING_RETRY_FILE)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
 
 
 def abort_retry_transaction(project_path: Path | str, expected_transaction_id: str | None = None) -> bool:

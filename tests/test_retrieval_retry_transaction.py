@@ -2144,10 +2144,11 @@ class RetryPdfPublicationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.project = Path(self.temp.name) / "project"
         self.project.mkdir(); retryable_project(self.project); self.prepared = preparation(self.project)
-        self.staging = ".retrieval_retry_staging_publish"; begin_retry_transaction(
+        self.staging = ".retrieval_retry_staging_publish"; self.handle = begin_retry_transaction(
             self.project, self.prepared, self.staging, self.project / self.staging)
         self.plan = publication(self.project, self.prepared, self.staging)
-        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        self.target_ledger = target_ledger(self.project, self.plan)
+        record_retry_transaction_target(self.project, self.plan, self.target_ledger)
 
     def tearDown(self):
         abandon_retry_transaction(self.project); self.temp.cleanup()
@@ -2601,9 +2602,10 @@ class RetryPdfPublicationTests(unittest.TestCase):
 
     def test_apply_pdf_commit_validator_accepts_zero_pdf_apply(self):
         self.assertTrue(abort_retry_transaction(self.project)); self.prepared = preparation(self.project)
-        begin_retry_transaction(self.project, self.prepared, self.staging, self.project / self.staging)
+        self.handle = begin_retry_transaction(self.project, self.prepared, self.staging, self.project / self.staging)
         self.plan = publication(self.project, self.prepared, self.staging, succeeds=False)
-        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        zero_target = target_ledger(self.project, self.plan)
+        record_retry_transaction_target(self.project, self.plan, zero_target)
         from reviewpilot_core import retrieval_retry_transaction as transaction
         publish_retry_transaction_pdfs(self.project)
         published = transaction._read_marker(self.project.resolve())
@@ -2611,13 +2613,14 @@ class RetryPdfPublicationTests(unittest.TestCase):
         marker_path = self.project / PENDING_RETRY_FILE; identity = marker_path.lstat().st_ino; raw = marker_path.read_bytes()
         publish_retry_transaction_pdfs(self.project)
         self.assertEqual((marker_path.lstat().st_ino, marker_path.read_bytes()), (identity, raw))
-        self.assertTrue(transaction.apply_retry_transaction(self.project))
+        self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
         self.assertFalse((self.project / self.staging).exists())
         self.assertEqual(json.loads((self.project / "pdfs/download_report.json").read_text()), published["target"]["report"])
         self.assertEqual([json.loads(line) for line in (self.project / "filtered/included_papers.jsonl").read_text().splitlines()],
             published["target"]["included"])
         self.assertEqual(json.loads((self.project / "workflow_state.json").read_text()), published["target"]["ledger"])
+        self.assertTrue(transaction.retry_target_is_committed(self.project, self.plan, zero_target))
         self.assertNotIn(self.project.resolve(), transaction._ACTIVE)
 
     def test_apply_staging_subset_is_read_only_and_accepts_monotonic_partial_cleanup(self):
@@ -2860,14 +2863,14 @@ class RetryPdfPublicationTests(unittest.TestCase):
         atomic_write_json(report_path, report)
         ledger = load_workflow_state(self.project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
         save_workflow_state(self.project, ledger)
-        self.prepared = preparation(self.project); begin_retry_transaction(
+        self.prepared = preparation(self.project); self.handle = begin_retry_transaction(
             self.project, self.prepared, self.staging, self.project / self.staging)
         self.plan = publication(self.project, self.prepared, self.staging)
         record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
         publish_retry_transaction_pdfs(self.project)
         before = {pdf.destination_path: pdf.destination_path.read_bytes() for pdf in self.plan.pdfs}
         from reviewpilot_core import retrieval_retry_transaction as transaction
-        self.assertTrue(transaction.apply_retry_transaction(self.project))
+        self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
         self.assertEqual(len(before), 2)
         self.assertEqual({path: path.read_bytes() for path in before}, before)
         self.assertFalse((self.project / self.staging).exists()); self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
@@ -2924,7 +2927,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
             phases.append(json.loads(marker_path.read_text())["phase"])
             return original(*args)
         with patch("reviewpilot_core.retrieval_retry_transaction._write_retry_authority_target", side_effect=observe_marker):
-            self.assertTrue(transaction.apply_retry_transaction(self.project))
+            self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
         self.assertEqual(phases, ["apply", "apply", "apply"])
         self.assertFalse(marker_path.exists()); self.assertFalse(staging.exists())
         self.assertEqual(destination.read_bytes(), before)
@@ -2936,7 +2939,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with patch("reviewpilot_core.retrieval_retry_transaction._validate_retry_apply_readiness",
                    side_effect=ValueError("readiness")):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
-                transaction.apply_retry_transaction(self.project)
+                transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual(json.loads(marker_path.read_text())["phase"], "abort")
         self.assertNotIn(self.project.resolve(), transaction._ACTIVE)
         self.assertTrue(reconcile_retry_transaction(self.project))
@@ -2953,7 +2956,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
             return original(path)
         with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_apply_marker):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
-                transaction.apply_retry_transaction(self.project)
+                transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual(json.loads(marker_path.read_text())["phase"], "apply")
         self.assertNotIn(self.project.resolve(), transaction._ACTIVE)
         self.assertTrue(reconcile_retry_transaction(self.project))
@@ -2964,7 +2967,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with patch("reviewpilot_core.retrieval_retry_transaction._roll_forward_retry_transaction",
                    side_effect=ValueError("finish")):
             with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
-                transaction.apply_retry_transaction(self.project)
+                transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual(json.loads(marker_path.read_text())["phase"], "apply")
         self.assertNotIn(self.project.resolve(), transaction._ACTIVE)
         self.assertTrue(reconcile_retry_transaction(self.project))
@@ -2974,7 +2977,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         before = marker_path.read_bytes()
         from reviewpilot_core import retrieval_retry_transaction as transaction
         transaction._ACTIVE[self.project.resolve()] = "foreign"
-        with self.assertRaises(ValueError): transaction.apply_retry_transaction(self.project)
+        with self.assertRaises(ValueError): transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual(transaction._ACTIVE[self.project.resolve()], "foreign")
         self.assertEqual(marker_path.read_bytes(), before)
 
@@ -2986,26 +2989,72 @@ class RetryPdfPublicationTests(unittest.TestCase):
             transaction._ACTIVE[project] = "foreign"; raise ValueError("readiness")
         with patch("reviewpilot_core.retrieval_retry_transaction._validate_retry_apply_readiness",
                    side_effect=replace_active_then_fail):
-            with self.assertRaises(ValueError): transaction.apply_retry_transaction(self.project)
+            with self.assertRaises(ValueError): transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual(transaction._ACTIVE[self.project.resolve()], "foreign")
         self.assertEqual(marker_path.read_bytes(), before)
+
+    def test_apply_executor_rejects_stale_caller_for_new_owned_transaction(self):
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        stale_transaction_id = self.handle.transaction_id
+        self.assertTrue(abort_retry_transaction(self.project, stale_transaction_id))
+        prepared = preparation(self.project)
+        self.handle = begin_retry_transaction(
+            self.project, prepared, self.staging, self.project / self.staging
+        )
+        self.plan = publication(self.project, prepared, self.staging)
+        self.target_ledger = target_ledger(self.project, self.plan)
+        record_retry_transaction_target(self.project, self.plan, self.target_ledger)
+        publish_retry_transaction_pdfs(self.project)
+        marker = self.project / PENDING_RETRY_FILE
+        before = (marker.read_bytes(), self.authority_bytes(), self.plan.pdfs[0].destination_path.read_bytes())
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
+            transaction.apply_retry_transaction(self.project, stale_transaction_id)
+
+        self.assertEqual(
+            (marker.read_bytes(), self.authority_bytes(), self.plan.pdfs[0].destination_path.read_bytes()),
+            before,
+        )
+        self.assertEqual(transaction._ACTIVE[self.project.resolve()], self.handle.transaction_id)
 
     def test_apply_executor_double_call_is_generic_and_does_not_change_destination(self):
         publish_retry_transaction_pdfs(self.project)
         from reviewpilot_core import retrieval_retry_transaction as transaction
-        self.assertTrue(transaction.apply_retry_transaction(self.project))
+        self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
         destination = self.plan.pdfs[0].destination_path
         before = (destination.read_bytes(), destination.lstat().st_ino)
         with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
-            transaction.apply_retry_transaction(self.project)
+            transaction.apply_retry_transaction(self.project, self.handle.transaction_id)
         self.assertEqual((destination.read_bytes(), destination.lstat().st_ino), before)
+
+    def test_committed_target_verifier_requires_exact_finished_authorities_and_pdfs(self):
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        ledger = self.target_ledger
+        self.assertFalse(transaction.retry_target_is_committed(self.project, self.plan, ledger))
+        publish_retry_transaction_pdfs(self.project)
+        self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
+        self.assertTrue(transaction.retry_target_is_committed(self.project, self.plan, ledger))
+
+        report = self.project / "pdfs/download_report.json"
+        changed = json.loads(report.read_text())
+        changed["attempted"] += 1
+        atomic_write_json(report, changed)
+        self.assertFalse(transaction.retry_target_is_committed(self.project, self.plan, ledger))
+
+    def test_committed_target_verifier_rejects_changed_target_pdf(self):
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        ledger = self.target_ledger
+        publish_retry_transaction_pdfs(self.project)
+        self.assertTrue(transaction.apply_retry_transaction(self.project, self.handle.transaction_id))
+        self.plan.pdfs[0].destination_path.write_bytes(b"%PDF-changed")
+        self.assertFalse(transaction.retry_target_is_committed(self.project, self.plan, ledger))
 
     def test_apply_executor_rejects_symlink_project_without_releasing_active(self):
         from reviewpilot_core import retrieval_retry_transaction as transaction
         active_before = transaction._ACTIVE[self.project.resolve()]
         linked = self.project.parent / "linked-project"; linked.symlink_to(self.project, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, r"^Retry transaction could not be applied$"):
-            transaction.apply_retry_transaction(linked)
+            transaction.apply_retry_transaction(linked, self.handle.transaction_id)
         self.assertEqual(transaction._ACTIVE[self.project.resolve()], active_before)
 
     def test_apply_pdf_commit_detects_safe_subset_change_between_rounds(self):
