@@ -35,6 +35,19 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_stale_activity_does_not_recount_pdfs_or_replay_old_canvas_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "stale-activity"; project.mkdir()
+            (project / "search_conditions.json").write_text(json.dumps({"project_name":"stale-activity","description":"Q","platforms":["pubmed"]}))
+            initialize_workflow_state(project)
+            for action in ("collect", "screen", "download-pdfs"):
+                start_action(project, action); complete_action(project, action, {})
+            (project / "pdfs").mkdir(); (project / "pdfs" / "old.pdf").write_bytes(b"old")
+            (project / "chat").mkdir(); (project / "chat" / "messages.jsonl").write_text(json.dumps({"role":"a","source":"canvas_action","stage":"download","text":"Download completed: 9 PDFs"}) + "\n")
+            from reviewpilot_core.workflow_state import mark_stages_stale
+            mark_stages_stale(project, ["retrieval"])
+            activity = build_rp_data(root, "stale-activity")["activityByStep"]["retrieval"]
+        self.assertEqual(activity, [{"t": "--:--:--", "tag": "retrieval", "msg": "0 PDFs fetched"}])
     def test_existing_ledger_is_sole_stage_truth_despite_artifact_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)

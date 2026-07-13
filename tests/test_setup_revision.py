@@ -9,7 +9,8 @@ from starlette.testclient import TestClient
 
 from reviewpilot_core.setup_revision import begin_setup_transaction, materially_changes_dependencies, normalize_setup, reconcile_setup_transaction, setup_revision, update_setup_transaction_target
 from reviewpilot_core.state_projection import build_rp_data, export_artifact_path
-from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, mark_stages_stale
+from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
+from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, start_action
 import reviewpilot_core.setup_revision as setup_revision_module
 import web_app
 
@@ -129,6 +130,48 @@ class SetupRevisionTests(unittest.TestCase):
         self.assertEqual(projected["steps"][0]["status"], "stale")
         self.assertEqual(projected["steps"][0]["sub"], "Needs rerun")
 
+    def test_fresh_schema_after_stale_extraction_is_reviewable_without_old_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _ = self._project(root)
+            for action in ("screen", "download-pdfs", "run-extraction"):
+                start_action(project, action); complete_action(project, action, {"processed": 1})
+            (project / "extraction").mkdir(exist_ok=True)
+            (project / "extraction" / "extraction_results.jsonl").write_text('{"title":"old","legacy":"secret"}\n')
+            mark_stages_stale(project, ["extraction"])
+            start_action(project, "generate-schema")
+            save_schema_draft(project, {"fields": [{"name": "fresh", "type": "Text"}]})
+            complete_action(project, "generate-schema", {"field_count": 1})
+            start_action(project, "finalize-schema"); finalize_schema(project); complete_action(project, "finalize-schema", {"field_count": 1})
+            projected = build_rp_data(root, "demo")
+        self.assertEqual(projected["fields"][0][0], "fresh")
+        self.assertEqual(projected["schemaWorkbench"]["primary_action"], "Run Extraction")
+        self.assertEqual(projected["previewFields"], [])
+        self.assertTrue(projected["stageState"]["extraction"]["stale"])
+
+    def test_fresh_suggestions_after_stale_categorization_are_reviewable_without_terminal_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _ = self._project(root)
+            for action in ("screen", "download-pdfs", "run-extraction", "categorize"):
+                start_action(project, action); complete_action(project, action, {"processed": 1})
+            cat = project / "categorization"; cat.mkdir(exist_ok=True)
+            (cat / "categorization_mapping.json").write_text(json.dumps({"categories": ["Old"], "mapping": {"P": "Old"}}))
+            mark_stages_stale(project, ["categorization"])
+            start_action(project, "suggest-categories")
+            (cat / "suggested_categories.json").write_text(json.dumps({"field": "methods", "categories": ["Fresh"]}))
+            complete_action(project, "suggest-categories", {"category_count": 1})
+            projected = build_rp_data(root, "demo")
+        self.assertEqual(projected["categorizationWorkflow"]["suggestedCategories"], ["Fresh"])
+        self.assertFalse(projected["categorizationWorkflow"]["done"])
+        self.assertEqual(projected["groups"], [])
+
+    def test_fresh_ready_only_output_counts_as_setup_impact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _ = self._project(root)
+            start_action(project, "screen"); complete_action(project, "screen", {})
+            start_action(project, "generate-schema"); complete_action(project, "generate-schema", {"field_count": 1})
+            preview = web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "platforms": ["pubmed"]})
+        self.assertIn("extraction", preview["affectedStages"])
+
     def test_setup_projection_round_trips_model_and_derive_search_terms(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, config = self._project(root)
@@ -240,6 +283,24 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertTrue(marker.exists())
             build_rp_data(root, "demo")
             self.assertFalse(marker.exists())
+
+    def test_failed_request_persists_abort_intent_and_never_rolls_forward_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, current = self._project(root)
+            real_write = web_app.atomic_write_json
+            writes = 0
+            def fail_rollback(path, data, **kwargs):
+                nonlocal writes
+                writes += 1
+                if writes == 2: raise OSError("rollback failed")
+                return real_write(path, data, **kwargs)
+            with patch.object(web_app, "mark_stages_stale", side_effect=RuntimeError("post-write failure")), patch.object(web_app, "atomic_write_json", side_effect=fail_rollback):
+                with self.assertRaisesRegex(OSError, "rollback failed"):
+                    web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
+            marker = project / ".setup_update_pending.json"
+            self.assertEqual(json.loads(marker.read_text())["phase"], "abort")
+            build_rp_data(root, "demo")
+            self.assertEqual(json.loads((project / "search_conditions.json").read_text()), current)
 
     def test_noop_update_recovers_pending_and_crash_rollforward_still_requires_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,6 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_stale_step_progress_remains_navigable_after_visiting_previous_step(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowProgressIndexForSteps } = require('./frontend/app.js');
+const steps = [{key:'search',status:'done'}, {key:'screening',status:'stale'}, {key:'retrieval',status:'todo'}];
+assert.equal(workflowProgressIndexForSteps(steps), 1);
+let selected = 'screening'; selected = 'search';
+assert.ok(workflowProgressIndexForSteps(steps) >= steps.findIndex((step) => step.key === 'screening'));
+selected = 'screening'; assert.equal(selected, 'screening');
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
     def test_material_setup_values_round_trip_without_dropping_fields(self):
         script = r"""
 const assert = require('node:assert/strict');

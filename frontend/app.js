@@ -82,8 +82,19 @@ function materialSetupValues(data) {
   };
 }
 
+function workflowProgressIndexForSteps(steps) {
+  const activeIndex = steps.findIndex((step) => step.status === 'active');
+  if (activeIndex >= 0) return activeIndex;
+  const staleIndex = steps.findIndex((step) => step.status === 'stale');
+  if (staleIndex >= 0) return staleIndex;
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index].status === 'done') return index;
+  }
+  return 0;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps };
 }
 
 /* ReviewPilot workspace UI.
@@ -356,12 +367,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function workflowProgressIndex(steps) {
-    const activeIndex = steps.findIndex((s) => s.status === 'active');
-    if (activeIndex >= 0) return activeIndex;
-    for (let i = steps.length - 1; i >= 0; i -= 1) {
-      if (steps[i].status === 'done') return i;
-    }
-    return 0;
+    return workflowProgressIndexForSteps(steps);
   }
 
   function formatElapsed(ms) {

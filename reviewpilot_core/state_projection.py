@@ -246,13 +246,18 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     if workflow_state["stages"]["retrieval"]["stale"]:
         download_report = {}
     if workflow_state["stages"]["extraction"]["stale"]:
-        schema, extraction_rows, extraction_results = {}, [], []
+        if not _fresh_ready_output(workflow_state["stages"]["extraction"]):
+            schema = {}
+        extraction_rows, extraction_results = [], []
     if workflow_state["stages"]["categorization"]["stale"]:
-        categorization, categorization_suggestions, categorized_rows = {}, {}, []
+        categorization, categorized_rows = {}, []
+        if not _fresh_ready_output(workflow_state["stages"]["categorization"]):
+            categorization_suggestions = {}
     current_step = _current_step(workflow_state)
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
-    schema_finalized = not workflow_state["stages"]["extraction"]["stale"] and is_schema_finalized(path)
+    extraction_stage = workflow_state["stages"]["extraction"]
+    schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage)) and is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
 
     return {
@@ -288,7 +293,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
         "previewPaper": _preview_paper(extraction_results[0] if extraction_results else {}, included),
         "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, extraction_stale=workflow_state["stages"]["extraction"]["stale"]),
-        "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization),
+        "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state),
         "quietLabels": _quiet_labels(path, workflow_state),
         "quietActions": _quiet_actions(path, workflow_state),
         "ctxLabels": _ctx_labels(current_step),
@@ -323,6 +328,11 @@ def _current_step(workflow_state: dict) -> int:
         return exceptional[-1]
     completed = [index for index, name in enumerate(STAGE_NAMES, start=1) if stages[name]["status"] == "completed"]
     return min((max(completed) + 1) if completed else 1, len(STAGE_NAMES))
+
+
+def _fresh_ready_output(stage: dict) -> bool:
+    last_valid = stage.get("last_valid") or {}
+    return stage.get("status") == "ready" and stage.get("attempt", 0) > last_valid.get("attempt", 0)
 
 
 def _steps(
@@ -1167,17 +1177,21 @@ def _activity_by_step(
     download_report: dict,
     fields: list[list[Any]],
     categorization: dict,
+    workflow_state: dict,
 ) -> dict:
     search_activity = [{"t": "--:--:--", "tag": "collection", "msg": f"{collected_summary.get('total_papers', 0)} records"}]
     search_activity.extend(_platform_error_activity(collected_summary.get("platform_errors") or {}))
     activity = {
         "search": search_activity,
         "screening": [{"t": "--:--:--", "tag": "screening", "msg": f"{screening_stats.get('included_count', len(included))} included"}],
-        "retrieval": [{"t": "--:--:--", "tag": "retrieval", "msg": f"{_download_success(path, download_report)} PDFs fetched"}],
+        "retrieval": [{"t": "--:--:--", "tag": "retrieval", "msg": f"{_download_success(path, download_report, allow_artifact_fallback=not workflow_state['stages']['retrieval']['stale'])} PDFs fetched"}],
         "extraction": [{"t": "--:--:--", "tag": "schema", "msg": f"{len(fields)} fields"}],
         "categorize": [{"t": "--:--:--", "tag": "categorize", "msg": f"{_categorization_summary(categorization)['groups']} groups"}],
     }
     for step_key, line in _canvas_action_activity(path):
+        stage_name = {"search": "collection", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorize": "categorization"}.get(step_key)
+        if stage_name and workflow_state["stages"][stage_name]["stale"]:
+            continue
         activity.setdefault(step_key, []).append(line)
     return activity
 

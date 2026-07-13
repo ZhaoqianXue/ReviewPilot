@@ -68,7 +68,12 @@ def materially_changes_dependencies(old: dict[str, Any], new: dict[str, Any]) ->
 
 def affected_stages(project_path: Path | str) -> list[str]:
     state = load_workflow_state(project_path)
-    return [name for name in STAGE_NAMES if state["stages"][name]["last_valid"] is not None]
+    return [name for name in STAGE_NAMES if _stage_has_material_output(state["stages"][name])]
+
+
+def _stage_has_material_output(stage: dict[str, Any]) -> bool:
+    last_valid = stage["last_valid"]
+    return last_valid is not None or (stage["status"] == "ready" and stage["attempt"] > (last_valid or {}).get("attempt", 0))
 
 
 def stale_replacement_stages(project_path: Path | str, action_stage: str) -> list[str]:
@@ -85,6 +90,7 @@ def begin_setup_transaction(project_path: Path | str, current: dict[str, Any], t
     try:
         atomic_write_json(marker, {
             "version": 1,
+            "phase": "apply",
             "current_revision": setup_revision(current),
             "target_revision": setup_revision(target),
             "current_setup": current,
@@ -102,6 +108,12 @@ def begin_setup_transaction(project_path: Path | str, current: dict[str, Any], t
 def update_setup_transaction_target(marker: Path, target: dict[str, Any]) -> None:
     data = json.loads(marker.read_text(encoding="utf-8"))
     data.update(target_setup=target, target_revision=setup_revision(target))
+    atomic_write_json(marker, data)
+
+
+def mark_setup_transaction_aborting(marker: Path) -> None:
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    data["phase"] = "abort"
     atomic_write_json(marker, data)
 
 
@@ -132,10 +144,14 @@ def reconcile_setup_transaction(project_path: Path | str) -> bool:
         try:
             pending = json.loads(marker.read_text(encoding="utf-8"))
             current_file = json.loads((project / "search_conditions.json").read_text(encoding="utf-8"))
-            if pending.get("version") != 1 or not isinstance(pending.get("affected_stages"), list):
+            phase = pending.get("phase", "abort")
+            if pending.get("version") != 1 or phase not in {"apply", "abort"} or not isinstance(pending.get("affected_stages"), list):
                 raise ValueError("Invalid pending setup transaction")
             revision = setup_revision(current_file)
-            if revision == pending["target_revision"]:
+            if phase == "abort":
+                atomic_write_json(project / "search_conditions.json", pending["current_setup"])
+                save_workflow_state(project, pending["ledger_before"])
+            elif revision == pending["target_revision"]:
                 mark_stages_stale(project, pending["affected_stages"])
             elif revision == pending["current_revision"]:
                 save_workflow_state(project, pending["ledger_before"])
