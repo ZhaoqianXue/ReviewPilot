@@ -109,13 +109,14 @@ def fake_download(outcomes: list[bool], *, mutate=None):
                 pdf.parent.mkdir(parents=True, exist_ok=True)
                 pdf.write_bytes(b"%PDF-1.7\nretry")
                 row.update(pdf_downloaded=True, pdf_path=str(pdf), retrieval_status="downloaded")
-                detail = {"path": str(pdf)}
-                if "title" in row: detail["title"] = row["title"]
+                detail = {"path": str(pdf), "title": row.get("title", "")}
                 downloaded.append(detail)
             else:
                 row.update(pdf_downloaded=False, retrieval_status="unavailable", pdf_failure_class="download_failed")
                 row.pop("pdf_path", None)
-                failed.append({"id": row["id"], "failure_class": "download_failed"})
+                failed.append({"id": row.get("id", ""), "title": row.get("title", ""),
+                    "doi": row.get("doi", ""), "url": row.get("url", ""),
+                    "failure_class": "download_failed"})
         write_jsonl(included_path, rows)
         report = {"success": sum(outcomes), "failed": len(outcomes) - sum(outcomes),
                   "downloaded": downloaded, "failed_papers": failed,
@@ -1018,6 +1019,40 @@ class RetryMergeFactsTests(unittest.TestCase):
                 "unavailable_papers": [failure], "web_search_fallback_candidates": [failure]}
             with self.subTest(kind="failure", field=field), self.assertRaises(ValueError):
                 merge_staged_retry_facts(preparation, replace(outcome, report=forged_report))
+
+    def test_merge_matches_downloader_empty_identity_defaults_and_success_method_aliases(self):
+        preparation, outcome = self.fixture()
+        downloaded = [{**outcome.report["downloaded"][0], "doi": "", "url": "",
+            "method": "direct", "pdf_method": "direct"}]
+        allowed = replace(outcome, report={**outcome.report, "downloaded": downloaded})
+        merge_staged_retry_facts(preparation, allowed)
+
+        failure = {**outcome.report["failed_papers"][0], "doi": "", "url": ""}
+        allowed_failure = replace(outcome, report={**outcome.report, "failed_papers": [failure],
+            "unavailable_papers": [failure], "web_search_fallback_candidates": [failure]})
+        merge_staged_retry_facts(preparation, allowed_failure)
+
+        for field, value in (("doi", "10.1/forged"), ("url", "https://forged.invalid"),
+                ("method", "forged"), ("pdf_method", "forged")):
+            forged = [{**outcome.report["downloaded"][0], field: value}]
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                merge_staged_retry_facts(preparation, replace(outcome,
+                    report={**outcome.report, "downloaded": forged}))
+
+        present_preparation, present_outcome = self.fixture(("f2",), (True,))
+        present_row = {**present_preparation.included_rows[0], "doi": None}
+        included = list(present_preparation.snapshot.included)
+        included[present_preparation.items[0].included_index] = present_row
+        present_snapshot = replace(present_preparation.snapshot, included=tuple(included))
+        present_preparation = replace(present_preparation, snapshot=present_snapshot, included_rows=(present_row,))
+        present_outcome = replace(present_outcome, updated_rows=({**present_outcome.updated_rows[0], "doi": None},))
+        matching = [{**present_outcome.report["downloaded"][0], "doi": None}]
+        merge_staged_retry_facts(present_preparation,
+            replace(present_outcome, report={**present_outcome.report, "downloaded": matching}))
+        wrong_empty = [{**present_outcome.report["downloaded"][0], "doi": ""}]
+        with self.assertRaises(ValueError):
+            merge_staged_retry_facts(present_preparation,
+                replace(present_outcome, report={**present_outcome.report, "downloaded": wrong_empty}))
 
     def test_merge_requires_strict_staged_report_pdf_count_and_attempted(self):
         preparation, outcome = self.fixture()

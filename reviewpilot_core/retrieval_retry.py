@@ -455,6 +455,9 @@ def _validate_canonical_merge_stage(
                     or any(key in detail for key in (*_REPORT_SECONDARY_DIAGNOSTICS, "failure_class",
                         "pdf_failure_class", "web_search_fallback_pending", "web_search_fallback_eligible"))):
                 raise ValueError("Staged retry success detail is not canonical")
+            for alias in ("method", "pdf_method"):
+                if alias in detail and (not row.get("pdf_method") or detail[alias] != row["pdf_method"]):
+                    raise ValueError("Staged retry success method is inconsistent")
         else:
             detail = failed_detail_by_id[retry_id]
             row_class, detail_class = row.get("pdf_failure_class"), detail.get("failure_class")
@@ -483,7 +486,10 @@ def _validate_canonical_merge_stage(
 
 def _validate_detail_provenance(row: dict[str, Any], detail: dict[str, Any]) -> None:
     for key, value in detail.items():
-        if key not in _OUTCOME_DERIVED_DETAIL_FIELDS and (key not in row or row[key] != value):
+        if key in _IDENTITY_FIELDS:
+            if (key in row and row[key] != value) or (key not in row and value != ""):
+                raise ValueError("Staged retry identity metadata has no paper provenance")
+        elif key not in _OUTCOME_DERIVED_DETAIL_FIELDS and (key not in row or row[key] != value):
             raise ValueError("Staged retry report metadata has no paper provenance")
 
 
