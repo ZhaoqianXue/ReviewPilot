@@ -524,7 +524,8 @@ def _validate_target_ledger(marker: dict[str, Any], ledger: dict[str, Any],
 
 def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicationPlan,
                     target_ledger: dict[str, Any]) -> dict[str, Any]:
-    if type(plan) is not RetryPublicationPlan or type(plan.merged_facts) is not RetryMergedFacts:
+    if ("sources" not in marker or type(plan) is not RetryPublicationPlan
+            or type(plan.merged_facts) is not RetryMergedFacts):
         raise ValueError
     merged = plan.merged_facts
     if (not _digest(plan.report_revision) or not _digest(merged.report_revision)
@@ -548,9 +549,10 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
     successful_names: list[str] = []
     source_identities: set[tuple[int, int]] = set()
     concrete_path_type = type(Path())
-    if len(plan.pdfs) != len(merged.planned_pdfs):
+    committed_pdfs = marker["sources"]["pdfs"]
+    if len(plan.pdfs) != len(merged.planned_pdfs) or len(plan.pdfs) != len(committed_pdfs):
         raise ValueError
-    for pdf, planned in zip(plan.pdfs, merged.planned_pdfs):
+    for pdf, planned, committed in zip(plan.pdfs, merged.planned_pdfs, committed_pdfs):
         if (type(planned) is not RetryPlannedPdf or type(pdf) is not RetryPublicationPdf
                 or type(pdf.retry_id) is not str or not _digest(pdf.retry_id)
                 or type(pdf.source_path) is not concrete_path_type or type(pdf.destination_path) is not concrete_path_type
@@ -561,7 +563,10 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
         name = pdf.destination_path.name
         source_parent = project / marker["staging_name"] / "retry" / "pdfs"
         if (pdf.destination_path != project / "pdfs" / name or name not in marker["candidate_names"]
-                or pdf.source_path.parent != source_parent or not _direct_regular(pdf.source_path, source_parent)):
+                or pdf.retry_id != committed["retry_id"]
+                or pdf.source_path != source_parent / committed["source_name"]
+                or pdf.source_size != committed["size"] or pdf.source_sha256 != committed["sha256"]
+                or not _direct_regular(pdf.source_path, source_parent)):
             raise ValueError
         size, digest, identity = _publication_pdf_fingerprint(pdf.source_path, source_parent)
         if (size != pdf.source_size or digest != pdf.source_sha256
@@ -570,6 +575,7 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
         source_identities.add(identity)
         successful_names.append(name)
         pdfs.append({"destination_name": name, "retry_id": pdf.retry_id,
+            "source_name": committed["source_name"],
             "size": pdf.source_size, "sha256": pdf.source_sha256})
     if successful_names != [name for name in marker["candidate_names"] if name in set(successful_names)]:
         raise ValueError
@@ -584,7 +590,7 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
 
 def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[str, Any]:
     target = _decode_before(encoded)
-    if set(target) != {"report", "included", "ledger", "pdfs"} or type(target["report"]) is not dict \
+    if "sources" not in marker or set(target) != {"report", "included", "ledger", "pdfs"} or type(target["report"]) is not dict \
             or type(target["included"]) is not list or type(target["ledger"]) is not dict or type(target["pdfs"]) is not list:
         raise ValueError
     if any(type(row) is not dict for row in target["included"]):
@@ -605,11 +611,15 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
     _validate_workflow_state(target["ledger"])
     _validate_target_ledger(marker, target["ledger"], status, counts)
     names: list[str] = []
-    for pdf in target["pdfs"]:
-        if (type(pdf) is not dict or set(pdf) != {"destination_name", "retry_id", "size", "sha256"}
+    committed_pdfs = marker["sources"]["pdfs"]
+    if len(target["pdfs"]) != len(committed_pdfs):
+        raise ValueError
+    for pdf, committed in zip(target["pdfs"], committed_pdfs):
+        if (type(pdf) is not dict or set(pdf) != {"destination_name", "retry_id", "source_name", "size", "sha256"}
                 or not _basename(pdf["destination_name"], "retry-") or pdf["destination_name"] not in marker["candidate_names"]
                 or pdf["destination_name"] != f"retry-{marker['expected_revision']}-{pdf['retry_id']}.pdf"
-                or not _digest(pdf["retry_id"]) or type(pdf["size"]) is not int or pdf["size"] < 0 or not _digest(pdf["sha256"])):
+                or not _digest(pdf["retry_id"]) or not _basename(pdf["source_name"])
+                or {key: pdf[key] for key in ("retry_id", "source_name", "size", "sha256")} != committed):
             raise ValueError
         names.append(pdf["destination_name"])
     if len(names) != len(set(names)) or names != [name for name in marker["candidate_names"] if name in set(names)]:
