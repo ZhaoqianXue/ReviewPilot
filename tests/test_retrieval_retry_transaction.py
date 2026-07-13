@@ -2212,6 +2212,59 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertEqual(collision.read_bytes(), b"%PDF-collision")
         self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
 
+    def test_retry_completes_after_qdir_rmdir_parent_fsync_failure(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        receipt = json.loads(base64.b64decode(marker["published_json_b64"]))["pdfs"][0]
+        qdir = self.project / self.staging / "retry" / "pdfs" / receipt["quarantine_name"]
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._fsync_directory; failed = False
+
+        def fail_after_rmdir(path):
+            nonlocal failed
+            if Path(path).resolve() == qdir.parent.resolve() and not qdir.exists() and not failed:
+                failed = True; raise OSError("qdir parent fsync")
+            return original(path)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._fsync_directory", side_effect=fail_after_rmdir):
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(failed); self.assertFalse(qdir.exists()); self.assertTrue((self.project / PENDING_RETRY_FILE).exists())
+        self.assertTrue(reconcile_retry_transaction(self.project))
+
+    def test_retry_completes_when_staging_and_all_receipt_paths_are_already_absent(self):
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        self.plan.pdfs[0].destination_path.unlink(); shutil.rmtree(self.project / self.staging)
+        self.assertTrue(reconcile_retry_transaction(self.project))
+
+    def test_multi_pdf_retry_skips_cleaned_first_receipt_after_later_cleanup_failure(self):
+        self.assertTrue(abort_retry_transaction(self.project))
+        rows_path = self.project / "filtered/included_papers.jsonl"
+        rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
+        rows.append({"id": "failed-2", "title": "Failed 2"}); atomic_write_jsonl(rows_path, rows)
+        report_path = self.project / "pdfs/download_report.json"; report = json.loads(report_path.read_text())
+        report["failed"] = 2; report["failed_papers"].append(
+            {"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(self.project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(self.project, ledger)
+        self.prepared = preparation(self.project); begin_retry_transaction(
+            self.project, self.prepared, self.staging, self.project / self.staging)
+        self.plan = publication(self.project, self.prepared, self.staging)
+        record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
+        publish_retry_transaction_pdfs(self.project); abandon_retry_transaction(self.project)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._quarantine_owned_path; calls = 0
+
+        def fail_second(*args):
+            nonlocal calls
+            calls += 1
+            if calls == 2: raise OSError("later receipt cleanup")
+            return original(*args)
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._quarantine_owned_path", side_effect=fail_second):
+            with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(reconcile_retry_transaction(self.project))
+
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
         publish_retry_transaction_pdfs(self.project)

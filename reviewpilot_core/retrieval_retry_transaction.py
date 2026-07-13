@@ -802,9 +802,13 @@ def _receipt_paths(project: Path, marker: dict[str, Any], receipt: dict[str, Any
     return tuple(path for path in candidates if _lexists(path))
 
 
-def _validate_quarantine(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> Path:
+def _validate_quarantine(project: Path, marker: dict[str, Any], receipt: dict[str, Any]) -> Path | None:
     parent = project / marker["staging_name"] / "retry" / "pdfs"
     path = parent / receipt["quarantine_name"]
+    if not _lexists(path):
+        originals = (parent / receipt["temp_name"], project / "pdfs" / receipt["destination_name"])
+        if any(_lexists(original) for original in originals): raise ValueError
+        return None
     info = path.lstat()
     if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700 or path.is_symlink()
             or (info.st_dev, info.st_ino) != (receipt["quarantine_device"], receipt["quarantine_inode"])
@@ -859,6 +863,7 @@ def _validate_receipt_group(project: Path, marker: dict[str, Any], receipt: dict
 def _quarantine_owned_path(project: Path, marker: dict[str, Any], receipt: dict[str, Any], path: Path) -> None:
     source_parent = project / marker["staging_name"] / "retry" / "pdfs"
     quarantine_parent = _validate_quarantine(project, marker, receipt)
+    if quarantine_parent is None: raise ValueError
     slot = "temp" if path.name in {receipt["temp_name"], "temp"} else "destination"
     original = (source_parent / receipt["temp_name"] if slot == "temp"
         else project / "pdfs" / receipt["destination_name"])
@@ -911,8 +916,9 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
                     _validate_receipt_group(project, data, receipt)
                     _quarantine_owned_path(project, data, receipt, path)
                 quarantine = _validate_quarantine(project, data, receipt)
-                if any(quarantine.iterdir()): raise ValueError
-                quarantine.rmdir(); _fsync_directory(quarantine.parent)
+                if quarantine is not None:
+                    if any(quarantine.iterdir()): raise ValueError
+                    quarantine.rmdir(); _fsync_directory(quarantine.parent)
             _fsync_directory(project / "pdfs")
             _assert_marker_generation(project, data)
             if _lexists(staging):
