@@ -1143,6 +1143,26 @@ class RetryTargetTransactionTests(unittest.TestCase):
         shutil.rmtree(self.project / self.staging_name)
         self.assertTrue(abort_retry_transaction(self.project))
 
+    def test_recovery_rejects_non_integer_committed_source_size(self):
+        record_retry_transaction_target(self.project, self.plan, self.ledger)
+        marker_path = self.project / PENDING_RETRY_FILE
+        valid = json.loads(marker_path.read_text())
+        committed_size = json.loads(base64.b64decode(valid["target_json_b64"]))["pdfs"][0]["size"]
+
+        for forged_size in (float(committed_size), True):
+            with self.subTest(forged_size=forged_size):
+                raw = deepcopy(valid)
+                target = json.loads(base64.b64decode(raw["target_json_b64"]))
+                target["pdfs"][0]["size"] = forged_size
+                raw["target_json_b64"] = base64.b64encode(
+                    json.dumps(target, sort_keys=True, separators=(",", ":")).encode()).decode()
+                atomic_write_json(marker_path, raw)
+                abandon_retry_transaction(self.project)
+
+                with self.assertRaisesRegex(
+                        ValueError, r"^Pending retry transaction cannot be recovered safely$"):
+                    reconcile_retry_transaction(self.project)
+
     def test_record_rejects_distinct_retry_ids_that_share_one_staged_pdf_source(self):
         project = Path(self.temp.name).resolve() / "shared-source"
         project.mkdir(); retryable_project(project)

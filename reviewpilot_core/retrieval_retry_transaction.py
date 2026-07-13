@@ -619,7 +619,12 @@ def _decode_target(encoded: Any, marker: dict[str, Any], project: Path) -> dict[
                 or not _basename(pdf["destination_name"], "retry-") or pdf["destination_name"] not in marker["candidate_names"]
                 or pdf["destination_name"] != f"retry-{marker['expected_revision']}-{pdf['retry_id']}.pdf"
                 or not _digest(pdf["retry_id"]) or not _basename(pdf["source_name"])
-                or {key: pdf[key] for key in ("retry_id", "source_name", "size", "sha256")} != committed):
+                or type(pdf["size"]) is not int or pdf["size"] < 0 or not _digest(pdf["sha256"])):
+            raise ValueError
+        committed_projection = {
+            key: pdf[key] for key in ("retry_id", "source_name", "size", "sha256")
+        }
+        if _encode_before(committed_projection) != _encode_before(committed):
             raise ValueError
         names.append(pdf["destination_name"])
     if len(names) != len(set(names)) or names != [name for name in marker["candidate_names"] if name in set(names)]:
