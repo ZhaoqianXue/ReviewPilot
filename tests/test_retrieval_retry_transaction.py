@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
 from reviewpilot_core.retrieval_retry import (
-    RetryItem, RetryMergedFacts, RetryPreparation, RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
+    RetryItem, RetryMergedFacts, RetryPlannedPdf, RetryPreparation, RetryPublicationPdf,
+    RetryPublicationPlan, RetrySnapshot, current_retry_snapshot,
     merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request,
     run_retry_staging, stable_retry_id,
 )
@@ -891,6 +892,42 @@ class RetryTargetTransactionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$"):
                     record_retry_transaction_target(project, forged, ledger)
                 self.assertEqual((project / PENDING_RETRY_FILE).read_bytes(), before)
+        self.assertTrue(abort_retry_transaction(project))
+
+    def test_record_rejects_distinct_retry_ids_that_share_one_staged_pdf_source(self):
+        project = Path(self.temp.name).resolve() / "shared-source"
+        project.mkdir(); retryable_project(project)
+        included_path = project / "filtered" / "included_papers.jsonl"
+        rows = [json.loads(line) for line in included_path.read_text().splitlines()]
+        rows.append({"id": "failed-2", "title": "Failed 2"}); atomic_write_jsonl(included_path, rows)
+        report_path = project / "pdfs" / "download_report.json"
+        report = json.loads(report_path.read_text()); report["failed"] = 2
+        report["failed_papers"].append({"id": "failed-2", "title": "Failed 2", "failure_class": "network"})
+        atomic_write_json(report_path, report)
+        ledger = load_workflow_state(project); ledger["stages"]["retrieval"]["counts"]["failed"] = 2
+        save_workflow_state(project, ledger)
+        prepared = preparation(project); staging_name = ".retrieval_retry_staging_shared"
+        begin_retry_transaction(project, prepared, staging_name, project / staging_name)
+        plan = publication(project, prepared, staging_name); ledger = target_ledger(project, plan)
+        first, second = plan.pdfs
+        shared_second = RetryPublicationPdf(
+            second.retry_id, first.source_path, second.destination_path,
+            first.source_size, first.source_sha256)
+        first_planned, second_planned = plan.merged_facts.planned_pdfs
+        shared_second_planned = RetryPlannedPdf(
+            second_planned.retry_id, first_planned.source_path, second_planned.destination_path)
+        forged = self.refreeze_plan(
+            *plan.merged_facts.mutable_copies(), base_plan=plan,
+            pdfs=(first, shared_second), planned_pdfs=(first_planned, shared_second_planned))
+        marker = project / PENDING_RETRY_FILE
+        before = marker.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, r"^Retry transaction target is invalid$") as caught:
+            record_retry_transaction_target(project, forged, ledger)
+
+        self.assertNotIn(str(project), str(caught.exception))
+        self.assertEqual(marker.read_bytes(), before)
+        record_retry_transaction_target(project, plan, ledger)
         self.assertTrue(abort_retry_transaction(project))
 
     def test_record_rejects_every_target_that_recovery_cannot_decode_before_writing_marker(self):

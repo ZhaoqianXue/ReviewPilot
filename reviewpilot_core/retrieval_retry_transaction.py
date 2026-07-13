@@ -446,6 +446,7 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
     _validate_target_ledger(marker, ledger, status, outcome_counts)
     pdfs: list[dict[str, Any]] = []
     successful_names: list[str] = []
+    source_identities: set[tuple[int, int]] = set()
     concrete_path_type = type(Path())
     if len(plan.pdfs) != len(merged.planned_pdfs):
         raise ValueError
@@ -462,9 +463,11 @@ def _trusted_target(project: Path, marker: dict[str, Any], plan: RetryPublicatio
         if (pdf.destination_path != project / "pdfs" / name or name not in marker["candidate_names"]
                 or pdf.source_path.parent != source_parent or not _direct_regular(pdf.source_path, source_parent)):
             raise ValueError
-        size, digest, _ = _publication_pdf_fingerprint(pdf.source_path, source_parent)
-        if size != pdf.source_size or digest != pdf.source_sha256:
+        size, digest, identity = _publication_pdf_fingerprint(pdf.source_path, source_parent)
+        if (size != pdf.source_size or digest != pdf.source_sha256
+                or identity in source_identities):
             raise ValueError
+        source_identities.add(identity)
         successful_names.append(name)
         pdfs.append({"destination_name": name, "retry_id": pdf.retry_id,
             "size": pdf.source_size, "sha256": pdf.source_sha256})
