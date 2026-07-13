@@ -443,7 +443,13 @@ class ExtractionAgentContract:
         successful_rows = 0
         failed_rows = 0
         for row in rows:
-            status = str(row.get("extraction_status") or "").strip().lower()
+            if "extraction_status" not in row:
+                status = ""
+            else:
+                raw_status = row["extraction_status"]
+                if not isinstance(raw_status, str):
+                    raise ValueError("Invalid extraction status")
+                status = raw_status.strip().lower()
             if status in {"", "success"}:
                 successful_rows += 1
             elif status in {"error", "failed"}:

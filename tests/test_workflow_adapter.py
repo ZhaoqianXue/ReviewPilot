@@ -143,10 +143,20 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             result = ExtractionAgentContract()._normalize_result(project, {"processed": 0, "errors": 0})
             self.assertEqual((result["processed"], result["errors"]), (0, 0))
 
-            rows = ({}, {"extraction_status": " SUCCESS "}, {"extraction_status": " Error "}, {"extraction_status": "FAILED"})
+            rows = ({}, {"extraction_status": ""}, {"extraction_status": "   "}, {"extraction_status": " SUCCESS "}, {"extraction_status": " Error "}, {"extraction_status": "FAILED"})
             (extraction / "extraction_results.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-            result = ExtractionAgentContract()._normalize_result(project, {"processed": 2, "errors": 2})
-            self.assertEqual((result["processed"], result["errors"]), (2, 2))
+            result = ExtractionAgentContract()._normalize_result(project, {"processed": 4, "errors": 2})
+            self.assertEqual((result["processed"], result["errors"]), (4, 2))
+
+    def test_extraction_contract_rejects_present_non_string_status(self):
+        for value in (None, False, 0, [], {}):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "demo"
+                extraction = project / "extraction"
+                extraction.mkdir(parents=True)
+                (extraction / "extraction_results.jsonl").write_text(json.dumps({"extraction_status": value}) + "\n")
+                with self.assertRaises(ValueError):
+                    ExtractionAgentContract()._normalize_result(project, {"processed": 1, "errors": 0})
 
     def test_collection_contract_requires_exact_valid_jsonl_for_every_named_source(self):
         invalid_cases = (
