@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .safe_text import safe_display_text
@@ -57,9 +59,9 @@ class RetryItem:
 @dataclass(frozen=True)
 class RetrySnapshot:
     report_revision: str
-    report: dict[str, Any]
-    included: list[dict[str, Any]]
-    ledger: dict[str, Any]
+    report: Mapping[str, Any]
+    included: tuple[Mapping[str, Any], ...]
+    ledger: Mapping[str, Any]
     items: tuple[RetryItem, ...]
 
     def to_projection(self) -> dict[str, Any]:
@@ -68,6 +70,13 @@ class RetrySnapshot:
             "reportRevision": self.report_revision,
             "items": [item.to_projection() for item in self.items],
         }
+
+    def mutable_fact_copies(self) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+        """Return isolated ordinary containers for a single mutation transaction."""
+        report = _thaw_json(self.report)
+        included = _thaw_json(self.included)
+        ledger = _thaw_json(self.ledger)
+        return report, included, ledger
 
 
 def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
@@ -115,17 +124,34 @@ def current_retry_snapshot(project_path: Path | str) -> RetrySnapshot:
     report_copy = deepcopy(report)
     included_copy = deepcopy(included)
     ledger_copy = deepcopy(ledger)
+    report_revision = retrieval_report_revision(report_copy, ledger_copy)
     return RetrySnapshot(
-        report_revision=retrieval_report_revision(report_copy, ledger_copy),
-        report=report_copy,
-        included=included_copy,
-        ledger=ledger_copy,
+        report_revision=report_revision,
+        report=_freeze_json(report_copy),
+        included=_freeze_json(included_copy),
+        ledger=_freeze_json(ledger_copy),
         items=tuple(items),
     )
 
 
 def disabled_retry_projection() -> dict[str, Any]:
     return {"canRetry": False, "reportRevision": "", "items": []}
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
 
 
 def _validate_current_stage(stage: dict[str, Any], expected_status: str, failed: int) -> None:

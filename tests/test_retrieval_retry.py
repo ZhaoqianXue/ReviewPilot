@@ -73,13 +73,49 @@ class RetrievalRetryTests(unittest.TestCase):
             project = Path(tmp)
             partial_project(project)
             snapshot = current_retry_snapshot(project)
-            snapshot.report["failed_papers"][0]["title"] = "mutated"
-            snapshot.included[1]["title"] = "mutated"
             fresh = current_retry_snapshot(project)
         self.assertEqual(snapshot.items[0].report_index, 0)
         self.assertEqual(snapshot.items[0].included_index, 1)
         self.assertEqual(fresh.report["failed_papers"][0]["title"], "Failed paper")
         self.assertEqual(fresh.included[1]["title"], "Failed paper")
+
+    def test_snapshot_authoritative_facts_are_recursively_immutable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); partial_project(project)
+            snapshot = current_retry_snapshot(project)
+            operations = (
+                lambda: snapshot.report.__setitem__("failed", 2),
+                lambda: snapshot.report["failed_papers"][0].__setitem__("id", "changed"),
+                lambda: snapshot.report["failed_papers"].append({"id": "extra"}),
+                lambda: snapshot.report.__delitem__("success"),
+                lambda: snapshot.included[0].__setitem__("id", "changed"),
+                lambda: snapshot.included.append({"id": "extra"}),
+                lambda: snapshot.included.__delitem__(0),
+                lambda: snapshot.ledger["counts"].__setitem__("failed", 9),
+                lambda: snapshot.ledger.__delitem__("status"),
+            )
+            for operation in operations:
+                with self.subTest(operation=operation), self.assertRaises((AttributeError, TypeError)):
+                    operation()
+
+    def test_mutable_fact_copies_are_plain_isolated_deep_copies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp); partial_project(project)
+            snapshot = current_retry_snapshot(project)
+            first_report, first_included, first_ledger = snapshot.mutable_fact_copies()
+            second_report, second_included, second_ledger = snapshot.mutable_fact_copies()
+            first_report["failed_papers"][0]["id"] = "changed"
+            first_report["failed_papers"].append({"id": "extra"})
+            del first_report["downloaded"]
+            first_included[0]["id"] = "changed"
+            first_included.append({"id": "extra"})
+            del first_included[1]
+            first_ledger["counts"]["failed"] = 9
+            del first_ledger["error"]
+        self.assertEqual(second_report["failed_papers"], [{"id": "failed-1", "title": "Failed paper", "failure_class": "paywall"}])
+        self.assertEqual(len(second_included), 2); self.assertEqual(second_ledger["counts"]["failed"], 1)
+        self.assertEqual(snapshot.report["failed_papers"][0]["id"], "failed-1")
+        self.assertEqual(snapshot.included[0]["id"], "ok-1"); self.assertEqual(snapshot.ledger["counts"]["failed"], 1)
 
     def test_structured_failed_snapshot_is_retryable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,7 +229,8 @@ class RetrievalRetryTests(unittest.TestCase):
     def test_snapshot_ledger_is_detached_from_disk_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp); partial_project(project)
-            snapshot = current_retry_snapshot(project); snapshot.ledger["status"] = "completed"
+            snapshot = current_retry_snapshot(project)
+            with self.assertRaises(TypeError): snapshot.ledger["status"] = "completed"
             self.assertEqual(current_retry_snapshot(project).ledger["status"], "partial")
 
 
