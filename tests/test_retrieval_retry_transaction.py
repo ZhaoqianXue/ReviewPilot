@@ -2228,7 +2228,33 @@ class RetryPdfPublicationTests(unittest.TestCase):
             for path in self.project.rglob("*")}
         self.assertEqual(after, before)
         forged = dict(marker); forged["phase"] = "abort"
-        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, forged)
+        self.assertEqual(_classify_retry_authorities(self.project, forged).kinds,
+            _classify_retry_authorities(self.project, marker).kinds)
+        marker_path = self.project / PENDING_RETRY_FILE; raw = json.loads(marker_path.read_text()); raw["phase"] = "abort"
+        atomic_write_json(marker_path, raw)
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        decoded_abort = transaction._read_marker(self.project.resolve())
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, decoded_abort)
+
+    def test_apply_authority_classifier_never_trusts_caller_before_or_target_facts(self):
+        marker = self.decoded_apply_marker(); report_path = self.project / "pdfs/download_report.json"
+        foreign = deepcopy(marker["target"]["report"]); foreign["foreign"] = True
+        atomic_write_json(report_path, foreign)
+        forged_target = deepcopy(marker); forged_target["target"]["report"] = deepcopy(foreign)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, forged_target)
+        forged_before = deepcopy(marker); forged_before["before"]["report"] = deepcopy(foreign)
+        with self.assertRaises(ValueError): _classify_retry_authorities(self.project, forged_before)
+        atomic_write_json(report_path, marker["before"]["report"])
+        target_equals_before = deepcopy(marker)
+        target_equals_before["target"]["report"] = deepcopy(target_equals_before["before"]["report"])
+        self.assertEqual(_classify_retry_authorities(self.project, target_equals_before).kinds[0], "before")
+
+    def test_apply_authority_classifier_keeps_target_priority_when_fresh_facts_are_equal(self):
+        marker = self.decoded_apply_marker(); atomic_write_json(
+            self.project / "pdfs/download_report.json", marker["before"]["report"])
+        fresh = deepcopy(marker); fresh["target"]["report"] = deepcopy(fresh["before"]["report"])
+        with patch("reviewpilot_core.retrieval_retry_transaction._assert_marker_generation", return_value=fresh):
+            self.assertEqual(_classify_retry_authorities(self.project, marker).kinds[0], "target")
 
     def test_apply_authority_classifier_rejects_semantic_and_path_forgeries(self):
         marker = self.decoded_apply_marker(); report = self.project / "pdfs/download_report.json"

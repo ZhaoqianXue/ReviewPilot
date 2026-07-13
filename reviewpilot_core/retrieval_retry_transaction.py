@@ -1512,11 +1512,12 @@ def _classify_retry_authorities(project_path: Path | str,
     project = _project_path(project_path)
     with _lock(project), _project_file_lock(project):
         try:
-            if (type(marker) is not dict or marker.get("phase") != "apply"
-                    or "before" not in marker or "target" not in marker
+            if (type(marker) is not dict
                     or _RAW_MARKER_BYTES not in marker or _MARKER_IDENTITY not in marker):
                 raise ValueError
-            _assert_marker_generation(project, marker)
+            current = _assert_marker_generation(project, marker)
+            if (current.get("phase") != "apply" or "before" not in current or "target" not in current):
+                raise ValueError
             authorities = (
                 (project / "pdfs/download_report.json", project / "pdfs", "report", False),
                 (project / "filtered/included_papers.jsonl", project / "filtered", "included", True),
@@ -1556,11 +1557,11 @@ def _classify_retry_authorities(project_path: Path | str,
                     value = [strict_json(line) for line in raw.decode("utf-8").splitlines()]
                 else:
                     value = strict_json(raw.decode("utf-8"))
-                if _same_loaded_fact(value, marker["target"][key]): kind = "target"
-                elif _same_loaded_fact(value, marker["before"][key]): kind = "before"
+                if _same_loaded_fact(value, current["target"][key]): kind = "target"
+                elif _same_loaded_fact(value, current["before"][key]): kind = "before"
                 else: raise ValueError
                 kinds.append(kind); identities.append(_file_identity(opened))
-            _assert_marker_generation(project, marker)
+            _assert_marker_generation(project, current)
             return RetryAuthorityClassification(tuple(kinds), tuple(identities))
         except Exception as exc:
             raise ValueError("Retry transaction authorities cannot be classified") from exc
