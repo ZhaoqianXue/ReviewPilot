@@ -28,13 +28,74 @@ from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 
 
 class WorkflowActionAdapterTests(unittest.TestCase):
+    def test_collection_contract_requires_exact_valid_jsonl_for_every_named_source(self):
+        invalid_cases = (
+            ("successful-zero-stale", {}, json.dumps({"title": "stale"}) + "\n"),
+            ("failed-zero-stale", {"pubmed": "temporarily unavailable"}, json.dumps({"title": "stale"}) + "\n"),
+            ("malformed-line", {}, "not-json\n"),
+            ("missing-file", {}, None),
+        )
+        for case, platform_errors, content in invalid_cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "demo"
+                collected = project / "collected"
+                collected.mkdir(parents=True)
+                (collected / "summary.json").write_text(json.dumps({"total_papers": 0, "platform_stats": {"pubmed": 0}, "platform_errors": platform_errors}))
+                if content is not None:
+                    (collected / "pubmed.jsonl").write_text(content)
+                with self.assertRaises(ValueError):
+                    CollectionAgentContract()._normalize_result(project, {"total": 0, "platform_stats": {"pubmed": 0}, "platform_errors": platform_errors})
+
+        valid_cases = (
+            ("successful-zero", 0, {}, ""),
+            ("failed-zero", 0, {"pubmed": "temporarily unavailable"}, ""),
+            ("nonzero-success", 1, {}, json.dumps({"title": "current"}) + "\n"),
+        )
+        for case, expected_count, platform_errors, content in valid_cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "demo"
+                collected = project / "collected"
+                collected.mkdir(parents=True)
+                summary = {"total_papers": expected_count, "platform_stats": {"pubmed": expected_count}, "platform_errors": platform_errors}
+                (collected / "summary.json").write_text(json.dumps(summary))
+                (collected / "pubmed.jsonl").write_text(content)
+                result = CollectionAgentContract()._normalize_result(project, {"total": expected_count, "platform_stats": {"pubmed": expected_count}, "platform_errors": platform_errors})
+                self.assertEqual(result["total"], expected_count)
+
+    def test_download_contract_requires_report_detail_lists_to_match_counts(self):
+        invalid_reports = (
+            {"success": 1, "failed": 0, "downloaded": [], "failed_papers": []},
+            {"success": 0, "failed": 1, "downloaded": [], "failed_papers": []},
+            {"success": 0, "failed": 0, "failed_papers": []},
+            {"success": 0, "failed": 0, "downloaded": []},
+            {"success": 0, "failed": 0, "downloaded": {}, "failed_papers": []},
+            {"success": 0, "failed": 0, "downloaded": [], "failed_papers": {}},
+            {"success": 1, "failed": 0, "downloaded": ["not-an-object"], "failed_papers": []},
+            {"success": 0, "failed": 1, "downloaded": [], "failed_papers": ["not-an-object"]},
+        )
+        for report in invalid_reports:
+            with self.subTest(report=report), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp) / "demo"
+                (project / "pdfs").mkdir(parents=True)
+                (project / "pdfs" / "download_report.json").write_text(json.dumps(report))
+                with self.assertRaises(ValueError):
+                    DownloadAgentContract()._normalize_result(project, {"success": report["success"], "failed": report["failed"]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            (project / "pdfs").mkdir(parents=True)
+            report = {"success": 1, "failed": 1, "pdf_count": 99, "downloaded": [{"title": "A"}], "failed_papers": [{"title": "B"}]}
+            (project / "pdfs" / "download_report.json").write_text(json.dumps(report))
+            result = DownloadAgentContract()._normalize_result(project, {"success": 1, "failed": 1, "pdf_count": 7})
+            self.assertEqual((result["success"], result["failed"]), (1, 1))
+
     def test_contract_normalizers_reject_alias_disagreement_and_artifact_count_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "demo"; (project / "collected").mkdir(parents=True); (project / "pdfs").mkdir(); (project / "extraction").mkdir()
             (project / "collected" / "summary.json").write_text(json.dumps({"total_papers": 1, "platform_stats": {"pubmed": 1}, "platform_errors": {}}))
             (project / "collected" / "pubmed.jsonl").write_text("")
             with self.assertRaises(ValueError): CollectionAgentContract()._normalize_result(project, {"total": 2, "platform_stats": {"pubmed": 2}, "platform_errors": {}})
-            (project / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}))
+            (project / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0, "downloaded": [{"title": "A"}], "failed_papers": []}))
             with self.assertRaises(ValueError): DownloadAgentContract()._normalize_result(project, {"success": 2, "failed": 0})
             (project / "extraction" / "extraction_results.jsonl").write_text(json.dumps({"title": "A", "extraction_status": "error"}) + "\n")
             with self.assertRaises(ValueError): ExtractionAgentContract()._normalize_result(project, {"processed": 1, "errors": 0})
@@ -464,7 +525,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (project_dir / "pdfs" / "download_report.json").write_text(
-                json.dumps({"success": 1, "failed": 0}),
+                json.dumps({"success": 1, "failed": 0, "downloaded": [{"title": "Paper A"}], "failed_papers": []}),
                 encoding="utf-8",
             )
             calls = []
@@ -490,7 +551,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(calls[1][1]["filtered_file"], str(project_dir / "filtered" / "included_papers.jsonl"))
         self.assertEqual(calls[1][1]["download_folder"], str(project_dir / "pdfs"))
         self.assertEqual(calls[1][1]["extraction_prompt"]["prompt_type"], "extraction")
-        self.assertEqual(calls[1][1]["download_report"], {"success": 1, "failed": 0})
+        self.assertEqual(calls[1][1]["download_report"], {"success": 1, "failed": 0, "downloaded": [{"title": "Paper A"}], "failed_papers": []})
         self.assertEqual(result["status"], "extraction_done")
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["errors"], 0)

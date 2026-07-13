@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,9 +199,21 @@ class CollectionAgentContract:
         normalized = {"total": total, "platform_stats": platform_stats, "platform_errors": platform_errors}
         structured_action_outcome("collect", normalized)
         for platform, expected_count in platform_stats.items():
-            if platform in platform_errors or expected_count == 0:
-                continue
-            if len(read_jsonl(collected_dir / f"{platform}.jsonl")) != expected_count:
+            source_path = collected_dir / f"{platform}.jsonl"
+            if not source_path.is_file():
+                raise ValueError(f"Missing {platform} collection artifact")
+            actual_count = 0
+            try:
+                for line in source_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if not isinstance(row, dict):
+                        raise ValueError(f"Invalid {platform} collection artifact row")
+                    actual_count += 1
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Invalid {platform} collection artifact") from exc
+            if actual_count != expected_count:
                 raise ValueError(f"{platform} artifact row count does not match collection contract")
         if summary_path.exists() and isinstance(summary, dict) and "platform_stats" not in summary:
             summary["platform_stats"] = platform_stats
@@ -360,6 +373,12 @@ class DownloadAgentContract:
         success = _contract_count(sources, ("success", "successful"), "retrieval success")
         failed = _contract_count(sources, ("failed",), "retrieval failed")
         structured_action_outcome("download-pdfs", {"success": success, "failed": failed})
+        if not isinstance(report, dict) or not isinstance(report.get("downloaded"), list) or not isinstance(report.get("failed_papers"), list):
+            raise ValueError("Retrieval report detail fields must be lists")
+        if not all(isinstance(item, dict) for item in report["downloaded"] + report["failed_papers"]):
+            raise ValueError("Retrieval report detail items must be objects")
+        if len(report["downloaded"]) != success or len(report["failed_papers"]) != failed:
+            raise ValueError("Retrieval report detail counts do not match contract")
         return {
             **result,
             "status": "download_done",
