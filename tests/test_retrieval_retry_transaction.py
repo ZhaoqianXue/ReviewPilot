@@ -567,7 +567,7 @@ class RetryAbortTransactionTests(unittest.TestCase):
 
         candidate = self.project / "pdfs" / handle.candidate_names[0]; candidate.write_bytes(b"%PDF-new")
         candidate_link = self.project / "candidate-link"; os.link(candidate, candidate_link)
-        with self.assertRaises(ValueError): reconcile_retry_transaction(self.project)
+        self.assertTrue(reconcile_retry_transaction(self.project))
         self.assertTrue(candidate.exists()); self.assertTrue(candidate_link.exists())
 
     def test_begin_revalidates_and_rejects_every_collision_kind(self):
@@ -596,7 +596,7 @@ class RetryAbortTransactionTests(unittest.TestCase):
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertEqual([json.loads(line) for line in (self.project / "filtered" / "included_papers.jsonl").read_text().splitlines()], before[1])
         self.assertEqual(load_workflow_state(self.project)["stages"]["retrieval"], before[2])
-        self.assertFalse(candidate.exists()); self.assertFalse(staging.exists()); self.assertEqual(keep.read_bytes(), b"keep")
+        self.assertTrue(candidate.exists()); self.assertFalse(staging.exists()); self.assertEqual(keep.read_bytes(), b"keep")
         self.assertFalse((self.project / PENDING_RETRY_FILE).exists())
 
     def test_abort_stops_when_authority_write_is_followed_by_a_new_transaction(self):
@@ -684,7 +684,6 @@ class RetryAbortTransactionTests(unittest.TestCase):
             ("report-write", "reconcile"),
             ("included-write", "reconcile"),
             ("ledger-write", "reconcile"),
-            ("candidate-unlink", "abort"),
             ("staging-rmtree", "abort"),
             ("marker-unlink", "abort"),
         )
@@ -771,7 +770,7 @@ class RetryAbortTransactionTests(unittest.TestCase):
                 self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before_report)
                 self.assertEqual([json.loads(line) for line in (self.project / "filtered" / "included_papers.jsonl").read_text().splitlines()], before_included)
                 self.assertEqual(load_workflow_state(self.project), before_ledger)
-                self.assertFalse(candidate.exists())
+                self.assertTrue(candidate.exists()); candidate.unlink()
                 self.assertFalse(staging.exists())
                 self.assertFalse(marker.exists())
                 self.assertEqual(keep.read_bytes(), b"keep")
@@ -1194,7 +1193,7 @@ class RetryTargetTransactionTests(unittest.TestCase):
         self.assertEqual(target["pdfs"][0]["source_name"], self.plan.pdfs[0].source_path.name)
         self.ledger["stages"]["retrieval"]["counts"]["succeeded"] = 99
         self.assertEqual(raw, marker_path.read_text())
-        self.publish_target()
+        publish_retry_transaction_pdfs(self.project)
         self.assertTrue(abort_retry_transaction(self.project))
         self.assertEqual(json.loads((self.project / "pdfs" / "download_report.json").read_text()), before[0])
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
@@ -2049,13 +2048,14 @@ class RetryPdfPublicationTests(unittest.TestCase):
 
     def test_publish_refuses_destination_collision_and_leaves_abort_marker(self):
         destination = self.plan.pdfs[0].destination_path
-        destination.write_bytes(b"%PDF-foreign")
+        destination.write_bytes(self.plan.pdfs[0].source_path.read_bytes())
 
         with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
             publish_retry_transaction_pdfs(self.project)
 
-        self.assertEqual(destination.read_bytes(), b"%PDF-foreign")
+        foreign = destination.read_bytes()
         self.assertEqual(json.loads((self.project / PENDING_RETRY_FILE).read_text())["phase"], "abort")
+        self.assertTrue(abort_retry_transaction(self.project)); self.assertEqual(destination.read_bytes(), foreign)
 
     def test_interrupted_partial_destination_is_abort_cleanable(self):
         original_write = os.write
@@ -2070,7 +2070,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with patch("reviewpilot_core.retrieval_retry_transaction.os.write", side_effect=interrupt):
             with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
         destination = self.plan.pdfs[0].destination_path
-        self.assertTrue(destination.exists()); self.assertNotEqual(destination.read_bytes(), self.plan.pdfs[0].source_path.read_bytes())
+        self.assertFalse(destination.exists())
         self.assertTrue(abort_retry_transaction(self.project)); self.assertFalse(destination.exists())
 
     def test_publish_rejects_source_mutation(self):
@@ -2079,6 +2079,40 @@ class RetryPdfPublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"^Retry transaction PDFs could not be published$"):
             publish_retry_transaction_pdfs(self.project)
         self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+
+    def test_crash_after_receipt_cas_recovers_temp_only(self):
+        from reviewpilot_core import retrieval_retry_transaction as transaction
+        original = transaction._replace_marker_cas
+
+        def replace_then_crash(*args):
+            original(*args); raise OSError("crash after receipt")
+
+        with patch("reviewpilot_core.retrieval_retry_transaction._replace_marker_cas", side_effect=replace_then_crash):
+            with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        receipt = json.loads(base64.b64decode(marker["published_json_b64"]))["pdfs"][0]
+        self.assertTrue((self.project / "pdfs" / receipt["temp_name"]).exists())
+        self.assertFalse(self.plan.pdfs[0].destination_path.exists())
+        publish_retry_transaction_pdfs(self.project)
+        self.assertTrue(self.plan.pdfs[0].destination_path.exists())
+
+    def test_crash_before_temp_unlink_recovers_double_link_without_rewriting_destination(self):
+        original = Path.unlink
+        failed = False
+
+        def interrupt(path, *args, **kwargs):
+            nonlocal failed
+            if path.parent.name == "pdfs" and ".pdf." in path.name and path.name.endswith(".tmp") and not failed:
+                failed = True; raise OSError("crash before temp unlink")
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", autospec=True, side_effect=interrupt):
+            with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
+        destination = self.plan.pdfs[0].destination_path
+        before = destination.stat(); self.assertEqual(before.st_nlink, 2)
+        publish_retry_transaction_pdfs(self.project)
+        after = destination.stat()
+        self.assertEqual((after.st_ino, after.st_mtime_ns, after.st_nlink), (before.st_ino, before.st_mtime_ns, 1))
 
     def test_publish_is_idempotent_after_complete_file_and_does_not_mutate_authorities(self):
         before = self.authority_bytes()
@@ -2089,6 +2123,7 @@ class RetryPdfPublicationTests(unittest.TestCase):
         self.assertEqual(self.authority_bytes(), before)
         marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
         self.assertEqual(marker["phase"], "abort"); self.assertIn("target_json_b64", marker)
+        self.assertIn("published_json_b64", marker)
 
     def test_multi_pdf_retry_accepts_first_complete_target_and_publishes_second(self):
         self.assertTrue(abort_retry_transaction(self.project))
@@ -2105,16 +2140,16 @@ class RetryPdfPublicationTests(unittest.TestCase):
             self.project, self.prepared, self.staging, self.project / self.staging)
         self.plan = publication(self.project, self.prepared, self.staging)
         record_retry_transaction_target(self.project, self.plan, target_ledger(self.project, self.plan))
-        original = __import__("reviewpilot_core.retrieval_retry_transaction", fromlist=["_publish_one_pdf"])._publish_one_pdf
+        original_link = os.link
         calls = 0
 
-        def stop_after_first(*args):
+        def stop_after_first(source, destination, *args, **kwargs):
             nonlocal calls
             calls += 1
             if calls == 2: raise OSError("crash")
-            return original(*args)
+            return original_link(source, destination, *args, **kwargs)
 
-        with patch("reviewpilot_core.retrieval_retry_transaction._publish_one_pdf", side_effect=stop_after_first):
+        with patch("reviewpilot_core.retrieval_retry_transaction.os.link", side_effect=stop_after_first):
             with self.assertRaises(ValueError): publish_retry_transaction_pdfs(self.project)
         self.assertTrue(self.plan.pdfs[0].destination_path.exists()); self.assertFalse(self.plan.pdfs[1].destination_path.exists())
         publish_retry_transaction_pdfs(self.project)

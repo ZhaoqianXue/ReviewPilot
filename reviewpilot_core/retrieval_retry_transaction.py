@@ -596,7 +596,7 @@ def _read_marker(project: Path) -> dict[str, Any]:
         data = json.loads(raw_marker_bytes.decode("utf-8"))
         base = {"version", "phase", "transaction_id", "expected_revision", "selected_ids", "staging_name", "candidate_names", "pdf_baseline_json_b64", "before_json_b64"}
         phase = data.get("phase") if type(data) is dict else None
-        optional = {key for key in ("sources_json_b64", "target_json_b64") if key in data}
+        optional = {key for key in ("sources_json_b64", "target_json_b64", "published_json_b64") if key in data}
         expected = base | optional
         if (type(data) is not dict or set(data) != expected or type(data["version"]) is not int
                 or data["version"] != 2 or type(phase) is not str or phase != "abort"
@@ -630,6 +630,19 @@ def _read_marker(project: Path) -> dict[str, Any]:
             data["sources"] = _decode_sources(data["sources_json_b64"], data)
         if "target_json_b64" in data:
             data["target"] = _decode_target(data["target_json_b64"], data, project)
+        if "published_json_b64" in data:
+            published = _decode_before(data["published_json_b64"])
+            if ("target" not in data or set(published) != {"pdfs"} or type(published["pdfs"]) is not list
+                    or len(published["pdfs"]) > len(data["target"]["pdfs"])):
+                raise ValueError
+            for receipt, target in zip(published["pdfs"], data["target"]["pdfs"]):
+                if (type(receipt) is not dict or set(receipt) != {"destination_name", "temp_name", "device", "inode", "size", "sha256"}
+                        or receipt["destination_name"] != target["destination_name"]
+                        or receipt["temp_name"] != f".{target['destination_name']}.{data['transaction_id']}.tmp"
+                        or any(type(receipt[key]) is not int or receipt[key] < 0 for key in ("device", "inode", "size"))
+                        or receipt["size"] != target["size"] or receipt["sha256"] != target["sha256"]):
+                    raise ValueError
+            data["published"] = published
         data[_RAW_MARKER_BYTES] = raw_marker_bytes
         data[_MARKER_IDENTITY] = marker_identity
         return data
@@ -787,10 +800,6 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
                     (project / "workflow_state.json", project)):
                 if not _direct_regular(path, parent):
                     raise ValueError
-            for name in data["candidate_names"]:
-                path = project / "pdfs" / name
-                if _lexists(path) and not _direct_regular(path, project / "pdfs"):
-                    raise ValueError
             staging = project / data["staging_name"]
             if _lexists(staging) and (staging.is_symlink() or not staging.is_dir() or staging.resolve(strict=True).parent != project):
                 raise ValueError
@@ -800,15 +809,16 @@ def _restore(project: Path, data: dict[str, Any]) -> bool:
             atomic_write_jsonl(project / "filtered" / "included_papers.jsonl", before["included"])
             _assert_marker_generation(project, data)
             save_workflow_state(project, before["ledger"])
-            for name in data["candidate_names"]:
-                _assert_marker_generation(project, data)
-                path = project / "pdfs" / name
-                if not _lexists(path):
-                    continue
-                if not _direct_regular(path, project / "pdfs"):
-                    raise ValueError
-                _assert_marker_generation(project, data)
-                path.unlink()
+            for receipt in data.get("published", {}).get("pdfs", []):
+                for name in (receipt["temp_name"], receipt["destination_name"]):
+                    _assert_marker_generation(project, data)
+                    path = project / "pdfs" / name
+                    if not _lexists(path):
+                        continue
+                    info = path.lstat()
+                    if (stat.S_ISREG(info.st_mode)
+                            and (info.st_dev, info.st_ino) == (receipt["device"], receipt["inode"])):
+                        path.unlink()
             _assert_marker_generation(project, data)
             if _lexists(staging):
                 _assert_marker_generation(project, data)
@@ -1070,24 +1080,57 @@ def record_retry_transaction_target(project_path: Path | str, publication_plan: 
             raise ValueError("Retry transaction target is invalid") from exc
 
 
-def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any]) -> None:
+def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any]) -> dict[str, Any]:
     source_parent = project / marker["staging_name"] / "retry" / "pdfs"
     destination_parent = project / "pdfs"
     source = source_parent / pdf["source_name"]
     destination = destination_parent / pdf["destination_name"]
+    receipts = marker.get("published", {}).get("pdfs", [])
+    index = marker["target"]["pdfs"].index(pdf)
+    if index < len(receipts):
+        receipt = receipts[index]; temporary = destination_parent / receipt["temp_name"]
+        paths = [path for path in (temporary, destination) if _lexists(path)]
+        if not paths:
+            raise ValueError
+        for path in paths:
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != len(paths)
+                    or (info.st_dev, info.st_ino) != (receipt["device"], receipt["inode"])):
+                raise ValueError
+        probe = destination if destination in paths else temporary
+        descriptor = os.open(probe, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            digest = hashlib.sha256(); size = 0
+            while chunk := os.read(descriptor, 64 * 1024): digest.update(chunk); size += len(chunk)
+        finally: os.close(descriptor)
+        if (size, digest.hexdigest()) != (receipt["size"], receipt["sha256"]): raise ValueError
+        _assert_marker_generation(project, marker)
+        if destination not in paths:
+            os.link(temporary, destination, follow_symlinks=False)
+            directory = os.open(destination_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try: os.fsync(directory)
+            finally: os.close(directory)
+            _assert_marker_generation(project, marker)
+        if _lexists(temporary):
+            _assert_marker_generation(project, marker)
+            temporary.unlink()
+        directory = os.open(destination_parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        _assert_marker_generation(project, marker)
+        return marker
+    if index != len(receipts) or _lexists(destination):
+        raise ValueError
+
+    temp_name = f".{pdf['destination_name']}.{marker['transaction_id']}.tmp"
+    temporary = destination_parent / temp_name
     before_info = source.lstat()
     size, digest, identity = _publication_pdf_fingerprint(source, source_parent)
     if (size, digest) != (pdf["size"], pdf["sha256"]):
         raise ValueError
-    if _lexists(destination):
-        if not _direct_regular(destination, destination_parent):
-            raise ValueError
-        existing_size, existing_digest, _ = _publication_pdf_fingerprint(destination, destination_parent)
-        if (existing_size, existing_digest) != (pdf["size"], pdf["sha256"]):
-            raise ValueError
-        return
-
     source_descriptor = destination_descriptor = None
+    created_identity = None
     try:
         source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         source_descriptor = os.open(source, source_flags)
@@ -1097,7 +1140,8 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
                 or _file_identity(opened) != _file_identity(before_info)):
             raise ValueError
         destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-        destination_descriptor = os.open(destination, destination_flags, 0o600)
+        destination_descriptor = os.open(temporary, destination_flags, 0o600)
+        created = os.fstat(destination_descriptor); created_identity = (created.st_dev, created.st_ino)
         copied_size = 0
         copied_digest = hashlib.sha256()
         while chunk := os.read(source_descriptor, 64 * 1024):
@@ -1115,13 +1159,26 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
                 or _file_identity(after_path) != _file_identity(opened)
                 or (copied_size, copied_digest.hexdigest()) != (pdf["size"], pdf["sha256"])):
             raise ValueError
+    except Exception:
+        if destination_descriptor is not None:
+            os.close(destination_descriptor); destination_descriptor = None
+        if source_descriptor is not None:
+            os.close(source_descriptor); source_descriptor = None
+        try:
+            _assert_marker_generation(project, marker)
+            info = temporary.lstat()
+            if created_identity is not None and (info.st_dev, info.st_ino) == created_identity:
+                temporary.unlink()
+        except (OSError, ValueError):
+            pass
+        raise
     finally:
         if destination_descriptor is not None:
             os.close(destination_descriptor)
         if source_descriptor is not None:
             os.close(source_descriptor)
     after_size, after_digest, after_identity = _publication_pdf_fingerprint(source, source_parent)
-    destination_size, destination_digest, _ = _publication_pdf_fingerprint(destination, destination_parent)
+    destination_size, destination_digest, destination_identity = _publication_pdf_fingerprint(temporary, destination_parent)
     if ((after_size, after_digest, after_identity) != (pdf["size"], pdf["sha256"], identity)
             or (destination_size, destination_digest) != (pdf["size"], pdf["sha256"])):
         raise ValueError
@@ -1130,24 +1187,40 @@ def _publish_one_pdf(project: Path, marker: dict[str, Any], pdf: dict[str, Any])
         os.fsync(directory)
     finally:
         os.close(directory)
+    receipt = {"destination_name": pdf["destination_name"], "temp_name": temp_name,
+        "device": destination_identity[0], "inode": destination_identity[1],
+        "size": pdf["size"], "sha256": pdf["sha256"]}
+    raw = json.loads(marker[_RAW_MARKER_BYTES].decode("utf-8"))
+    raw["published_json_b64"] = _encode_before({"pdfs": receipts + [receipt]})
+    _replace_marker_cas(project, marker, raw)
+    marker = _read_marker(project)
+    return _publish_one_pdf(project, marker, pdf)
 
 
 def _validate_before_with_published_pdfs(project: Path, marker: dict[str, Any]) -> None:
     expected_pdfs = [(pdf["name"], pdf["sha256"]) for pdf in marker["pdf_baseline"]["pdfs"]]
-    missing_seen = False
-    for pdf in marker["target"]["pdfs"]:
+    receipts = marker.get("published", {}).get("pdfs", [])
+    receipt_count = len(receipts)
+    for receipt in receipts:
+        temporary = project / "pdfs" / receipt["temp_name"]
+        if _lexists(temporary):
+            info = temporary.lstat()
+            if (not stat.S_ISREG(info.st_mode)
+                    or (info.st_dev, info.st_ino) != (receipt["device"], receipt["inode"])):
+                raise ValueError
+            expected_pdfs.append((receipt["temp_name"], receipt["sha256"]))
+    for index, pdf in enumerate(marker["target"]["pdfs"]):
         destination = project / "pdfs" / pdf["destination_name"]
         if not _lexists(destination):
-            missing_seen = True
             continue
-        if missing_seen:
+        if index >= receipt_count:
             raise ValueError
-        if not _direct_regular(destination, project / "pdfs"):
+        receipt = receipts[index]
+        info = destination.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink not in (1, 2)
+                or (info.st_dev, info.st_ino) != (receipt["device"], receipt["inode"])):
             raise ValueError
-        size, digest, _ = _publication_pdf_fingerprint(destination, project / "pdfs")
-        if (size, digest) != (pdf["size"], pdf["sha256"]):
-            raise ValueError
-        expected_pdfs.append((pdf["destination_name"], digest))
+        expected_pdfs.append((pdf["destination_name"], receipt["sha256"]))
     pdf_names = tuple(pdf["name"] for pdf in marker["pdf_baseline"]["pdfs"])
     expected_identities = _baseline_identities(marker["pdf_baseline"])
     identity_before = _capture_authority_identities(project, pdf_names)
@@ -1192,7 +1265,7 @@ def publish_retry_transaction_pdfs(project_path: Path | str) -> None:
                 _validate_before_with_published_pdfs(project, marker)
                 _assert_marker_generation(project, marker)
                 _validate_committed_source_set(project, marker)
-                _publish_one_pdf(project, marker, pdf)
+                marker = _publish_one_pdf(project, marker, pdf)
                 _assert_marker_generation(project, marker)
                 _validate_committed_source_set(project, marker)
                 _validate_before_with_published_pdfs(project, marker)
