@@ -172,6 +172,8 @@ def prepare_retry_request(project_path: Path | str, payload: Any) -> RetryPrepar
 class StagedRetryPdf:
     retry_id: str
     source_path: Path
+    source_size: int | None = None
+    source_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -206,6 +208,132 @@ class RetryMergedFacts:
 
     def mutable_copies(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         return _thaw_json(self.report), _thaw_json(self.included)
+
+
+@dataclass(frozen=True)
+class RetryPublicationPdf:
+    retry_id: str
+    source_path: Path
+    destination_path: Path
+    source_size: int
+    source_sha256: str
+
+
+@dataclass(frozen=True)
+class RetryPublicationPlan:
+    report_revision: str
+    merged_facts: RetryMergedFacts
+    pdfs: tuple[RetryPublicationPdf, ...]
+
+
+def prepare_retry_publication(
+    project_path: Path | str,
+    preparation: RetryPreparation,
+    staged_outcome: StagedRetryOutcome,
+    merged_facts: RetryMergedFacts,
+) -> RetryPublicationPlan:
+    """Revalidate retry inputs and freeze a no-write publication plan."""
+    project = Path(project_path)
+    try:
+        before = _authoritative_fingerprint(project)
+        resolved_project = project.resolve(strict=True)
+        if (not isinstance(preparation, RetryPreparation)
+                or not isinstance(staged_outcome, StagedRetryOutcome)
+                or type(merged_facts) is not RetryMergedFacts
+                or not isinstance(preparation.snapshot, RetrySnapshot)
+                or preparation._project_identity != resolved_project):
+            raise ValueError
+
+        current = current_retry_snapshot(project)
+        frozen = preparation.snapshot
+        if (current.report_revision != frozen.report_revision
+                or _thaw_json(current.report) != _thaw_json(frozen.report)
+                or _thaw_json(current.included) != _thaw_json(frozen.included)
+                or _thaw_json(current.ledger) != _thaw_json(frozen.ledger)
+                or current.items != frozen.items):
+            raise ValueError
+
+        expected = merge_staged_retry_facts(preparation, staged_outcome)
+        if merged_facts != expected:
+            raise ValueError
+        if (expected.report_revision != current.report_revision
+                or staged_outcome.report_revision != current.report_revision):
+            raise ValueError
+
+        resolved_root = _directory_child(staged_outcome.staging_root, resolved_project)
+        if (not staged_outcome.staging_root.name.startswith(".retrieval_retry_staging_")
+                or staged_outcome.staging_root.parent != resolved_project
+                or staged_outcome.staging_root.resolve(strict=True) != resolved_root):
+            raise ValueError
+        resolved_staged_project = _directory_child(staged_outcome.staging_project_path, resolved_root)
+        if (staged_outcome.staging_project_path != staged_outcome.staging_root / _STAGING_PROJECT_ID
+                or staged_outcome.staging_project_path.resolve(strict=True) != resolved_staged_project):
+            raise ValueError
+        staged_pdfs = staged_outcome.staging_project_path / "pdfs"
+        resolved_staged_pdfs = _directory_child(staged_pdfs, resolved_staged_project)
+        authoritative_pdfs = resolved_project / "pdfs"
+        resolved_authoritative_pdfs = authoritative_pdfs.resolve(strict=True)
+
+        outcome_by_id = {item.retry_id: item for item in staged_outcome.successful_pdfs}
+        if len(outcome_by_id) != len(staged_outcome.successful_pdfs):
+            raise ValueError
+        publication_pdfs: list[RetryPublicationPdf] = []
+        seen_sources: set[tuple[int, int]] = set()
+        seen_destinations: set[Path] = set()
+        for planned in expected.planned_pdfs:
+            source_item = outcome_by_id.get(planned.retry_id)
+            if source_item is None or source_item.source_path != planned.source_path:
+                raise ValueError
+            source = planned.source_path
+            if source.parent != staged_pdfs or source.suffix != ".pdf":
+                raise ValueError
+            size, digest, identity = _publication_pdf_fingerprint(source, resolved_staged_pdfs)
+            if source_item.source_size != size or source_item.source_sha256 != digest:
+                raise ValueError
+            if identity in seen_sources:
+                raise ValueError
+            seen_sources.add(identity)
+
+            destination = planned.destination_path
+            expected_name = f"retry-{current.report_revision}-{planned.retry_id}.pdf"
+            if (destination != authoritative_pdfs / expected_name
+                    or destination.parent != authoritative_pdfs
+                    or destination.suffix != ".pdf"
+                    or destination in seen_destinations
+                    or destination.exists() or destination.is_symlink()):
+                raise ValueError
+            if destination.parent.resolve(strict=True) != resolved_authoritative_pdfs:
+                raise ValueError
+            seen_destinations.add(destination)
+            publication_pdfs.append(RetryPublicationPdf(
+                planned.retry_id, source, destination, size, digest))
+        if set(outcome_by_id) != {item.retry_id for item in publication_pdfs}:
+            raise ValueError
+        if _authoritative_fingerprint(project) != before:
+            raise ValueError
+        return RetryPublicationPlan(current.report_revision, expected, tuple(publication_pdfs))
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise ValueError("Retry publication preparation failed") from None
+
+
+def _publication_pdf_fingerprint(path: Path, resolved_parent: Path) -> tuple[int, str, tuple[int, int]]:
+    if path.is_symlink() or not path.is_file() or path.resolve(strict=True).parent != resolved_parent:
+        raise ValueError
+    stat = path.stat()
+    if stat.st_nlink != 1:
+        raise ValueError
+    digest = hashlib.sha256()
+    size = 0
+    header = bytearray()
+    with path.open("rb") as handle:
+        while chunk := handle.read(64 * 1024):
+            if len(header) < 1024:
+                header.extend(chunk[:1024 - len(header)])
+            size += len(chunk)
+            digest.update(chunk)
+    if size == 0 or not bytes(header).lstrip().startswith(b"%PDF-"):
+        raise ValueError
+    return size, digest.hexdigest(), (stat.st_dev, stat.st_ino)
 
 
 def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: StagedRetryOutcome) -> RetryMergedFacts:
@@ -684,7 +812,8 @@ def _normalize_staged_retry(
             path = _staged_pdf_path(row.get("pdf_path"), staging_project, pdfs)
             if path not in downloaded_paths:
                 raise ValueError("Staged retry PDF is absent from report")
-            successes.append(StagedRetryPdf(retry_id, path))
+            size, digest, _ = _publication_pdf_fingerprint(path, pdfs)
+            successes.append(StagedRetryPdf(retry_id, path, size, digest))
         else:
             if row.get("pdf_path") not in (None, ""):
                 raise ValueError("Failed staged retry has a PDF path")

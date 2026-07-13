@@ -13,12 +13,14 @@ from reviewpilot_core.retrieval_retry import (
     RevisionConflict,
     RetryItem,
     RetryPreparation,
+    RetryPublicationPlan,
     RetrySnapshot,
     StagedRetryOutcome,
     StagedRetryPdf,
     current_retry_snapshot,
     merge_staged_retry_facts,
     prepare_retry_request,
+    prepare_retry_publication,
     run_retry_staging,
     retrieval_report_revision,
     stable_retry_id,
@@ -1118,6 +1120,125 @@ class RetryMergeFactsTests(unittest.TestCase):
                 patch.object(Path, "stat", side_effect=AssertionError("filesystem access")):
             facts = merge_staged_retry_facts(preparation, outcome)
         self.assertEqual(facts.report_revision, preparation.snapshot.report_revision)
+
+
+class RetryPublicationPlanTests(unittest.TestCase):
+    def fixture(self, outcomes=(True, False)):
+        temporary = tempfile.TemporaryDirectory()
+        project = Path(temporary.name).resolve()
+        two_failure_project(project)
+        (project / "pdfs" / "original.pdf").write_bytes(b"%PDF-1.7\noriginal")
+        preparation = confirmed_preparation(project)
+        staging = preparation._project_identity / ".retrieval_retry_staging_publish"
+        outcome = run_retry_staging(project, preparation, staging, fake_download(list(outcomes)))
+        merged = merge_staged_retry_facts(preparation, outcome)
+        return temporary, project, preparation, outcome, merged
+
+    def test_plan_freezes_ordered_source_integrity_and_changes_nothing(self):
+        temporary, project, preparation, outcome, merged = self.fixture((True, True))
+        with temporary:
+            before = authoritative_fingerprint(project)
+            plan = prepare_retry_publication(project, preparation, outcome, merged)
+            self.assertEqual(plan.report_revision, preparation.snapshot.report_revision)
+            self.assertEqual(plan.merged_facts, merged)
+            self.assertEqual(tuple(pdf.retry_id for pdf in plan.pdfs), preparation.selected_ids)
+            for planned, source in zip(plan.pdfs, outcome.successful_pdfs):
+                payload = source.source_path.read_bytes()
+                self.assertEqual(planned.source_path, source.source_path)
+                self.assertEqual(planned.source_size, len(payload))
+                self.assertEqual(planned.source_sha256, hashlib.sha256(payload).hexdigest())
+            with self.assertRaises(Exception): plan.pdfs[0].source_size = 0
+            self.assertEqual(authoritative_fingerprint(project), before)
+
+    def test_partial_and_all_failure_plans_are_valid(self):
+        for outcomes, expected in (((True, False), 1), ((False, False), 0)):
+            temporary, project, preparation, outcome, merged = self.fixture(outcomes)
+            with temporary:
+                plan = prepare_retry_publication(project, preparation, outcome, merged)
+                self.assertEqual(len(plan.pdfs), expected)
+
+    def test_rejects_current_authority_drift_even_when_revision_is_unchanged(self):
+        mutations = (
+            lambda project: write_jsonl(project / "filtered" / "included_papers.jsonl",
+                [{"id": "ok-1", "new": True}, {"id": "failed-1", "title": "Failed 1", "doi": "", "url": ""},
+                 {"id": "failed-2", "title": "Failed 2", "doi": "", "url": ""}]),
+            lambda project: write_json(project / "pdfs" / "download_report.json",
+                {**json.loads((project / "pdfs" / "download_report.json").read_text()), "new": True}),
+            lambda project: self._mutate_retrieval_ledger(project),
+        )
+        for mutate in mutations:
+            temporary, project, preparation, outcome, merged = self.fixture()
+            with temporary, self.subTest(mutate=mutate):
+                before = authoritative_fingerprint(project); mutate(project); changed = authoritative_fingerprint(project)
+                self.assertNotEqual(before, changed)
+                with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                    prepare_retry_publication(project, preparation, outcome, merged)
+                self.assertEqual(authoritative_fingerprint(project), changed)
+
+    def test_rejects_forged_or_cross_bound_inputs(self):
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            forged_report = {**merged.report, "success": 99}
+            cases = (
+                replace(merged, report=forged_report),
+                replace(merged, status="completed"),
+                replace(merged, counts={"succeeded": 99, "failed": 0}),
+                replace(merged, planned_pdfs=()),
+                replace(merged, report_revision="0" * 64),
+            )
+            for forged in cases:
+                with self.subTest(forged=forged), self.assertRaises(ValueError):
+                    prepare_retry_publication(project, preparation, outcome, forged)
+            with self.assertRaises(ValueError):
+                prepare_retry_publication(project, replace(preparation, _project_identity=Path("/tmp/other")), outcome, merged)
+
+    def test_rejects_source_mutation_invalid_pdf_aliases_and_boundary_replacement(self):
+        mutations = (
+            lambda project, outcome, merged: outcome.successful_pdfs[0].source_path.write_bytes(b"%PDF-1.7\nchanged"),
+            lambda project, outcome, merged: outcome.successful_pdfs[0].source_path.write_bytes(b"not a pdf"),
+            lambda project, outcome, merged: outcome.successful_pdfs[0].source_path.write_bytes(b""),
+            lambda project, outcome, merged: self._replace_with_symlink(outcome.successful_pdfs[0].source_path,
+                project / "pdfs" / "original.pdf"),
+            lambda project, outcome, merged: self._replace_directory_with_symlink(
+                outcome.staging_project_path / "pdfs", project / "pdfs"),
+        )
+        for mutate in mutations:
+            temporary, project, preparation, outcome, merged = self.fixture()
+            with temporary, self.subTest(mutate=mutate):
+                mutate(project, outcome, merged)
+                before = authoritative_fingerprint(project)
+                with self.assertRaises(ValueError): prepare_retry_publication(project, preparation, outcome, merged)
+                self.assertEqual(authoritative_fingerprint(project), before)
+
+    def test_rejects_every_destination_collision_kind_including_broken_symlink(self):
+        makers = (
+            lambda path: path.write_bytes(b"occupied"),
+            lambda path: path.mkdir(),
+            lambda path: path.symlink_to(path.parent / "original.pdf"),
+            lambda path: path.symlink_to(path.parent / "missing.pdf"),
+        )
+        for make in makers:
+            temporary, project, preparation, outcome, merged = self.fixture()
+            with temporary, self.subTest(make=make):
+                destination = merged.planned_pdfs[0].destination_path; make(destination)
+                before = authoritative_fingerprint(project)
+                with self.assertRaises(ValueError): prepare_retry_publication(project, preparation, outcome, merged)
+                self.assertEqual(authoritative_fingerprint(project), before)
+
+    @staticmethod
+    def _replace_with_symlink(path, target):
+        path.unlink(); path.symlink_to(target)
+
+    @staticmethod
+    def _replace_directory_with_symlink(path, target):
+        for child in path.iterdir(): child.unlink()
+        path.rmdir(); path.symlink_to(target, target_is_directory=True)
+
+    @staticmethod
+    def _mutate_retrieval_ledger(project):
+        state = json.loads((project / "workflow_state.json").read_text())
+        state["stages"]["retrieval"]["new"] = True
+        write_json(project / "workflow_state.json", state)
 
 
 if __name__ == "__main__":
