@@ -240,7 +240,7 @@ def prepare_retry_publication(
             raise ValueError
         project = Path(project_path)
         resolved_project = project.resolve(strict=True)
-        _validate_publication_inputs(
+        preparation, staged_outcome, merged_facts = _trusted_publication_inputs(
             preparation, staged_outcome, merged_facts, type(resolved_project))
         before = _authoritative_fingerprint(project)
         if preparation._project_identity != resolved_project:
@@ -314,17 +314,17 @@ def prepare_retry_publication(
         if _authoritative_fingerprint(project) != before:
             raise ValueError
         return RetryPublicationPlan(current.report_revision, expected, tuple(publication_pdfs))
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except Exception:
         raise ValueError("Retry publication preparation failed") from None
 
 
-def _validate_publication_inputs(
+def _trusted_publication_inputs(
     preparation: RetryPreparation,
     staged_outcome: StagedRetryOutcome,
     merged_facts: RetryMergedFacts,
     concrete_path_type: type[Path],
-) -> None:
-    """Reject polymorphic values before equality or filesystem decisions."""
+) -> tuple[RetryPreparation, StagedRetryOutcome, RetryMergedFacts]:
+    """Reject polymorphic values and materialize facts before using them."""
     if (type(preparation) is not RetryPreparation
             or type(preparation.snapshot) is not RetrySnapshot
             or type(staged_outcome) is not StagedRetryOutcome
@@ -373,8 +373,6 @@ def _validate_publication_inputs(
     if type(merged_facts.status) is not str:
         raise ValueError
     _require_frozen_mapping(merged_facts.counts)
-    if any(type(value) is not int or value < 0 for value in merged_facts.counts.values()):
-        raise ValueError
     _require_exact_tuple(merged_facts.planned_pdfs)
     for item in merged_facts.planned_pdfs:
         if type(item) is not RetryPlannedPdf:
@@ -382,6 +380,48 @@ def _validate_publication_inputs(
         _require_exact_sha256(item.retry_id)
         _require_concrete_path(item.source_path, concrete_path_type)
         _require_concrete_path(item.destination_path, concrete_path_type)
+
+    snapshot = RetrySnapshot(
+        preparation.snapshot.report_revision,
+        _freeze_json(_materialize_frozen_mapping(preparation.snapshot.report)),
+        _freeze_json(_materialize_frozen_mapping_tuple(preparation.snapshot.included)),
+        _freeze_json(_materialize_frozen_mapping(preparation.snapshot.ledger)),
+        tuple(_clone_retry_item(item) for item in preparation.snapshot.items),
+    )
+    trusted_preparation = RetryPreparation(
+        snapshot,
+        tuple(value for value in preparation.selected_ids),
+        tuple(_clone_retry_item(item) for item in preparation.items),
+        _freeze_json(_materialize_frozen_mapping_tuple(preparation.included_rows)),
+        preparation._project_identity,
+    )
+    trusted_outcome = StagedRetryOutcome(
+        staged_outcome.staging_root,
+        staged_outcome.staging_project_path,
+        staged_outcome.report_revision,
+        tuple(value for value in staged_outcome.selected_ids),
+        _freeze_json(_materialize_frozen_mapping_tuple(staged_outcome.updated_rows)),
+        _freeze_json(_materialize_frozen_mapping(staged_outcome.report)),
+        tuple(StagedRetryPdf(item.retry_id, item.source_path, item.source_size, item.source_sha256)
+            for item in staged_outcome.successful_pdfs),
+    )
+    counts = _materialize_frozen_mapping(merged_facts.counts)
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        raise ValueError
+    trusted_merged = RetryMergedFacts(
+        merged_facts.report_revision,
+        _freeze_json(_materialize_frozen_mapping(merged_facts.report)),
+        _freeze_json(_materialize_frozen_mapping_tuple(merged_facts.included)),
+        merged_facts.status,
+        _freeze_json(counts),
+        tuple(RetryPlannedPdf(item.retry_id, item.source_path, item.destination_path)
+            for item in merged_facts.planned_pdfs),
+    )
+    return trusted_preparation, trusted_outcome, trusted_merged
+
+
+def _clone_retry_item(item: RetryItem) -> RetryItem:
+    return RetryItem(item.retry_id, item.label, item.failure_class, item.report_index, item.included_index)
 
 
 def _validate_retry_item(item: RetryItem) -> None:
@@ -412,30 +452,46 @@ def _require_exact_tuple(value: Any) -> None:
 
 def _require_frozen_mapping_tuple(value: Any) -> None:
     _require_exact_tuple(value)
-    for item in value:
-        _require_frozen_mapping(item)
 
 
 def _require_frozen_mapping(value: Any) -> None:
     if type(value) is not MappingProxyType:
         raise ValueError
-    _require_frozen_json(value)
 
 
-def _require_frozen_json(value: Any) -> None:
+def _materialize_frozen_mapping(value: Any) -> dict[str, Any]:
+    if type(value) is not MappingProxyType:
+        raise ValueError
+    materialized = _materialize_frozen_json(value)
+    if type(materialized) is not dict:
+        raise ValueError
+    return materialized
+
+
+def _materialize_frozen_mapping_tuple(value: Any) -> list[dict[str, Any]]:
+    if type(value) is not tuple:
+        raise ValueError
+    result = []
+    for item in value:
+        result.append(_materialize_frozen_mapping(item))
+    return result
+
+
+def _materialize_frozen_json(value: Any) -> Any:
     value_type = type(value)
     if value_type is MappingProxyType:
+        result: dict[str, Any] = {}
         for key, item in value.items():
-            if type(key) is not str:
+            if type(key) is not str or key in result:
                 raise ValueError
-            _require_frozen_json(item)
+            result[key] = _materialize_frozen_json(item)
+        return result
     elif value_type is tuple:
-        for item in value:
-            _require_frozen_json(item)
+        return [_materialize_frozen_json(item) for item in value]
     elif value is None or value_type in (str, int, bool):
-        return
+        return value
     elif value_type is float and math.isfinite(value):
-        return
+        return value
     else:
         raise ValueError
 

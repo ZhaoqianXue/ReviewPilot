@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import Mock, patch
 
 from reviewpilot_core.sub_agent_contracts import DownloadAgentContract
@@ -1228,6 +1229,67 @@ class RetryPublicationPlanTests(unittest.TestCase):
             forged_nested_report = replace(merged, report={**merged.report, "success": EvilInt(99)})
             with self.assertRaises(ValueError):
                 prepare_retry_publication(project, preparation, outcome, forged_nested_report)
+
+    def test_rejects_forged_top_level_mapping_proxy_backing_before_comparison(self):
+        class AlwaysEqualDict(dict):
+            def __eq__(self, other): return True
+            def __ne__(self, other): return False
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            forged_report = MappingProxyType(AlwaysEqualDict({**merged.report, "success": 99}))
+            with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                prepare_retry_publication(project, preparation, outcome,
+                    replace(merged, report=forged_report))
+
+    def test_rejects_forged_nested_mapping_proxy_backing_before_comparison(self):
+        class AlwaysEqualDict(dict):
+            def __eq__(self, other): return True
+            def __ne__(self, other): return False
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            downloaded = list(merged.report["downloaded"])
+            downloaded[0] = MappingProxyType(AlwaysEqualDict({**downloaded[0], "title": "forged"}))
+            nested_report = MappingProxyType({**merged.report, "downloaded": tuple(downloaded)})
+            with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                prepare_retry_publication(project, preparation, outcome,
+                    replace(merged, report=nested_report))
+
+    def test_rejects_first_stateful_mapping_snapshot_even_when_later_values_are_valid(self):
+        class StatefulDict(dict):
+            def __init__(self, valid, forged):
+                super().__init__(valid)
+                self.forged = forged
+                self.reads = 0
+
+            def items(self):
+                self.reads += 1
+                if self.reads == 1:
+                    return self.forged.items()
+                return super().items()
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            backing = StatefulDict(dict(merged.report), {**merged.report, "success": 99})
+            with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$"):
+                prepare_retry_publication(project, preparation, outcome,
+                    replace(merged, report=MappingProxyType(backing)))
+            self.assertEqual(backing.reads, 1)
+
+    def test_masks_mapping_backing_exceptions_without_leaking_paths(self):
+        leaked_path = "/private/retry/secret.pdf"
+
+        class RaisingItemsDict(dict):
+            def items(self):
+                raise Exception(leaked_path)
+
+        temporary, project, preparation, outcome, merged = self.fixture()
+        with temporary:
+            forged = replace(merged, report=MappingProxyType(RaisingItemsDict(merged.report)))
+            with self.assertRaisesRegex(ValueError, r"^Retry publication preparation failed$") as raised:
+                prepare_retry_publication(project, preparation, outcome, forged)
+            self.assertNotIn(leaked_path, str(raised.exception))
 
     def test_rejects_dataclass_and_concrete_path_subclasses_at_publication_boundary(self):
         class PreparationSubclass(RetryPreparation): pass
