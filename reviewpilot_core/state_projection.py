@@ -244,6 +244,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     workflow_state = reconcile_orphaned_running(path, active_action=active_action)
     workflow_notices = _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_failed_items)
     setup_update_pending = (path / ".setup_update_pending.json").exists()
+    retry_update_pending = (path / ".retrieval_retry_pending.json").exists()
     if setup_update_pending:
         for stage in workflow_state["stages"].values():
             stage["stale"] = True
@@ -267,7 +268,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     extraction_stage = workflow_state["stages"]["extraction"]
     schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage)) and is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
-    retrieval_recovery = disabled_retry_projection() if setup_update_pending else _retrieval_recovery(path)
+    retrieval_recovery = disabled_retry_projection() if setup_update_pending or retry_update_pending else _retrieval_recovery(path)
 
     return {
         "isNewProject": False,

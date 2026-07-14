@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sys
+import tempfile
 from html import unescape
 from pathlib import Path
 
@@ -41,6 +43,9 @@ from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
+from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
+from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
+from reviewpilot_core.retrieval_retry_transaction import abandon_retry_transaction, abort_retry_transaction, apply_retry_transaction, begin_retry_transaction, publish_retry_transaction_pdfs, reconcile_retry_transaction, record_retry_transaction_target, retry_target_is_committed, run_retry_transaction_staging
 
 
 OUTPUT_ROOT = ROOT / "output"
@@ -61,6 +66,10 @@ class SetupRevisionConflict(ValueError):
 
 def build_project_state(output_root: Path | str, project_id: str) -> dict:
     active_task = task_runner.active_for_project(project_id)
+    project_path = Path(output_root) / project_id
+    retry_is_active = active_task is not None and active_task["action"] == "retry-failed-downloads"
+    if (project_path / ".retrieval_retry_pending.json").exists() and not retry_is_active:
+        reconcile_retry_transaction(project_path)
     state = build_rp_data(Path(output_root), project_id, active_action=active_task["action"] if active_task else None)
     state["activeTask"] = active_task
     return state
@@ -135,6 +144,12 @@ async def project_action(request):
         task_id = submit_project_action(OUTPUT_ROOT, project_id, action, input_data=input_data)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except RetryConfirmationRequired as exc:
+        return JSONResponse({"code": exc.code, "detail": str(exc), "confirmationRequired": True, "expectedReportRevision": exc.expected_report_revision, "failedIds": list(exc.failed_ids)}, status_code=409)
+    except RevisionConflict as exc:
+        return JSONResponse({"code": exc.code, "detail": str(exc), "expectedReportRevision": exc.expected_report_revision}, status_code=409)
+    except InvalidRetryRequest as exc:
+        return JSONResponse({"code": exc.code, "detail": str(exc)}, status_code=400)
     except ConfirmationRequired as exc:
         return JSONResponse({"detail": str(exc), "confirmationRequired": True, "expectedRevision": exc.revision, "affectedStages": exc.stages}, status_code=409)
     except ValueError as exc:
@@ -421,9 +436,12 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"collect", "screen", "download-pdfs", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
+
+    if action == "retry-failed-downloads":
+        return _submit_retry_action(output_root, project_id, input_data, llm_query)
 
     project_path = Path(output_root) / project_id
     action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
@@ -465,6 +483,104 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     return task_runner.submit(
         project_id,
         action,
+        run_action,
+        prepare=prepare_action,
+        rollback=rollback_action,
+    )
+
+
+def _retry_target_ledger(before_ledger: dict, success: int, failed: int) -> dict:
+    with tempfile.TemporaryDirectory() as directory:
+        oracle = Path(directory)
+        save_workflow_state(oracle, before_ledger)
+        start_action(oracle, "retry-failed-downloads")
+        return complete_action(
+            oracle,
+            "retry-failed-downloads",
+            {"success": success, "failed": failed},
+        )
+
+
+def _submit_retry_action(output_root: Path | str, project_id: str, input_data: dict | None, llm_query=None) -> str:
+    project = Path(output_root) / project_id
+    context: dict = {}
+
+    def prepare_action():
+        reconcile_setup_transaction(project)
+        reconcile_retry_transaction(project)
+        preparation = prepare_retry_request(project, input_data)
+        before_ledger = load_workflow_state(project)
+        staging_name = f".retrieval_retry_staging_{secrets.token_hex(16)}"
+        handle = begin_retry_transaction(project, preparation, staging_name, project / staging_name)
+        context.update(preparation=preparation, before_ledger=before_ledger, handle=handle)
+
+    def rollback_action():
+        handle = context.get("handle")
+        if handle is not None:
+            abort_retry_transaction(project, handle.transaction_id)
+
+    def run_action():
+        preparation = context["preparation"]
+        handle = context["handle"]
+        plan = None
+        target_ledger = None
+        apply_started = False
+        try:
+            outcome = run_retry_transaction_staging(
+                project,
+                preparation,
+                lambda root, retry_project_id: WorkflowActionAdapter().run(
+                    "download-pdfs", root, retry_project_id, llm_query=llm_query
+                ),
+            )
+            merged = merge_staged_retry_facts(preparation, outcome)
+            plan = prepare_retry_publication(project, preparation, outcome, merged)
+            counts = merged.counts
+            target_ledger = _retry_target_ledger(
+                context["before_ledger"], counts["succeeded"], counts["failed"]
+            )
+            record_retry_transaction_target(project, plan, target_ledger)
+            publish_retry_transaction_pdfs(project)
+            result = {
+                "stage": "retrieval",
+                "status": merged.status,
+                "data": {
+                    "success": counts["succeeded"],
+                    "failed": counts["failed"],
+                    "retried": len(preparation.selected_ids),
+                    "recovered": len(outcome.successful_pdfs),
+                },
+            }
+            apply_started = True
+            try:
+                apply_retry_transaction(project, handle.transaction_id)
+            except Exception:
+                abandon_retry_transaction(project, handle.transaction_id)
+                try:
+                    reconcile_retry_transaction(project)
+                except ValueError:
+                    pass
+                if plan is not None and target_ledger is not None and retry_target_is_committed(project, plan, target_ledger):
+                    return result
+                raise
+            return result
+        except Exception:
+            if not apply_started:
+                try:
+                    abort_retry_transaction(project, handle.transaction_id)
+                except ValueError:
+                    abandon_retry_transaction(project, handle.transaction_id)
+                    try:
+                        reconcile_retry_transaction(project)
+                    except ValueError:
+                        pass
+            raise
+        finally:
+            abandon_retry_transaction(project, handle.transaction_id)
+
+    return task_runner.submit(
+        project_id,
+        "retry-failed-downloads",
         run_action,
         prepare=prepare_action,
         rollback=rollback_action,

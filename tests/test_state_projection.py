@@ -68,8 +68,8 @@ class StateProjectionTests(unittest.TestCase):
                 write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1})
                 self.assertEqual(build_rp_data(root, "p")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
 
-    def test_retrieval_recovery_is_disabled_when_stale_running_or_setup_update_pending(self):
-        for condition in ("stale", "running", "setup-pending"):
+    def test_retrieval_recovery_is_disabled_when_stale_running_or_transaction_pending(self):
+        for condition in ("stale", "running", "setup-pending", "retry-pending"):
             with self.subTest(condition=condition), tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]})
                 write_jsonl(project/"filtered"/"included_papers.jsonl", [{"id":"ok"},{"id":"bad"}]); write_json(project/"pdfs"/"download_report.json", {"success":1,"failed":1,"downloaded":[{"id":"ok"}],"failed_papers":[{"id":"bad"}]})
@@ -78,9 +78,11 @@ class StateProjectionTests(unittest.TestCase):
                 if condition == "stale":
                     state=json.loads((project/"workflow_state.json").read_text()); state["stages"]["retrieval"]["stale"]=True; write_json(project/"workflow_state.json",state)
                 elif condition == "running": start_action(project,"download-pdfs")
-                else:
+                elif condition == "setup-pending":
                     from reviewpilot_core.setup_revision import begin_setup_transaction, finish_setup_transaction
                     begin_setup_transaction(project, {"project_name":"p","platforms":["pubmed"]}, {"project_name":"changed","platforms":["pubmed"]}, [])
+                else:
+                    write_json(project/".retrieval_retry_pending.json", {"pending": True})
                 try: self.assertEqual(build_rp_data(root,"p",active_action="download-pdfs" if condition=="running" else None)["retrievalRecovery"], {"canRetry":False,"reportRevision":"","items":[]})
                 finally:
                     if condition == "setup-pending": finish_setup_transaction(project)
