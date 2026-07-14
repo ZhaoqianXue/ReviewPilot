@@ -24,7 +24,7 @@ class TaskRunner:
         self._mutations: dict[str, dict] = {}
         self._registry_lock = Lock()
 
-    def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None) -> str:
+    def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None, metadata: dict | None = None) -> str:
         with self._registry_lock:
             active_task = self._active_for_project_unlocked(project_id)
             if active_task is None:
@@ -43,6 +43,9 @@ class TaskRunner:
                 "result": None,
                 "error": None,
             }
+            for key, value in (metadata or {}).items():
+                if key not in self._tasks[task_id] and isinstance(value, (str, int, float, bool, type(None))):
+                    self._tasks[task_id][str(key)] = value
             prepared = False
             try:
                 if prepare is not None:

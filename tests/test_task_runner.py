@@ -7,6 +7,22 @@ from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 
 
 class TaskRunnerTests(unittest.TestCase):
+    def test_submit_exposes_only_json_scalar_metadata(self):
+        runner = TaskRunner(max_workers=1)
+        try:
+            task_id = runner.submit(
+                "demo", "preview-extraction", lambda: {"status": "preview_ready"},
+                metadata={"paper_index": 4, "label": "safe", "nested": {"secret": True}, "flag": False},
+            )
+            task = runner.wait(task_id, timeout=2)
+        finally:
+            runner.shutdown()
+
+        self.assertEqual(task["paper_index"], 4)
+        self.assertEqual(task["label"], "safe")
+        self.assertFalse(task["flag"])
+        self.assertNotIn("nested", task)
+
     def test_structured_workflow_terminal_status_is_not_relabelled_completed(self):
         runner = TaskRunner()
         try:

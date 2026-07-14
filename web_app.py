@@ -41,6 +41,7 @@ from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD
 from reviewpilot_core.atomic_files import atomic_write_json
 from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
+from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
@@ -132,6 +133,17 @@ async def project_state(request):
     if not known_project(OUTPUT_ROOT, project_id):
         raise HTTPException(status_code=404)
     return JSONResponse(build_project_state(OUTPUT_ROOT, project_id))
+
+
+async def extraction_preview(request):
+    project_id = request.path_params["project_id"]
+    if not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(status_code=404)
+    try:
+        projection = project_preview_projection(Path(OUTPUT_ROOT) / project_id, request.path_params["paper_index"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(projection)
 
 
 async def project_action(request):
@@ -256,6 +268,7 @@ def create_app() -> Starlette:
             Route("/projects/new", new_project_page, methods=["GET"]),
             Route("/projects/{project_id}", project_page, methods=["GET"]),
             Route("/projects/{project_id}/state", project_state, methods=["GET"]),
+            Route("/projects/{project_id}/extraction-preview/{paper_index:int}", extraction_preview, methods=["GET"]),
             Route("/projects/{project_id}/exports/{export_key}", project_export, methods=["GET"]),
             Route("/projects/{project_id}/chat", project_chat, methods=["POST"]),
             Route("/projects/{project_id}/setup", update_project_setup_api, methods=["PUT"]),
@@ -436,7 +449,7 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -444,6 +457,17 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         return _submit_retry_action(output_root, project_id, input_data, llm_query)
 
     project_path = Path(output_root) / project_id
+    if action == "preview-extraction":
+        index = (input_data or {}).get("paper_index") if isinstance(input_data, dict) else None
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("paper_index must be a non-negative integer")
+        project_preview_projection(project_path, index)
+        return task_runner.submit(
+            project_id,
+            action,
+            lambda: run_project_preview(project_path, index, llm_query=llm_query),
+            metadata={"paper_index": index},
+        )
     action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
     confirmation = input_data.get("overwrite_confirmation") if isinstance(input_data, dict) and isinstance(input_data.get("overwrite_confirmation"), dict) else {}
     if confirmation:

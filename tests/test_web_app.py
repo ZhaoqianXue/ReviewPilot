@@ -24,6 +24,49 @@ def terminal_result(action: str) -> dict:
 
 
 class WebAppTests(unittest.TestCase):
+    def test_preview_endpoint_and_action_use_public_index_without_mutating_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            (project / "extraction").mkdir(parents=True)
+            (project / "filtered").mkdir(parents=True)
+            (project / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+            (project / "extraction" / "extraction_schema_draft.json").write_text(json.dumps({"fields": [{"name": "methods"}]}), encoding="utf-8")
+            (project / "filtered" / "included_papers.jsonl").write_text(json.dumps({"id": "p1", "title": "Paper A"}) + "\n", encoding="utf-8")
+            ledger_path = project / "workflow_state.json"
+            ledger_path.write_text(json.dumps({"sentinel": "unchanged"}), encoding="utf-8")
+            old_root, old_runner = web_app.OUTPUT_ROOT, web_app.task_runner
+            try:
+                web_app.OUTPUT_ROOT = root
+                web_app.task_runner = TaskRunner(max_workers=1)
+                client = TestClient(web_app.create_app())
+                preview = client.get("/projects/demo/extraction-preview/0")
+                self.assertEqual(preview.status_code, 200)
+                self.assertEqual(preview.json()["paper"]["title"], "Paper A")
+                with patch.object(web_app, "run_project_preview", return_value={"status": "preview_ready", "paper_index": 0, "total": 1}):
+                    response = client.post("/projects/demo/actions/preview-extraction", json={"paper_index": 0})
+                    task = web_app.task_runner.wait(response.json()["task_id"], timeout=2)
+                ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            finally:
+                web_app.task_runner.shutdown()
+                web_app.task_runner = old_runner
+                web_app.OUTPUT_ROOT = old_root
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(task["paper_index"], 0)
+        self.assertEqual(task["status"], "completed")
+        self.assertEqual(ledger, {"sentinel": "unchanged"})
+
+    def test_preview_action_rejects_bool_and_out_of_range_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            project.mkdir()
+            (project / "search_conditions.json").write_text(json.dumps({"project_name": "demo"}), encoding="utf-8")
+            for index in (True, -1):
+                with self.subTest(index=index), self.assertRaisesRegex(ValueError, "paper_index"):
+                    web_app.submit_project_action(root, "demo", "preview-extraction", input_data={"paper_index": index})
+
     def test_structured_partial_and_zero_success_task_status_match_ledger_and_refresh_projection(self):
         for expected_status, data in (
             ("partial", {"total": 1, "platform_stats": {"pubmed": 1, "arxiv": 0}, "platform_errors": {"arxiv": "timeout"}}),
