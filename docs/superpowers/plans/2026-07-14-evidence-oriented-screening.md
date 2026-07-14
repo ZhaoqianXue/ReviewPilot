@@ -66,11 +66,15 @@ For Biomedical, HCI, and Urban, run the existing `generate-relevance-prompt` wor
 
 Run the existing screening action for each project. Record identified, post-dedup, included, and excluded counts; do not impose an inclusion quota.
 
-- [ ] **Step 3: Rerun invalidated downstream stages**
+- [ ] **Step 3: Reopen finalized schemas**
 
-For each project, run retrieval, finalize a schema based on the revised included corpus, run extraction with legitimate web fallbacks where PDFs remain unavailable, and run categorization. Retry only the workflow's supported failed-only retrieval path.
+Run the existing `edit-schema` action for each project before regeneration. This preserves the product rule that a finalized schema cannot be silently overwritten.
 
-- [ ] **Step 4: Verify authoritative state**
+- [ ] **Step 4: Rerun invalidated downstream stages**
+
+For each project, run retrieval, generate and finalize a schema based on the revised included corpus, run extraction with legitimate web fallbacks where PDFs remain unavailable, and run categorization. Retry only the workflow's supported failed-only retrieval path.
+
+- [ ] **Step 5: Verify authoritative state**
 
 Require `activeTask=null`, `stale=false` for every stage, terminal collection/screening/extraction/categorization, finalized schema, and seven existing export entries for every project.
 
