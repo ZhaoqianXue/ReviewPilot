@@ -196,8 +196,22 @@ function extractionSchemaAction(status) {
   return status === 'finalized' ? 'regenerate-schema' : 'generate-schema';
 }
 
+function schemaJsonForDisplay(value) {
+  const decode = (item) => {
+    if (typeof item === 'string') {
+      return item.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    }
+    if (Array.isArray(item)) return item.map(decode);
+    if (item && typeof item === 'object') {
+      return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, decode(entry)]));
+    }
+    return item;
+  };
+  return JSON.stringify(decode(value), null, 2);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction };
+  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
 }
 
 /* ReviewPilot workspace UI.
@@ -246,6 +260,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     retryFocusIndex: null,
     previewIndex: clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total),
     schemaJsonOpen: false,
+    schemaJsonReturnFocus: false,
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
@@ -320,6 +335,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ? clampPreviewIndex(ui.previewIndex, D.extractionPreview.total)
       : clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total);
     state.schemaJsonOpen = false;
+    state.schemaJsonReturnFocus = false;
     state.dialog = '';
     state.actionError = '';
     state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';
@@ -609,6 +625,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ? clampPreviewIndex(previousPreviewIndex, D.extractionPreview.total)
       : clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total);
     state.schemaJsonOpen = false;
+    state.schemaJsonReturnFocus = false;
     state.actionError = '';
     state.setupDraft = setupDraftFromData(D);
     state.catDraft = categorizationDraftFromData(D);
@@ -1743,7 +1760,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
   }
 
   function schemaJsonDialog(v) {
-    const schema = JSON.stringify(v.schemaJson, null, 2);
+    const schema = schemaJsonForDisplay(v.schemaJson);
     return `<div role="dialog" aria-modal="true" aria-labelledby="rp-schema-json-title" style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:60;"><section style="width:min(680px,calc(100vw - 32px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;"><h2 id="rp-schema-json-title" style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Schema JSON</h2><button type="button" data-act="close-schema-json" aria-label="Close schema JSON" style="${buttonStyle};padding:7px;"><i class="ph ph-x"></i></button></div><pre style="margin:0;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc;padding:14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;">${esc(schema)}</pre></section></div>`;
   }
 
@@ -1884,6 +1901,11 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         state.retryFocusIndex = null;
         if (retryInput) retryInput.focus({ preventScroll: true });
       }
+      if (state.schemaJsonReturnFocus) {
+        state.schemaJsonReturnFocus = false;
+        const jsonTrigger = root.querySelector('[data-act="schema-json"]');
+        if (jsonTrigger) jsonTrigger.focus({ preventScroll: true });
+      }
       writeWorkspaceSnapshot();
       if (state.actionPending && !actionTicker) {
         actionTicker = setInterval(paint, 1000);
@@ -1948,8 +1970,14 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         postAction('preview-extraction', { paper_index: state.previewIndex }).catch(() => {});
         return;
       }
-      else if (act === 'schema-json') state.schemaJsonOpen = true;
-      else if (act === 'close-schema-json') state.schemaJsonOpen = false;
+      else if (act === 'schema-json') {
+        state.schemaJsonOpen = true;
+        state.schemaJsonReturnFocus = false;
+      }
+      else if (act === 'close-schema-json') {
+        state.schemaJsonOpen = false;
+        state.schemaJsonReturnFocus = true;
+      }
       else if (act === 'new-project') {
         setData(newProjectDataWithCurrentHistory(), true);
         state.dialog = '';

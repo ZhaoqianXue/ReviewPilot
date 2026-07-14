@@ -10,7 +10,7 @@ class FrontendBehaviorTests(unittest.TestCase):
     def test_extraction_preview_navigation_and_schema_actions_are_deterministic(self):
         script = r"""
 const assert = require('node:assert/strict');
-const { clampPreviewIndex, extractionSchemaAction } = require('./frontend/app.js');
+const { clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay } = require('./frontend/app.js');
 assert.equal(clampPreviewIndex(-4, 3), 0);
 assert.equal(clampPreviewIndex(1, 3), 1);
 assert.equal(clampPreviewIndex(99, 3), 2);
@@ -18,6 +18,7 @@ assert.equal(clampPreviewIndex(4, 0), 0);
 assert.equal(extractionSchemaAction('missing'), 'generate-schema');
 assert.equal(extractionSchemaAction('draft'), 'generate-schema');
 assert.equal(extractionSchemaAction('finalized'), 'regenerate-schema');
+assert.equal(schemaJsonForDisplay({fields:[{description:'A &amp; B &lt; C'}]}), '{\n  "fields": [\n    {\n      "description": "A & B < C"\n    }\n  ]\n}');
 """
         result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)

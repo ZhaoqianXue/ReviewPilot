@@ -608,6 +608,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('data-action="finalize-and-run-extraction"', assistant)
         self.assertIn('data-act="open-preview"', assistant)
         self.assertIn('data-act="schema-json"', assistant)
+        self.assertIn("schemaJsonReturnFocus", source)
+        self.assertIn("jsonTrigger.focus", source)
         self.assertNotIn('data-action="edit-schema"', extraction_ui + assistant)
         self.assertNotIn('data-action="run-extraction"', extraction_ui + assistant)
 
