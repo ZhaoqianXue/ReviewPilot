@@ -527,10 +527,10 @@ def _descriptive_keyword_terms(text: str) -> list[str]:
 
 
 def _clean_keyword(text: str) -> str:
-    value = str(text or "").strip(" ()'\"")
+    value = str(text or "").strip(" '\"")
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"^survey of\s+", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\s*\([^)]*\)", "", value).strip()
+    value = re.sub(r"\s*\([^)]*\)", "", value).strip(" ()'\"")
     value = re.sub(r"^\"|\"$", "", value).strip()
     return value
 

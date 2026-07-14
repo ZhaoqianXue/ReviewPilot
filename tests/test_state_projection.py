@@ -43,6 +43,26 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_descriptive_keyword_parentheses_do_not_render_as_truncated_editable_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "hci"
+            write_json(
+                project / "search_conditions.json",
+                {
+                    "project_name": "hci",
+                    "primary_topic": "Using large language models in human-computer interaction",
+                    "domain": "Human-Computer Interaction (HCI)",
+                    "platforms": ["pubmed", "arxiv", "openalex"],
+                    "search_terms": '("human-computer interaction" OR HCI) AND "large language model"',
+                },
+            )
+
+            keywords = build_rp_data(root, "hci")["keywords"]
+
+        self.assertIn("Human-Computer Interaction", keywords)
+        self.assertNotIn("Human-Computer Interaction (HCI", keywords)
+
     def test_new_project_has_disabled_retrieval_recovery(self):
         self.assertEqual(build_new_project_data("/tmp")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
 
