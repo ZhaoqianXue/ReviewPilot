@@ -209,9 +209,9 @@ class PromptAgent(BaseAgent):
 
         # Task description
         task = (
-            f"Decide whether the paper is about {primary_topic}{primary_syn_str} "
-            f"AND it is applied in {domain}{domain_syn_str} contexts. "
-            f"Return True only if BOTH criteria are clearly indicated."
+            f"Decide whether the paper provides substantive evidence relevant to this review question: "
+            f"{primary_topic}{primary_syn_str} in {domain}{domain_syn_str}. "
+            f"Return True only when the evidence is relevant to both the topic and domain."
         )
 
         # Input format
@@ -225,20 +225,22 @@ class PromptAgent(BaseAgent):
             examples.append(f"- '{negative_example}' → False")
 
         # Add generic examples based on criteria
-        examples.append(f"- '{primary_topic} for {domain} applications' → True")
-        examples.append(f"- '{primary_topic} for code generation' (no {domain}) → False")
-        examples.append(f"- '{domain} NER using BERT' (no {primary_topic}) → False")
+        examples.append(f"- 'A primary study evaluating {primary_topic} in {domain}' → True")
+        examples.append(f"- 'A method using {primary_topic} for code generation' (no {domain}) → False")
+        examples.append(f"- 'A {domain} study using an unrelated method' (no {primary_topic}) → False")
 
         examples_str = "\n".join(examples)
 
         # Instruction
         instruction = (
             f"Use ONLY the provided title/abstract. Return exactly one word: True or False.\n"
-            f"- True if the paper (1) concerns {primary_topic}{primary_syn_str} "
-            f"AND (2) is applied in {domain}{domain_syn_str} contexts.\n"
-            f"- If either part is missing or unclear, return False.\n"
-            f"- Papers about {primary_topic} without {domain} context → False.\n"
-            f"- Papers about {domain} without the {primary_topic} aspect → False.\n"
+            f"- True if the paper provides substantive evidence relevant to the review question and is meaningfully related to both the topic and domain.\n"
+            f"- The candidate paper does not need to be a survey or review. Words such as survey, review, or mapping in the review question describe the user's synthesis activity, not a required publication type.\n"
+            f"- Relevant evidence may include primary studies, methods, systems, datasets, benchmarks, applications, evaluations, or reviews.\n"
+            f"- The topic is {primary_topic}{primary_syn_str}; the domain is {domain}{domain_syn_str}.\n"
+            f"- Return False if either the topic or domain is missing or unclear, or if either is mentioned only incidentally.\n"
+            f"- Papers about the topic without the domain context → False.\n"
+            f"- Papers about the domain without the topic aspect → False.\n"
             f"- If the abstract is unavailable, use the title only.\n"
             f"- Do NOT use outside knowledge. Do NOT include explanations, punctuation, or quotes.\n\n"
             f"Examples:\n{examples_str}"

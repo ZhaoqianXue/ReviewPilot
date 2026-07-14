@@ -9,6 +9,22 @@ from reviewpilot_core.project_store import read_json
 
 
 class PromptAgentTests(unittest.TestCase):
+    def test_review_objective_does_not_require_candidates_to_be_reviews(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = PromptAgent(Path(tmp) / "demo")._build_relevance_prompt(
+                primary_topic="Survey of large language models for biomedicine",
+                primary_synonyms="",
+                domain="Biomedical informatics and health AI",
+                domain_synonyms="",
+            )
+
+        instruction = prompt["instruction"]
+        self.assertIn("provides substantive evidence relevant to the review question", instruction)
+        self.assertIn("does not need to be a survey or review", instruction)
+        self.assertIn("primary studies, methods, systems, datasets, benchmarks, applications, evaluations, or reviews", instruction)
+        self.assertIn("both the topic and domain", instruction)
+        self.assertEqual(prompt["expected_output"], "True or False")
+
     def test_generate_extraction_prompt_calls_llm_and_writes_stage_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
