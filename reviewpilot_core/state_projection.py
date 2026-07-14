@@ -47,19 +47,19 @@ STEP_DEFS = [
 DEMO_HISTORY_DIRECTIONS = [
     {
         "label": "LLM for Biomedical",
-        "id_prefixes": ("qa-live-llm-biomedical",),
+        "id_prefixes": ("quick-start-biomedical", "qa-live-llm-biomedical"),
         "keywords": ("biomedical", "biomedicine"),
         "starter_topic": "I want to review how LLMs are used in biomedical research and clinical care.",
     },
     {
         "label": "LLM for HCI",
-        "id_prefixes": ("qa-live-llm-hci",),
+        "id_prefixes": ("quick-start-hci", "qa-live-llm-hci"),
         "keywords": ("human-computer", "hci"),
         "starter_topic": "I want to review how LLMs are changing human-computer interaction.",
     },
     {
         "label": "LLM for Urban",
-        "id_prefixes": ("qa-live-llm-urban",),
+        "id_prefixes": ("quick-start-urban", "qa-live-llm-urban"),
         "keywords": ("urban",),
         "starter_topic": "I want to review how LLMs support urban planning and smart cities.",
     },
@@ -1480,12 +1480,13 @@ def _demo_history_project_items(output_root: Path, active_project_id: str) -> li
 
 
 def _best_demo_project(projects: list[dict], direction: dict, used_ids: set[str]) -> dict | None:
-    for project in projects:
-        project_id = str(project.get("id") or "")
-        if project_id in used_ids:
-            continue
-        if any(project_id.lower().startswith(prefix) for prefix in direction["id_prefixes"]):
-            return project
+    for prefix in direction["id_prefixes"]:
+        for project in projects:
+            project_id = str(project.get("id") or "")
+            if project_id in used_ids:
+                continue
+            if project_id.lower().startswith(prefix):
+                return project
     for project in projects:
         project_id = str(project.get("id") or "")
         if project_id in used_ids:

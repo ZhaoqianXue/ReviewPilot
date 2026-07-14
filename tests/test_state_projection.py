@@ -445,6 +445,28 @@ class StateProjectionTests(unittest.TestCase):
             ],
         )
 
+    def test_history_prefers_completed_quick_start_showcases_over_inner_beta_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            for project_id, title in (
+                ("inner-beta-biomedicine-r7", "Inner beta Biomedical"),
+                ("inner-beta-hci-r3", "Inner beta HCI"),
+                ("qa-live-llm-biomedical-older", "QA Biomedical"),
+                ("qa-live-llm-hci-older", "QA HCI"),
+                ("qa-live-llm-urban-older", "QA Urban"),
+                ("quick-start-biomedical-showcase", "Quick Start Biomedical"),
+                ("quick-start-hci-showcase", "Quick Start HCI"),
+                ("quick-start-urban-showcase", "Quick Start Urban"),
+            ):
+                write_json(output_root / project_id / "search_conditions.json", {"project_name": title})
+
+            data = build_rp_data(output_root, "quick-start-hci-showcase")
+
+        self.assertEqual(
+            [item["id"] for item in data["history"][0]["items"][1:]],
+            ["quick-start-biomedical-showcase", "quick-start-hci-showcase", "quick-start-urban-showcase"],
+        )
+
     def test_demo_examples_start_with_real_new_review_conversation_shape(self):
         cases = [
             (
