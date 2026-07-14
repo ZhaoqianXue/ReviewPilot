@@ -6,6 +6,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendContractTests(unittest.TestCase):
+    def test_retrieval_recovery_panel_is_accessible_index_bound_and_hides_full_download(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        panel = source[source.index("function retrievalRecoveryPanel") : source.index("function extractionCanvas")]
+        compute = source[source.index("function computeVals") : source.index("function draftStep")]
+
+        self.assertIn("retrievalRecovery: normalizeRetrievalRecovery", source)
+        self.assertIn("<fieldset", panel)
+        self.assertIn("<legend", panel)
+        self.assertIn('type="checkbox"', panel)
+        self.assertIn('data-retry-index="${index}"', panel)
+        self.assertNotIn("data-retry-id", panel)
+        self.assertIn('data-act="retry-select-all"', panel)
+        self.assertIn('data-act="retry-clear"', panel)
+        self.assertIn('data-act="retry-submit"', panel)
+        self.assertIn('role="status" aria-live="polite"', panel)
+        self.assertIn("retryRecoveryRunning", compute)
+        self.assertIn("showCanvasAction", compute)
+        self.assertIn("!retryRecoveryVisible", compute)
+
+    def test_retry_click_routing_canonicalizes_selection_and_prevents_double_submit(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
+
+        self.assertIn("act === 'retry-toggle'", router)
+        self.assertIn("act === 'retry-select-all'", router)
+        self.assertIn("act === 'retry-clear'", router)
+        self.assertIn("act === 'retry-submit'", router)
+        self.assertIn("if (state.actionPending) return;", router)
+        self.assertIn("orderedRetryIds", router)
+        self.assertIn("retry-failed-downloads", router)
+
     def test_setup_update_handles_impact_preview_and_revision_confirmation(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn("confirmationRequired", source)
@@ -504,6 +535,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("data: snapshotData(D)", snapshot)
         self.assertIn("const authoritativeActiveTask = D.activeTask;", restore)
         self.assertIn("D.activeTask = authoritativeActiveTask;", restore)
+        self.assertIn("const authoritativeRetrievalRecovery = D.retrievalRecovery;", restore)
+        self.assertIn("D.retrievalRecovery = authoritativeRetrievalRecovery;", restore)
 
         # Interleaving 2: selecting a project adopts and monitors its active task.
         self.assertIn("function syncActionState(activeTask)", source)

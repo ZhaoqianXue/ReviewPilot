@@ -15,7 +15,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
-from .retrieval_retry import current_retry_snapshot, disabled_retry_projection
+from .retrieval_retry import current_retry_snapshot, disabled_retry_projection, stable_retry_id
 from .safe_text import contains_absolute_path, safe_display_text
 from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
@@ -292,7 +292,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "platformIssues": _platform_issues(collected_summary.get("platform_errors") or {}),
         "keywords": _keywords(config),
         "groups": _groups(categorization),
-        "retrieved": _retrieved(included),
+        "retrieved": _retrieved(included, download_report),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
@@ -621,9 +621,28 @@ def _preview_paper(row: dict, included: list[dict]) -> dict:
     }
 
 
-def _retrieved(included: list[dict]) -> list[dict]:
+def _retrieved(included: list[dict], download_report: dict) -> list[dict]:
+    downloaded = download_report.get("downloaded")
+    if isinstance(downloaded, list):
+        downloaded_ids = set()
+        for detail in downloaded:
+            try:
+                downloaded_ids.add(stable_retry_id(detail))
+            except (TypeError, ValueError):
+                continue
+        papers = []
+        for paper in included:
+            try:
+                is_downloaded = paper.get("pdf_downloaded") is True or stable_retry_id(paper) in downloaded_ids
+            except (TypeError, ValueError):
+                is_downloaded = paper.get("pdf_downloaded") is True
+            if is_downloaded:
+                papers.append(paper)
+    else:
+        success = download_report.get("success")
+        papers = included[:success] if type(success) is int and success >= 0 else included
     rows = []
-    for index, paper in enumerate(included[:8], start=1):
+    for index, paper in enumerate(papers[:8], start=1):
         title = paper.get("title") or f"Paper {index}"
         source = paper.get("source") or paper.get("platform") or "paper"
         year = paper.get("year") or paper.get("publication_year") or ""

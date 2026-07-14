@@ -7,6 +7,43 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_retry_selection_is_revision_bound_ordered_and_not_persisted(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, snapshotDataForStorage } = require('./frontend/app.js');
+const recovery = normalizeRetrievalRecovery({canRetry:true,reportRevision:'r1',items:[{retryId:'a',label:'A',failureClass:'network'},{retryId:'b',label:'B',failureClass:'paywall'}]});
+let selection = reconcileRetrySelection({reportRevision:'',selectedIds:[]}, recovery);
+assert.deepEqual(selection, {reportRevision:'r1',selectedIds:['a','b']});
+selection = reconcileRetrySelection({reportRevision:'r1',selectedIds:['b']}, recovery);
+assert.deepEqual(orderedRetryIds(recovery, selection), ['b']);
+selection = reconcileRetrySelection(selection, {canRetry:true,reportRevision:'r2',items:[{retryId:'c'}]});
+assert.deepEqual(selection, {reportRevision:'r2',selectedIds:['c']});
+assert.deepEqual(snapshotDataForStorage({retrievalRecovery:recovery}).retrievalRecovery, {canRetry:false,reportRevision:'',items:[]});
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_retry_confirmation_resends_only_an_exact_frozen_challenge(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { confirmRetryImpact } = require('./frontend/app.js');
+const payload = {report_revision:'r1',failed_ids:['a','b']};
+let sends = 0;
+confirmRetryImpact({expectedReportRevision:'r1',failedIds:['a','b']}, payload, () => false, async () => { sends += 1; }).then((cancelled) => {
+  assert.equal(cancelled.cancelled, true); assert.equal(sends, 0);
+  return confirmRetryImpact({expectedReportRevision:'r2',failedIds:['a','b']}, payload, () => true, async () => { sends += 1; });
+}).then((stale) => {
+  assert.equal(stale.stale, true); assert.equal(sends, 0);
+  return confirmRetryImpact({expectedReportRevision:'r1',failedIds:['a','b']}, payload, () => true, async (confirmed) => {
+    sends += 1;
+    assert.deepEqual(confirmed.retry_confirmation, {expected_report_revision:'r1',failed_ids:['a','b']});
+    return confirmed;
+  });
+}).then(() => assert.equal(sends, 1));
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_failed_task_refreshes_authoritative_state_before_surface_error(self):
         script = r"""
 const assert = require('node:assert/strict');

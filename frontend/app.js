@@ -1,5 +1,9 @@
 function snapshotDataForStorage(data) {
-  return { ...data, activeTask: null };
+  return {
+    ...data,
+    activeTask: null,
+    retrievalRecovery: { canRetry: false, reportRevision: '', items: [] },
+  };
 }
 
 function createTaskPollRegistry(waitForTaskFn) {
@@ -72,6 +76,62 @@ async function confirmOverwriteImpact(preview, payload, confirmFn, retry) {
   return retry({ ...(payload || {}), overwrite_confirmation: { expected_revision: preview.expectedRevision, affected_stages: preview.affectedStages } });
 }
 
+function normalizeRetrievalRecovery(value) {
+  const items = Array.isArray(value?.items)
+    ? value.items.filter((item) => item && typeof item.retryId === 'string' && item.retryId).map((item) => ({
+      retryId: item.retryId,
+      label: typeof item.label === 'string' && item.label ? item.label : 'Untitled paper',
+      failureClass: typeof item.failureClass === 'string' && item.failureClass ? item.failureClass : 'Retrieval failed',
+    }))
+    : [];
+  const reportRevision = typeof value?.reportRevision === 'string' ? value.reportRevision : '';
+  if (!value?.canRetry || !reportRevision || !items.length) {
+    return { canRetry: false, reportRevision: '', items: [] };
+  }
+  return { canRetry: true, reportRevision, items };
+}
+
+function reconcileRetrySelection(current, recovery) {
+  const normalized = normalizeRetrievalRecovery(recovery);
+  if (!normalized.canRetry) return { reportRevision: '', selectedIds: [] };
+  const available = normalized.items.map((item) => item.retryId);
+  if (!current || current.reportRevision !== normalized.reportRevision) {
+    return { reportRevision: normalized.reportRevision, selectedIds: available };
+  }
+  const selected = new Set(Array.isArray(current.selectedIds) ? current.selectedIds : []);
+  return {
+    reportRevision: normalized.reportRevision,
+    selectedIds: available.filter((retryId) => selected.has(retryId)),
+  };
+}
+
+function orderedRetryIds(recovery, selection) {
+  const normalized = normalizeRetrievalRecovery(recovery);
+  if (!normalized.canRetry || selection?.reportRevision !== normalized.reportRevision) return [];
+  const selected = new Set(Array.isArray(selection.selectedIds) ? selection.selectedIds : []);
+  return normalized.items.filter((item) => selected.has(item.retryId)).map((item) => item.retryId);
+}
+
+async function confirmRetryImpact(preview, frozenPayload, confirmFn, resend) {
+  const expectedIds = Array.isArray(preview?.failedIds) ? preview.failedIds : [];
+  const frozenIds = Array.isArray(frozenPayload?.failed_ids) ? frozenPayload.failed_ids : [];
+  const exact = preview?.expectedReportRevision === frozenPayload?.report_revision
+    && expectedIds.length === frozenIds.length
+    && expectedIds.every((retryId, index) => retryId === frozenIds[index]);
+  if (!exact) return { stale: true };
+  if (!confirmFn(`Retry ${frozenIds.length} failed download${frozenIds.length === 1 ? '' : 's'}? Existing successful PDFs will not be requested or replaced.`)) {
+    return { cancelled: true };
+  }
+  return resend({
+    report_revision: frozenPayload.report_revision,
+    failed_ids: [...frozenIds],
+    retry_confirmation: {
+      expected_report_revision: frozenPayload.report_revision,
+      failed_ids: [...frozenIds],
+    },
+  });
+}
+
 function materialSetupValues(data) {
   const setup = data.setup || {};
   return {
@@ -123,7 +183,7 @@ async function resolveTaskAndRefresh(taskPromise, projectId, fetchProjectStateFn
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
+  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
 }
 
 /* ReviewPilot workspace UI.
@@ -168,6 +228,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     actionStartedAt: D.activeTask ? (Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt) : 0,
     preservedChatMessages: [],
     catDraft: categorizationDraftFromData(D),
+    retrySelection: reconcileRetrySelection(null, D.retrievalRecovery),
+    retryFocusIndex: null,
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
@@ -222,9 +284,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (!snapshot) return;
     const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);
     const authoritativeActiveTask = D.activeTask;
+    const authoritativeRetrievalRecovery = D.retrievalRecovery;
     if (shouldRestoreSnapshotData) {
       D = migrateWorkspaceSnapshotData(snapshot.data);
       D.activeTask = authoritativeActiveTask;
+      D.retrievalRecovery = authoritativeRetrievalRecovery;
     }
     MAX = maxPlatformValue(D.platforms);
 
@@ -347,6 +411,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       history: data.history || [],
       screeningMetrics: data.screeningMetrics || { identified: 0, afterDedup: 0, included: 0 },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
+      retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
       categorizationSummary: data.categorizationSummary || { papers: 0, groups: 0 },
       categorizationWorkflow: data.categorizationWorkflow || emptyCategorizationWorkflow(),
       resultOverview: data.resultOverview || [],
@@ -508,6 +573,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     syncActionState(D.activeTask);
     monitorActiveTask();
     const sameProject = !!previousProjectId && previousProjectId === D.project.id;
+    state.retrySelection = reconcileRetrySelection(
+      sameProject ? state.retrySelection : null,
+      D.retrievalRecovery
+    );
+    state.retryFocusIndex = null;
     const stepKeys = new Set(D.steps.map((step) => step.key));
     state.step = preserveView && sameProject && stepKeys.has(previousStep) ? previousStep : initialStep(D);
     state.tab = preserveView && sameProject && ['fields', 'preview'].includes(previousTab) ? previousTab : 'fields';
@@ -586,6 +656,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     }
   }
 
+  async function refreshRetryConflict(projectId, ownsRequest) {
+    if (!ownsRequest()) return;
+    const latest = await fetchProjectState(projectId);
+    if (!ownsRequest()) return;
+    setData(latest, false, { preserveView: true });
+    state.actionError = 'Failure list changed. Review the current failures and retry.';
+    paintWorkspace();
+  }
+
   async function postAction(action, payload = null) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId || D.isNewProject) return;
@@ -602,6 +681,23 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
+        if (action === 'retry-failed-downloads' && body?.code === 'confirmation_required') {
+          const retried = await confirmRetryImpact(
+            body,
+            payload,
+            window.confirm,
+            (confirmed) => postAction(action, confirmed)
+          );
+          if (retried?.cancelled) throw new Error('Retry cancelled.');
+          if (retried?.stale) {
+            await refreshRetryConflict(projectId, isCurrentProject);
+          }
+          return retried;
+        }
+        if (action === 'retry-failed-downloads' && body?.code === 'revision_conflict') {
+          await refreshRetryConflict(projectId, isCurrentProject);
+          return;
+        }
         if (body?.confirmationRequired) {
           const retried = await confirmOverwriteImpact(body, payload, window.confirm, (confirmed) => postAction(action, confirmed));
           if (retried?.cancelled) throw new Error('Rerun cancelled.');
@@ -802,6 +898,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       : 0;
     const activeAction = D.quietActions[step] || '';
     const canvasActionPending = !!state.actionPending && state.actionPending === activeAction;
+    const retryRecoveryRunning = state.actionPending === 'retry-failed-downloads';
+    const retryRecovery = D.retrievalRecovery;
+    const retrySelectedIds = orderedRetryIds(retryRecovery, state.retrySelection);
+    const retrySelectedSet = new Set(retrySelectedIds);
+    const retryRecoveryItems = retryRecovery.items.map((item, index) => ({
+      ...item,
+      index,
+      selected: retrySelectedSet.has(item.retryId),
+    }));
+    const retryRecoveryVisible = retryRecovery.canRetry || retryRecoveryRunning;
+    const retrievalHasTerminalOutput = ['completed', 'partial', 'failed'].includes(
+      D.stageState.retrieval?.status
+    );
     const canvasActionElapsedLabel = canvasActionPending && state.actionStartedAt
       ? formatElapsed(Date.now() - state.actionStartedAt)
       : '';
@@ -861,7 +970,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       notFieldsTab: state.tab !== 'fields',
       isPreviewTab: state.tab === 'preview',
       notPreviewTab: state.tab !== 'preview',
-      showCanvasAction: !D.isNewProject && step !== 'categorize' && step !== 'extraction' && !!D.quietLabels[step],
+      showCanvasAction: !D.isNewProject
+        && step !== 'categorize'
+        && step !== 'extraction'
+        && !!D.quietLabels[step]
+        && !retryRecoveryVisible
+        && !(step === 'retrieval' && retrievalHasTerminalOutput),
       canvasActionLabel: D.quietLabels[step] || '',
       canvasActionName: D.quietActions[step] || '',
       canvasActionPending,
@@ -871,6 +985,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       workflowNotice: D.workflowNotices[({search:'collection',screening:'screening',retrieval:'retrieval',extraction:'extraction',categorize:'categorization'})[step]] || null,
       screeningMetrics: D.screeningMetrics,
       retrievalSummary: D.retrievalSummary,
+      retryRecoveryVisible,
+      retryRecoveryRunning,
+      retryRecoveryItems,
+      retrySelectedCount: retrySelectedIds.length,
       retrievalDashOffset: (144.5 - ((144.5 * retrievalPct) / 100)).toFixed(1),
       categorizationSummary: D.categorizationSummary,
       categorizationWorkflow: D.categorizationWorkflow,
@@ -1214,12 +1332,13 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     if (!v.showCanvasAction) return '';
     const pendingLabel = v.canvasActionLabel.replace(/^Run\s+/i, '');
     const label = v.canvasActionPending ? `Running ${pendingLabel.toLowerCase()}...${v.canvasActionElapsedLabel ? ` ${v.canvasActionElapsedLabel}` : ''}` : v.canvasActionLabel;
-    const disabled = v.canvasActionPending ? 'disabled' : '';
+    const actionDisabled = !!state.actionPending;
+    const disabled = actionDisabled ? 'disabled' : '';
     const icon = v.canvasActionPending
       ? '<span data-ui="canvas-action-spinner" style="width:13px;height:13px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>'
       : '<i class="ph ph-arrow-bend-down-right" style="font-size:13px;"></i>';
     return `<div data-ui="canvas-action-row" style="display:flex;justify-content:flex-end;margin:16px 0;">
-      <button data-ui="canvas-action-button" data-act="action" data-action="${v.canvasActionName}" ${disabled} style="${buttonStyle}${v.canvasActionPending ? ';opacity:.72;cursor:wait;' : ''}">${icon}${label}</button>
+      <button data-ui="canvas-action-button" data-act="action" data-action="${v.canvasActionName}" ${disabled} style="${buttonStyle}${actionDisabled ? ';opacity:.72;cursor:wait;' : ''}">${icon}${label}</button>
     </div>`;
   }
 
@@ -1250,7 +1369,35 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Unavailable</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unavailable}</span></div>
         </div>
       </div>
+      ${retrievalRecoveryPanel(v)}
       <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">${v.retrievalSummary.retrieved > 0 ? 'Recently retrieved' : 'Included papers queued for retrieval'}</div>${v.retrieved.map((r) => `<div style="display:flex;align-items:center;gap:11px;padding:8px 0;border-bottom:1px solid #f4f6f3;"><i class="ph ph-file-text" style="font-size:16px;color:#1a365d;"></i><div style="flex:1;min-width:0;"><div style="font-size:12.5px;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${r.t}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9aa39b;">${r.v}</div></div><i class="ph-fill ph-check-circle" style="font-size:15px;color:#1a365d;"></i></div>`).join('') || emptyHint('No included papers queued yet')}</div>`;
+  }
+
+  function retrievalRecoveryPanel(v) {
+    if (!v.retryRecoveryVisible) return '';
+    if (v.retryRecoveryRunning) {
+      return `<div data-ui="retrieval-recovery-running" role="status" aria-live="polite" style="border:1px solid #c8d8e8;background:#f8fbff;border-radius:12px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
+        <span aria-hidden="true" style="width:15px;height:15px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
+        <div><div style="font-size:13px;color:#1a365d;">Retrying failed downloads…</div><div style="font-size:11.5px;color:#6b746c;margin-top:2px;">Existing successful PDFs are preserved.</div></div>
+      </div>`;
+    }
+    const items = v.retryRecoveryItems.map((item, index) => {
+      const failure = String(item.failureClass || 'Retrieval failed').replace(/[_-]+/g, ' ');
+      return `<label for="rp-retry-${index}" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid #eef0ee;cursor:pointer;min-width:0;">
+        <input id="rp-retry-${index}" type="checkbox" data-act="retry-toggle" data-retry-index="${index}" ${item.selected ? 'checked' : ''} style="margin-top:3px;accent-color:#1a365d;flex:0 0 auto;">
+        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;text-transform:capitalize;">${failure}</span></span>
+      </label>`;
+    }).join('');
+    const disabled = v.retrySelectedCount === 0 ? 'disabled' : '';
+    return `<fieldset data-ui="retrieval-recovery-panel" style="border:1px solid #e5c88f;background:#fffbf2;border-radius:12px;padding:13px 16px 15px;margin:0 0 16px;min-width:0;">
+      <legend style="padding:0 7px;font-size:13px;color:#7a4b00;font-weight:500;">Failed downloads</legend>
+      <div style="font-size:11.5px;color:#6b746c;margin-bottom:8px;">${v.retryRecoveryItems.length} paper${v.retryRecoveryItems.length === 1 ? ' needs' : 's need'} recovery. Choose only the files to retry.</div>
+      <div data-ui="retrieval-recovery-items">${items}</div>
+      <div data-ui="retrieval-recovery-actions" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:12px;">
+        <div style="display:flex;gap:7px;flex-wrap:wrap;"><button type="button" data-act="retry-select-all" style="border:1px solid #d8ddd6;background:#fffefc;color:#1a365d;border-radius:8px;padding:7px 10px;font:inherit;font-size:11.5px;cursor:pointer;">Select all</button><button type="button" data-act="retry-clear" style="border:1px solid #d8ddd6;background:#fffefc;color:#6b746c;border-radius:8px;padding:7px 10px;font:inherit;font-size:11.5px;cursor:pointer;">Clear</button></div>
+        <button type="button" data-act="retry-submit" ${disabled} style="${buttonStyle}${disabled ? ';opacity:.5;cursor:not-allowed;' : ''}"><i class="ph ph-arrow-clockwise" style="font-size:13px;"></i>Retry ${v.retrySelectedCount} failed download${v.retrySelectedCount === 1 ? '' : 's'}</button>
+      </div>
+    </fieldset>`;
   }
 
   function extractionCanvas(v) {
@@ -1637,6 +1784,11 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         state.chatInputFocus = false;
         focusResearchTopicInput(root);
       }
+      if (state.retryFocusIndex !== null) {
+        const retryInput = root.querySelector(`[data-retry-index="${state.retryFocusIndex}"]`);
+        state.retryFocusIndex = null;
+        if (retryInput) retryInput.focus({ preventScroll: true });
+      }
       writeWorkspaceSnapshot();
       if (state.actionPending && !actionTicker) {
         actionTicker = setInterval(paint, 1000);
@@ -1721,7 +1873,50 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
       else if (act === 'finalize-project') {
         state.catDraft.finalized = true;
       }
+      else if (act === 'retry-toggle') {
+        if (state.actionPending) return;
+        const index = Number(t.getAttribute('data-retry-index'));
+        const item = D.retrievalRecovery.items[index];
+        if (!item) return;
+        const selected = new Set(orderedRetryIds(D.retrievalRecovery, state.retrySelection));
+        if (t.checked) selected.add(item.retryId);
+        else selected.delete(item.retryId);
+        state.retrySelection = {
+          reportRevision: D.retrievalRecovery.reportRevision,
+          selectedIds: D.retrievalRecovery.items
+            .filter((candidate) => selected.has(candidate.retryId))
+            .map((candidate) => candidate.retryId),
+        };
+        state.retryFocusIndex = index;
+      }
+      else if (act === 'retry-select-all') {
+        if (state.actionPending) return;
+        state.retrySelection = reconcileRetrySelection(null, D.retrievalRecovery);
+      }
+      else if (act === 'retry-clear') {
+        if (state.actionPending) return;
+        state.retrySelection = {
+          reportRevision: D.retrievalRecovery.reportRevision,
+          selectedIds: [],
+        };
+      }
+      else if (act === 'retry-submit') {
+        if (state.actionPending) return;
+        const failedIds = orderedRetryIds(D.retrievalRecovery, state.retrySelection);
+        if (!failedIds.length) return;
+        const payload = {
+          report_revision: D.retrievalRecovery.reportRevision,
+          failed_ids: failedIds,
+        };
+        state.actionPending = 'retry-failed-downloads';
+        state.actionStartedAt = Date.now();
+        state.actionError = '';
+        paint();
+        postAction('retry-failed-downloads', payload).catch(() => {});
+        return;
+      }
       else if (act === 'action') {
+        if (state.actionPending) return;
         const actionName = t.getAttribute('data-action');
         const payload = ['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null;
         if (actionName === 'categorize' && (!payload.categories || !payload.categories.length)) {

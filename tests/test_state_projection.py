@@ -63,6 +63,7 @@ class StateProjectionTests(unittest.TestCase):
                 data = build_rp_data(root, "p")
                 projected = data["retrievalRecovery"]
                 self.assertTrue(projected["canRetry"]); self.assertEqual(len(projected["reportRevision"]), 64); self.assertEqual(len(projected["items"]), 1)
+                self.assertEqual([row["t"] for row in data["retrieved"]], ["Paper 1"])
                 if contains_path:
                     self.assertNotIn("Users/private", json.dumps(projected)); self.assertNotIn("secret", json.dumps(projected))
                 write_json(project / "pdfs" / "download_report.json", {"success": 1, "failed": 1})
