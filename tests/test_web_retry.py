@@ -78,6 +78,8 @@ class UnsuccessfulRetryAdapter:
             "pdf_count": 0,
             "attempted": 1,
         })
+        atomic_write_json(staged / "download_stats.json", {"success": 0, "failed": 1})
+        atomic_write_json(staged / "logs/agent_states.json", {"download": {"state": {}}})
         return {"success": 0, "failed": 1, "stats": {"success": 0, "failed": 1}}
 
 

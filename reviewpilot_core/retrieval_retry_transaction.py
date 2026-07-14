@@ -773,6 +773,39 @@ def _validate_committed_source_set(project: Path, marker_or_sources: dict[str, A
             raise ValueError
 
 
+def _remove_retry_download_sidecars(staged_project: Path) -> None:
+    """Remove validated DownloadAgent auxiliaries before the staging tree is committed."""
+    changed = False
+    stats_path = staged_project / "download_stats.json"
+    if _lexists(stats_path):
+        if not _direct_regular(stats_path, staged_project):
+            raise ValueError
+        stats_path.unlink()
+        changed = True
+
+    logs = staged_project / "logs"
+    if _lexists(logs):
+        info = logs.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or logs.is_symlink()
+                or logs.resolve(strict=True).parent != staged_project):
+            raise ValueError
+        children = {child.name: child for child in logs.iterdir()}
+        if set(children) - {"agent_states.json", "pipeline.log"}:
+            raise ValueError
+        for child in children.values():
+            if not _direct_regular(child, logs):
+                raise ValueError
+        for child in children.values():
+            child.unlink()
+        logs.rmdir()
+        changed = True
+
+    if {path.name for path in staged_project.iterdir()} != {"filtered", "pdfs"}:
+        raise ValueError
+    if changed:
+        _fsync_directory(staged_project)
+
+
 def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPreparation,
                                   run_download) -> StagedRetryOutcome:
     """Stage with a trusted internal downloader that may write only the supplied staging tree."""
@@ -809,6 +842,7 @@ def run_retry_transaction_staging(project_path: Path | str, preparation: RetryPr
                         != _encode_before({"rows": trusted_rows})):
                 raise ValueError
             outcome = run_retry_staging(project, trusted, project / marker["staging_name"], run_download)
+            _remove_retry_download_sidecars(outcome.staging_project_path)
             if (type(outcome) is not StagedRetryOutcome
                     or outcome.report_revision != marker["expected_revision"]
                     or outcome.selected_ids != tuple(marker["selected_ids"])

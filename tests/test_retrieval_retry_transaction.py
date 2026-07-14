@@ -880,6 +880,36 @@ class RetrySourceCommitTests(unittest.TestCase):
         self.assertEqual(outcome.successful_pdfs, ())
         self.assertEqual(self.decoded_sources()[1], {"pdfs": []})
 
+    def test_wrapper_removes_only_known_download_agent_sidecars_before_committing_sources(self):
+        download = self.download(0)
+
+        def download_with_agent_sidecars(root, project_id):
+            result = download(root, project_id)
+            staged = root / project_id
+            atomic_write_json(staged / "download_stats.json", {"success": 0, "failed": 2})
+            atomic_write_json(staged / "logs" / "agent_states.json", {"download": {"state": {}}})
+            (staged / "logs" / "pipeline.log").write_text("download retry\n", encoding="utf-8")
+            return result
+
+        run_retry_transaction_staging(self.project, self.prepared, download_with_agent_sidecars)
+
+        staged = self.project / self.staging_name / "retry"
+        self.assertEqual({path.name for path in staged.iterdir()}, {"filtered", "pdfs"})
+
+    def test_wrapper_rejects_unknown_sidecars_before_committing_sources(self):
+        download = self.download(0)
+
+        def download_with_unknown_sidecar(root, project_id):
+            result = download(root, project_id)
+            (root / project_id / "unexpected.txt").write_text("foreign\n", encoding="utf-8")
+            return result
+
+        with self.assertRaisesRegex(ValueError, "^Retry transaction staging failed$"):
+            run_retry_transaction_staging(self.project, self.prepared, download_with_unknown_sidecar)
+
+        marker = json.loads((self.project / PENDING_RETRY_FILE).read_text())
+        self.assertNotIn("sources_json_b64", marker)
+
     def test_outer_generation_cannot_overwrite_or_release_reentrant_aba_transaction(self):
         first_marker = self.project / PENDING_RETRY_FILE
         first = json.loads(first_marker.read_text())
