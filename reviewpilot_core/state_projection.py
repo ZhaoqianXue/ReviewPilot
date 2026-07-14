@@ -13,6 +13,7 @@ from urllib.parse import quote
 from ui_state import project_stage_label, schema_workbench_state
 
 from .extraction_schema import is_schema_finalized, load_schema_draft
+from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
 from .retrieval_retry import current_retry_snapshot, disabled_retry_projection, stable_retry_id
@@ -194,8 +195,8 @@ def build_new_project_data(output_root: Path | str) -> dict:
         "evidenceMatrix": [],
         "categorizationAnalysis": {"field": "", "categories": []},
         "exportPackage": [],
-        "previewFields": [],
-        "previewPaper": {"title": "No paper preview available", "ref": "", "countLabel": "0 / 0"},
+        "extractionPreview": empty_preview_projection(),
+        "schemaJson": {"fields": []},
         "messages": [
             {
                 "step": 1,
@@ -302,8 +303,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
-        "previewFields": _preview_fields(extraction_results[0] if extraction_results else {}),
-        "previewPaper": _preview_paper(extraction_results[0] if extraction_results else {}, included),
+        "extractionPreview": project_preview_projection(path, 0) if included else empty_preview_projection(),
+        "schemaJson": schema if isinstance(schema, dict) else {"fields": []},
         "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, workflow_notices=workflow_notices, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
         "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state, workflow_notices),
         "quietLabels": _quiet_labels(path, workflow_state),

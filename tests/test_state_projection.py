@@ -726,8 +726,12 @@ class StateProjectionTests(unittest.TestCase):
                 },
             )
             write_jsonl(
+                project_dir / "filtered" / "included_papers.jsonl",
+                [{"id": "paper-1", "title": "Extracted paper", "source": "pubmed", "year": 2026}],
+            )
+            write_jsonl(
                 project_dir / "extraction" / "extraction_results.jsonl",
-                [{"title": "Extracted paper", "sample_size": 42, "finding": "Worked"}],
+                [{"paper_id": "paper-1", "title": "Extracted paper", "sample_size": 42, "finding": "Worked"}],
             )
 
             data = build_rp_data(output_root, "extracted-project")
@@ -737,9 +741,12 @@ class StateProjectionTests(unittest.TestCase):
         self.assertIn("Extraction is complete. Choose a field to categorize for final analysis.", [message["text"] for message in data["messages"]])
         self.assertEqual(data["fields"][0], ["sample_size", "Number", "Participants", True])
         self.assertEqual(data["fields"][1], ["finding", "Text", "Main finding", False])
-        self.assertIn({"k": "sample_size", "v": "42"}, data["previewFields"])
-        self.assertEqual(data["previewPaper"]["title"], "Extracted paper")
-        self.assertEqual(data["previewPaper"]["ref"], "extraction_results.jsonl")
+        self.assertEqual(data["extractionPreview"]["paper"]["title"], "Extracted paper")
+        self.assertEqual(data["extractionPreview"]["paper"]["ref"], "pubmed · 2026")
+        self.assertEqual(data["extractionPreview"]["fields"][0]["value"], "42")
+        self.assertEqual(data["schemaJson"]["fields"][0]["name"], "sample_size")
+        self.assertNotIn("previewFields", data)
+        self.assertNotIn("previewPaper", data)
 
     def test_download_report_marks_retrieval_step_done_even_without_successful_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:
