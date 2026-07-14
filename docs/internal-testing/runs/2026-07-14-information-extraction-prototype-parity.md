@@ -2,7 +2,7 @@
 
 ## Scope
 
-Commit under test before this evidence update: `2b632c7`. The acceptance run covered the Prototype-faithful Step 4 controls, the real asynchronous single-paper preview path, and all three canonical Quick Start histories after a fresh end-to-end rerun.
+Code commit accepted after final audit: `49551bf`. The acceptance run covered the Prototype-faithful Step 4 controls, the real asynchronous single-paper preview path, and all three canonical Quick Start histories after a fresh end-to-end rerun.
 
 ## Automated verification
 
@@ -31,6 +31,7 @@ The app was restarted at `http://127.0.0.1:5602/workspace` and tested at 1280 ×
 - HCI displayed 1/18 and Urban displayed 1/14 with real schema-ordered values.
 - A real draft project displayed the Prototype hierarchy: Decision needed, Finalize Schema, Preview, JSON, and Regenerate schema.
 - JSON opened as a read-only modal with the normalized schema.
+- Schema JSON preserved literal special characters after display escaping, and closing the modal returned keyboard focus to its JSON trigger.
 - Preview launched a real asynchronous single-paper extraction, showed the in-place busy state, then rendered ten schema fields without changing the formal extraction ledger.
 - Browser console errors: zero.
 
