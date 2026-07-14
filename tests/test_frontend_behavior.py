@@ -7,6 +7,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_count_labels_use_grammatical_singular_and_plural_forms(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { formatCount } = require('./frontend/app.js');
+assert.equal(formatCount(1, 'paper'), '1 paper');
+assert.equal(formatCount(2, 'paper'), '2 papers');
+assert.equal(formatCount(1, 'category', 'categories'), '1 category');
+assert.equal(formatCount(0, 'category', 'categories'), '0 categories');
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_retry_selection_is_revision_bound_ordered_and_not_persisted(self):
         script = r"""
 const assert = require('node:assert/strict');

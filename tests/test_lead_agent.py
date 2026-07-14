@@ -1281,6 +1281,8 @@ class LeadAgentTests(unittest.TestCase):
         )
 
         self.assertIn("Generated 1 category suggestion for methods.", singular)
+        self.assertIn("Review it, select Confirm Categories", singular)
+        self.assertNotIn("Review them", singular)
         self.assertNotIn("1 category suggestions", singular)
         for malformed_count in (True, "nine"):
             with self.subTest(categories=malformed_count):

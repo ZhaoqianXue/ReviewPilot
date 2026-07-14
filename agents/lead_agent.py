@@ -492,11 +492,13 @@ For remove_field use args.field_name. For modify_field use args.field_name plus 
             category_count = result.get("categories")
             if isinstance(category_count, int) and not isinstance(category_count, bool):
                 suggestion_text = f"{category_count} category {'suggestion' if category_count == 1 else 'suggestions'}"
+                review_pronoun = "it" if category_count == 1 else "them"
             else:
                 suggestion_text = "category suggestions"
+                review_pronoun = "them"
             return (
                 f"Generated {suggestion_text} for {field}. "
-                "Review them, select Confirm Categories, then select Apply Categorization."
+                f"Review {review_pronoun}, select Confirm Categories, then select Apply Categorization."
             )
         if stage == "prompt_extraction":
             field_count = result.get("field_count")

@@ -6,6 +6,10 @@ function snapshotDataForStorage(data) {
   };
 }
 
+function formatCount(count, singular, plural = `${singular}s`) {
+  return `${count} ${Number(count) === 1 ? singular : plural}`;
+}
+
 function createTaskPollRegistry(waitForTaskFn) {
   const polls = new Map();
   return {
@@ -183,7 +187,7 @@ async function resolveTaskAndRefresh(taskPromise, projectId, fetchProjectStateFn
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
+  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
 }
 
 /* ReviewPilot workspace UI.
@@ -1445,7 +1449,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
           <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:5px;">Step 5</div>
           <div style="font-family:Newsreader,Georgia,serif;font-size:21px;color:#1a1a1a;line-height:1.15;">Categorization & Analysis</div>
         </div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${workflow.done ? `${v.categorizationSummary.papers} papers · ${v.categorizationSummary.groups} categories` : `${workflow.metrics.papersExtracted} papers · ${workflow.metrics.fields} fields`}</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${workflow.done ? `${formatCount(v.categorizationSummary.papers, 'paper')} · ${formatCount(v.categorizationSummary.groups, 'category', 'categories')}` : `${formatCount(workflow.metrics.papersExtracted, 'paper')} · ${formatCount(workflow.metrics.fields, 'field')}`}</div>
       </div>
       ${categorizationMetrics(workflow)}
       ${(workflow.done || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : categorizationSetupPanel(v, workflow)}`;
@@ -1502,7 +1506,7 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         <div style="font-size:12.5px;color:#1a1a1a;margin-bottom:8px;">Review your categories:</div>
         <div style="display:flex;flex-direction:column;gap:5px;">${categories.map((category, index) => `<div style="font-size:12px;color:#3a4252;">${index + 1}. ${category}</div>`).join('')}</div>
       </div>
-      ${confirmed ? `<div style="margin-top:12px;border:1px solid #d8e2f0;background:#f8fbff;border-radius:9px;padding:10px 11px;color:#1a365d;font-size:12px;">Categories confirmed: ${categories.length} categories</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"><button data-act="edit-categories" style="${buttonStyle}"><i class="ph ph-pencil-simple" style="font-size:13px;"></i><span>Edit Categories</span></button><button data-act="action" data-action="categorize" ${applying ? 'disabled' : ''} style="${buttonStyle}${applying ? ';opacity:.72;cursor:wait;' : ''}"><i class="ph ph-check-circle" style="font-size:13px;"></i>${applying ? 'Categorizing papers...' : 'Apply Categorization'}</button></div>` : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"><button data-act="confirm-categories" style="${buttonStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Confirm Categories</button><button data-act="action" data-action="suggest-categories" style="${buttonStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button></div><div style="font-size:11px;color:#8a938b;margin-top:8px;">Review the categories above. Click Confirm when ready, or Regenerate for new suggestions.</div>`}
+      ${confirmed ? `<div style="margin-top:12px;border:1px solid #d8e2f0;background:#f8fbff;border-radius:9px;padding:10px 11px;color:#1a365d;font-size:12px;">Categories confirmed: ${formatCount(categories.length, 'category', 'categories')}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"><button data-act="edit-categories" style="${buttonStyle}"><i class="ph ph-pencil-simple" style="font-size:13px;"></i><span>Edit Categories</span></button><button data-act="action" data-action="categorize" ${applying ? 'disabled' : ''} style="${buttonStyle}${applying ? ';opacity:.72;cursor:wait;' : ''}"><i class="ph ph-check-circle" style="font-size:13px;"></i>${applying ? 'Categorizing papers...' : 'Apply Categorization'}</button></div>` : `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"><button data-act="confirm-categories" style="${buttonStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Confirm Categories</button><button data-act="action" data-action="suggest-categories" style="${buttonStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button></div><div style="font-size:11px;color:#8a938b;margin-top:8px;">Review the categories above. Click Confirm when ready, or Regenerate for new suggestions.</div>`}
     </div>`;
   }
 
