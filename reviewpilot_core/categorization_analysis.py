@@ -156,10 +156,17 @@ class CategorizationAnalysis:
 
 def _generate_suggestions(rows: list[dict], field: str, mode: str, llm_query: Callable) -> tuple[list[str], dict[str, str]]:
     sample_values = _field_sample_values(rows, field, limit=30)
+    sample_count = len(sample_values)
+    category_limit = min(sample_count or 1, 5, max(1, round(sample_count ** 0.5) + 1))
+    shared_instruction = (
+        f"Create at most {category_limit} broad, reusable categories that can classify all papers. "
+        "Use materially fewer categories than papers whenever there are 3 or more papers. "
+        "Consolidate related values; do not create paper-specific categories."
+    )
     mode_instruction = (
-        "Create 5-10 meaningful categories that could classify ALL papers. Each paper should fit into exactly ONE category."
+        f"{shared_instruction} Each paper should fit into exactly ONE category."
         if mode == "single"
-        else "Create 5-10 meaningful categories/tags. Each paper may belong to MULTIPLE categories."
+        else f"{shared_instruction} Each paper may belong to MULTIPLE categories."
     )
     response, _usage = llm_query(
         text_prompt=f"""Analyze these values from the "{field}" field in research papers.

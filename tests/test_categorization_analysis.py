@@ -136,6 +136,8 @@ class CategorizationAnalysisTests(unittest.TestCase):
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
                 self.assertIn('Analyze these values from the "methods" field', text_prompt)
+                self.assertIn("at most 2 broad, reusable categories", text_prompt)
+                self.assertIn("materially fewer categories than papers", text_prompt)
                 return (
                     json.dumps(
                         {
@@ -160,6 +162,27 @@ class CategorizationAnalysisTests(unittest.TestCase):
         self.assertEqual(result["categories"], 2)
         self.assertFalse((project_dir / "categorization" / "categorization_mapping.json").exists())
         self.assertEqual(suggestions["categories"], ["Qualitative studies", "Benchmark studies"])
+
+    def test_suggestion_prompt_prevents_one_category_per_paper_for_small_reviews(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            extraction_dir = project_dir / "extraction"
+            extraction_dir.mkdir(parents=True)
+            (extraction_dir / "extraction_results.jsonl").write_text(
+                "".join(json.dumps({"title": f"Paper {index}", "methods": f"Method {index}"}) + "\n" for index in range(7)),
+                encoding="utf-8",
+            )
+
+            def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
+                self.assertIn("at most 4 broad, reusable categories", text_prompt)
+                self.assertIn("do not create paper-specific categories", text_prompt)
+                return json.dumps({"categories": ["A", "B", "C", "D"]}), {}
+
+            result = CategorizationAnalysis(project_dir, llm_query=fake_llm_query).suggest_categories(
+                {"field": "methods", "mode": "multiple"}
+            )
+
+        self.assertEqual(result["categories"], 4)
 
     def test_run_applies_user_confirmed_categories_and_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
