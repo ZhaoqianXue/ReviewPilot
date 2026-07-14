@@ -98,6 +98,8 @@ Open http://127.0.0.1:5602, create a review project, then run collection, screen
 With `--reload`, Python backend edits restart the local server automatically.
 Frontend static edits under `frontend/` are picked up by a browser refresh.
 
+For the formal local inner-beta boundary, launch checklist, cohort protocol, and issue policy, see [`docs/internal-testing/INNER_BETA_RUNBOOK.md`](docs/internal-testing/INNER_BETA_RUNBOOK.md). The engineering release decision and three-example evidence are in [`docs/internal-testing/runs/2026-07-14-inner-beta-release-audit.md`](docs/internal-testing/runs/2026-07-14-inner-beta-release-audit.md).
+
 The old Streamlit and CLI entrypoints are kept only in `ReviewPilot_prototype/`
 for historical comparison.
 
