@@ -215,6 +215,8 @@ git commit -m "Add prototype extraction decision actions"
 
 ### Task 5: Reproduce the Prototype Step 4 interface
 
+This task owns the accessibility acceptance criteria as well as visual fidelity: tab semantics, accessible names, focus restoration, live busy/error announcements, and keyboard navigation must pass together.
+
 **Files:**
 - Modify: `frontend/app.js:210-370,390-435,920-990,1413-1446,1611-1680,1810-1955`
 - Modify: `tests/test_frontend_behavior.py`
