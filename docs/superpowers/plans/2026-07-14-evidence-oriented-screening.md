@@ -43,7 +43,7 @@ Commit `tests/test_prompt_agent.py` and `agents/prompt_agent.py` with message `F
 
 - [ ] **Step 1: Run focused behavior suites**
 
-Run `python -m unittest tests.test_prompt_agent tests.test_filter_agent tests.test_workflow_adapter tests.test_lead_agent tests.test_web_app tests.test_state_projection tests.test_frontend_contract` and require zero failures, errors, and skips.
+Run `python -m unittest tests.test_prompt_agent tests.test_filtering_agent tests.test_workflow_adapter tests.test_lead_agent tests.test_web_app tests.test_state_projection tests.test_frontend_contract` and require zero failures, errors, and skips.
 
 - [ ] **Step 2: Run static checks**
 
