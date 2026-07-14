@@ -156,7 +156,8 @@ class SetupRevisionTests(unittest.TestCase):
             projected = build_rp_data(root, "demo")
         self.assertEqual(projected["fields"][0][0], "fresh")
         self.assertEqual(projected["schemaWorkbench"]["primary_action"], "Run Extraction")
-        self.assertEqual(projected["previewFields"], [])
+        self.assertEqual(projected["extractionPreview"]["status"], "missing")
+        self.assertEqual(projected["extractionPreview"]["fields"], [])
         self.assertTrue(projected["stageState"]["extraction"]["stale"])
 
     def test_fresh_suggestions_after_stale_categorization_are_reviewable_without_terminal_mapping(self):
