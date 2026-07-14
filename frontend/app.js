@@ -186,8 +186,18 @@ async function resolveTaskAndRefresh(taskPromise, projectId, fetchProjectStateFn
   return { data, error };
 }
 
+function clampPreviewIndex(index, total) {
+  const count = Math.max(0, Number(total) || 0);
+  if (!count) return 0;
+  return Math.max(0, Math.min(count - 1, Number(index) || 0));
+}
+
+function extractionSchemaAction(status) {
+  return status === 'finalized' ? 'regenerate-schema' : 'generate-schema';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh };
+  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction };
 }
 
 /* ReviewPilot workspace UI.
@@ -234,6 +244,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     catDraft: categorizationDraftFromData(D),
     retrySelection: reconcileRetrySelection(null, D.retrievalRecovery),
     retryFocusIndex: null,
+    previewIndex: clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total),
+    schemaJsonOpen: false,
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
@@ -304,6 +316,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const stepKeys = new Set(D.steps.map((s) => s.key));
     state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);
     state.tab = (shouldRestoreSnapshotData || sameProject) && ui.tab === 'preview' ? 'preview' : 'fields';
+    state.previewIndex = (shouldRestoreSnapshotData || sameProject)
+      ? clampPreviewIndex(ui.previewIndex, D.extractionPreview.total)
+      : clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total);
+    state.schemaJsonOpen = false;
     state.dialog = '';
     state.actionError = '';
     state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';
@@ -348,6 +364,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         ui: {
           step: state.step,
           tab: state.tab,
+          previewIndex: state.previewIndex,
           activeProjectId: state.activeProjectId,
           setupDraft: state.setupDraft,
           catDraft: state.catDraft,
@@ -567,6 +584,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const previousProjectId = D.project.id || '';
     const previousStep = state.step;
     const previousTab = state.tab;
+    const previousPreviewIndex = state.previewIndex;
     const nextData = normalizeData(alreadyEscaped ? data : escapeData(data || {}));
     if (state.preservedChatMessages.length) {
       nextData.messages = mergeConversationMessages(state.preservedChatMessages, nextData.messages);
@@ -587,6 +605,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const stepKeys = new Set(D.steps.map((step) => step.key));
     state.step = preserveView && sameProject && stepKeys.has(previousStep) ? previousStep : initialStep(D);
     state.tab = preserveView && sameProject && ['fields', 'preview'].includes(previousTab) ? previousTab : 'fields';
+    state.previewIndex = preserveView && sameProject
+      ? clampPreviewIndex(previousPreviewIndex, D.extractionPreview.total)
+      : clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total);
+    state.schemaJsonOpen = false;
     state.actionError = '';
     state.setupDraft = setupDraftFromData(D);
     state.catDraft = categorizationDraftFromData(D);
@@ -615,6 +637,37 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return res.json();
   }
 
+  async function fetchExtractionPreview(index, projectId = state.activeProjectId || D.project.id) {
+    if (!projectId) return null;
+    const ownership = projectNavigation.capture(projectId);
+    const boundedIndex = clampPreviewIndex(index, D.extractionPreview.total);
+    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/extraction-preview/${boundedIndex}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `Preview refresh failed: ${res.status}`);
+    }
+    const preview = await res.json();
+    if (!projectNavigation.owns(ownership) || D.project.id !== projectId) return null;
+    D.extractionPreview = escapeData(preview);
+    state.previewIndex = clampPreviewIndex(preview.index, preview.total);
+    return D.extractionPreview;
+  }
+
+  async function showExtractionPreview(index, generateIfMissing = false) {
+    state.tab = 'preview';
+    state.previewIndex = clampPreviewIndex(index, D.extractionPreview.total);
+    paintWorkspace();
+    const preview = await fetchExtractionPreview(state.previewIndex);
+    if (preview?.status === 'missing' && generateIfMissing) {
+      state.actionPending = 'preview-extraction';
+      state.actionStartedAt = Date.now();
+      paintWorkspace();
+      await postAction('preview-extraction', { paper_index: state.previewIndex });
+      return;
+    }
+    paintWorkspace();
+  }
+
   async function selectProject(projectId) {
     setData(await fetchProjectState(projectId));
   }
@@ -640,6 +693,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   async function monitorOwnedTask(taskId, projectId, key, generation) {
+    const monitoredAction = D.activeTask?.action || '';
+    const monitoredPaperIndex = D.activeTask?.paper_index ?? state.previewIndex;
     const ownsTask = () => (
       activeTaskMonitor.key === key
       && ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation, taskId)
@@ -648,6 +703,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const outcome = await resolveTaskAndRefresh(waitForActiveTaskOnce(taskId, key), projectId, fetchProjectState);
       if (!ownsTask()) return;
       setData(outcome.data, false, { preserveView: true });
+      if (monitoredAction === 'preview-extraction') {
+        await fetchExtractionPreview(monitoredPaperIndex, projectId);
+      }
       state.actionError = outcome.error;
       paintWorkspace();
     } catch (err) {
@@ -721,6 +779,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         action,
         status: task.status || 'running',
         created_at: new Date().toISOString(),
+        ...(payload && Number.isInteger(payload.paper_index) ? { paper_index: payload.paper_index } : {}),
       };
       monitorActiveTask();
     } catch (err) {
@@ -968,6 +1027,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       retrieved: D.retrieved,
       extractionPreview: D.extractionPreview,
       schemaJson: D.schemaJson,
+      schemaJsonOpen: state.schemaJsonOpen,
+      previewIndex: state.previewIndex,
       chat: chatMessages,
       chatPending: state.chatPending,
       quickStartOpen: state.quickStartOpen,
@@ -1174,6 +1235,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return `
 ${v.showSetupDialog ? setupDialog(v) : ''}
 ${v.showKeywordDialog ? keywordDialog(v) : ''}
+${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 <style>${workspaceResponsiveStyle()}</style>
 <div class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
   <aside class="rp-sidebar" style="width:175px;flex:0 0 175px;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
@@ -1412,26 +1474,15 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
 
   function extractionCanvas(v) {
     const wb = v.schemaWorkbench || { status: 'missing' };
-    const statusLabel = wb.status === 'finalized' ? 'Finalized schema' : (wb.status === 'draft' ? 'Draft schema' : 'No schema');
-    const statusColor = wb.status === 'finalized' ? '#1a365d' : (wb.status === 'draft' ? '#6b746c' : '#9aa39b');
-    const schemaActionDisabled = state.actionPending ? 'disabled' : '';
-    const schemaActionPendingStyle = state.actionPending ? ';opacity:.72;cursor:wait;' : '';
-    const schemaActions = v.isNewProject ? '' : (
-      wb.status === 'missing'
-        ? `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-sparkle" style="font-size:13px;"></i>Generate Schema</button>`
-        : wb.status === 'finalized'
-          ? `<button data-act="action" data-action="edit-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-pencil-simple" style="font-size:14px;"></i>Edit Schema</button><button data-act="action" data-action="run-extraction" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-play-circle" style="font-size:13px;"></i>Run Extraction</button>`
-          : `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button><button data-act="action" data-action="finalize-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Finalize Schema</button>`
-    );
-    return `<div style="display:flex;align-items:center;gap:4px;border-bottom:1px solid #eef0ee;margin-bottom:2px;">
-        ${v.isFieldsTab ? `<span style="font-size:13px;color:#1a365d;padding:9px 12px;border-bottom:2px solid #1a365d;margin-bottom:-1px;cursor:pointer;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></span>` : ''}
-        ${v.notFieldsTab ? `<span data-act="tab" data-tab="fields" style="font-size:13px;color:#6b746c;padding:9px 12px;cursor:pointer;transition:color .12s ease;" data-hover="color:#1a365d;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></span>` : ''}
-        ${v.isPreviewTab ? '<span style="font-size:13px;color:#1a365d;padding:9px 12px;border-bottom:2px solid #1a365d;margin-bottom:-1px;cursor:pointer;">Preview on paper</span>' : ''}
-        ${v.notPreviewTab ? '<span data-act="tab" data-tab="preview" style="font-size:13px;color:#6b746c;padding:9px 12px;cursor:pointer;transition:color .12s ease;" data-hover="color:#1a365d;">Preview on paper</span>' : ''}
-        ${!v.isNewProject ? `<span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:${statusColor};background:#f4f6f3;border:1px solid #e5e7eb;border-radius:999px;padding:5px 8px;">${statusLabel}</span><span style="display:flex;gap:8px;margin-left:8px;">${schemaActions}</span>` : ''}
+    const pending = !!state.actionPending;
+    const schemaAction = extractionSchemaAction(wb.status);
+    const schemaLabel = wb.status === 'missing' ? 'Generate Schema' : 'Regenerate';
+    return `<div role="tablist" aria-label="Information extraction views" style="display:flex;align-items:center;gap:4px;border-bottom:1px solid #eef0ee;margin-bottom:2px;">
+        <button type="button" role="tab" aria-selected=${v.isFieldsTab ? '"true"' : '"false"'} data-act="tab" data-tab="fields" style="border:none;background:none;font:inherit;font-size:13px;color:${v.isFieldsTab ? '#1a365d' : '#6b746c'};padding:9px 12px;border-bottom:${v.isFieldsTab ? '2px solid #1a365d' : '2px solid transparent'};margin-bottom:-1px;cursor:pointer;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></button>
+        <button type="button" role="tab" aria-selected=${v.isPreviewTab ? '"true"' : '"false"'} data-act="tab" data-tab="preview" style="border:none;background:none;font:inherit;font-size:13px;color:${v.isPreviewTab ? '#1a365d' : '#6b746c'};padding:9px 12px;border-bottom:${v.isPreviewTab ? '2px solid #1a365d' : '2px solid transparent'};margin-bottom:-1px;cursor:pointer;">Preview on paper</button>
+        ${!v.isNewProject ? `<button data-act="action" data-action="${schemaAction}" ${pending ? 'disabled aria-busy="true"' : ''} style="${buttonStyle};margin-left:auto;${pending ? 'opacity:.72;cursor:wait;' : ''}"><i class="ph ph-${wb.status === 'missing' ? 'sparkle' : 'arrows-clockwise'}" style="font-size:13px;"></i>${schemaLabel}</button>` : ''}
       </div>
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
-      ${!v.isNewProject && wb.status === 'draft' ? `<div style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:9px;padding:10px 11px;margin:12px 0;color:#1a365d;font-size:12px;line-height:1.45;">Refine this draft through chat, then finalize the schema before running extraction.</div>` : ''}
       ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}`;
   }
 
@@ -1441,8 +1492,20 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
   }
 
   function previewTable(v) {
-    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px 12px;"><div style="min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:440px;">${v.previewPaper.title}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;margin-top:2px;">${v.previewPaper.ref}</div></div><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b746c;">${v.previewPaper.countLabel}</div></div>
-      <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">${v.previewFields.map((p) => `<div style="display:grid;grid-template-columns:160px 1fr;gap:14px;padding:10px 16px;border-bottom:1px solid #f4f6f3;align-items:start;"><span style="font-size:12px;color:#8a938b;letter-spacing:-0.01em;">${p.k}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1a1a1a;line-height:1.5;">${p.v}</span></div>`).join('') || emptyHint('No preview yet')}</div>`;
+    const preview = v.extractionPreview;
+    const busy = state.actionPending === 'preview-extraction';
+    const rows = preview.status === 'ready'
+      ? preview.fields.map((field) => `<div style="display:grid;grid-template-columns:160px 1fr;gap:14px;padding:10px 16px;border-bottom:1px solid #f4f6f3;align-items:start;"><span style="font-size:12px;color:#8a938b;letter-spacing:-0.01em;">${field.label}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#1a1a1a;line-height:1.5;overflow-wrap:anywhere;">${field.value}</span></div>`).join('')
+      : '';
+    const status = busy
+      ? `<div role="status" aria-live="polite" style="padding:24px;color:#1a365d;text-align:center;">Generating preview for this paper…</div>`
+      : preview.status === 'error'
+        ? `<div role="alert" style="padding:18px;color:#8a1f1f;background:#fff5f5;">${preview.error || 'Preview failed.'}<div style="margin-top:10px;"><button data-act="generate-preview" style="${buttonStyle}">Retry preview</button></div></div>`
+        : preview.status === 'missing'
+          ? `<div style="padding:24px;text-align:center;color:#6b746c;">No preview has been generated for this paper.<div style="margin-top:12px;"><button data-act="generate-preview" style="${buttonStyle}"><i class="ph ph-sparkle"></i>Generate preview</button></div></div>`
+          : rows;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px 12px;gap:12px;"><div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:440px;">${preview.paper.title}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;margin-top:2px;">${preview.paper.ref}</div></div><div style="display:flex;align-items:center;gap:6px;"><button type="button" data-act="preview-nav" data-delta="-1" aria-label="Previous paper" ${preview.canPrevious && !busy ? '' : 'disabled'} style="${buttonStyle};padding:7px;"><i class="ph ph-caret-left"></i></button><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b746c;min-width:52px;text-align:center;">${preview.total ? preview.index + 1 : 0} / ${preview.total}</span><button type="button" data-act="preview-nav" data-delta="1" aria-label="Next paper" ${preview.canNext && !busy ? '' : 'disabled'} style="${buttonStyle};padding:7px;"><i class="ph ph-caret-right"></i></button></div></div>
+      <div aria-busy="${busy ? 'true' : 'false'}" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">${status || emptyHint('No preview yet')}</div>`;
   }
 
   function categorizeCanvas(v) {
@@ -1665,11 +1728,31 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     </div>`;
   }
 
+  function extractionDecisionCard(v) {
+    const wb = v.schemaWorkbench || { status: 'missing' };
+    if (!v.isExtraction || wb.status !== 'draft') return '';
+    const pending = !!state.actionPending;
+    const disabled = pending ? 'disabled aria-busy="true"' : '';
+    return `<section data-ui="extraction-decision-card" style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:12px;padding:14px;margin-top:2px;">
+      <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#6b746c;margin-bottom:7px;">Decision needed</div>
+      <div style="font-size:13px;color:#1a1a1a;line-height:1.45;margin-bottom:12px;">Finalize this ${v.allFields.length}-field schema and run extraction on all retrieved papers?</div>
+      <button data-act="action" data-action="finalize-and-run-extraction" ${disabled} style="width:100%;border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 12px;font:inherit;font-size:12.5px;cursor:${pending ? 'wait' : 'pointer'};"><i class="ph ph-check-circle" style="margin-right:6px;"></i>Finalize Schema</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;"><button data-act="open-preview" ${disabled} style="${buttonStyle};justify-content:center;"><i class="ph ph-eye"></i>Preview</button><button data-act="schema-json" ${disabled} style="${buttonStyle};justify-content:center;"><i class="ph ph-brackets-curly"></i>JSON</button></div>
+      <button data-act="action" data-action="generate-schema" ${disabled} style="border:none;background:none;color:#6b746c;width:100%;padding:10px 4px 2px;font:inherit;font-size:11.5px;cursor:${pending ? 'wait' : 'pointer'};">Regenerate schema</button>
+    </section>`;
+  }
+
+  function schemaJsonDialog(v) {
+    const schema = JSON.stringify(v.schemaJson, null, 2);
+    return `<div role="dialog" aria-modal="true" aria-labelledby="rp-schema-json-title" style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:60;"><section style="width:min(680px,calc(100vw - 32px));max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px;"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;"><h2 id="rp-schema-json-title" style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Schema JSON</h2><button type="button" data-act="close-schema-json" aria-label="Close schema JSON" style="${buttonStyle};padding:7px;"><i class="ph ph-x"></i></button></div><pre style="margin:0;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;background:#f8fafc;padding:14px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.55;white-space:pre-wrap;">${esc(schema)}</pre></section></div>`;
+  }
+
   function assistantPanel(v) {
     return `<aside class="rp-assistant" style="width:407px;flex:0 0 407px;border-left:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
       <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div><button data-act="open-setup" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button></div>
       <div class="rp-scroll" id="rp-conv" style="flex:1;min-height:0;overflow-y:auto;padding:16px 15px;display:flex;flex-direction:column;gap:13px;">
         ${v.chat.map(chatMessage).join('')}
+        ${extractionDecisionCard(v)}
         ${v.chatPending ? thinkingBubble() : ''}
       </div>
       <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" placeholder="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...'}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:#1a365d;color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
@@ -1835,7 +1918,38 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         if (t.getAttribute('data-disabled') === 'true') return;
         state.step = t.getAttribute('data-step');
       }
-      else if (act === 'tab') state.tab = t.getAttribute('data-tab');
+      else if (act === 'tab') {
+        state.tab = t.getAttribute('data-tab');
+        paint();
+        if (state.tab === 'preview') {
+          showExtractionPreview(state.previewIndex).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        }
+        return;
+      }
+      else if (act === 'open-preview') {
+        if (state.actionPending) return;
+        paint();
+        showExtractionPreview(state.previewIndex, true).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        return;
+      }
+      else if (act === 'preview-nav') {
+        if (state.actionPending) return;
+        const nextIndex = clampPreviewIndex(state.previewIndex + Number(t.getAttribute('data-delta') || 0), D.extractionPreview.total);
+        paint();
+        showExtractionPreview(nextIndex).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        return;
+      }
+      else if (act === 'generate-preview') {
+        if (state.actionPending) return;
+        state.actionPending = 'preview-extraction';
+        state.actionStartedAt = Date.now();
+        state.actionError = '';
+        paint();
+        postAction('preview-extraction', { paper_index: state.previewIndex }).catch(() => {});
+        return;
+      }
+      else if (act === 'schema-json') state.schemaJsonOpen = true;
+      else if (act === 'close-schema-json') state.schemaJsonOpen = false;
       else if (act === 'new-project') {
         setData(newProjectDataWithCurrentHistory(), true);
         state.dialog = '';

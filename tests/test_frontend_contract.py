@@ -589,27 +589,27 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("Included papers queued for retrieval", retrieval_canvas)
         self.assertIn("v.retrievalSummary.retrieved > 0", retrieval_canvas)
 
-    def test_extraction_canvas_has_schema_finalize_and_edit_gates(self):
+    def test_extraction_canvas_and_assistant_match_prototype_decision_flow(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-        extraction_canvas = source[source.index("function extractionCanvas(v)") : source.index("function fieldsTable(v)")]
+        extraction_ui = source[source.index("function extractionCanvas(v)") : source.index("function categorizeCanvas(v)")]
+        assistant = source[source.index("function extractionDecisionCard(v)") : source.index("function setupDialog(v)")]
 
         self.assertIn("schemaWorkbench", source)
-        self.assertIn("Draft schema", extraction_canvas)
-        self.assertIn("Finalized schema", extraction_canvas)
-        self.assertIn('data-action="finalize-schema"', extraction_canvas)
-        self.assertIn('data-action="edit-schema"', extraction_canvas)
-        self.assertIn('data-action="run-extraction"', extraction_canvas)
-        self.assertIn("Finalize Schema", extraction_canvas)
-        self.assertIn("Edit Schema", extraction_canvas)
-        self.assertIn("Run Extraction", extraction_canvas)
-        self.assertIn("schemaActionDisabled", extraction_canvas)
-        self.assertIn("schemaActionPendingStyle", extraction_canvas)
-        self.assertIn("wb.status === 'missing'", extraction_canvas)
-        actions = extraction_canvas[extraction_canvas.index("const schemaActions") :]
-        missing_branch = actions[actions.index("wb.status === 'missing'") : actions.index("wb.status === 'finalized'")]
-        self.assertIn('data-action="generate-schema"', missing_branch)
-        self.assertIn("Generate Schema", missing_branch)
-        self.assertNotIn('data-action="finalize-schema"', missing_branch)
+        self.assertIn('role="tab"', extraction_ui)
+        self.assertIn('aria-selected=', extraction_ui)
+        self.assertIn('aria-label="Previous paper"', extraction_ui)
+        self.assertIn('aria-label="Next paper"', extraction_ui)
+        self.assertIn("extractionPreview", extraction_ui)
+        self.assertIn("Decision needed", assistant)
+        self.assertIn("Finalize Schema", assistant)
+        self.assertIn("Preview", assistant)
+        self.assertIn("JSON", assistant)
+        self.assertIn("Regenerate schema", assistant)
+        self.assertIn('data-action="finalize-and-run-extraction"', assistant)
+        self.assertIn('data-act="open-preview"', assistant)
+        self.assertIn('data-act="schema-json"', assistant)
+        self.assertNotIn('data-action="edit-schema"', extraction_ui + assistant)
+        self.assertNotIn('data-action="run-extraction"', extraction_ui + assistant)
 
     def test_same_project_chat_and_actions_preserve_visible_step_and_tab(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
