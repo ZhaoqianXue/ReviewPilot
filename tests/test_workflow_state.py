@@ -278,8 +278,8 @@ class WorkflowStateTests(unittest.TestCase):
             ACTION_STAGES,
             {
                 "collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "retry-failed-downloads": "retrieval",
-                "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction",
-                "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization",
+                "generate-schema": "extraction", "regenerate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction",
+                "run-extraction": "extraction", "finalize-and-run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization",
             },
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -292,6 +292,22 @@ class WorkflowStateTests(unittest.TestCase):
             state = complete_action(project, "generate-schema", {"field_count": 7})
             self.assertEqual(state["stages"]["extraction"]["status"], "ready")
             self.assertEqual(state["stages"]["extraction"]["counts"], {"field_count": 7})
+
+    def test_composite_schema_actions_have_ready_and_terminal_extraction_semantics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            initialize_workflow_state(project)
+            for action in ("collect", "screen", "download-pdfs"):
+                start_action(project, action)
+                complete_action(project, action, _terminal_result(action))
+            start_action(project, "regenerate-schema")
+            ready = complete_action(project, "regenerate-schema", {"field_count": 4})
+            self.assertEqual(ready["stages"]["extraction"]["status"], "ready")
+            start_action(project, "finalize-and-run-extraction")
+            done = complete_action(project, "finalize-and-run-extraction", {"processed": 2, "errors": 1})
+
+        self.assertEqual(done["stages"]["extraction"]["status"], "partial")
+        self.assertEqual(done["stages"]["extraction"]["counts"], {"succeeded": 2, "failed": 1})
 
     def test_failed_attempt_preserves_last_valid_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:

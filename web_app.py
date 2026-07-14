@@ -449,7 +449,7 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "finalize-schema", "edit-schema", "run-extraction", "preview-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -468,7 +468,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             lambda: run_project_preview(project_path, index, llm_query=llm_query),
             metadata={"paper_index": index},
         )
-    action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
+    action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "regenerate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "finalize-and-run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
     confirmation = input_data.get("overwrite_confirmation") if isinstance(input_data, dict) and isinstance(input_data.get("overwrite_confirmation"), dict) else {}
     if confirmation:
         input_data = {key: value for key, value in input_data.items() if key != "overwrite_confirmation"}

@@ -25,6 +25,71 @@ def ledger_through(project: Path, stage: str) -> None:
 
 
 class LeadAgentTests(unittest.TestCase):
+    def test_finalize_and_run_extraction_finalizes_then_invokes_existing_extraction_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            ledger_through(project, "retrieval")
+            (project / "search_conditions.json").write_text(json.dumps({"project_name": "Demo"}), encoding="utf-8")
+            (project / "filtered").mkdir(parents=True)
+            (project / "filtered" / "included_papers.jsonl").write_text(json.dumps({"id": "p1", "title": "Paper A"}) + "\n", encoding="utf-8")
+            (project / "filtered" / "screening_stats.json").write_text(json.dumps({"included": 1}), encoding="utf-8")
+            (project / "pdfs").mkdir(parents=True)
+            (project / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}), encoding="utf-8")
+            save_schema_draft(project, {"fields": [{"name": "methods", "type": "Text"}]})
+            (project / "prompts").mkdir(parents=True)
+            (project / "prompts" / "extraction_prompt.json").write_text(json.dumps({"extraction_prompt": "draft"}), encoding="utf-8")
+            (project / "extraction" / "extraction_prompt.json").write_text(json.dumps({"extraction_prompt": "draft"}), encoding="utf-8")
+            calls = []
+
+            class Adapter:
+                class Contract:
+                    agent_name = "ExtractionAgent"; stage = "extraction"; model = "gpt-5.4-mini"
+                def contract_for(self, action): return self.Contract()
+                def run(self, action, output_root, project_id, **kwargs):
+                    calls.append(action)
+                    (project / "extraction" / "extraction_results.jsonl").write_text(json.dumps({"paper_id": "p1", "methods": "Survey"}) + "\n", encoding="utf-8")
+                    return {"processed": 1, "errors": 0}
+
+            result = LeadAgent(root, workflow_adapter=Adapter(), llm_query=lambda **kwargs: (json.dumps({"reply": "Extraction complete."}), {})).handle_message(
+                project_id="demo", action="finalize-and-run-extraction"
+            )
+            marker_exists = (project / "extraction" / "schema_finalized.json").exists()
+
+        self.assertEqual(calls, ["run-extraction"])
+        self.assertTrue(marker_exists)
+        self.assertEqual(result.data["processed"], 1)
+
+    def test_regenerate_schema_reopens_finalized_schema_and_invokes_schema_generator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project = root / "demo"
+            ledger_through(project, "screening")
+            (project / "search_conditions.json").write_text(json.dumps({"project_name": "Demo"}), encoding="utf-8")
+            (project / "filtered").mkdir(parents=True)
+            (project / "filtered" / "included_papers.jsonl").write_text(json.dumps({"id": "p1", "title": "Paper A"}) + "\n", encoding="utf-8")
+            (project / "filtered" / "screening_stats.json").write_text(json.dumps({"included": 1}), encoding="utf-8")
+            save_schema_draft(project, {"fields": [{"name": "old", "type": "Text"}]})
+            finalize_schema(project)
+            calls = []
+
+            class Adapter:
+                class Contract:
+                    agent_name = "PromptAgent"; stage = "prompt_extraction"; model = "gpt-5.4-mini"
+                def contract_for(self, action): return self.Contract()
+                def run(self, action, output_root, project_id, **kwargs):
+                    calls.append(action)
+                    save_schema_draft(project, {"fields": [{"name": "new", "type": "Text"}]})
+                    (project / "prompts").mkdir(parents=True, exist_ok=True)
+                    (project / "prompts" / "extraction_prompt.json").write_text(json.dumps({"extraction_prompt": "new"}), encoding="utf-8")
+                    (project / "extraction" / "extraction_prompt.json").write_text(json.dumps({"extraction_prompt": "new"}), encoding="utf-8")
+                    return {"field_count": 1}
+
+            result = LeadAgent(root, workflow_adapter=Adapter()).handle_message(project_id="demo", action="regenerate-schema")
+            marker_exists = (project / "extraction" / "schema_finalized.json").exists()
+
+        self.assertEqual(calls, ["generate-schema"])
+        self.assertFalse(marker_exists)
+        self.assertEqual(result.data["field_count"], 1)
     def test_partial_and_failed_replies_are_deterministic_and_do_not_ask_the_llm_to_classify_outcomes(self):
         def forbidden_llm(**_kwargs):
             raise AssertionError("outcome replies must not use the LLM")

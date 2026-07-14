@@ -221,6 +221,14 @@ Return ONLY valid JSON:
             artifacts.extend(self._verify_stage_artifacts(project_path, "prompt_extraction"))
             return self._action_result(project_path, "prompt_extraction", result, artifacts, action="generate-schema")
 
+        if action == "regenerate-schema":
+            self._require_completed_stage(project_path, action, "filtering")
+            if is_schema_finalized(project_path):
+                save_schema_draft(project_path, load_schema_draft(project_path))
+            result = self._call_workflow_action("generate-schema", project_id)
+            artifacts.extend(self._verify_stage_artifacts(project_path, "prompt_extraction"))
+            return self._action_result(project_path, "prompt_extraction", result, artifacts, action="generate-schema")
+
         if action == "finalize-schema":
             self._verify_stage_artifacts(project_path, "prompt_extraction")
             result = finalize_schema(project_path)
@@ -256,6 +264,16 @@ Return ONLY valid JSON:
             if not is_schema_finalized(project_path):
                 raise ValueError("Action 'run-extraction' requires finalized extraction schema")
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
+            result = self._call_workflow_action("run-extraction", project_id)
+            artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
+            return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")
+
+        if action == "finalize-and-run-extraction":
+            self._require_completed_stage(project_path, action, "download")
+            self._verify_stage_artifacts(project_path, "prompt_extraction")
+            finalize_schema(project_path)
+            artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
+            artifacts.append(str(schema_paths(project_path)["finalized"]))
             result = self._call_workflow_action("run-extraction", project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
             return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")

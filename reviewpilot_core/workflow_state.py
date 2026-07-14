@@ -21,21 +21,25 @@ ACTION_STAGES = {
     "download-pdfs": "retrieval",
     "retry-failed-downloads": "retrieval",
     "generate-schema": "extraction",
+    "regenerate-schema": "extraction",
     "finalize-schema": "extraction",
     "edit-schema": "extraction",
     "run-extraction": "extraction",
+    "finalize-and-run-extraction": "extraction",
     "suggest-categories": "categorization",
     "categorize": "categorization",
 }
-_READY_ACTIONS = {"generate-schema", "finalize-schema", "edit-schema", "suggest-categories"}
+_READY_ACTIONS = {"generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "suggest-categories"}
 _ACTION_PREREQUISITES = {
     "screen": "collection",
     "download-pdfs": "screening",
     "retry-failed-downloads": "screening",
     "generate-schema": "screening",
+    "regenerate-schema": "screening",
     "finalize-schema": "screening",
     "edit-schema": "screening",
     "run-extraction": "retrieval",
+    "finalize-and-run-extraction": "retrieval",
     "suggest-categories": "extraction",
     "categorize": "extraction",
 }
@@ -118,7 +122,7 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         is_rerun = stage["last_valid"] is not None
         result = result or {}
         status, outcome_counts = structured_action_outcome(action, result)
-        counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction"} else _counts(result)
+        counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction", "finalize-and-run-extraction"} else _counts(result)
         if action in _READY_ACTIONS:
             status = "ready"
         error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
@@ -173,7 +177,7 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
         success = _consistent_count(result, nested, ("success", "successful"), "retrieval success")
         succeeded = success
         counts = {"succeeded": succeeded, "failed": failed}
-    elif action == "run-extraction":
+    elif action in {"run-extraction", "finalize-and-run-extraction"}:
         failed = _consistent_count(result, nested, ("errors", "failed"), "extraction errors")
         processed = _consistent_count(result, nested, ("processed", "success"), "extraction processed")
         succeeded = processed
