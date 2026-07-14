@@ -367,6 +367,39 @@ class StateProjectionTests(unittest.TestCase):
             data["history"][0]["items"][0],
             {"id": "", "title": "Untitled review", "active": True, "isNewProject": True},
         )
+        self.assertEqual(
+            [
+                (item["title"], item.get("starterTopic"))
+                for item in data["history"][0]["items"][1:]
+            ],
+            [
+                ("LLM for Biomedical", "I want to review how LLMs are used in biomedical research and clinical care."),
+                ("LLM for HCI", "I want to review how LLMs are changing human-computer interaction."),
+                ("LLM for Urban", "I want to review how LLMs support urban planning and smart cities."),
+            ],
+        )
+
+    def test_missing_quick_start_project_remains_visible_as_a_startable_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            write_json(output_root / "inner-beta-biomedicine-r7" / "search_conditions.json", {"project_name": "inner-beta-biomedicine-r7"})
+            write_json(output_root / "inner-beta-hci-r3" / "search_conditions.json", {"project_name": "inner-beta-hci-r3"})
+
+            data = build_rp_data(output_root, "inner-beta-hci-r3")
+
+        items = data["history"][0]["items"]
+        self.assertEqual([item["title"] for item in items[1:]], ["LLM for Biomedical", "LLM for HCI", "LLM for Urban"])
+        self.assertEqual(items[1]["id"], "inner-beta-biomedicine-r7")
+        self.assertEqual(items[2]["id"], "inner-beta-hci-r3")
+        self.assertEqual(
+            items[3],
+            {
+                "id": "",
+                "title": "LLM for Urban",
+                "active": False,
+                "starterTopic": "I want to review how LLMs support urban planning and smart cities.",
+            },
+        )
 
     def test_demo_history_limits_sidebar_to_new_and_three_showcase_directions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -499,7 +532,11 @@ class StateProjectionTests(unittest.TestCase):
             data = build_rp_data(output_root, "alpha")
 
         history_items = data["history"][0]["items"]
-        self.assertEqual(history_items, [{"id": "", "title": "Untitled review", "active": False, "isNewProject": True}])
+        self.assertEqual(
+            [item["title"] for item in history_items],
+            ["Untitled review", "LLM for Biomedical", "LLM for HCI", "LLM for Urban"],
+        )
+        self.assertTrue(all(item.get("starterTopic") for item in history_items[1:]))
 
     def test_canvas_action_chat_messages_render_as_activity_not_chat_bubbles(self):
         with tempfile.TemporaryDirectory() as tmp:

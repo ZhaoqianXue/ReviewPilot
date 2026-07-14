@@ -289,10 +289,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);
     const authoritativeActiveTask = D.activeTask;
     const authoritativeRetrievalRecovery = D.retrievalRecovery;
+    const authoritativeHistory = D.history;
     if (shouldRestoreSnapshotData) {
       D = migrateWorkspaceSnapshotData(snapshot.data);
       D.activeTask = authoritativeActiveTask;
       D.retrievalRecovery = authoritativeRetrievalRecovery;
+      D.history = authoritativeHistory;
     }
     MAX = maxPlatformValue(D.platforms);
 
@@ -1217,8 +1219,12 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     const activeStyle = h.active ? 'background:#eaf0f7;' : 'transition:background .12s ease;';
     const icon = h.active ? 'ph-fill ph-chat-circle' : 'ph ph-chat-circle';
     const color = h.active ? '#1a365d' : '#9aa39b';
-    const actionAttrs = h.isNewProject ? `data-act="new-project"` : (h.id ? `data-act="project" data-project="${h.id}"` : '');
-    const clickable = h.isNewProject || h.id;
+    const actionAttrs = h.isNewProject
+      ? `data-act="new-project"`
+      : (h.id
+        ? `data-act="project" data-project="${h.id}"`
+        : (h.starterTopic ? `data-act="history-quick-start" data-topic="${h.starterTopic}"` : ''));
+    const clickable = h.isNewProject || h.id || h.starterTopic;
     return `<div ${actionAttrs} style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;cursor:${clickable ? 'pointer' : 'default'};${activeStyle}" data-hover="background:#eef4fb;">
       <i class="${icon}" style="font-size:15px;color:${color};flex:0 0 auto;"></i>
       <span style="font-size:13px;letter-spacing:-0.01em;color:${h.active ? '#1a365d' : '#1a1a1a'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.title}</span>
@@ -1834,6 +1840,15 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
         setData(newProjectDataWithCurrentHistory(), true);
         state.dialog = '';
         state.chatInputFocus = true;
+      }
+      else if (act === 'history-quick-start') {
+        const topic = t.getAttribute('data-topic') || '';
+        setData(newProjectDataWithCurrentHistory(), true);
+        state.dialog = '';
+        const pending = handleChatSubmit(topic);
+        paint();
+        pending.then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        return;
       }
       else if (act === 'starter-topic') {
         const topic = t.getAttribute('data-topic') || '';

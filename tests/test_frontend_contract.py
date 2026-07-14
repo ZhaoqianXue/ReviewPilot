@@ -129,16 +129,25 @@ class FrontendContractTests(unittest.TestCase):
     def test_sidebar_uses_historys_and_keeps_new_review_in_history(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         project_nav_item = source[source.index("function projectNavItem") : source.index("function workspaceHeader")]
+        click_router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
+        restore_snapshot = source[source.index("function restoreWorkspaceSnapshot") : source.index("function shouldRestoreSnapshotDataForRoute")]
 
         self.assertIn("label: 'Historys'", source)
         self.assertIn('data-ui="history-label"', source)
         self.assertNotIn('data-ui="history-label" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase', source)
         self.assertNotIn(">PROJECTS</div>", source)
         self.assertIn("historyGroupsForView(D.history)", source)
-        self.assertIn("h.isNewProject ? `data-act=\"new-project\"`", project_nav_item)
+        self.assertIn('? `data-act="new-project"`', project_nav_item)
         self.assertIn("h.isNewProject", project_nav_item)
         self.assertIn("title: 'Untitled review'", source)
         self.assertIn("const icon = h.active ? 'ph-fill ph-chat-circle' : 'ph ph-chat-circle';", project_nav_item)
+        self.assertIn('data-act="history-quick-start"', project_nav_item)
+        self.assertIn("h.starterTopic", project_nav_item)
+        self.assertIn("act === 'history-quick-start'", click_router)
+        self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", click_router)
+        self.assertIn("const pending = handleChatSubmit(topic);", click_router)
+        self.assertIn("const authoritativeHistory = D.history;", restore_snapshot)
+        self.assertIn("D.history = authoritativeHistory;", restore_snapshot)
         self.assertNotIn("ph-plus-circle", project_nav_item)
         self.assertNotIn("title: D.project.title || 'Untitled review'", source)
 

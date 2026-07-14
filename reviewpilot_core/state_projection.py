@@ -1459,6 +1459,14 @@ def _demo_history_project_items(output_root: Path, active_project_id: str) -> li
     for direction in DEMO_HISTORY_DIRECTIONS:
         match = _best_demo_project(projects, direction, used_ids)
         if not match:
+            selected.append(
+                {
+                    "id": "",
+                    "title": str(direction["label"]),
+                    "active": False,
+                    "starterTopic": str(direction["starter_topic"]),
+                }
+            )
             continue
         used_ids.add(match["id"])
         selected.append(
