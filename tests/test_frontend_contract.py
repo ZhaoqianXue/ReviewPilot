@@ -595,6 +595,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("Run Extraction", extraction_canvas)
         self.assertIn("schemaActionDisabled", extraction_canvas)
         self.assertIn("schemaActionPendingStyle", extraction_canvas)
+        self.assertIn("wb.status === 'missing'", extraction_canvas)
+        actions = extraction_canvas[extraction_canvas.index("const schemaActions") :]
+        missing_branch = actions[actions.index("wb.status === 'missing'") : actions.index("wb.status === 'finalized'")]
+        self.assertIn('data-action="generate-schema"', missing_branch)
+        self.assertIn("Generate Schema", missing_branch)
+        self.assertNotIn('data-action="finalize-schema"', missing_branch)
 
     def test_same_project_chat_and_actions_preserve_visible_step_and_tab(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")

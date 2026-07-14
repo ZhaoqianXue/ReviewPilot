@@ -308,7 +308,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "activityByStep": _activity_by_step(path, collected_summary, screening_stats, included, download_report, fields, categorization, workflow_state, workflow_notices),
         "quietLabels": _quiet_labels(path, workflow_state),
         "quietActions": _quiet_actions(path, workflow_state),
-        "ctxLabels": _ctx_labels(current_step),
+        "ctxLabels": _ctx_labels(current_step, has_schema=bool(fields)),
         "history": _history(root, project_id),
     }
 
@@ -1425,12 +1425,18 @@ def _platform_error_activity(platform_errors: dict) -> list[dict[str, str]]:
     ]
 
 
-def _ctx_labels(current_step: int) -> dict:
+def _ctx_labels(current_step: int, *, has_schema: bool) -> dict:
+    if current_step < 4:
+        extraction = "Waiting"
+    elif not has_schema:
+        extraction = "Ready to generate schema"
+    else:
+        extraction = "Schema ready for review"
     labels = {
         "search": "Ready",
         "screening": "Ready",
         "retrieval": "Ready",
-        "extraction": "Schema ready for review" if current_step >= 4 else "Waiting",
+        "extraction": extraction,
         "categorize": "Ready for analysis" if current_step >= 5 else "Waiting",
     }
     return labels

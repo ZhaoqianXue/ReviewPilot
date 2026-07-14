@@ -1407,9 +1407,11 @@ ${v.showKeywordDialog ? keywordDialog(v) : ''}
     const schemaActionDisabled = state.actionPending ? 'disabled' : '';
     const schemaActionPendingStyle = state.actionPending ? ';opacity:.72;cursor:wait;' : '';
     const schemaActions = v.isNewProject ? '' : (
-      wb.status === 'finalized'
-        ? `<button data-act="action" data-action="edit-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-pencil-simple" style="font-size:14px;"></i>Edit Schema</button><button data-act="action" data-action="run-extraction" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-play-circle" style="font-size:13px;"></i>Run Extraction</button>`
-        : `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button><button data-act="action" data-action="finalize-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Finalize Schema</button>`
+      wb.status === 'missing'
+        ? `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-sparkle" style="font-size:13px;"></i>Generate Schema</button>`
+        : wb.status === 'finalized'
+          ? `<button data-act="action" data-action="edit-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-pencil-simple" style="font-size:14px;"></i>Edit Schema</button><button data-act="action" data-action="run-extraction" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-play-circle" style="font-size:13px;"></i>Run Extraction</button>`
+          : `<button data-act="action" data-action="generate-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-arrows-clockwise" style="font-size:13px;"></i>Regenerate</button><button data-act="action" data-action="finalize-schema" ${schemaActionDisabled} style="${buttonStyle}${schemaActionPendingStyle}"><i class="ph ph-check-circle" style="font-size:13px;"></i>Finalize Schema</button>`
     );
     return `<div style="display:flex;align-items:center;gap:4px;border-bottom:1px solid #eef0ee;margin-bottom:2px;">
         ${v.isFieldsTab ? `<span style="font-size:13px;color:#1a365d;padding:9px 12px;border-bottom:2px solid #1a365d;margin-bottom:-1px;cursor:pointer;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></span>` : ''}

@@ -130,6 +130,16 @@ class SetupRevisionTests(unittest.TestCase):
         self.assertEqual(projected["steps"][0]["status"], "stale")
         self.assertEqual(projected["steps"][0]["sub"], "Needs rerun")
 
+    def test_retrieval_completion_without_schema_invites_generation_not_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); project, _config = self._project(root)
+            start_action(project, "screen"); complete_action(project, "screen", {"included": 1, "excluded": 0})
+            start_action(project, "download-pdfs"); complete_action(project, "download-pdfs", {"success": 1, "failed": 0})
+            projected = build_rp_data(root, "demo")
+        self.assertEqual(projected["schemaWorkbench"]["status"], "missing")
+        self.assertEqual(projected["schemaWorkbench"]["primary_action"], "Generate Schema")
+        self.assertEqual(projected["ctxLabels"]["extraction"], "Ready to generate schema")
+
     def test_fresh_schema_after_stale_extraction_is_reviewable_without_old_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); project, _ = self._project(root)
