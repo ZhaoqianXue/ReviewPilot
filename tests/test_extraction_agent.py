@@ -10,6 +10,48 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 
 
 class ExtractionAgentTests(unittest.TestCase):
+    def test_extract_one_uses_production_pdf_path_without_writing_formal_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            pdf_path = project_dir / "pdfs" / "row1_paper.pdf"
+            pdf_path.parent.mkdir(parents=True)
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            paper = {"id": "p1", "title": "Paper A", "source": "pubmed", "pdf_path": str(pdf_path), "pdf_downloaded": True}
+            prompt = {"system_prompt": "Return JSON.", "user_prompt_template": "Extract:\n{paper_text}"}
+            agent = ExtractionAgent(
+                project_dir,
+                llm_query=lambda **kwargs: (json.dumps({"methods": "Survey"}), {"total_tokens": 1}),
+                pdf_reader=lambda path: "paper text",
+            )
+
+            row = agent.extract_one(
+                paper=paper,
+                row_number=1,
+                extraction_prompt=prompt,
+                pdf_folder=project_dir / "pdfs",
+                pdf_files=[pdf_path],
+            )
+
+        self.assertEqual(row["extraction_status"], "success")
+        self.assertEqual(row["extraction_source"], "pdf")
+        self.assertEqual(row["methods"], "Survey")
+        self.assertFalse((project_dir / "extraction" / "extraction_results.jsonl").exists())
+        self.assertFalse((project_dir / "extraction" / "extraction_stats.json").exists())
+
+    def test_extract_one_supports_production_web_search_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            paper = {"id": "p1", "title": "Paper A", "web_search_fallback_pending": True, "pdf_downloaded": False}
+            agent = ExtractionAgent(
+                project_dir,
+                web_search_query=lambda **kwargs: ({"methods": "Public evidence", "source_urls": ["https://example.test/a"]}, {}),
+            )
+            row = agent.extract_one(paper=paper, row_number=1, extraction_prompt={}, pdf_folder=project_dir / "pdfs", pdf_files=[])
+
+        self.assertEqual(row["extraction_status"], "success")
+        self.assertEqual(row["extraction_source"], "web_search_fallback")
+        self.assertEqual(row["methods"], "Public evidence")
+
     def test_one_shot_writer_failure_rolls_back_pdf_and_web_results(self):
         for source in ("pdf", "web"):
             with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:

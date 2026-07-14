@@ -2,9 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from reviewpilot_core.extraction_preview import (
     project_preview_projection,
+    run_project_preview,
     schema_revision,
     write_preview_cache,
 )
@@ -101,6 +103,36 @@ class ExtractionPreviewProjectionTests(unittest.TestCase):
     def test_schema_revision_is_canonical(self):
         reordered = {"fields": [dict(reversed(list(field.items()))) for field in self.schema["fields"]]}
         self.assertEqual(schema_revision(self.schema), schema_revision(reordered))
+
+    def test_run_project_preview_writes_revision_scoped_cache_without_formal_artifacts(self):
+        pdf = self.project / "pdfs" / "row1_paper.pdf"
+        pdf.parent.mkdir(parents=True)
+        pdf.write_bytes(b"%PDF-1.4\n")
+        papers = [{"id": "p1", "title": "Paper A", "source": "pubmed", "pdf_path": str(pdf), "pdf_downloaded": True}]
+        write_jsonl(self.project / "filtered" / "included_papers.jsonl", papers)
+
+        result = run_project_preview(
+            self.project,
+            0,
+            llm_query=lambda **kwargs: (json.dumps({"methods": "Survey"}), {"total_tokens": 1}),
+            pdf_reader=lambda path: "paper text",
+        )
+
+        self.assertEqual(result, {"status": "preview_ready", "paper_index": 0, "total": 1})
+        self.assertEqual(project_preview_projection(self.project, 0)["fields"][0]["value"], "Survey")
+        self.assertFalse((self.project / "extraction" / "extraction_results.jsonl").exists())
+        self.assertFalse((self.project / "extraction" / "extraction_stats.json").exists())
+
+    def test_schema_change_during_preview_prevents_cache_publication(self):
+        with patch("reviewpilot_core.extraction_preview.ExtractionAgent.extract_one") as extract:
+            def mutate(**kwargs):
+                changed = {"fields": [{"name": "different", "type": "Text"}]}
+                write_json(self.project / "extraction" / "extraction_schema_draft.json", changed)
+                return {"paper_id": "p1", "methods": "stale", "extraction_status": "success"}
+            extract.side_effect = mutate
+            with self.assertRaisesRegex(ValueError, "schema changed"):
+                run_project_preview(self.project, 0)
+        self.assertFalse((self.project / "extraction" / "schema_preview.json").exists())
 
 
 if __name__ == "__main__":

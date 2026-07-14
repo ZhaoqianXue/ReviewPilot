@@ -140,78 +140,30 @@ class ExtractionAgent(BaseAgent):
         with atomic_output_path(output_file) as pending_output:
             for i, paper_meta in enumerate(papers, start=1):
                 show_progress(i, len(papers), prefix="  Extracting")
-
-                if paper_meta.get("web_search_fallback_pending") and not paper_meta.get("pdf_downloaded"):
-                    try:
-                        result, cost = self._extract_with_web_search_fallback(
-                            paper=paper_meta,
-                            row_number=i,
-                            extraction_prompt=extraction_prompt,
-                            web_search_query=active_web_search_query,
-                        )
-                    except Exception as e:
-                        self.log(f"Web-search fallback failed for row {i}: {e}", "error")
-                        result = self._web_search_error_record(paper_meta, i, str(e))
-                        append_jsonl(str(pending_output), result)
-                        errors += 1
-                        pending_web_search_fallback += 1
-                    else:
-                        append_jsonl(str(pending_output), result)
-                        processed += 1
-                        web_search_fallback += 1
-                        total_cost += cost
-                    continue
-
-                pdf_file = self._pdf_for_paper(i, paper_meta, pdf_folder, pdf_files)
-                if pdf_file is None:
-                    append_jsonl(str(pending_output), self._error_record(paper_meta, i, "PDF file not found"))
-                    errors += 1
-                    continue
-
-                try:
-                    # Read PDF
-                    pdf_text = active_pdf_reader(pdf_file) if active_pdf_reader else self._read_pdf(pdf_file)
-
-                    if not pdf_text:
-                        self.log(f"Could not extract text from {pdf_file.name}", "warning")
-                        result = self._error_record(paper_meta, i, "Could not extract text from PDF", pdf_file)
-                    else:
-                        extracted, cost = self._extract_with_llm(
-                            pdf_text, system_prompt, user_template, active_llm_query
-                        )
-                        total_cost += cost
-                        extracted_data = self._parse_extracted_data(extracted)
-                        result = {
-                            "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
-                            "source": paper_meta.get("source", "unknown") if paper_meta else "unknown",
-                            "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
-                            "pdf_file": pdf_file.name,
-                            "row_number": i,
-                            "extracted_at": datetime.now().isoformat(),
-                            "extraction_model": self.model,
-                            "extraction_cost_usd": cost,
-                            "extracted_data": extracted_data,
-                            "extraction_source": "pdf",
-                            "extraction_status": "success",
-                            **extracted_data,
-                        }
-
-                except Exception as e:
-                    self.log(f"Error processing {pdf_file.name}: {e}", "error")
-                    result = {
-                        "paper_id": paper_meta.get("id", "unknown") if paper_meta else "unknown",
-                        "title": paper_meta.get("title", pdf_file.stem) if paper_meta else pdf_file.stem,
-                        "pdf_file": pdf_file.name,
-                        "row_number": i,
-                        "extracted_at": datetime.now().isoformat(),
-                        "extraction_status": "error",
-                        "error_message": str(e)
-                    }
+                result = self.extract_one(
+                    paper=paper_meta,
+                    row_number=i,
+                    extraction_prompt={
+                        **extraction_prompt,
+                        "system_prompt": system_prompt,
+                        "user_prompt_template": user_template,
+                    },
+                    pdf_folder=pdf_folder,
+                    pdf_files=pdf_files,
+                    llm_query=active_llm_query,
+                    pdf_reader=active_pdf_reader,
+                    web_search_query=active_web_search_query,
+                )
                 append_jsonl(str(pending_output), result)
                 if result["extraction_status"] == "success":
                     processed += 1
+                    total_cost += float(result.get("extraction_cost_usd") or 0)
+                    if result.get("extraction_source") == "web_search_fallback":
+                        web_search_fallback += 1
                 else:
                     errors += 1
+                    if paper_meta.get("web_search_fallback_pending") and not paper_meta.get("pdf_downloaded"):
+                        pending_web_search_fallback += 1
 
         print()  # New line after progress
 
@@ -263,6 +215,67 @@ class ExtractionAgent(BaseAgent):
                 except json.JSONDecodeError:
                     continue
         return {}
+
+    def extract_one(
+        self,
+        *,
+        paper: Dict[str, Any],
+        row_number: int,
+        extraction_prompt: Dict[str, Any],
+        pdf_folder: Path,
+        pdf_files: List[Path],
+        llm_query=None,
+        pdf_reader=None,
+        web_search_query=None,
+    ) -> Dict[str, Any]:
+        """Extract one paper without writing formal extraction artifacts."""
+        active_llm_query = llm_query or self.llm_query
+        active_pdf_reader = pdf_reader or self.pdf_reader
+        active_web_search_query = web_search_query or self.web_search_query
+        if paper.get("web_search_fallback_pending") and not paper.get("pdf_downloaded"):
+            try:
+                result, _cost = self._extract_with_web_search_fallback(
+                    paper=paper,
+                    row_number=row_number,
+                    extraction_prompt=extraction_prompt,
+                    web_search_query=active_web_search_query,
+                )
+                return result
+            except Exception as exc:
+                self.log(f"Web-search fallback failed for row {row_number}: {exc}", "error")
+                return self._web_search_error_record(paper, row_number, str(exc))
+
+        pdf_file = self._pdf_for_paper(row_number, paper, Path(pdf_folder), pdf_files)
+        if pdf_file is None:
+            return self._error_record(paper, row_number, "PDF file not found")
+        try:
+            text = active_pdf_reader(pdf_file) if active_pdf_reader else self._read_pdf(pdf_file)
+            if not text:
+                self.log(f"Could not extract text from {pdf_file.name}", "warning")
+                return self._error_record(paper, row_number, "Could not extract text from PDF", pdf_file)
+            if active_llm_query is None and self.client is None:
+                self._init_client()
+            system_prompt = extraction_prompt.get("system_prompt", "You are an expert academic paper analyst.")
+            user_template = extraction_prompt.get("user_prompt_template") or f"{extraction_prompt.get('extraction_prompt', 'Summarize this paper.')}\n\nPAPER CONTENT:\n{{paper_text}}"
+            extracted, cost = self._extract_with_llm(text, system_prompt, user_template, active_llm_query)
+            extracted_data = self._parse_extracted_data(extracted)
+            return {
+                "paper_id": paper.get("id", "unknown"),
+                "source": paper.get("source", "unknown"),
+                "title": paper.get("title", pdf_file.stem),
+                "pdf_file": pdf_file.name,
+                "row_number": row_number,
+                "extracted_at": datetime.now().isoformat(),
+                "extraction_model": self.model,
+                "extraction_cost_usd": cost,
+                "extracted_data": extracted_data,
+                "extraction_source": "pdf",
+                "extraction_status": "success",
+                **extracted_data,
+            }
+        except Exception as exc:
+            self.log(f"Error processing {pdf_file.name}: {exc}", "error")
+            return self._error_record(paper, row_number, str(exc), pdf_file)
 
     def _pdf_for_paper(self, row_number: int, paper: Dict[str, Any], pdf_folder: Path, pdf_files: List[Path]) -> Path | None:
         if paper.get("pdf_path") and Path(str(paper["pdf_path"])).exists():

@@ -7,8 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agents.extraction_agent import ExtractionAgent
+
 from .atomic_files import atomic_write_json
-from .extraction_schema import load_schema_draft, normalize_schema
+from .extraction_schema import build_extraction_prompts, load_schema_draft, normalize_schema
 from .project_store import read_json, read_jsonl
 from .safe_text import safe_display_text
 
@@ -114,6 +116,57 @@ def empty_preview_projection() -> dict[str, Any]:
         "source": "",
         "error": "",
     }
+
+
+def draft_extraction_prompt(project: Path, schema: dict[str, Any]) -> dict[str, Any]:
+    config = read_json(Path(project) / "search_conditions.json", {}) or {}
+    system_prompt, extraction_prompt, user_prompt_template = build_extraction_prompts(config, schema)
+    return {
+        "system_prompt": system_prompt,
+        "extraction_prompt": extraction_prompt,
+        "user_prompt_template": user_prompt_template,
+        "schema": normalize_schema(schema),
+        "source": "schema_preview",
+    }
+
+
+def run_project_preview(
+    project: Path,
+    index: int,
+    *,
+    llm_query=None,
+    pdf_reader=None,
+    web_search_query=None,
+) -> dict[str, Any]:
+    project = Path(project)
+    if isinstance(index, bool) or not isinstance(index, int):
+        raise ValueError("paper index must be an integer")
+    papers = read_jsonl(project / "filtered" / "included_papers.jsonl")
+    if index < 0 or index >= len(papers):
+        raise ValueError("paper index is out of range")
+    schema = load_schema_draft(project)
+    if not schema.get("fields"):
+        raise ValueError("extraction schema is required for preview")
+    revision = schema_revision(schema)
+    prompt = draft_extraction_prompt(project, schema)
+    pdf_folder = project / "pdfs"
+    row = ExtractionAgent(
+        project,
+        llm_query=llm_query,
+        pdf_reader=pdf_reader,
+        web_search_query=web_search_query,
+    ).extract_one(
+        paper=papers[index],
+        row_number=index + 1,
+        extraction_prompt=prompt,
+        pdf_folder=pdf_folder,
+        pdf_files=sorted(pdf_folder.glob("*.pdf")),
+    )
+    current_schema = load_schema_draft(project)
+    if schema_revision(current_schema) != revision:
+        raise ValueError("extraction schema changed while preview was running")
+    write_preview_cache(project, schema, paper_key(papers[index], index), row)
+    return {"status": "preview_ready", "paper_index": index, "total": len(papers)}
 
 
 def _formal_row(project: Path, paper: dict[str, Any], index: int) -> dict[str, Any] | None:
