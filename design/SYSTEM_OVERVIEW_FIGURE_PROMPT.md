@@ -14,7 +14,7 @@ Nature Communications is a multidisciplinary journal: reviewers may come from bi
 - Spell out "large language model (LLM)" once; after that "LLM" is fine.
 - Frame the workflow as mirroring a human-conducted systematic review (identification → screening → full-text retrieval → data extraction → synthesis). Reviewers who know PRISMA should recognize the logic instantly.
 
-Ground the facts in this repository (`design/LEAD_AGENT_ARCHITECTURE.md`, `agents/`, `reviewpilot_core/`), but **translate everything into the plain language above** — code names and file names must never appear in the figure.
+Ground the facts in this repository (`design/LEAD_AGENT_ARCHITECTURE.md`, `design/AGENT_SKILL_ARCHITECTURE.md`, `design/AGENT_MEMORY_ARCHITECTURE.md`, `agents/`, `reviewpilot_core/`), but **translate everything into the plain language above** — code names and file names must never appear in the figure. The current figure remains an Agent-and-workflow overview: do not turn the four shared Skills or either Agent Memory layer into additional Agent cards or workflow stages.
 
 ## Canvas
 Nature double-column figure: 183 mm wide, ~120–140 mm tall, white background, single integrated composition.
@@ -43,6 +43,8 @@ Nature double-column figure: 183 mm wide, ~120–140 mm tall, white background, 
 
 **Shared project memory (bottom strip, full width):** a single horizontal band labeled "Shared project memory". Short dashed connectors from every Sub Agent card and from the Lead Agent down to this band. Caption: "every agent saves its results here; the Lead Agent verifies each saved result before the workflow advances".
 
+In this figure, "Shared project memory" is the plain-language label for the current project's authoritative saved review record. It is not the Lead Agent's session memory or the cross-project memory defined in `AGENT_MEMORY_ARCHITECTURE.md`. Do not merge those concepts. A later figure revision may add cross-project memory as a separate Lead-only context source after the runtime is implemented.
+
 **Researcher checkpoints:** small person-icon markers on the flow line at: ① approve search strategy · ④ review screening result · Categorization: review/edit themes. Legend entry: "researcher approval point".
 
 **Revision arrows (thin, distinct color, curving back above the flow line, max 2 to avoid clutter):** "researcher revises the question → back to ①"; "researcher revises criteria → back to ②". Label the pair "researcher-driven revision".
@@ -55,6 +57,7 @@ Nature double-column figure: 183 mm wide, ~120–140 mm tall, white background, 
 
 ## Accuracy checklist (verify before finishing)
 - Exactly **6** Sub-Agent cards; the Prompt Agent appears **once** as a card but carries **two** sequence numbers (② and ⑤).
+- No Skill is drawn as an additional Agent or workflow stage; any future Skill annotation must preserve the four shared capabilities and assignments defined in `AGENT_SKILL_ARCHITECTURE.md`.
 - Workflow order is exactly ①→⑦ as in the table; Categorization & Analysis comes after ⑦ and belongs to the Lead Agent — never drawn as a 7th Sub Agent.
 - The web-evidence fallback is a branch within step ⑦, not a separate step.
 - Not a single banned engineering term or file name appears anywhere in the figure.

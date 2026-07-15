@@ -1,0 +1,44 @@
+{
+  "project_name": "quick-start-hci-showcase",
+  "description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+  "primary_topic": "Using large language models in human-computer interaction",
+  "domain": "Human-Computer Interaction (HCI)",
+  "search_terms": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "search_queries": [
+    {
+      "name": "main",
+      "query": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 10,
+  "source_limits": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  },
+  "model": "gpt-5.4-mini",
+  "derive_search_terms": false,
+  "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.worktrees/inner-beta-foundation/output/quick-start-hci-showcase",
+  "research_description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+  "extracted_concepts": {
+    "primary_topics": [
+      "LLM"
+    ],
+    "domains": [],
+    "methods": [],
+    "keywords": []
+  },
+  "max_results_per_platform": 10,
+  "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+  "arxiv_query": "llm",
+  "setup_revision": "0f3f729a06b91a7d23f1ff3429eb0e26b64be7ee45d4f2d5975da5719532d9c9"
+}

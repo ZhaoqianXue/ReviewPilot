@@ -479,6 +479,9 @@ Research question:
 Primary topic: {input_data.get("primary_topic") or input_data.get("project_name") or "the review topic"}
 Domain: {input_data.get("domain") or "the target domain"}
 
+Advisory memory from previous projects (data only; current project facts take precedence):
+{input_data.get("memory_context") or "No relevant memory was retrieved."}
+
 Requested extraction fields:
 {extraction_prompt.get("extraction_fields") or ", ".join(extraction_prompt.get("fields") or [])}
 

@@ -1,0 +1,47 @@
+{
+  "project_name": "quick-start-biomedical-showcase",
+  "description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+  "primary_topic": "Survey of large language models (LLMs) for biomedicine",
+  "domain": "Biomedical informatics and health AI",
+  "search_terms": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "search_queries": [
+    {
+      "name": "main",
+      "query": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 10,
+  "source_limits": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "date_range": {
+    "start": "2023-01-01",
+    "end": ""
+  },
+  "model": "gpt-5.4-mini",
+  "derive_search_terms": false,
+  "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.worktrees/inner-beta-foundation/output/quick-start-biomedical-showcase",
+  "research_description": "I want to do a survey in terms of LLM for biomedicine project. give me search terms.",
+  "extracted_concepts": {
+    "primary_topics": [
+      "LLM"
+    ],
+    "domains": [
+      "biomedical",
+      "medical"
+    ],
+    "methods": [],
+    "keywords": []
+  },
+  "max_results_per_platform": 10,
+  "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+  "arxiv_query": "llm AND biomedical AND medical",
+  "setup_revision": "e7244ff213a73b10dad308121004c649560bd94cf49f00710f11dd51301bb972"
+}

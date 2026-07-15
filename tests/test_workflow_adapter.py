@@ -332,7 +332,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
                 def run(self, input_data):
                     calls.append(("run", dict(input_data)))
                     project_path = Path(input_data["project_path"])
-                    project_path.mkdir(parents=True)
+                    project_path.mkdir(parents=True, exist_ok=True)
                     search_conditions = {
                         **input_data,
                         "project_name": "Contract Review",
@@ -359,7 +359,8 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             )
             written = read_json(output_root / "contract-review" / "search_conditions.json")
 
-        self.assertEqual(calls[0], ("init", str(output_root), fake_llm_query))
+            self.assertEqual(calls[0][:2], ("init", str(output_root)))
+            self.assertTrue(callable(calls[0][2]))
         self.assertEqual(calls[1][0], "run")
         self.assertEqual(calls[1][1]["project_path"], str(output_root / "contract-review"))
         self.assertEqual(result["status"], "search_setup_done")
@@ -397,6 +398,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
                         "prompt_type": "relevance_check",
                         "task": "Include LLM systems in biomedicine.",
                         "instruction": "Return True or False.",
+                        "system_prompt": "Apply the approved eligibility criteria.",
                     }
                     (self.project_path / "prompts").mkdir(parents=True)
                     (self.project_path / "prompts" / "relevance_prompt.json").write_text(json.dumps(prompt), encoding="utf-8")
@@ -416,6 +418,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "relevance_prompt_generated")
         self.assertEqual(result["prompt_path"], str(project_dir / "prompts" / "relevance_prompt.json"))
         self.assertEqual(prompt["task"], "Include LLM systems in biomedicine.")
+        self.assertIn('<reviewpilot-agent-skill name="evidence-screening"', prompt["system_prompt"])
 
     def test_collection_contract_runs_collection_agent_against_search_conditions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,8 +493,8 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             calls = []
 
             class FakeFilteringAgent:
-                def __init__(self, project_path, model):
-                    calls.append(("init", Path(project_path), model))
+                def __init__(self, project_path, model, llm_query=None):
+                    calls.append(("init", Path(project_path), model, llm_query))
                     self.project_path = Path(project_path)
 
                 def run(self, input_data):
@@ -517,7 +520,8 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             excluded = read_jsonl(project_dir / "filtered" / "excluded_papers.jsonl")
             screening_stats = read_json(project_dir / "filtered" / "screening_stats.json")
 
-        self.assertEqual(calls[0], ("init", project_dir, FILTERING_MODEL))
+        self.assertEqual(calls[0][:3], ("init", project_dir, FILTERING_MODEL))
+        self.assertTrue(callable(calls[0][3]))
         self.assertEqual(calls[1][0], "run")
         self.assertEqual(calls[1][1]["collected_folder"], str(project_dir / "collected"))
         self.assertEqual(calls[1][1]["relevance_prompt"]["system_prompt"], "Return true for relevant papers.")
@@ -594,7 +598,8 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             result = PromptAgentContract(agent_cls=FakePromptAgent).run(output_root, "demo", llm_query=fake_llm_query)
             schema = read_json(project_dir / "extraction" / "extraction_schema.json")
 
-        self.assertEqual(calls[0], ("init", project_dir, PROMPT_MODEL, fake_llm_query))
+        self.assertEqual(calls[0][:3], ("init", project_dir, PROMPT_MODEL))
+        self.assertTrue(callable(calls[0][3]))
         self.assertEqual(calls[1][0], "generate_extraction_prompt")
         self.assertEqual(calls[1][1]["auto_approve"], True)
         self.assertEqual(calls[1][1]["relevance_prompt"]["task"], "Include AI tools in surgery.")
@@ -676,11 +681,16 @@ class WorkflowActionAdapterTests(unittest.TestCase):
 
             result = ExtractionAgentContract(agent_cls=FakeExtractionAgent).run(output_root, "demo", llm_query=fake_llm_query)
 
-        self.assertEqual(calls[0], ("init", project_dir, EXTRACTION_MODEL, fake_llm_query))
+        self.assertEqual(calls[0][:3], ("init", project_dir, EXTRACTION_MODEL))
+        self.assertTrue(callable(calls[0][3]))
         self.assertEqual(calls[1][0], "run")
         self.assertEqual(calls[1][1]["filtered_file"], str(project_dir / "filtered" / "included_papers.jsonl"))
         self.assertEqual(calls[1][1]["download_folder"], str(project_dir / "pdfs"))
         self.assertEqual(calls[1][1]["extraction_prompt"]["prompt_type"], "extraction")
+        self.assertIn(
+            '<reviewpilot-agent-skill name="structured-evidence-extraction"',
+            calls[1][1]["extraction_prompt"]["system_prompt"],
+        )
         self.assertEqual(calls[1][1]["download_report"], {"success": 1, "failed": 0, "downloaded": [{"title": "Paper A"}], "failed_papers": []})
         self.assertEqual(result["status"], "extraction_done")
         self.assertEqual(result["processed"], 1)

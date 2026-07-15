@@ -1,0 +1,4 @@
+interface:
+  display_name: "Structured Evidence Extraction"
+  short_description: "Design schemas and extract source-grounded evidence"
+  default_prompt: "Use $structured-evidence-extraction to design or apply a grounded extraction schema."

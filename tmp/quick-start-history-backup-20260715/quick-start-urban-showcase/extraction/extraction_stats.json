@@ -1,0 +1,11 @@
+{
+  "extracted_at": "2026-07-14T18:50:15.194318",
+  "total_pdfs": 12,
+  "processed": 14,
+  "errors": 0,
+  "web_search_fallback": 2,
+  "pending_web_search_fallback": 0,
+  "total_cost_usd": 0.084338,
+  "model": "gpt-5.4-mini",
+  "output_file": "output/quick-start-urban-showcase/extraction/extraction_results.jsonl"
+}

@@ -1,0 +1,344 @@
+{
+  "search_condition": {
+    "state": {
+      "completed": true,
+      "conditions": {
+        "project_name": "quick-start-urban-showcase",
+        "description": "I want to review how LLMs support urban planning and smart cities.",
+        "primary_topic": "Applications of large language models in urban planning and smart cities",
+        "domain": "Urban planning and smart cities",
+        "search_terms": "(\"large language model\" OR LLM OR \"generative AI\" OR ChatGPT) AND (\"urban planning\" OR \"smart city\" OR \"smart cities\")",
+        "search_queries": [
+          {
+            "name": "main",
+            "query": "(\"large language model\" OR LLM OR \"generative AI\" OR ChatGPT) AND (\"urban planning\" OR \"smart city\" OR \"smart cities\")"
+          }
+        ],
+        "platforms": [
+          "pubmed",
+          "arxiv",
+          "openalex"
+        ],
+        "max_results": 10,
+        "source_limits": {
+          "pubmed": 10,
+          "arxiv": 10,
+          "openalex": 10
+        },
+        "date_range": {
+          "start": "2020-01-01",
+          "end": ""
+        },
+        "model": "gpt-5.4-mini",
+        "derive_search_terms": false,
+        "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.worktrees/inner-beta-foundation/output/quick-start-urban-showcase",
+        "research_description": "I want to review how LLMs support urban planning and smart cities.",
+        "extracted_concepts": {
+          "primary_topics": [
+            "LLM"
+          ],
+          "domains": [],
+          "methods": [],
+          "keywords": []
+        },
+        "max_results_per_platform": 10,
+        "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+        "arxiv_query": "llm"
+      }
+    },
+    "updated_at": "2026-07-14T15:10:12.155281"
+  },
+  "prompt": {
+    "state": {
+      "extraction_prompt": {
+        "system_prompt": "You are an expert academic paper analyst. Extract specific information accurately and comprehensively. If information is not available, indicate 'Not specified'.",
+        "user_prompt_template": "TASK: Extract the following information from the research paper.\n\nFIELDS TO EXTRACT:\ndatasets used, methods, key findings, evaluation metrics\n\nPAPER CONTENT:\n{paper_text}\n\nINSTRUCTION:\n1. Read the paper carefully\n2. Extract each requested field\n3. If information is not found, use \"Not specified\"\n4. Be concise but accurate\n5. Return ONLY valid JSON\n\nOUTPUT FORMAT:\n{\n  \"datasets_used\": \"...\",\n  \"methods\": \"...\",\n  \"key_findings\": \"...\",\n  \"evaluation_metrics\": \"...\"\n}\n\nYour JSON response:",
+        "output_format": "json",
+        "fields": [
+          "datasets used",
+          "methods",
+          "key findings",
+          "evaluation metrics"
+        ],
+        "prompt_type": "extraction",
+        "generated_at": "2026-07-14T18:45:28.079160",
+        "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+        "output_structured": true,
+        "schema": {
+          "fields": [
+            {
+              "name": "relevance_to_review_question",
+              "type": "Text",
+              "description": "Whether the paper provides substantive evidence relevant to applications of large language models in urban planning and smart cities within the urban planning and smart cities domain, based only on the title and abstract.",
+              "required": true,
+              "example": "True"
+            },
+            {
+              "name": "datasets_used",
+              "type": "Text",
+              "description": "Datasets, corpora, benchmarks, or data sources used to develop, train, test, or evaluate the LLM-based approach.",
+              "required": false,
+              "example": "City complaint dataset; traffic sensor records; manually annotated urban planning documents"
+            },
+            {
+              "name": "methods",
+              "type": "Text",
+              "description": "The LLM-based method, model architecture, prompting strategy, pipeline, or system design used in the study.",
+              "required": false,
+              "example": "Multi-LLM scoring framework with prompt-based classification and benchmark construction"
+            },
+            {
+              "name": "key_findings",
+              "type": "Text",
+              "description": "Main results, conclusions, or claims about how the LLM approach performed or supported urban planning/smart city tasks.",
+              "required": false,
+              "example": "The approach improved prediction accuracy and enabled scalable city-wide analysis"
+            },
+            {
+              "name": "evaluation_metrics",
+              "type": "Text",
+              "description": "Quantitative or qualitative metrics used to assess performance, such as accuracy, F1, MAE, RMSE, BLEU, human ratings, or task-specific measures.",
+              "required": false,
+              "example": "Accuracy, F1-score, MAE"
+            },
+            {
+              "name": "urban_planning_or_smart_city_task",
+              "type": "Text",
+              "description": "The specific urban planning or smart city application addressed by the paper, such as traffic forecasting, noise analysis, land-use planning, mobility, or urban policy support.",
+              "required": false,
+              "example": "City-wide traffic prediction"
+            },
+            {
+              "name": "llm_role",
+              "type": "Text",
+              "description": "How the large language model is used in the study, such as classifier, generator, extractor, planner assistant, evaluator, or reasoning component.",
+              "required": false,
+              "example": "LLM used as a scoring and reasoning engine"
+            },
+            {
+              "name": "input_data_type",
+              "type": "Text",
+              "description": "The type of input data processed by the LLM-based approach, such as text reports, complaints, sensor time series, maps, policy documents, or multimodal urban data.",
+              "required": false,
+              "example": "Urban complaint text and traffic time series"
+            },
+            {
+              "name": "comparison_or_baselines",
+              "type": "Text",
+              "description": "Any baseline methods, comparative models, or reference approaches used in the study.",
+              "required": false,
+              "example": "Compared against traditional machine learning and non-LLM forecasting models"
+            },
+            {
+              "name": "practical_implications",
+              "type": "Text",
+              "description": "Any stated implications for urban planning practice, smart city operations, decision-making, or policy support.",
+              "required": false,
+              "example": "Supports scalable city-level monitoring and planning decisions"
+            }
+          ]
+        },
+        "source": "llm",
+        "usage": {
+          "input_tokens": 790,
+          "output_tokens": 563,
+          "total_tokens": 1353,
+          "cost_usd": 0.0013235,
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    "updated_at": "2026-07-14T18:45:33.661035"
+  },
+  "collection": {
+    "state": {
+      "completed": true,
+      "total_papers": 30,
+      "platform_stats": {
+        "pubmed": 10,
+        "arxiv": 10,
+        "openalex": 10
+      },
+      "platform_errors": {},
+      "output_dir": "output/quick-start-urban-showcase/collected"
+    },
+    "updated_at": "2026-07-14T18:42:25.790094"
+  },
+  "filtering": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "filtered_at": "2026-07-14T18:43:53.132173",
+        "initial_count": 30,
+        "after_date_filter": 30,
+        "after_exact_dedup": 29,
+        "after_similarity_dedup": 28,
+        "after_relevance_check": 14,
+        "removed": {
+          "by_date": 0,
+          "by_exact_dedup": 1,
+          "by_similarity": 1,
+          "by_relevance": 14
+        },
+        "final_count": 14,
+        "total_screened": 28,
+        "included_count": 14,
+        "excluded_count": 14
+      },
+      "output_file": "output/quick-start-urban-showcase/filtered/filtered_papers.jsonl"
+    },
+    "updated_at": "2026-07-14T18:43:53.136011"
+  },
+  "download": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "downloaded_at": "2026-07-14T18:45:28.052152",
+        "success": 12,
+        "failed": 2,
+        "skipped": 0,
+        "attempted": 14,
+        "pdf_count": 12,
+        "downloaded": [
+          {
+            "title": "A scalable and generic framework for city-wide traffic prediction with large language model.",
+            "path": "output/quick-start-urban-showcase/pdfs/a_scalable_and_generic_framework_for_city-wide_traffic_prediction_with_large_language_model_publisher_nature.pdf"
+          },
+          {
+            "title": "DG-LLM: Decomposition-based dynamic graph adaptation of large language models for spatiotemporal traffic forecasting.",
+            "path": "output/quick-start-urban-showcase/pdfs/dg-llm_decomposition-based_dynamic_graph_adaptation_of_large_language_models_for_spatiotemporal_traf_publisher_plos.pdf"
+          },
+          {
+            "title": "Diagnosing the innovation atmosphere of industrial parks through urban spatial perception: a multimodal large language model approach.",
+            "path": "output/quick-start-urban-showcase/pdfs/diagnosing_the_innovation_atmosphere_of_industrial_parks_through_urban_spatial_perception_a_multimod_publisher_nature.pdf"
+          },
+          {
+            "title": "Large language model-driven knowledge graph reasoning for enhanced semantic segmentation.",
+            "path": "output/quick-start-urban-showcase/pdfs/large_language_model-driven_knowledge_graph_reasoning_for_enhanced_semantic_segmentation_publisher_nature.pdf"
+          },
+          {
+            "title": "The Role of LLMs in Sustainable Smart Cities: Applications, Challenges, and Future Directions",
+            "path": "output/quick-start-urban-showcase/pdfs/the_role_of_llms_in_sustainable_smart_cities_applications_challenges_and_future_directions_direct_pdf.pdf"
+          },
+          {
+            "title": "Opportunities and Applications of GenAI in Smart Cities: A User-Centric Survey",
+            "path": "output/quick-start-urban-showcase/pdfs/opportunities_and_applications_of_genai_in_smart_cities_a_user-centric_survey_direct_pdf.pdf"
+          },
+          {
+            "title": "Swarm-Driven Multi-Agent Reasoning for Smart City Security",
+            "path": "output/quick-start-urban-showcase/pdfs/swarm-driven_multi-agent_reasoning_for_smart_city_security_direct_pdf.pdf"
+          },
+          {
+            "title": "SORA-ATMAS: Adaptive Trust Management and Multi-LLM Aligned Governance for Future Smart Cities",
+            "path": "output/quick-start-urban-showcase/pdfs/sora-atmas_adaptive_trust_management_and_multi-llm_aligned_governance_for_future_smart_cities_direct_pdf.pdf"
+          },
+          {
+            "title": "Large language model empowered participatory urban planning",
+            "path": "output/quick-start-urban-showcase/pdfs/large_language_model_empowered_participatory_urban_planning_direct_pdf.pdf"
+          },
+          {
+            "title": "The Trilingual Triad Framework: Integrating Design, AI, and Domain Knowledge in No-code AI Smart City Course",
+            "path": "output/quick-start-urban-showcase/pdfs/the_trilingual_triad_framework_integrating_design_ai_and_domain_knowledge_in_no-code_ai_smart_city_c_direct_pdf.pdf"
+          },
+          {
+            "title": "Artificial Intelligence-Enabled Metaverse for Sustainable Smart Cities: Technologies, Applications, Challenges, and Future Directions",
+            "path": "output/quick-start-urban-showcase/pdfs/artificial_intelligence-enabled_metaverse_for_sustainable_smart_cities_technologies_applications_cha_publisher_mdpi.pdf"
+          },
+          {
+            "title": "Generative AI and Large Language Models in Industry 5.0: Shaping Smarter Sustainable Cities",
+            "path": "output/quick-start-urban-showcase/pdfs/generative_ai_and_large_language_models_in_industry_50_shaping_smarter_sustainable_cities_publisher_mdpi.pdf"
+          }
+        ],
+        "failed_papers": [
+          {
+            "id": "42323939",
+            "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+            "doi": "10.1016/j.socscimed.2026.119516",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "2403.14639v1",
+            "title": "On Defining Smart Cities using Transformer Neural Networks",
+            "doi": "10.24297/ijct.v24i.9579",
+            "url": "http://arxiv.org/abs/2403.14639v1",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "subscribed_papers": [
+          {
+            "id": "42323939",
+            "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+            "doi": "10.1016/j.socscimed.2026.119516",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "unavailable_papers": [
+          {
+            "id": "2403.14639v1",
+            "title": "On Defining Smart Cities using Transformer Neural Networks",
+            "doi": "10.24297/ijct.v24i.9579",
+            "url": "http://arxiv.org/abs/2403.14639v1",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "web_search_fallback_candidates": [
+          {
+            "id": "42323939",
+            "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+            "doi": "10.1016/j.socscimed.2026.119516",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "2403.14639v1",
+            "title": "On Defining Smart Cities using Transformer Neural Networks",
+            "doi": "10.24297/ijct.v24i.9579",
+            "url": "http://arxiv.org/abs/2403.14639v1",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "output_dir": "output/quick-start-urban-showcase/pdfs",
+        "download_engine": "FastCascadePDFDownloader"
+      },
+      "output_dir": "output/quick-start-urban-showcase/pdfs"
+    },
+    "updated_at": "2026-07-14T18:45:28.066463"
+  },
+  "extraction": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "extracted_at": "2026-07-14T18:50:15.194318",
+        "total_pdfs": 12,
+        "processed": 14,
+        "errors": 0,
+        "web_search_fallback": 2,
+        "pending_web_search_fallback": 0,
+        "total_cost_usd": 0.084338,
+        "model": "gpt-5.4-mini",
+        "output_file": "output/quick-start-urban-showcase/extraction/extraction_results.jsonl"
+      }
+    },
+    "updated_at": "2026-07-14T18:50:15.345468"
+  }
+}

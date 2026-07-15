@@ -1,0 +1,114 @@
+{
+  "created_at": "2026-07-14T07:10:12.156+00:00",
+  "stages": {
+    "collection": {
+      "attempt": 2,
+      "counts": {
+        "succeeded": 3,
+        "failed": 0,
+        "collected": 30
+      },
+      "error": null,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 2,
+        "updated_at": "2026-07-14T10:42:28.019+00:00",
+        "counts": {
+          "succeeded": 3,
+          "failed": 0,
+          "collected": 30
+        }
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-07-14T10:42:28.019+00:00"
+    },
+    "screening": {
+      "attempt": 3,
+      "counts": {
+        "filtered_count": 14,
+        "included_count": 14,
+        "excluded_count": 14,
+        "included": 14,
+        "excluded": 14
+      },
+      "error": null,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 3,
+        "updated_at": "2026-07-14T10:43:56.033+00:00",
+        "counts": {
+          "filtered_count": 14,
+          "included_count": 14,
+          "excluded_count": 14,
+          "included": 14,
+          "excluded": 14
+        }
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-07-14T10:43:56.033+00:00"
+    },
+    "retrieval": {
+      "attempt": 5,
+      "counts": {
+        "succeeded": 12,
+        "failed": 2
+      },
+      "error": null,
+      "last_valid": {
+        "status": "partial",
+        "attempt": 5,
+        "updated_at": "2026-07-14T10:45:28.071+00:00",
+        "counts": {
+          "succeeded": 12,
+          "failed": 2
+        }
+      },
+      "stale": false,
+      "status": "partial",
+      "updated_at": "2026-07-14T10:45:28.071+00:00"
+    },
+    "extraction": {
+      "attempt": 10,
+      "counts": {
+        "succeeded": 14,
+        "failed": 0
+      },
+      "error": null,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 10,
+        "updated_at": "2026-07-14T10:50:30.280+00:00",
+        "counts": {
+          "succeeded": 14,
+          "failed": 0
+        }
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-07-14T10:50:30.280+00:00"
+    },
+    "categorization": {
+      "attempt": 6,
+      "counts": {
+        "categories": 4,
+        "rows": 14
+      },
+      "error": null,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 6,
+        "updated_at": "2026-07-14T10:51:23.323+00:00",
+        "counts": {
+          "categories": 4,
+          "rows": 14
+        }
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-07-14T10:51:23.323+00:00"
+    }
+  },
+  "version": 1
+}

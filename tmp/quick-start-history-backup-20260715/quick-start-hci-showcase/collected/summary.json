@@ -1,0 +1,26 @@
+{
+  "collected_at": "2026-07-14T18:34:10.404922",
+  "query": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results_per_platform": 10,
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  },
+  "results": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_stats": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_errors": {},
+  "total_papers": 30
+}

@@ -1,0 +1,201 @@
+# Progress
+
+## 2026-07-12
+
+- 确认线程已有持续目标，内容与用户本次 `/goal` 请求一致。
+- 完整读取并启用 `using-superpowers`、`brainstorming` 和 `planning-with-files`。
+- 建立 8 步工作清单；设计获批前不进行产品实现。
+- 完成第一轮只读仓库扫描：工作区干净，项目已有真实运行与基准资产。
+- 下一步：读取入口文档、关键目录和近期提交差异，形成项目现状基线。
+- 读取 README、前端说明、依赖清单、测试文件索引和最近四次提交统计。
+- 确认正式架构为 Starlette + 零构建前端，完整流程包含六个阶段，且已有广泛的自动化契约测试。
+- 下一步：检查已有真实 run 配置、Web 入口和测试运行说明，确定三个样例候选是否可复现。
+- 完成工作流/API/前端结构与历史 run 配置抽查；凭证文件存在但未读取内容。
+- 识别出历史配置字段漂移、单文件前端状态集中和真实长任务失败恢复三类主要风险。
+- 项目现状勘察达到足以开始需求澄清的程度；下一步先按 brainstorming 流程征询是否启用视觉伴侣。
+- 未收到视觉伴侣确认，因此默认采用纯文本设计流程；这不会改变产品目标或验收范围。
+- 恢复持久化计划并运行 session catchup；除本轮新增的三个规划文件外，工作区没有产品代码变化。
+- 示例选择问题未收到反对意见，按推荐方案锁定三类代表场景；下一步确认真实外部服务调用边界。
+- 外部服务问题未收到反对意见，依据原始“真实使用”要求采用低额度真实调用；下一步确认正式内测门槛。
+- 内测门槛问题未收到异议，采用本机 Chrome、3–5 名内部用户、P0 为 0、失败可恢复的推荐边界；需求澄清完成。
+- 迭代策略未收到反对意见，采用纵向场景闭环方案；开始分段设计审批。
+- 设计第 1 节未收到异议，锁定三个差异化场景、独立运行证据和纵向闭环执行架构。
+- 设计第 2 节未收到异议，锁定现有技术栈、后端事实源、显式阶段状态、任务互斥和原子产物约束。
+- 设计第 3 节未收到异议，锁定错误分类、部分成功语义、失败项重试和桌面可恢复体验。
+- 从三个历史项目恢复了真实查询条件；确认将使用新 project id 和低结果上限重新执行。
+- 测试收集出现不可中断挂起，已停止重复尝试并启用 systematic-debugging；下一步采集进程栈/I/O 证据定位阻塞层。
+- 完成测试挂起的最小 A/B 对照：同一 pytest 与同一纯测试在原生 arm64 Python 下 0.01 秒收集成功，在 x86_64 `.venv` 且禁用插件时仍挂起。根因定位为架构不匹配的测试运行时；未修改产品或测试代码。
+- 设计第 4 节和完整设计未收到异议，已写入 `docs/superpowers/specs/2026-07-12-reviewpilot-inner-beta-quality-design.md`；下一步进行规格自审并提交该文档。
+- 完成规格自审：无占位符和范围矛盾；将模糊的“每平台 5–10 篇”收紧为首轮固定 5 篇、稳定后确认轮最多 10 篇。
+- 规格文档已作为提交 `b721d99` 单独提交。根据 brainstorming 用户审阅门禁，等待明确批准后再进入 writing-plans 和实现。
+- 同一设计审批阻塞连续三轮未解除；按持续目标规则标记 blocked。用户明确回复“批准”后可恢复实施规划。
+- 用户明确回复“全部批准，开始多轮迭代”，设计门禁解除；启用 `writing-plans`，开始编写精确实施计划。
+- 完成第一轮实施映射：确认重复 action 只排队不去重、前端丢弃 action 错误 detail、刷新无法恢复 active task、核心输出缺少统一原子写入。
+- 完成第二轮实施映射：确认 setup 更新不使下游过期、步骤状态依赖文件存在、ExtractionAgent 会先清空正式结果再流式追加。实施计划将先处理环境、互斥/刷新和原子输出，再运行真实场景。
+- 写入首个实施计划 `docs/superpowers/plans/2026-07-12-inner-beta-foundation-biomedicine.md`，覆盖原生环境、基线、重复任务、刷新恢复、原子产物、场景目录和生物医学首轮真实运行。
+- 实施计划自审修复：明确后续不可省略的状态/失效/重试/双视口/导出范围；加入 `.venv-native` 忽略；收紧暂存命令；补充 Web、刷新和场景 fixture 的具体断言。
+- 实施计划完成最终自审：无占位符，接口名一致，计划 1 可独立验收；等待用户选择 Subagent-Driven 或 Inline Execution。
+- 用户选择 Subagent-Driven，并授权后续决策自主完成。
+- 提交实施计划与工作树忽略规则（`dfc7057`），创建隔离工作树 `.worktrees/inner-beta-foundation` 和分支 `codex/inner-beta-foundation`。
+- 启动任务 1 实施代理：构建原生 arm64 开发环境；后续按规格审查 → 代码质量审查双门禁验收。
+- 任务 1 初始提交 `c0b7c14` 通过规格审查，但质量审查发现路径空格、已有环境污染、优化模式跳过和跨目录调用问题。
+- 同一实施代理按 TDD 修复：4 个回归测试 RED 后 GREEN，提交 `1fd27d9`；质量复审 Critical/Important/Minor 均为 0，任务 1 完成。
+- 代理如实报告任务 1 后续修复超出每任务 4,000-token 预算；已记录为执行纪律偏差，不影响产品证据。
+- 任务 2 首轮因工作树缺少 ignored `config.py` 收集失败；仅链接本地配置后收集成功 286 项。
+- 原生全量基线得到 284 passed / 2 failed / 0 skipped / 7 warnings；两个失败分别为 tracked 测试依赖 ignored benchmark 脚本，以及 contract smoke 意外访问真实 OpenAI key。
+- 已进入 systematic-debugging：拒绝链接 `secrets.txt` 掩盖问题，正在采集两个目标测试完整 traceback 并准备聚焦 TDD 修复计划。
+- 根因确认：ExtractionAgent 对 web-search fallback 冗余 eager client init 绕过注入；benchmark 测试依赖 ignored scratch 脚本且与 tracked factory 测试重复。
+- 写入聚焦修复计划 `docs/superpowers/plans/2026-07-12-native-baseline-repairs.md`，将按 TDD 与双审查门禁执行。
+- 修复提交 `07ba611`：fallback-only extraction 不再提前加载真实 OpenAI client；聚焦测试 RED→GREEN，ExtractionAgent 8 项及 Web smoke 通过；规格与质量审查均通过。
+- 基线提交 `fd73e16`：删除依赖 ignored scratch 脚本的 stale 测试，保留 tracked 生产 factory 契约；原生全量 286 passed / 0 failed / 0 skipped / 7 warnings。
+- 报告精度修订 `3b202a5` 后质量复审通过；任务 2 完成。
+- 任务 3 初始提交 `677a594`：同项目 active task 原子冲突、API 409、前端 detail；规格通过，质量审查批准但提出 4 个防御性问题。
+- 质量修复 `bf908b6`：executor submit 回滚、JSON null/type guard、确定性并发测试与同步竞态覆盖；复审 Critical/Important/Minor 均为 0，全量 291 passed。
+- 任务 4 经四次基于审查证据的修复提交收口：`881026f` 集中任务所有权、`4787fd7` 去重轮询、`e01bbc8` 保护聊天与任务状态、`3a8e07d` 分离聊天导航所有权。
+- 任务 4 最终实现以服务端 `activeTask` 为权威，支持刷新恢复、项目切换、任务替换、聊天并发和 A→B→A 单轮询；可执行 Node 时序测试覆盖关键交错，规格与质量审查均通过。
+- 任务 4 最终原生全量回归：296 passed / 0 failed / 0 skipped / 7 warnings，`git diff --check` clean；进入任务 5 原子产物写入。
+- 任务 5 初始提交 `809b99a`：共享同目录临时文件 + `os.replace` 原语，核心 overwrite writer 统一路由，ExtractionAgent 整批结果仅在正常完成后发布。
+- 规格保护提交 `59c8188`：新增 schema、分类和子代理正式输出的原子边界测试；临时恢复直接覆盖写时 3/3 按预期失败。
+- 质量修复 `0560b2f`：将 PDF/Web 写入移出领域异常捕获区，输出故障现在向外传播并触发整批回滚；双路径均验证旧文件字节不变且临时文件清零。
+- 任务 5 最终规格与质量审查通过；原生全量 302 passed / 0 failed / 0 skipped / 7 warnings。新文件/替换文件使用 `mkstemp` 的 0600 模式，接受为单用户本机内测限制。
+- 任务 6 初始目录提交 `58ff842`，输入/代码绑定修复 `7e6fe8b`；三场景精确复用历史查询，限制为每源 5 条，并记录原始 SHA-256。
+- 可复现性修复 `420a517`：新增去敏 provenance 快照与 manifest、应用持久化字段投影、确定性 `max(N)+1` 运行编号与 ID 冲突中止、递归敏感键/个人路径拒绝、外部错误和截图脱敏协议。
+- 日期边界措辞修复 `9e92d8b` 后，任务 6 规格与质量均批准；原生全量 306 passed / 0 failed / 0 skipped / 7 warnings，聚焦 4 passed + 3 negative subtests。
+- 任务 7 生物医学 r1 在 1280×800 真实浏览器中于项目创建阶段失败：Search Setup 填写后点击 Create project 会静默重置，服务器无 `POST /projects`，输出目录不存在；2/2 复现并保存提交前后截图。
+- r1 证据与子修复计划提交 `9e2e779`。根因是根级无 `data-act` click 分支在浏览器默认 submit 前同步 `paint()` 替换表单 DOM；P1，阻断全部场景，后续阶段均明确 BLOCKED，未调用外部服务。
+- P1 表单修复提交 `4d49ef6`，规格/质量均批准，全量 308 passed；r2 真实浏览器证明输入保持、一次 POST、精确项目 ID 和无重复提交。
+- r2 随即发现 `Max/source=5` 被 stale `{10,10,10}` source map 覆盖，保存与 UI 均为 10，且平台顺序从冻结的 PubMed/arXiv/OpenAlex 变为 PubMed/OpenAlex/arXiv；collection 前停止，未调用外部服务。
+- r2 证据和双缺陷计划提交 `fa822d0`：数值错配为 P1 成本/配置完整性阻断，来源顺序为 P2 可复现性缺陷；修复后使用 r3。
+- Source-limit 修复 `e014f96` 通过双审查、全量 310 passed；默认/显式平台顺序修复经 `fdba195`、`7f56859`、`4ea0b6b` 覆盖 Web、Collection、LLM derived 和 CLI，全量 316 passed 且双审查批准。
+- r3 配置投影全部通过；真实 collection 15、筛选后 1 included/13 excluded、1/1 PDF 下载成功，重复 collect 返回同一 task 409，筛选运行中刷新恢复同一任务。
+- r3 schema 生成 10 fields 后，UI 要求 Finalize Schema，但助手错误宣称下一步 Categorization & Analysis；P2 导航冲突，finalize/extraction/categorization 未继续。证据/计划提交 `c18cffc`，修复后使用 r4。
+- Schema 路由修复 `6342c28` + polish `ab37dc6` 通过双审查、全量 319 passed；r4 草稿→finalize→extraction 路由全部一致。
+- r4 完成 extraction 1/1、0 errors、0 fallback，随后 category suggestion 生成 9 类却被助手误报为 categorization complete/no next action；另观察到提取回复暴露本机绝对路径。Confirm/Apply 前停止，证据/双任务计划提交 `1b8c917`，修复后使用 r5。
+- Category suggestion 路由修复 `66f9f87` + 计数加固 `dac3abf` 通过双审查；建议阶段现在确定性指向 Review → Confirm → Apply，而最终 categorization 才是无下一步。
+- 路径隐私修复经历基于审查证据的多轮收敛：最终提交 `0ebec46` 不再解析自由文本路径边界；任何绝对路径标记都会使整条不可信模型回复被结构化 stage 摘要替代。
+- 最终路径覆盖包括 Unix、Windows drive、UNC、file URI、冒号相邻路径、`//` 网络形式及 `///`/`////` 重复 POSIX 根；普通 HTTPS 保持不变。DownloadAgent 的嵌套 `stats.web_search_fallback_candidates`、各阶段计数/单复数/next-action 契约均有回归。
+- 任务 7i 最终原生全量：325 passed / 0 failed / 0 skipped / 7 warnings；独立规格与质量复核均无 Critical/Important。下一步重启服务并执行全新生物医学 r5 完整流程。
+- r5 选择聊天建项入口后，应用派生 `llm-biomedicine-search`，与预留 id 不一致；身份协议在一个 `POST /projects` 后立即中止，未运行 collection 或任何后续任务。该执行路由无效，不计产品回归。
+- r6 改用助手头部 Search Setup 表单，项目 id 与 catalog 投影全部精确通过；collection 15、重复请求 409、screen refresh 恢复同 task、14 去重后 1 included/13 excluded、1/1 PDF、10-field schema、1/1 extraction、8 suggestions、confirm/apply 后 8 categories/1 row 均通过。
+- r6 证明此前两个缺陷已修复：extraction 用户可见回复不再含本机路径；suggestion 回复明确 Review → Confirm → Apply，最终 categorize 才报告 no next action。
+- r6 最终状态投影列出七个存在的 export artifacts，但 UI 只有 `Finalize Project`/`Project Complete!`，无下载控件；定级 `BIO-R6-P1-007`。证据/计划提交 `ce55593`，进入安全导出端点与 Export Package UI 的 TDD 修复，确认轮预留 r7。
+- Export Package 初版 `ba2dfb5` 由单一七项 allow-list 驱动状态投影与下载路由；质量审查复现同项目 symlink 白名单绕过，修复 `f38b680` 逐组件拒绝链接。最终 328 passed，规格/质量双审查批准。
+- r7 完整复跑通过：精确配置、15 collection、409 duplicate、screen refresh 同 task、14 screened/1 included/13 excluded、1/1 PDF、10-field schema、1/1 extraction、5 suggestions、confirm/apply 后 5 categories/1 row。
+- r7 最终页面显示七个 Export Package 控件；真实浏览器点击 Search setup 触发 200，下载 SHA-256 与源 artifact 相等；七项逐一 GET 均为 200、正确 JSON/NDJSON media type 和 attachment filename，客户端投影无本地 path。
+- r7 证据提交 `ffde2a5`；生物医学 example 正式 PASS。下一步先实现批准设计中的显式 stage state、上游失效、partial 与 retry-failed-only，再运行 HCI。
+- 工作流恢复 Task 1 经多轮 TDD 与双审查收口：`713b44b` 引入显式六态账本，`8fed78a` 加固前置条件、旧项目语义迁移、项目级并发锁与错误脱敏，`881412a` 深验分类映射，`3de26f5` 将迁移并发回归改为确定性线程异常传播。
+- Task 1 最终原生全量 350 passed / 0 failed / 0 skipped / 7 warnings；真实 r4/r6/r7 产物迁移复测正确，规格与质量审查均 APPROVED。进入 Task 2：setup revision、影响预览、确认写入、下游 stale 与 stale 输出阻断。
+- 工作流恢复 Task 2 经 `b38200c`、`7cb73f3`、`bc24bc4`、`7988bcc` 四轮审查修复收口：setup 内容 revision、无写影响预览、确认写入、同项目 mutation reservation、下游 stale、旧产物保留但阻断、二次覆盖确认、前端 Needs rerun 与 abort-first durable transaction 全部实现。
+- Task 2 最终原生全量 382 passed / 0 failed / 57 subtests / 7 warnings；规格与质量审查均 APPROVED。进入 Task 3：collection/retrieval/extraction 的 deterministic partial/failed outcome 与前端恢复信息。
+- Task 3 初版 `02ae56e` 与首轮审查修复 `1eb99d8` 均未通过双门禁；第二轮审查仍复现孤儿重跑未失效、异常后 UI 不刷新、结构化计数契约过宽、extraction 失败行计入成功指标、生成回复路径泄露及运行期 stale 竞态 6 项 Important。
+- Task 3 第三轮修复坚持严格生产契约，不以兼容旧 `{}` 测试夹具掩盖问题：新增回归已完成 RED→GREEN；当前正在把旧测试 fake 迁移到真实完整 contract，并等待完整原生回归、提交与规格→质量复审。Task 4 失败项重试尚未开始。
+- Task 3 第三版提交 `1127bf7`，实现者与控制端分别得到完整原生回归 424 passed / 133 subtests / 0 skipped，工作树干净；但规格复审仍 NOT APPROVED：collection 对 0 行/失败源跳过 JSONL 对账，retrieval 未核验 `downloaded`/`failed_papers` 明细长度与计数。已回到同一实现者做第四轮聚焦 TDD，Task 4 继续冻结。
+- Task 3 第四版 `cf95134` 经补充 entry-type RED→GREEN 后，控制端完整回归 426 passed / 148 subtests，规格复审 APPROVED；质量复审仍 NOT APPROVED：collection source/returned folder/symlink 可越过权威 artifact 根，extraction 宽松 JSONL 会忽略 malformed/non-object/unknown status。接受“规范空 extraction 文件+0/0”为真实合法结果，拒绝审查中将其一并判错的建议；其余边界回到同一实现者做第五轮 TDD。
+- Task 3 最终经 `cd22cbd` 封闭 collection/extraction artifact 根、路径与 symlink 边界，并以 `1808106` 拒绝 present non-string falsy extraction status；字段缺失/空字符串和规范空文件 0/0 仍保留为合法 legacy/零结果语义。
+- Task 3 最终控制端全量 432 passed / 169 subtests / 0 skipped / 7 warnings，`git diff --check` 与 status clean；规格、质量复审均 APPROVED，Critical/Important/Minor 为 0。进入独立 Task 4：当前非 stale 下载报告的 failed-only retry、revision/确认/并发门禁与原子合并。
+- Task 4 设计与实施计划分别提交为 `f343a63`、`9ba5e3c`，按 4A1 只读身份/修订/投影、4A2 后端事务/API、4B 前端/浏览器证据三段独立验收。
+- Task 4A1 初版 `c9b9c59` 的绿色测试未通过规格门禁：报告分类可伪造、六层权威路径可跟随 symlink、安全显示候选不会继续回退、测试缺口共 4 个 Important；`7fce44c` 以严格 report→structured outcome→ledger 对账和路径 fail-closed 规则闭合。
+- Task 4A1 质量审查随后发现 `frozen=True` 仍允许嵌套权威事实原地修改；最终 `a91adbd` 递归冻结 JSON 树并提供显式隔离的 `mutable_fact_copies()`，消除 4A2 回滚基线污染风险。
+- Task 4A1 最终控制端聚焦 52 passed / 69 subtests、全量 449 passed / 210 subtests、0 failed / 0 skipped / 7 warnings，工作树干净；规格与质量复审均 APPROVED，Critical/Important/Minor 为 0。进入 4A2：确认/版本冲突、仅失败项隔离下载、abort-first 合并与中断恢复。
+- 为遵守每任务预算并降低事务风险，4A2 内部分为 4A2a 请求/确认、4A2b 隔离 staging/合并目标、4A2c durable publication/Web 生命周期；不改变已批准的 4A2 对外范围。
+- Task 4A2a 生产提交 `e728fd8`：一次性读取当前 retry snapshot，严格校验 ordered opaque IDs、report revision 与二次确认，返回深层不可变 preparation；同时将 `retry-failed-downloads` 映射 retrieval 并复用 download 严格 outcome。
+- 4A2a 初版测试被规格审查拒绝 2 个 Important：双 ID 顺序绑定和 exact workflow error/root-nested alias parity 缺少失败敏感性；test-only `8d47613` 通过 mutation RED 补强。
+- Task 4A2a 最终控制端聚焦 88 passed / 159 subtests、全量 457 passed / 242 subtests、0 failed / 0 skipped / 7 warnings；规格和质量审查均 APPROVED，Critical/Important 为 0。保留 1 个 Minor：Web 集成时 retry/setup 同名 `ConfirmationRequired` 必须模块限定或别名导入。
+- Task 4A2b1 初版 `0bff162` 通过测试但规格审查复现真实 DownloadAgent 正常输出被拒、失败事实冲突、清理残留、路径泄露等 1 Critical/3 Important/1 Minor；`4f6de86` 以真实 contract seam、显式派生字段、失败事实对账和安全清理修复。
+- 后续规格/质量复审继续发现 broad web metadata 前缀、初始 fingerprint 路径泄露、成功/失败派生事实不对称等边界；经 `a3e85bb`、`33e5f9f`、`9d96868` 逐轮 mutation TDD 收口为 canonical staged outcome。
+- Task 4A2b1 最终实现绑定来源项目，只向固定 opaque staging project 发送有序 selected failures；严格验证 result/report/row/PDF/identity/symlink，成功与失败 schema 对称规范化，异常清 staging，既有 PDF 使用 64 KiB 流式指纹。
+- Task 4A2b1 最终控制端聚焦 108 passed / 209 subtests、全量 477 passed / 292 subtests、0 failed / 0 skipped / 7 warnings；规格与质量均 APPROVED，Critical/Important 为 0。保留 1 个 Minor：row/report 次级 failure diagnostics 在正式合并前需选择单一来源或剔除。
+- Task 4A2b2a 初版 `76607af` 仅构造纯内存合并事实；规格审查连续发现 outcome 未绑定 revision、selected source 与当前 schema 未重验、过宽 metadata 前缀删除、report detail provenance 和 staged aggregate counts 缺口，经 `910f16a`、`5d82306` 逐项 TDD 收紧。
+- 真实 `DownloadAgent` 会把缺失的 `id/title/doi/url` 规范化为 `""`；`09d0c99` 将这一兼容限定为“source key 缺失且 report 值严格为空字符串”，source present（含 `None`）仍需 deep-equal，同时把 success method aliases 绑定 row `pdf_method`。
+- 最终质量审查进一步复现 row/report 同时使用非字符串 method 可穿透；`d02c52a` 要求 success `pdf_method` 与 aliases 均为非空文本且精确相等，dict/list/bool/int/null/空/纯空白全部拒绝。
+- Task 4A2b2a 最终控制端聚焦 121 passed / 256 subtests、全量 490 passed / 339 subtests、0 failed / 0 skipped / 7 warnings；规格与质量均 APPROVED，Critical/Important/Minor 为 0。纯 merge 保持零文件系统访问，旧 authoritative `pdf_count/attempted` 不作当前尝试权威，当前 staged counts 严格对账。进入 4A2b2b：发布前文件系统再验证、revision/source fingerprint、目标碰撞拒绝与无写 publication plan。
+- Task 4A2b2b 初版 `a5f6efc` 新增只读 publication plan，并把 staging success 扩展为当场冻结 PDF size/SHA-256；计划阶段重验当前 snapshot、source 边界和 fingerprint，拒绝 destination 文件/目录/正常及断链 symlink 碰撞，全失败可生成零 PDF 计划。
+- 规格审查以 Python 多态值和 `MappingProxyType` 恶意 backing mapping 连续击穿输入绑定；`f06b8a8` 加入精确 dataclass/scalar/path/frozen JSON 类型边界，`1b7061a` 改为单次物化并重建 trusted preparation/outcome/merged，后续不再引用不可信 proxy。
+- 质量审查进一步复现相对 project 在物化期间被恶意 `chdir` 重绑定权威读取；`521e213` 在接触任何不可信输入前拒绝 symlink/non-directory，单次 strict resolve 后统一使用绝对 project，关闭 A/B 当前状态错读。
+- Task 4A2b2b 最终控制端聚焦 68 passed / 180 subtests、全量 504 passed / 366 subtests、0 failed / 0 skipped / 7 warnings；规格与质量均 APPROVED，Critical/Important/Minor 为 0。publication plan 仍零写；进入 4A2c1 abort-first marker/copy/recovery，再单独接 Web task lifecycle。
+- Task 4A2c1a 初版 `a55eedb` 建立独立 abort-only transaction 模块：任何 running/staging mutation 前保存旧 report/included/full ledger、ordered IDs、staging 与全部候选目标名；live reconcile 跳过，explicit abort 或重启 reconcile 可 marker-last 恢复。
+- 规格审查连续发现逐字段 sentinel 编码非双射/绝对 key 泄露、nested preparation 多态、hardlink、bool version 与 marker 编码失败 active 泄漏；经 `851eb9f` whole-before canonical blob + nlink/exact schema、`a42e9f7` trusted preparation/current-only rollback facts、`b148b6f` post-reservation统一清理域收口。
+- 质量审查确认生产恢复逻辑通过但 committed tests 未编码完整承诺；test-only `96a5322` 加入 report/included/full-ledger/candidate/staging/marker 六点故障矩阵，以及完整 ledger/unknown fields、owned cleanup、跨项目 active 隔离和同项目重复 begin 的 mutation-sensitive 回归。
+- Task 4A2c1a 最终控制端聚焦 83 passed / 206 subtests、全量 519 passed / 392 subtests、0 failed / 0 skipped / 7 warnings；规格与质量均 APPROVED，Critical/Important/Minor 为 0。下一步 4A2c1b：target marker、PDF exclusive copy+hash recheck、apply promotion/roll-forward。
+- Task 4A2c1b 从 `8c92006` 的 record-only target marker 开始，连续把 target 绑定到 canonical before→target delta、exact merged facts/types、terminal ledger、committed staging sources、source/detail provenance、fixed authority/PDF identity、transaction generation 与 marker inode；所有路径在此检查点仍只更新 `phase=abort` marker，不复制 destination PDF、不写 target authorities、不晋升 apply。
+- `ed5ca35` 的 same-byte/new-inode 防护通过原有 probes 后，最终门禁仍复现 begin no-clobber、CAS replace 和 recovery unlink 三个真实 TOCTOU；`89d1039` 加入原子 no-clobber publish 和跨进程串行化。复审继续发现 link→temp unlink 崩溃会留下不可恢复 nlink=2 marker、fork 继承伪 reentrancy、可替换 lockfile 分裂锁域。
+- `5b4630c` 将锁载体改为项目目录 inode flock，reentrancy 绑定 PID；recovery 只对唯一严格命名、同 device/inode、nlink=2 的发布 temp link 做归一化，并在 unlink 后 fsync 目录及复验 marker identity。真实 subprocess crash、fork blocking、CAS 与 final unlink probes 全部通过。
+- Task 4A2c1b 最终控制端 retry suites 148 passed / 0 skipped，全量 584 passed / 0 failed / 0 errors / 0 skipped，`git diff --check 96a5322..5b4630c` 与 status clean。规格 APPROVED C0/I0/M1；质量 APPROVED C0/I0/M2。接受的 Minor 是 ledger timestamp monotonicity、外部替换整个 project root 的锁域限制、link 前硬崩溃孤立 temp；进入独立 4A2c1c：exclusive PDF copy、abort/apply promotion、幂等 roll-forward 与 finish cleanup。
+- Task 4A2c1c1 初版 `1254399` 在 abort phase 下以 O_EXCL/stream/fsync 发布 target PDFs，但 reviewer 复现 foreign destination（同内容或不同内容）会被 abort 按候选名删除，且 idempotent path 未补 directory fsync；绿色 589 tests 不放行。
+- `6ad3358` 把 staging temp 的 device/inode/size/SHA 和 ordered destination 写入 `published_json_b64` receipt，再 link 暴露；`5743eef` 将 pre-receipt temp 移回 marker-owned staging，关闭 CAS 前崩溃阻塞 authority PDF set；`d0a82dd` 在 cleanup 前用 no-follow fd 复验 receipt group 的 inode/nlink/size/SHA/header，拒绝 forged receipt。
+- reviewer 继续复现 validate→unlink foreign swap 与 deletion durability 重排；`537e187` 加入 quarantine + `pdfs/staging/project/marker` fsync 顺序，但随机未记录 quarantine 在 crash/fsync failure 后仍会被 staging cleanup 吞掉 foreign，且普通 rename 可覆盖 q-slot collision。
+- `528e52a` 在 receipt CAS 前 exclusive 创建 0700 quarantine directory，并持久化 path-safe name/device/inode；固定 temp/destination slots 让 rename 后崩溃可发现，slot collision 与 unknown children fail closed。`6e15c48` 补齐 qdir 已删除但 marker 尚存的 single/multi-PDF幂等恢复，仅当所有 receipt paths 均已消失才接受 missing qdir。
+- Task 4A2c1c1 最终控制端 transaction 92 passed / 0 skipped，全量 600 passed / 0 failed / 0 errors / 0 skipped，`git diff --check` 与 status clean。规格/质量均 APPROVED C0/I0/M0；范围仍为 `phase=abort` 的 PDF publication/rollback，未写 target authorities、未晋升 apply、未 finish、未触及 Web。进入 4A2c1c2 authority apply/promotion/roll-forward/finish。
+- Task 4A2c1c2a `045c891` 新增只读 apply readiness：要求 active exact transaction、`phase=abort`、完整 sources/target/published receipts，并双轮复核 marker generation、authorities、source commitments、receipt-owned destination 与 quarantine。首轮规格 probe 发现未枚举 staging 目录，合法 publication 后插入 foreign sibling 仍会错误放行。
+- `4e5238f` 将 readiness 收紧为四层 direct hierarchy 与精确集合：staging 仅 retry，retry 仅 pdfs/filtered，filtered 仅 committed included rows，pdfs 仅 committed sources、download report 与 receipt qdirs；foreign file/dir/symlink/hardlink、zero-source 层级破坏和两轮间 drift 全部拒绝。readiness 规格与质量复审均 APPROVED C0/I0/M0。
+- apply 预规格审查发现 `_replace_marker_cas` 原先仅做普通 atomic replace，不能证明 marker receipt 在 destination 暴露前具备 power-loss durability；先暂停 promotion。`0c8f898` 加入同目录 temp 完整写/flush/file fsync、旧 raw/inode/transaction generation 二次复核、replace、project directory fsync 与新 marker 回读。
+- durable CAS 复审继续复现 exact-new-raw/new-inode ABA 与 `fdopen` 异常 descriptor 泄漏；`ecfdbaa` 保持已 fsync temp fd 打开，replace 后以同一 fd 取得最终 identity，并要求路径回读 identity/raw/transaction 精确一致，同时补齐 fd ownership 与 `file fsync → replace → dir fsync → reread` 顺序断言。独立复审 APPROVED C0/I0/M0。
+- Task 4A2c1c2a/durability 最终控制端 transaction 109 passed / 0 skipped，全量 617 passed / 0 failed / 0 errors / 0 skipped，`git diff --check` 与 status clean。范围仍未写 target authorities、未生成 `phase=apply`、未执行 roll-forward/finish、未触及 Web；下一步为严格 apply marker 解码与只允许 roll-forward 的恢复器。
+- Task 4A2c1c2b1 `c2e25a7` 扩展 strict marker decoder：abort 只允许 base→sources→target→published 四个有序状态；apply 只允许完整 sources+target+published 且 receipt 数精确等于 target PDF 数。`_restore` 仅接受 abort，abort API 对 valid apply 在 release finally 前拒绝；尚未接入 roll-forward 的 reconcile 同样零修改 fail-closed。transaction 112 passed，规格/质量 APPROVED C0/I0/M0。
+- Task 4A2c1c2b2a `7a46af2` 新增只读三 authority 稳定分类，覆盖 8 种 before/target 组合、nofollow fd、六元 identity、严格 JSON/JSONL、duplicate/NaN/type/order/path 攻击；但 reviewer 证明 caller 保留 raw/inode 后伪造 derived `before/target` 可把 foreign report 误判为 target，绿色 116 tests 不放行。
+- `4686f7d` 将 caller marker 降为 generation locator；phase/before/target 唯一权威改为 `_assert_marker_generation` 返回的 fresh disk decode，末尾再对同一 current generation 复核。forged caller phase/before/target 不再影响分类，fresh target==before 仍 target-first。transaction 118 passed，规格/质量复审 APPROVED C0/I0/M0。下一步继续拆分单 authority durable replacement 与三 authority coordinator。
+- Task 4A2c1c2b2b1 `230b73b` 新增未接 production flow 的单 authority durable primitive：固定 report/included/ledger serializer，同目录 temp file fsync，fresh marker 与全 authority expected snapshot 复核，replace、parent fsync、同 fd identity 与 post-classification。三 authority 正常写及 fd/fsync/marker/destination/replace/postread fault probes 通过。
+- 规格审查最初用 monkeypatch 在持有 project-directory flock 的 `lstat→replace` 内注入 noncooperating foreign inode并定 I1；按已批准 threat boundary 复核后撤销：不存在 cooperating writer 路径，固定 authorities 又是事务获授权替换目标。若未来防御 hostile same-user filesystem，需扩展 marker schema、backup receipt 与崩溃恢复，不能以不可移植 `renameat2` 冒充当前通用方案。
+- 质量审查提出非当前 authority expected snapshot 测试债；test-only `cb6270a` 分别伪造 kind/identity，证明首写前拒绝、当前 authority bytes/inode 不变且无 temp。transaction 126 passed / 0 skipped；等待质量 final gate 后进入三 authority coordinator。
+- Task 4A2c1c2b2b2 `92177be` 新增仍未接 production 的三 authority coordinator：fresh apply marker、首次全体 classification、固定 report→included→ledger 顺序，target 跳过、before 交给 durable primitive；8 种 B/T 均收敛 TTT，initial foreign 零写，中途 foreign/dir-fsync/marker ABA 保留已完成 target 与 marker并可重入。
+- 质量审查指出 final double-classify 防线没有直接 mutation test；test-only `8f6cf3a` 在第一次 final snapshot 后换入相同 target bytes 的新 inode，第二次 snapshot identity 不同必须 generic failure，marker与foreign inode保留。transaction 134 passed / 0 skipped，规格/质量最终 APPROVED C0/I0/M0。进入 apply PDF commit 验证；coordinator 仍无 production/reconcile 调用点。
+- Task 4A2c1c2b3a `0963b58` 新增只读 apply PDF commit snapshot：project PDF set 精确等于 report+baseline+receipt destinations，baseline 完整 identity/hash/header、receipt ownership、temp/qslot/qdir cleanup state、zero-PDF 与双轮 ABA 全部验证。transaction 142，双审查 C0/I0/M0。
+- Task 4A2c1c2b3b1 `f22989c` 新增 safe staging subset snapshot并集成进 PDF commit 双轮：允许完整 tree 到任意 child-first 缺失子集，所有 present dir/artifact/qdir 仍要求 whitelist、direct path、identity、nlink/source hash；unknown/symlink/hardlink/qslot 拒绝。transaction 146，双审查 C0/I0/M0。
+- Task 4A2c1c2b3b2 `0f2251e` 新增未接主流程的 apply staging cleanup：只在 TTT+PDF commit+safe subset 下按 receipt 删除 qdir并fsync，再 rmtree staging并fsync project；partial/缺失可重入，marker/PDF/authority/ACTIVE不改。quality 复现 staging 已删但 project fsync失败后的第二次调用没有补fsync，初版不放行。
+- `228f509` 修复 absent branch：final committed validation→project directory fsync→post-fsync marker generation；重入和 initially absent均有 mutation-sensitive测试。transaction 152 passed / 0 skipped，规格/质量最终 APPROVED C0/I0/M0。下一步 private marker-last roll-forward finish，再接 reconcile dispatch。
+- Task 4A2c1c2b3c1 `db4588c` 组合 initial PDF proof→authority TTT→PDF proof→staging cleanup→final stable TTT/PDF/staging absent→project fsync→exact marker unlink last→project fsync；`faad993` 补 authority partial failure、unlink failure、multi receipt与 Mock.assert_not_called，`a350961` 把 marker ABA 精确定位到 finish 第2个 eligible pre-unlink fsync。transaction 160，规格/质量 C0/I0/M0。
+- Task 4A2c1c2b3c2 `be9b93c` 仅扩展 inactive reconcile dispatch：strict abort→restore、strict apply→marker-last finish；active在 marker read 前返回False。BBB/mixed/invalid/failure reentry/zero/multi均通过，transaction 164，双审查 C0/I0/M0。
+- Task 4A2c1c2c `621e6bf` 新增 public `apply_retry_transaction`：exact ACTIVE+readiness，durable phase-only abort→apply CAS作为唯一commit point，fresh apply后marker-last finish；finally只compare-by-tx释放自己的reservation。pre-commit失败由abort reconcile，post-commit失败由apply reconcile。
+- 双审查发现真实 zero-success target不会调用 `_publish_one_pdf`，因此缺少 published empty receipt，旧zero测试手工伪造marker掩盖生产缺口；`375f51b` 在 publish boundary durable CAS canonical `published={pdfs:[]}`，二次publish inode/bytes不变。真实 failure-only public apply、foreign ACTIVE seam、double call、symlink path全部通过，transaction 172，双审查 C0/I0/M0。
+- Task 4A2c1c2 控制端最终 transaction 172 passed / 0 skipped，全量 680 passed / 0 failed / 0 errors / 0 skipped；`git diff --check 6e15c48..375f51b` 与 status clean。正在进行整段 acceptance audit，通过后进入 Web failed-only retry lifecycle。
+- Task 4A2c1c2 acceptance audit 在 `375f51b` 发现两个 Important：public apply 未绑定 expected transaction id，以及 marker unlink 后 acknowledgement failure 缺少 public exact-commit verifier。`6fe4b04` 以 stale caller interleaving 和 authority/PDF drift tests 修复；transaction 175/175。
+- Web failed-only retry backend `347d059` 已完成：第一次请求返回 revision+ordered IDs challenge，确认请求精确绑定；worker 使用真实 download adapter staging、严格 merge/publication、exact transaction apply；pre-commit 失败回滚，post-commit 仅在 exact verifier 通过时恢复为成功。`tests/test_web_retry.py` 9/9。
+- Recovery frontend `8e897ec` 已完成：默认选择全部失败项、Select all/Clear、原生 checkbox、opaque ID 不进入 DOM/sessionStorage、revision conflict 权威刷新、running status 与互斥 action ownership、普通 Download PDFs 在恢复状态隐藏。
+- 真实浏览器在 1280×800 和 1440×900 验证 recovery panel 无横向溢出、全选/清空/重试/确认/运行/终态链路、console 0 errors/warnings；真实 downloader 只接收被选失败项。浏览器额外发现并修复 `1 paper needs recovery` 单复数和失败项错误进入 Recently retrieved 的状态投影缺陷。
+- 精确 final SHA `8e897ec` 原生全量：696 tests，0 failures/errors/skips，81.771s；`git diff --check 375f51b..HEAD` clean，工作树 clean。Example 1 与 mandatory state/partial/retry 阶段完成，Example 2 HCI/CS 正式进入真实使用迭代；Example 3 与三例联合 release audit 未开始。
+- HCI r1 `inner-beta-hci-r1` 在 setup 投影发现 `Human-Computer Interaction (HCI` 未闭合可编辑关键词；持久化 query/domain 精确无损，按 P1 在 collection 前停止。`5cd9c53` 先处理平衡括号再剥外层符号，95 focused、697 full 全绿；r1 证据报告已提交。
+- HCI r2 `inner-beta-hci-r2`：collection 15（5/5/5、无错误），duplicate POST 409，刷新恢复同 task；screening 15→14→8 included/6 excluded；retrieval 7/8 partial，真实恢复面板正确显示一条 `pdf_endpoint_cloudflare` 失败。
+- r2 failed-only retry 真实重试同一失败项仍 0/1，但任务错误结束为 `ValueError`。事务保护验证 7 个 PDF、partial report、included 与 ledger 完整回滚，marker/staging 清理。根因是真实 DownloadAgent staging sidecars `download_stats.json`、`logs/agent_states.json` 未出现在测试 fake，随后 exact apply hierarchy 正确拒绝。
+- `96da8dc` 在 sources marker 前只验证并清理已知 sidecars（可选 `pipeline.log`），并 fsync staging project；未知文件、未知日志项、非直属普通文件与链接继续 fail closed。258 focused、699 full 全绿；r2 报告/四张证据图提交。HCI 正式 PASS 仍需全新 r3。
+## 2026-07-14 — HCI example accepted
+
+- `inner-beta-hci-r3` completed the real browser workflow: 15 collected, 14 after exact dedup, 7 included, 7/7 PDFs retrieved, 10-field schema finalized, 7/7 extracted, and 7 rows categorized into 4 reviewed HCI themes.
+- Fixed `HCI-R3-P1-003`: an empty schema no longer renders Regenerate/Finalize or claims it is ready for review. Commit: `86e43fd`.
+- Fixed `HCI-R3-P2-004`: small-review category suggestions now request a sample-size-aware maximum of broad reusable categories and explicitly reject paper-specific category design. Commit: `71c0465`.
+- Browser gates: seven export links, one real download click, 0 console warnings/errors, and no horizontal overflow at 1280×800.
+- Export gates: all seven allow-listed endpoints returned HTTP 200 with correct JSON/NDJSON media types and non-empty payloads.
+- Exact candidate regression: 701 tests passed, 0 failed, 0 errors, 0 skipped in 79.255 seconds.
+- HCI disposition: PASS with high confidence. Overall inner-beta remains open until the spatial-design example and joint release audit pass.
+
+## 2026-07-14 — Spatial example accepted and joint audit started
+
+- `inner-beta-spatial-authoring-r1` completed the visible browser workflow: 15 collected, 15 screened, 1 included, 1/1 PDF retrieved, an 11-field Schema finalized, 1/1 extracted, and 1 row categorized.
+- Fixed `SPATIAL-R1-P2-001`: one-item summaries, confirmation copy, and LeadAgent review pronouns now use grammatical singular forms. Commit: `b8ab180`.
+- Browser gates: final `1 paper · 1 category`, seven export links, no incorrect singular plurals, 0 error-console entries, and no horizontal overflow at 1280-pixel content width.
+- Exact application candidate regression passed twice: 702 tests, 0 failures, 0 errors, 0 skipped in 103.334 seconds, then the final release audit repeated all 702 in 76.623 seconds with the same result.
+- Joint state audit: all three accepted projects have no active task; all five stages are completed and non-stale; all Schemas are finalized; counts agree with their run reports; no `/Users/`, `file://`, or `secrets.txt` marker appears in user-facing state.
+- Joint export audit: 21/21 endpoints returned HTTP 200 with correct JSON/NDJSON media types and non-empty bodies, totaling 182,281 bytes.
+- Provisional product decision: GO to start formal local inner beta with high confidence inside the single-user boundary. Human validation is not claimed until the 3–5-person cohort completes the runbook.
+- Final release-audit commit: `e5189d5`. The audit report, operator/cohort runbook, and README handoff are committed; the browser audit tabs and local test server were closed cleanly.
+
+## 2026-07-14 — Formal-release scope reopened
+
+- The previous `GO` remains valid only for a local single-user inner beta. The new objective asks for a formal release, so completion is reopened rather than relabeling existing evidence.
+- Current release blockers: no versioned build artifact or installer, no reproducible dependency lock, no health/readiness endpoint, no explicit graceful application lifecycle, configuration depends on ignored machine-local files, and there is no authentication/authorization boundary.
+- The current Starlette process writes directly below a repository-local `output/` root and uses an in-process task runner. That architecture is compatible with a packaged local single-user v1.0, but not with a public or concurrent multi-user service without a larger persistence/job/identity redesign.
+- Design work is now gated on choosing the formal-release product shape. No product implementation has started in this extension.
+- The recommended local single-user v1.0 design was presented twice without a user response. After three consecutive goal turns with the same approval blocker, implementation remains untouched and the goal is marked blocked in accordance with the design gate.
+
+## 2026-07-14 — Formal-release design approved and committed
+
+- User explicitly approved the local, single-user, self-contained, reproducibly installable ReviewPilot v1.0 scope; the blocked goal resumed automatically.
+- Design commit `daf40ff` defines macOS 14.x Apple Silicon support, a portable PyInstaller bundle, Keychain/environment credential boundary, loopback/origin security, application lifecycle and locking, vendored assets, verified migration/backup/restore, four-plan implementation decomposition, packaged three-example validation, and a zero-P0/P1/P2 release gate.
+- The spec self-review found no placeholders, contradictory platform claims, ambiguous browser-launch behavior, or omitted backup reconciliation. No product code has been changed in the formal-release extension.
+- Written-spec approval remained absent for three consecutive resumed goal turns. Because implementation plans are forbidden before this approval, the goal is marked blocked rather than leaving an active task that cannot make honest progress.
+
+## 2026-07-14 — Formal-release goal canceled and rolled back
+
+- User canceled the formal-release objective and requested restoration of the pre-release-adjustment inner-beta candidate.
+- Branch `codex/inner-beta-foundation` was reset from `26e36fe` to exact audited inner-beta commit `e5189d5`.
+- Removed from current history: formal-release design `daf40ff`, four-plan implementation commit `f049e86`, and package-metadata implementation `26e36fe`.
+- Post-reset verification: worktree clean, `HEAD == e5189d5`, and no diff from the audited inner-beta commit. The retained product status is local single-user inner beta; no formal-release claim remains active.

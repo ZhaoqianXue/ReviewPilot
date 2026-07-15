@@ -1,0 +1,1 @@
+{"filtered_at": "2026-07-14T18:35:47.794494", "initial_count": 30, "after_date_filter": 29, "after_exact_dedup": 28, "after_similarity_dedup": 28, "after_relevance_check": 18, "removed": {"by_date": 1, "by_exact_dedup": 1, "by_similarity": 0, "by_relevance": 10}, "final_count": 18, "total_screened": 28, "included_count": 18, "excluded_count": 10}

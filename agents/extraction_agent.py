@@ -374,6 +374,7 @@ class ExtractionAgent(BaseAgent):
                 {
                     "role": "system",
                     "content": (
+                        f"{extraction_prompt.get('system_prompt', '')}\n\n"
                         "Extract only information supported by cited web sources. "
                         "Return only valid JSON. Include source_urls and confidence. "
                         "If a schema field is unsupported, return an empty value and low confidence."

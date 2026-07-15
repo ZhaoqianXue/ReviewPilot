@@ -616,6 +616,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(project["id"], "llm-biomedicine-search")
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][2], "gpt-5.4-mini")
+        self.assertIn('<reviewpilot-agent-skill name="systematic-review-search-strategy"', calls[0][1])
         self.assertEqual(project["title"], "LLM Biomedicine Review")
         self.assertEqual(config["project_name"], "LLM Biomedicine Review")
         self.assertEqual(config["search_terms"], "LLM_JSON_QUERY")

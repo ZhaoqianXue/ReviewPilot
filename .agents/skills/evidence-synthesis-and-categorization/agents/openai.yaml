@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evidence Synthesis and Categorization"
+  short_description: "Build reviewable categories from extracted evidence"
+  default_prompt: "Use $evidence-synthesis-and-categorization to organize extracted evidence into reviewable categories."

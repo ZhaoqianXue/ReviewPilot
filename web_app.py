@@ -37,6 +37,7 @@ def _prefer_local_package_imports() -> None:
 _prefer_local_package_imports()
 
 from agents.lead_agent import LeadAgent
+from reviewpilot_core.agent_memory import CrossProjectMemoryService, MemoryStoreError
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.atomic_files import atomic_write_json
 from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
@@ -230,6 +231,37 @@ async def projects(request):
     return JSONResponse({"projects": list_projects(OUTPUT_ROOT)})
 
 
+async def memory_settings(request):
+    service = CrossProjectMemoryService(OUTPUT_ROOT)
+    try:
+        if request.method == "GET":
+            enabled = service.get_enabled()
+        else:
+            try:
+                payload = await request.json()
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                raise ValueError("Memory setting must be valid JSON") from exc
+            if not isinstance(payload, dict) or set(payload) != {"cross_project_memory_enabled"}:
+                raise ValueError("Memory setting must contain only cross_project_memory_enabled")
+            enabled = payload["cross_project_memory_enabled"]
+            if type(enabled) is not bool:
+                raise ValueError("cross_project_memory_enabled must be a boolean")
+            service.set_enabled(enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MemoryStoreError:
+        return JSONResponse({"detail": "Memory is unavailable"}, status_code=503)
+    return JSONResponse({"cross_project_memory_enabled": enabled})
+
+
+async def clear_memory(request):
+    try:
+        CrossProjectMemoryService(OUTPUT_ROOT).clear()
+    except MemoryStoreError:
+        return JSONResponse({"detail": "Memory is unavailable"}, status_code=503)
+    return JSONResponse({"cleared": True})
+
+
 async def project_export(request):
     project_id = request.path_params["project_id"]
     export_key = request.path_params["export_key"]
@@ -265,6 +297,8 @@ def create_app() -> Starlette:
             Route("/workspace", workspace_page, methods=["GET"]),
             Route("/projects", projects, methods=["GET"]),
             Route("/projects", create_project_api, methods=["POST"]),
+            Route("/memory/settings", memory_settings, methods=["GET", "PUT"]),
+            Route("/memory", clear_memory, methods=["DELETE"]),
             Route("/projects/new", new_project_page, methods=["GET"]),
             Route("/projects/{project_id}", project_page, methods=["GET"]),
             Route("/projects/{project_id}/state", project_state, methods=["GET"]),

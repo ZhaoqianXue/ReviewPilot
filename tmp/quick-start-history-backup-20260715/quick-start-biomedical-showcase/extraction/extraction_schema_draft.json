@@ -1,0 +1,74 @@
+{
+  "fields": [
+    {
+      "name": "datasets_used",
+      "type": "Text",
+      "description": "Biomedical datasets, corpora, benchmarks, or data sources used to train, fine-tune, validate, or evaluate the LLM or related system.",
+      "required": false,
+      "example": "PubMed abstracts, MIMIC-III clinical notes, MedQA, BioASQ"
+    },
+    {
+      "name": "methods",
+      "type": "Text",
+      "description": "The LLM approach, model architecture, prompting strategy, fine-tuning method, retrieval setup, or experimental design used in the study.",
+      "required": false,
+      "example": "Zero-shot prompting with GPT-4; retrieval-augmented generation using PubMed articles"
+    },
+    {
+      "name": "key_findings",
+      "type": "Text",
+      "description": "Main results, conclusions, or notable observations reported by the paper about LLM performance or utility in biomedicine.",
+      "required": false,
+      "example": "The model improved clinical question answering accuracy and produced more fluent summaries, but hallucinations remained common"
+    },
+    {
+      "name": "evaluation_metrics",
+      "type": "Text",
+      "description": "Metrics or criteria used to assess performance, quality, safety, or usefulness of the LLM system.",
+      "required": false,
+      "example": "Accuracy, F1 score, ROUGE, BLEU, exact match, human expert rating"
+    },
+    {
+      "name": "biomedical_task",
+      "type": "Text",
+      "description": "The specific biomedical or clinical task addressed by the LLM study.",
+      "required": false,
+      "example": "Clinical question answering, medical text summarization, diagnosis support, information extraction"
+    },
+    {
+      "name": "llm_model_or_family",
+      "type": "Text",
+      "description": "The large language model(s) or model family evaluated or discussed in the paper.",
+      "required": false,
+      "example": "ChatGPT, GPT-4, BioGPT, LLaMA, Med-PaLM"
+    },
+    {
+      "name": "biomedical_domain_context",
+      "type": "Text",
+      "description": "The biomedical subdomain or health AI setting in which the LLM is applied.",
+      "required": false,
+      "example": "Radiology, oncology, electronic health records, biomedical literature mining"
+    },
+    {
+      "name": "study_type",
+      "type": "Text",
+      "description": "The publication or study design relevant to evidence synthesis.",
+      "required": false,
+      "example": "Benchmark evaluation, clinical validation, user study, review, methodological paper"
+    },
+    {
+      "name": "comparison_baselines",
+      "type": "Text",
+      "description": "Any baseline models, alternative methods, or human comparators used for comparison.",
+      "required": false,
+      "example": "Compared against BERT, traditional machine learning models, and physician annotations"
+    },
+    {
+      "name": "limitations_or_risks",
+      "type": "Text",
+      "description": "Reported limitations, failure modes, safety concerns, or risks associated with the LLM approach in biomedicine.",
+      "required": false,
+      "example": "Hallucinations, limited generalizability, privacy concerns, bias in clinical recommendations"
+    }
+  ]
+}

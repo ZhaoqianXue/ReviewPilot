@@ -1,0 +1,26 @@
+{
+  "collected_at": "2026-07-14T18:42:25.788039",
+  "query": "(\"large language model\" OR LLM OR \"generative AI\" OR ChatGPT) AND (\"urban planning\" OR \"smart city\" OR \"smart cities\")",
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results_per_platform": 10,
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  },
+  "results": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_stats": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_errors": {},
+  "total_papers": 30
+}

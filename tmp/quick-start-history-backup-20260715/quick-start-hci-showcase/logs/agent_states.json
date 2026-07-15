@@ -1,0 +1,386 @@
+{
+  "search_condition": {
+    "state": {
+      "completed": true,
+      "conditions": {
+        "project_name": "quick-start-hci-showcase",
+        "description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+        "primary_topic": "Using large language models in human-computer interaction",
+        "domain": "Human-Computer Interaction (HCI)",
+        "search_terms": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+        "search_queries": [
+          {
+            "name": "main",
+            "query": "(\"human-computer interaction\" OR HCI OR \"human computer interaction\" OR \"interactive system\" OR \"user interface\" OR \"user experience\" OR UX) AND (\"large language model\" OR LLM OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)"
+          }
+        ],
+        "platforms": [
+          "pubmed",
+          "arxiv",
+          "openalex"
+        ],
+        "max_results": 10,
+        "source_limits": {
+          "pubmed": 10,
+          "arxiv": 10,
+          "openalex": 10
+        },
+        "date_range": {
+          "start": "2020-01-01",
+          "end": ""
+        },
+        "model": "gpt-5.4-mini",
+        "derive_search_terms": false,
+        "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.worktrees/inner-beta-foundation/output/quick-start-hci-showcase",
+        "research_description": "I want to do a survey in terms of LLM for Human Computer Interaction project. give me search terms.",
+        "extracted_concepts": {
+          "primary_topics": [
+            "LLM"
+          ],
+          "domains": [],
+          "methods": [],
+          "keywords": []
+        },
+        "max_results_per_platform": 10,
+        "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+        "arxiv_query": "llm"
+      }
+    },
+    "updated_at": "2026-07-14T15:10:12.124130"
+  },
+  "prompt": {
+    "state": {
+      "extraction_prompt": {
+        "system_prompt": "You are an expert academic paper analyst. Extract specific information accurately and comprehensively. If information is not available, indicate 'Not specified'.",
+        "user_prompt_template": "TASK: Extract the following information from the research paper.\n\nFIELDS TO EXTRACT:\ndatasets used, methods, key findings, evaluation metrics\n\nPAPER CONTENT:\n{paper_text}\n\nINSTRUCTION:\n1. Read the paper carefully\n2. Extract each requested field\n3. If information is not found, use \"Not specified\"\n4. Be concise but accurate\n5. Return ONLY valid JSON\n\nOUTPUT FORMAT:\n{\n  \"datasets_used\": \"...\",\n  \"methods\": \"...\",\n  \"key_findings\": \"...\",\n  \"evaluation_metrics\": \"...\"\n}\n\nYour JSON response:",
+        "output_format": "json",
+        "fields": [
+          "datasets used",
+          "methods",
+          "key findings",
+          "evaluation metrics"
+        ],
+        "prompt_type": "extraction",
+        "generated_at": "2026-07-14T18:37:54.794922",
+        "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+        "output_structured": true,
+        "schema": {
+          "fields": [
+            {
+              "name": "datasets_used",
+              "type": "Text",
+              "description": "Any datasets, corpora, logs, benchmarks, participant data, prompts, or task materials used to develop, train, test, or evaluate the LLM-based HCI work.",
+              "required": false,
+              "example": "User study transcripts, ChatGPT interaction logs, UX workshop responses"
+            },
+            {
+              "name": "methods",
+              "type": "Text",
+              "description": "The study design, system approach, experimental setup, or analytical method used to investigate LLM use in HCI.",
+              "required": false,
+              "example": "Prototype system with mixed-method user study and comparative evaluation against baseline"
+            },
+            {
+              "name": "key_findings",
+              "type": "Text",
+              "description": "The main results, conclusions, or observed effects reported by the paper regarding LLM use in HCI.",
+              "required": false,
+              "example": "LLM support improved task completion and user satisfaction, but raised concerns about trust and controllability"
+            },
+            {
+              "name": "evaluation_metrics",
+              "type": "Text",
+              "description": "Any quantitative or qualitative metrics used to assess performance, usability, quality, or user experience.",
+              "required": false,
+              "example": "Accuracy, task completion rate, SUS, usability ratings, response quality scores"
+            },
+            {
+              "name": "hci_context",
+              "type": "Text",
+              "description": "The specific HCI setting, application area, or interaction scenario in which the LLM is used.",
+              "required": false,
+              "example": "UX education, conversational interface design, user research simulation"
+            },
+            {
+              "name": "llm_role",
+              "type": "Text",
+              "description": "How the large language model is used in the HCI system or study.",
+              "required": false,
+              "example": "User simulator, design assistant, conversational agent, coaching tool"
+            },
+            {
+              "name": "participants_or_users",
+              "type": "Text",
+              "description": "Who interacted with the system or took part in the study, including target users, designers, students, or other stakeholders.",
+              "required": false,
+              "example": "Undergraduate engineering students, UX practitioners, end users"
+            },
+            {
+              "name": "comparison_baseline",
+              "type": "Text",
+              "description": "Any baseline, control condition, or comparison system used in the study.",
+              "required": false,
+              "example": "Rule-based conversational agent, human coach, no-LLM baseline"
+            },
+            {
+              "name": "study_type",
+              "type": "Text",
+              "description": "The overall type of evidence provided by the paper.",
+              "required": false,
+              "example": "Proof-of-concept study, user study, system paper, evaluation study"
+            },
+            {
+              "name": "relevance_judgment",
+              "type": "Text",
+              "description": "Whether the paper provides substantive evidence relevant to using large language models in human-computer interaction within the HCI domain, based only on the title and abstract.",
+              "required": false,
+              "example": "True"
+            }
+          ]
+        },
+        "source": "llm",
+        "usage": {
+          "input_tokens": 779,
+          "output_tokens": 709,
+          "total_tokens": 1488,
+          "cost_usd": 0.00161275,
+          "model": "gpt-5.4-mini"
+        }
+      }
+    },
+    "updated_at": "2026-07-14T18:38:01.956681"
+  },
+  "collection": {
+    "state": {
+      "completed": true,
+      "total_papers": 30,
+      "platform_stats": {
+        "pubmed": 10,
+        "arxiv": 10,
+        "openalex": 10
+      },
+      "platform_errors": {},
+      "output_dir": "output/quick-start-hci-showcase/collected"
+    },
+    "updated_at": "2026-07-14T18:34:10.406911"
+  },
+  "filtering": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "filtered_at": "2026-07-14T18:35:47.794494",
+        "initial_count": 30,
+        "after_date_filter": 29,
+        "after_exact_dedup": 28,
+        "after_similarity_dedup": 28,
+        "after_relevance_check": 18,
+        "removed": {
+          "by_date": 1,
+          "by_exact_dedup": 1,
+          "by_similarity": 0,
+          "by_relevance": 10
+        },
+        "final_count": 18,
+        "total_screened": 28,
+        "included_count": 18,
+        "excluded_count": 10
+      },
+      "output_file": "output/quick-start-hci-showcase/filtered/filtered_papers.jsonl"
+    },
+    "updated_at": "2026-07-14T18:35:47.796480"
+  },
+  "download": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "downloaded_at": "2026-07-14T18:37:54.758768",
+        "success": 15,
+        "failed": 3,
+        "skipped": 0,
+        "attempted": 18,
+        "pdf_count": 20,
+        "downloaded": [
+          {
+            "title": "Leveraging Large Language Models in User eXperience (UX) Education when Real Users Are Unavailable.",
+            "path": "output/quick-start-hci-showcase/pdfs/leveraging_large_language_models_in_user_experience_ux_education_when_real_users_are_unavailable_publisher_ios.pdf"
+          },
+          {
+            "title": "Can GPT-4o Evaluate Usability Like Human Experts? A Comparative Study on Issue Identification in Heuristic Evaluation",
+            "path": "output/quick-start-hci-showcase/pdfs/can_gpt-4o_evaluate_usability_like_human_experts_a_comparative_study_on_issue_identification_in_heur_direct_pdf.pdf"
+          },
+          {
+            "title": "Mapping the Challenges of HCI: An Application and Evaluation of ChatGPT for Mining Insights at Scale",
+            "path": "output/quick-start-hci-showcase/pdfs/mapping_the_challenges_of_hci_an_application_and_evaluation_of_chatgpt_for_mining_insights_at_scale_direct_pdf.pdf"
+          },
+          {
+            "title": "ChatGPT and U(X): A Rapid Review on Measuring the User Experience",
+            "path": "output/quick-start-hci-showcase/pdfs/chatgpt_and_ux_a_rapid_review_on_measuring_the_user_experience_direct_pdf.pdf"
+          },
+          {
+            "title": "UX Remix: Improving Measurement Item Design Process Using Large Language Models and Prior Literature",
+            "path": "output/quick-start-hci-showcase/pdfs/ux_remix_improving_measurement_item_design_process_using_large_language_models_and_prior_literature_direct_pdf.pdf"
+          },
+          {
+            "title": "Human-Computer Interaction and Visualization in Natural Language Generation Models: Applications, Challenges, and Opportunities",
+            "path": "output/quick-start-hci-showcase/pdfs/human-computer_interaction_and_visualization_in_natural_language_generation_models_applications_chal_direct_pdf.pdf"
+          },
+          {
+            "title": "LLMs in HCI Data Work: Bridging the Gap Between Information Retrieval and Responsible Research Practices",
+            "path": "output/quick-start-hci-showcase/pdfs/llms_in_hci_data_work_bridging_the_gap_between_information_retrieval_and_responsible_research_practi_direct_pdf.pdf"
+          },
+          {
+            "title": "Guiding Generative Storytelling with Knowledge Graphs",
+            "path": "output/quick-start-hci-showcase/pdfs/guiding_generative_storytelling_with_knowledge_graphs_direct_pdf.pdf"
+          },
+          {
+            "title": "Risk or Chance? Large Language Models and Reproducibility in HCI Research",
+            "path": "output/quick-start-hci-showcase/pdfs/risk_or_chance_large_language_models_and_reproducibility_in_hci_research_direct_pdf.pdf"
+          },
+          {
+            "title": "Reporting and Reviewing LLM-Integrated Systems in HCI: Challenges and Considerations",
+            "path": "output/quick-start-hci-showcase/pdfs/reporting_and_reviewing_llm-integrated_systems_in_hci_challenges_and_considerations_direct_pdf.pdf"
+          },
+          {
+            "title": "LLM Whisperer: An Inconspicuous Attack to Bias LLM Responses",
+            "path": "output/quick-start-hci-showcase/pdfs/llm_whisperer_an_inconspicuous_attack_to_bias_llm_responses_doi_static_html.pdf"
+          },
+          {
+            "title": "ECHO: Explainable Co-editing with Human-in-the-loop Operations for Presentation Refinement",
+            "path": "output/quick-start-hci-showcase/pdfs/echo_explainable_co-editing_with_human-in-the-loop_operations_for_presentation_refinement_arxiv.pdf"
+          },
+          {
+            "title": "Will AI also replace inspectors? Investigating the potential of generative AIs in usability inspection",
+            "path": "output/quick-start-hci-showcase/pdfs/will_ai_also_replace_inspectors_investigating_the_potential_of_generative_ais_in_usability_inspectio_arxiv.pdf"
+          },
+          {
+            "title": "ChatGPT: perspectives from human–computer interaction and psychology",
+            "path": "output/quick-start-hci-showcase/pdfs/chatgpt_perspectives_from_humancomputer_interaction_and_psychology_doi_static_html.pdf"
+          },
+          {
+            "title": "Fine-Tuning Large Language Models for Specialized Use Cases",
+            "path": "output/quick-start-hci-showcase/pdfs/fine-tuning_large_language_models_for_specialized_use_cases_open_access_rescue.pdf"
+          }
+        ],
+        "failed_papers": [
+          {
+            "id": "42407032",
+            "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+            "doi": "10.2196/94036",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+            "failure_class": "pdf_endpoint_cloudflare",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "42361730",
+            "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+            "doi": "10.1016/j.msksp.2026.103594",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "W4366549000",
+            "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+            "doi": "10.1145/3544548.3580688",
+            "url": "https://openalex.org/W4366549000",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "subscribed_papers": [
+          {
+            "id": "42361730",
+            "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+            "doi": "10.1016/j.msksp.2026.103594",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "unavailable_papers": [
+          {
+            "id": "42407032",
+            "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+            "doi": "10.2196/94036",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+            "failure_class": "pdf_endpoint_cloudflare",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "W4366549000",
+            "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+            "doi": "10.1145/3544548.3580688",
+            "url": "https://openalex.org/W4366549000",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "web_search_fallback_candidates": [
+          {
+            "id": "42407032",
+            "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+            "doi": "10.2196/94036",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+            "failure_class": "pdf_endpoint_cloudflare",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "42361730",
+            "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+            "doi": "10.1016/j.msksp.2026.103594",
+            "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+            "failure_class": "publisher_paywalled",
+            "retrieval_status": "subscribed_unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          },
+          {
+            "id": "W4366549000",
+            "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+            "doi": "10.1145/3544548.3580688",
+            "url": "https://openalex.org/W4366549000",
+            "failure_class": "article_print_failed",
+            "retrieval_status": "unavailable",
+            "web_search_fallback_pending": true,
+            "web_search_fallback_eligible": true
+          }
+        ],
+        "output_dir": "output/quick-start-hci-showcase/pdfs",
+        "download_engine": "FastCascadePDFDownloader"
+      },
+      "output_dir": "output/quick-start-hci-showcase/pdfs"
+    },
+    "updated_at": "2026-07-14T18:37:54.779401"
+  },
+  "extraction": {
+    "state": {
+      "completed": true,
+      "stats": {
+        "extracted_at": "2026-07-14T18:40:58.086176",
+        "total_pdfs": 20,
+        "processed": 18,
+        "errors": 0,
+        "web_search_fallback": 3,
+        "pending_web_search_fallback": 0,
+        "total_cost_usd": 0.10246849999999999,
+        "model": "gpt-5.4-mini",
+        "output_file": "output/quick-start-hci-showcase/extraction/extraction_results.jsonl"
+      }
+    },
+    "updated_at": "2026-07-14T18:40:58.091004"
+  }
+}

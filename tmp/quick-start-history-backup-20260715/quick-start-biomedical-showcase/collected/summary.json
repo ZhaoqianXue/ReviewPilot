@@ -1,0 +1,26 @@
+{
+  "collected_at": "2026-07-14T18:34:10.080127",
+  "query": "(biomedicine OR biomedical OR \"life sciences\" OR healthcare OR \"health care\" OR biomed* OR \"electronic health record\" OR EHR) AND (LLM OR \"large language model\" OR \"large language modelling\" OR \"foundation model\" OR GPT OR ChatGPT OR Claude OR Gemini OR Qwen OR DeepSeek)",
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results_per_platform": 10,
+  "date_range": {
+    "start": "2023-01-01",
+    "end": ""
+  },
+  "results": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_stats": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "platform_errors": {},
+  "total_papers": 30
+}

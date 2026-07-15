@@ -1,0 +1,4 @@
+interface:
+  display_name: "Systematic Review Search Strategy"
+  short_description: "Design reproducible, source-aware review searches"
+  default_prompt: "Use $systematic-review-search-strategy to design a reproducible search strategy for this review."

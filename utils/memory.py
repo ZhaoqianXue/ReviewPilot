@@ -3,7 +3,13 @@ Memory System for ReviewPilot.
 
 Provides both short-term (project-level) and long-term (user-level) memory
 to improve suggestions for screening criteria and information extraction.
+
+LEGACY/UNWIRED: production Agent Memory is implemented in
+``reviewpilot_core.agent_memory``. This prototype is retained only for
+backward compatibility and must not be imported by the Web App runtime.
 """
+
+LEGACY_UNWIRED = True
 
 import json
 import sqlite3

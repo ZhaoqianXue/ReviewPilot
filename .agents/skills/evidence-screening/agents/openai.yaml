@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evidence Screening"
+  short_description: "Operationalize and apply review eligibility criteria"
+  default_prompt: "Use $evidence-screening to define or apply evidence-screening criteria."

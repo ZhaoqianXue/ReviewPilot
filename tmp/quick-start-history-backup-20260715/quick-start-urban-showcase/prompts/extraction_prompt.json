@@ -1,0 +1,83 @@
+{
+  "prompt_type": "extraction",
+  "system_prompt": "You are an expert researcher extracting structured information from papers about Applications of large language models in urban planning and smart cities in Urban planning and smart cities. Extract only information supported by the provided paper text.",
+  "user_prompt_template": "Extract information from the paper using these fields:\n\n1. relevance_to_review_question (Text, required): Whether the paper provides substantive evidence relevant to applications of large language models in urban planning and smart cities within the urban planning and smart cities domain, based only on the title and abstract. Example: True\n2. datasets_used (Text, optional): Datasets, corpora, benchmarks, or data sources used to develop, train, test, or evaluate the LLM-based approach. Example: City complaint dataset; traffic sensor records; manually annotated urban planning documents\n3. methods (Text, optional): The LLM-based method, model architecture, prompting strategy, pipeline, or system design used in the study. Example: Multi-LLM scoring framework with prompt-based classification and benchmark construction\n4. key_findings (Text, optional): Main results, conclusions, or claims about how the LLM approach performed or supported urban planning/smart city tasks. Example: The approach improved prediction accuracy and enabled scalable city-wide analysis\n5. evaluation_metrics (Text, optional): Quantitative or qualitative metrics used to assess performance, such as accuracy, F1, MAE, RMSE, BLEU, human ratings, or task-specific measures. Example: Accuracy, F1-score, MAE\n6. urban_planning_or_smart_city_task (Text, optional): The specific urban planning or smart city application addressed by the paper, such as traffic forecasting, noise analysis, land-use planning, mobility, or urban policy support. Example: City-wide traffic prediction\n7. llm_role (Text, optional): How the large language model is used in the study, such as classifier, generator, extractor, planner assistant, evaluator, or reasoning component. Example: LLM used as a scoring and reasoning engine\n8. input_data_type (Text, optional): The type of input data processed by the LLM-based approach, such as text reports, complaints, sensor time series, maps, policy documents, or multimodal urban data. Example: Urban complaint text and traffic time series\n9. comparison_or_baselines (Text, optional): Any baseline methods, comparative models, or reference approaches used in the study. Example: Compared against traditional machine learning and non-LLM forecasting models\n10. practical_implications (Text, optional): Any stated implications for urban planning practice, smart city operations, decision-making, or policy support. Example: Supports scalable city-level monitoring and planning decisions\n\nReturn ONLY valid JSON with exactly these schema field names. Use empty strings for unavailable optional values.\n\nPAPER CONTENT:\n{paper_text}\n\nYour JSON response:",
+  "extraction_fields": "relevance_to_review_question, datasets_used, methods, key_findings, evaluation_metrics, urban_planning_or_smart_city_task, llm_role, input_data_type, comparison_or_baselines, practical_implications",
+  "output_structured": true,
+  "schema": {
+    "fields": [
+      {
+        "name": "relevance_to_review_question",
+        "type": "Text",
+        "description": "Whether the paper provides substantive evidence relevant to applications of large language models in urban planning and smart cities within the urban planning and smart cities domain, based only on the title and abstract.",
+        "required": true,
+        "example": "True"
+      },
+      {
+        "name": "datasets_used",
+        "type": "Text",
+        "description": "Datasets, corpora, benchmarks, or data sources used to develop, train, test, or evaluate the LLM-based approach.",
+        "required": false,
+        "example": "City complaint dataset; traffic sensor records; manually annotated urban planning documents"
+      },
+      {
+        "name": "methods",
+        "type": "Text",
+        "description": "The LLM-based method, model architecture, prompting strategy, pipeline, or system design used in the study.",
+        "required": false,
+        "example": "Multi-LLM scoring framework with prompt-based classification and benchmark construction"
+      },
+      {
+        "name": "key_findings",
+        "type": "Text",
+        "description": "Main results, conclusions, or claims about how the LLM approach performed or supported urban planning/smart city tasks.",
+        "required": false,
+        "example": "The approach improved prediction accuracy and enabled scalable city-wide analysis"
+      },
+      {
+        "name": "evaluation_metrics",
+        "type": "Text",
+        "description": "Quantitative or qualitative metrics used to assess performance, such as accuracy, F1, MAE, RMSE, BLEU, human ratings, or task-specific measures.",
+        "required": false,
+        "example": "Accuracy, F1-score, MAE"
+      },
+      {
+        "name": "urban_planning_or_smart_city_task",
+        "type": "Text",
+        "description": "The specific urban planning or smart city application addressed by the paper, such as traffic forecasting, noise analysis, land-use planning, mobility, or urban policy support.",
+        "required": false,
+        "example": "City-wide traffic prediction"
+      },
+      {
+        "name": "llm_role",
+        "type": "Text",
+        "description": "How the large language model is used in the study, such as classifier, generator, extractor, planner assistant, evaluator, or reasoning component.",
+        "required": false,
+        "example": "LLM used as a scoring and reasoning engine"
+      },
+      {
+        "name": "input_data_type",
+        "type": "Text",
+        "description": "The type of input data processed by the LLM-based approach, such as text reports, complaints, sensor time series, maps, policy documents, or multimodal urban data.",
+        "required": false,
+        "example": "Urban complaint text and traffic time series"
+      },
+      {
+        "name": "comparison_or_baselines",
+        "type": "Text",
+        "description": "Any baseline methods, comparative models, or reference approaches used in the study.",
+        "required": false,
+        "example": "Compared against traditional machine learning and non-LLM forecasting models"
+      },
+      {
+        "name": "practical_implications",
+        "type": "Text",
+        "description": "Any stated implications for urban planning practice, smart city operations, decision-making, or policy support.",
+        "required": false,
+        "example": "Supports scalable city-level monitoring and planning decisions"
+      }
+    ]
+  },
+  "source": "user_finalized_schema",
+  "generated_at": "2026-07-14T18:45:33.671889"
+}

@@ -1,4 +1,16 @@
-# ReviewPilot UI design reference
+# ReviewPilot design reference
+
+## Architecture documents
+
+| File | Authority |
+|---|---|
+| [`LEAD_AGENT_ARCHITECTURE.md`](LEAD_AGENT_ARCHITECTURE.md) | One Lead Agent plus six Sub Agents, bounded workflow, model policy, contracts, and artifact-first orchestration |
+| [`AGENT_SKILL_ARCHITECTURE.md`](AGENT_SKILL_ARCHITECTURE.md) | Implemented system-prompt/Skill boundary, four-Skill catalog, deterministic activation, progressive loading, provenance, and engineering gates |
+| [`AGENT_MEMORY_ARCHITECTURE.md`](AGENT_MEMORY_ARCHITECTURE.md) | Implemented invisible Lead-owned Session Memory and minimal Cross-project Memory runtime, including storage, promotion, retrieval, failure policy, API, UI, and verification gates |
+| [`LEAD_AGENT_UI_UX_BOUNDARY.md`](LEAD_AGENT_UI_UX_BOUNDARY.md) | Canvas/chat responsibilities and the user-visible boundary of internal Agent and Skill behavior |
+| [`SYSTEM_OVERVIEW_FIGURE_PROMPT.md`](SYSTEM_OVERVIEW_FIGURE_PROMPT.md) | Publication-facing system-overview figure specification |
+
+## UI design files
 
 Target UI: **Direction C · Ledger**. Three files, three jobs:
 

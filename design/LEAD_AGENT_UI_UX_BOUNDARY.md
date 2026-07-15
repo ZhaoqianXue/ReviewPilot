@@ -1,9 +1,11 @@
 # ReviewPilot Lead Agent UI/UX Boundary
 
 ## Relationship to Architecture
-This document defines how the Lead Agent architecture should appear in the web app. It must be read together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which defines the Lead Agent, six evidence Sub Agents, the internal seven-stage evidence pipeline, the user-facing five-step workflow, model policy, and artifact contracts.
+This document defines how the Lead Agent architecture should appear in the web app. It must be read together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which defines the Lead Agent, six evidence Sub Agents, the internal seven-stage evidence pipeline, the user-facing five-step workflow, model policy, and artifact contracts; [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md), which defines the internal four-Skill catalog and loading boundary; and [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md), which defines invisible session context and minimal cross-project memory controls.
 
 The Lead Agent architecture is primarily a backend kernel change. It should not substantially redesign ReviewPilot's frontend appearance, layout, or interaction model.
+
+Agent Skills are also an internal capability layer. The canvas should continue to expose review decisions and evidence results rather than Skill selectors, loading traces, hidden prompts, or internal Skill activity widgets unless a separate product decision establishes a user need.
 
 ## Core Principle
 Keep the current ReviewPilot web app experience. The Lead Agent changes who decides and orchestrates work behind the scenes; it should not make the UI look like a new product.
@@ -18,8 +20,14 @@ The existing three-column layout, sidebar, canvas, stepper, right-side chat, vis
 | Canvas | Business state, data review, setup editing, workflow decisions, final result presentation | Buttons, forms, checkboxes, source selection, date range edits, Add keyword, approve/retry/run actions, categorization controls, export controls | Long agent conversation or hidden orchestration details |
 | Chat | Text-only conversation with the Lead Agent | User text input and Lead Agent text responses | Buttons, cards with click actions, decision controls, menus, checkboxes |
 
+## Agent Memory Visibility
+
+Session Memory is entirely internal Lead Agent behavior. It has no frontend name, explanation, status, setting, reset action, endpoint, diagnostic field, or visual representation. Users may notice conversational continuity, but they never manage a Session Memory feature.
+
+The frontend calls the feature only `Memory`. Its only two Settings interactions are `Memory` as an on/off toggle and `Clear memory` as a confirmed clear-all action. `Cross-project Memory` remains an internal architecture term and must not appear in user-facing copy. The UI must not show memory items, counts, kinds, source projects, timestamps, retrieval scores, internal identifiers, promotion events, or advanced controls. Chat may naturally benefit from earlier validated configurations, but it must not present remembered content as a current-project fact until the user adopts it and the normal project action persists it.
+
 ## Canvas Is the Operation Area
-All click interactions must happen in the canvas. If the user needs to click, choose, approve, retry, add, remove, toggle, edit, or run something, that interaction belongs in the canvas.
+All review-workflow click interactions must happen in the canvas. If the user needs to click, choose, approve, retry, add, remove, toggle, edit, or run something that changes the current review workflow, that interaction belongs in the canvas. Application-level controls in the existing Settings surface, including the two Memory controls, are outside this workflow rule.
 
 Examples of canvas interactions:
 

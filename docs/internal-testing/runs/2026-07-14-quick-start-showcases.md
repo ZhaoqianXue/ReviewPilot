@@ -1,5 +1,7 @@
 # ReviewPilot Quick Start showcase runs
 
+> Historical record: these 2026-07-14 artifacts were replaced in the canonical History slots by the 2026-07-15 Agent Skill browser validation. See [`2026-07-15-agent-skill-quick-start-showcases.md`](2026-07-15-agent-skill-quick-start-showcases.md) for the current runs and counts.
+
 ## Product acceptance
 
 History must present the same three subjects as Quick Start and each History item must open a completed, inspectable review rather than an empty project template. The canonical History projects are `quick-start-biomedical-showcase`, `quick-start-hci-showcase`, and `quick-start-urban-showcase`. Older `inner-beta-*` and `qa-live-*` projects remain local audit evidence but are not selected while these canonical projects exist.

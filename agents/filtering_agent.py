@@ -42,7 +42,7 @@ class FilteringAgent(BaseAgent):
     4. LLM-based relevance checking
     """
 
-    def __init__(self, project_path: Path, model: str = FILTERING_MODEL):
+    def __init__(self, project_path: Path, model: str = FILTERING_MODEL, llm_query=None):
         """
         Initialize the filtering agent.
 
@@ -52,6 +52,7 @@ class FilteringAgent(BaseAgent):
         """
         super().__init__(project_path, "filtering")
         self.model = model
+        self.llm_query = llm_query
 
     def run(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -339,7 +340,8 @@ class FilteringAgent(BaseAgent):
             )
 
             try:
-                response, usage = query_llm(
+                active_llm_query = self.llm_query or query_llm
+                response, usage = active_llm_query(
                     text_prompt=user_prompt,
                     system_prompt=system_prompt,
                     model=self.model,

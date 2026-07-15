@@ -1,0 +1,74 @@
+{
+  "fields": [
+    {
+      "name": "datasets_used",
+      "type": "Text",
+      "description": "Any datasets, corpora, logs, benchmarks, participant data, prompts, or task materials used to develop, train, test, or evaluate the LLM-based HCI work.",
+      "required": false,
+      "example": "User study transcripts, ChatGPT interaction logs, UX workshop responses"
+    },
+    {
+      "name": "methods",
+      "type": "Text",
+      "description": "The study design, system approach, experimental setup, or analytical method used to investigate LLM use in HCI.",
+      "required": false,
+      "example": "Prototype system with mixed-method user study and comparative evaluation against baseline"
+    },
+    {
+      "name": "key_findings",
+      "type": "Text",
+      "description": "The main results, conclusions, or observed effects reported by the paper regarding LLM use in HCI.",
+      "required": false,
+      "example": "LLM support improved task completion and user satisfaction, but raised concerns about trust and controllability"
+    },
+    {
+      "name": "evaluation_metrics",
+      "type": "Text",
+      "description": "Any quantitative or qualitative metrics used to assess performance, usability, quality, or user experience.",
+      "required": false,
+      "example": "Accuracy, task completion rate, SUS, usability ratings, response quality scores"
+    },
+    {
+      "name": "hci_context",
+      "type": "Text",
+      "description": "The specific HCI setting, application area, or interaction scenario in which the LLM is used.",
+      "required": false,
+      "example": "UX education, conversational interface design, user research simulation"
+    },
+    {
+      "name": "llm_role",
+      "type": "Text",
+      "description": "How the large language model is used in the HCI system or study.",
+      "required": false,
+      "example": "User simulator, design assistant, conversational agent, coaching tool"
+    },
+    {
+      "name": "participants_or_users",
+      "type": "Text",
+      "description": "Who interacted with the system or took part in the study, including target users, designers, students, or other stakeholders.",
+      "required": false,
+      "example": "Undergraduate engineering students, UX practitioners, end users"
+    },
+    {
+      "name": "comparison_baseline",
+      "type": "Text",
+      "description": "Any baseline, control condition, or comparison system used in the study.",
+      "required": false,
+      "example": "Rule-based conversational agent, human coach, no-LLM baseline"
+    },
+    {
+      "name": "study_type",
+      "type": "Text",
+      "description": "The overall type of evidence provided by the paper.",
+      "required": false,
+      "example": "Proof-of-concept study, user study, system paper, evaluation study"
+    },
+    {
+      "name": "relevance_judgment",
+      "type": "Text",
+      "description": "Whether the paper provides substantive evidence relevant to using large language models in human-computer interaction within the HCI domain, based only on the title and abstract.",
+      "required": false,
+      "example": "True"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "project_name": "quick-start-urban-showcase",
+  "description": "I want to review how LLMs support urban planning and smart cities.",
+  "primary_topic": "Applications of large language models in urban planning and smart cities",
+  "domain": "Urban planning and smart cities",
+  "search_terms": "(\"large language model\" OR LLM OR \"generative AI\" OR ChatGPT) AND (\"urban planning\" OR \"smart city\" OR \"smart cities\")",
+  "search_queries": [
+    {
+      "name": "main",
+      "query": "(\"large language model\" OR LLM OR \"generative AI\" OR ChatGPT) AND (\"urban planning\" OR \"smart city\" OR \"smart cities\")"
+    }
+  ],
+  "platforms": [
+    "pubmed",
+    "arxiv",
+    "openalex"
+  ],
+  "max_results": 10,
+  "source_limits": {
+    "pubmed": 10,
+    "arxiv": 10,
+    "openalex": 10
+  },
+  "date_range": {
+    "start": "2020-01-01",
+    "end": ""
+  },
+  "model": "gpt-5.4-mini",
+  "derive_search_terms": false,
+  "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.worktrees/inner-beta-foundation/output/quick-start-urban-showcase",
+  "research_description": "I want to review how LLMs support urban planning and smart cities.",
+  "extracted_concepts": {
+    "primary_topics": [
+      "LLM"
+    ],
+    "domains": [],
+    "methods": [],
+    "keywords": []
+  },
+  "max_results_per_platform": 10,
+  "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+  "arxiv_query": "llm",
+  "setup_revision": "53298406dcc8ad38ec4c04a25702d85b25d30c1a0f293f1087d699a3aa275931"
+}

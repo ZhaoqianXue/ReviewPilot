@@ -1,0 +1,170 @@
+{
+  "downloaded_at": "2026-07-14T18:37:54.758768",
+  "success": 15,
+  "failed": 3,
+  "skipped": 0,
+  "attempted": 18,
+  "pdf_count": 20,
+  "downloaded": [
+    {
+      "title": "Leveraging Large Language Models in User eXperience (UX) Education when Real Users Are Unavailable.",
+      "path": "output/quick-start-hci-showcase/pdfs/leveraging_large_language_models_in_user_experience_ux_education_when_real_users_are_unavailable_publisher_ios.pdf"
+    },
+    {
+      "title": "Can GPT-4o Evaluate Usability Like Human Experts? A Comparative Study on Issue Identification in Heuristic Evaluation",
+      "path": "output/quick-start-hci-showcase/pdfs/can_gpt-4o_evaluate_usability_like_human_experts_a_comparative_study_on_issue_identification_in_heur_direct_pdf.pdf"
+    },
+    {
+      "title": "Mapping the Challenges of HCI: An Application and Evaluation of ChatGPT for Mining Insights at Scale",
+      "path": "output/quick-start-hci-showcase/pdfs/mapping_the_challenges_of_hci_an_application_and_evaluation_of_chatgpt_for_mining_insights_at_scale_direct_pdf.pdf"
+    },
+    {
+      "title": "ChatGPT and U(X): A Rapid Review on Measuring the User Experience",
+      "path": "output/quick-start-hci-showcase/pdfs/chatgpt_and_ux_a_rapid_review_on_measuring_the_user_experience_direct_pdf.pdf"
+    },
+    {
+      "title": "UX Remix: Improving Measurement Item Design Process Using Large Language Models and Prior Literature",
+      "path": "output/quick-start-hci-showcase/pdfs/ux_remix_improving_measurement_item_design_process_using_large_language_models_and_prior_literature_direct_pdf.pdf"
+    },
+    {
+      "title": "Human-Computer Interaction and Visualization in Natural Language Generation Models: Applications, Challenges, and Opportunities",
+      "path": "output/quick-start-hci-showcase/pdfs/human-computer_interaction_and_visualization_in_natural_language_generation_models_applications_chal_direct_pdf.pdf"
+    },
+    {
+      "title": "LLMs in HCI Data Work: Bridging the Gap Between Information Retrieval and Responsible Research Practices",
+      "path": "output/quick-start-hci-showcase/pdfs/llms_in_hci_data_work_bridging_the_gap_between_information_retrieval_and_responsible_research_practi_direct_pdf.pdf"
+    },
+    {
+      "title": "Guiding Generative Storytelling with Knowledge Graphs",
+      "path": "output/quick-start-hci-showcase/pdfs/guiding_generative_storytelling_with_knowledge_graphs_direct_pdf.pdf"
+    },
+    {
+      "title": "Risk or Chance? Large Language Models and Reproducibility in HCI Research",
+      "path": "output/quick-start-hci-showcase/pdfs/risk_or_chance_large_language_models_and_reproducibility_in_hci_research_direct_pdf.pdf"
+    },
+    {
+      "title": "Reporting and Reviewing LLM-Integrated Systems in HCI: Challenges and Considerations",
+      "path": "output/quick-start-hci-showcase/pdfs/reporting_and_reviewing_llm-integrated_systems_in_hci_challenges_and_considerations_direct_pdf.pdf"
+    },
+    {
+      "title": "LLM Whisperer: An Inconspicuous Attack to Bias LLM Responses",
+      "path": "output/quick-start-hci-showcase/pdfs/llm_whisperer_an_inconspicuous_attack_to_bias_llm_responses_doi_static_html.pdf"
+    },
+    {
+      "title": "ECHO: Explainable Co-editing with Human-in-the-loop Operations for Presentation Refinement",
+      "path": "output/quick-start-hci-showcase/pdfs/echo_explainable_co-editing_with_human-in-the-loop_operations_for_presentation_refinement_arxiv.pdf"
+    },
+    {
+      "title": "Will AI also replace inspectors? Investigating the potential of generative AIs in usability inspection",
+      "path": "output/quick-start-hci-showcase/pdfs/will_ai_also_replace_inspectors_investigating_the_potential_of_generative_ais_in_usability_inspectio_arxiv.pdf"
+    },
+    {
+      "title": "ChatGPT: perspectives from human–computer interaction and psychology",
+      "path": "output/quick-start-hci-showcase/pdfs/chatgpt_perspectives_from_humancomputer_interaction_and_psychology_doi_static_html.pdf"
+    },
+    {
+      "title": "Fine-Tuning Large Language Models for Specialized Use Cases",
+      "path": "output/quick-start-hci-showcase/pdfs/fine-tuning_large_language_models_for_specialized_use_cases_open_access_rescue.pdf"
+    }
+  ],
+  "failed_papers": [
+    {
+      "id": "42407032",
+      "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+      "doi": "10.2196/94036",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+      "failure_class": "pdf_endpoint_cloudflare",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42361730",
+      "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+      "doi": "10.1016/j.msksp.2026.103594",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4366549000",
+      "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+      "doi": "10.1145/3544548.3580688",
+      "url": "https://openalex.org/W4366549000",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "subscribed_papers": [
+    {
+      "id": "42361730",
+      "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+      "doi": "10.1016/j.msksp.2026.103594",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "unavailable_papers": [
+    {
+      "id": "42407032",
+      "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+      "doi": "10.2196/94036",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+      "failure_class": "pdf_endpoint_cloudflare",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4366549000",
+      "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+      "doi": "10.1145/3544548.3580688",
+      "url": "https://openalex.org/W4366549000",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "web_search_fallback_candidates": [
+    {
+      "id": "42407032",
+      "title": "Structured Large Language Model Workflows for Motivational Interviewing in Health Behavior Change: Proof-of-Concept Study.",
+      "doi": "10.2196/94036",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42407032/",
+      "failure_class": "pdf_endpoint_cloudflare",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42361730",
+      "title": "ChatGPT-assisted pain history-taking system for musculoskeletal rehabilitation: Development and preliminary psychometric validation.",
+      "doi": "10.1016/j.msksp.2026.103594",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42361730/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4366549000",
+      "title": "Evaluating Large Language Models in Generating Synthetic HCI Research Data: a Case Study",
+      "doi": "10.1145/3544548.3580688",
+      "url": "https://openalex.org/W4366549000",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "output_dir": "output/quick-start-hci-showcase/pdfs",
+  "download_engine": "FastCascadePDFDownloader"
+}

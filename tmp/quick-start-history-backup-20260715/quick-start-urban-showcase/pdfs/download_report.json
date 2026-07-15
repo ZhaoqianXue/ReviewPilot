@@ -1,0 +1,128 @@
+{
+  "downloaded_at": "2026-07-14T18:45:28.052152",
+  "success": 12,
+  "failed": 2,
+  "skipped": 0,
+  "attempted": 14,
+  "pdf_count": 12,
+  "downloaded": [
+    {
+      "title": "A scalable and generic framework for city-wide traffic prediction with large language model.",
+      "path": "output/quick-start-urban-showcase/pdfs/a_scalable_and_generic_framework_for_city-wide_traffic_prediction_with_large_language_model_publisher_nature.pdf"
+    },
+    {
+      "title": "DG-LLM: Decomposition-based dynamic graph adaptation of large language models for spatiotemporal traffic forecasting.",
+      "path": "output/quick-start-urban-showcase/pdfs/dg-llm_decomposition-based_dynamic_graph_adaptation_of_large_language_models_for_spatiotemporal_traf_publisher_plos.pdf"
+    },
+    {
+      "title": "Diagnosing the innovation atmosphere of industrial parks through urban spatial perception: a multimodal large language model approach.",
+      "path": "output/quick-start-urban-showcase/pdfs/diagnosing_the_innovation_atmosphere_of_industrial_parks_through_urban_spatial_perception_a_multimod_publisher_nature.pdf"
+    },
+    {
+      "title": "Large language model-driven knowledge graph reasoning for enhanced semantic segmentation.",
+      "path": "output/quick-start-urban-showcase/pdfs/large_language_model-driven_knowledge_graph_reasoning_for_enhanced_semantic_segmentation_publisher_nature.pdf"
+    },
+    {
+      "title": "The Role of LLMs in Sustainable Smart Cities: Applications, Challenges, and Future Directions",
+      "path": "output/quick-start-urban-showcase/pdfs/the_role_of_llms_in_sustainable_smart_cities_applications_challenges_and_future_directions_direct_pdf.pdf"
+    },
+    {
+      "title": "Opportunities and Applications of GenAI in Smart Cities: A User-Centric Survey",
+      "path": "output/quick-start-urban-showcase/pdfs/opportunities_and_applications_of_genai_in_smart_cities_a_user-centric_survey_direct_pdf.pdf"
+    },
+    {
+      "title": "Swarm-Driven Multi-Agent Reasoning for Smart City Security",
+      "path": "output/quick-start-urban-showcase/pdfs/swarm-driven_multi-agent_reasoning_for_smart_city_security_direct_pdf.pdf"
+    },
+    {
+      "title": "SORA-ATMAS: Adaptive Trust Management and Multi-LLM Aligned Governance for Future Smart Cities",
+      "path": "output/quick-start-urban-showcase/pdfs/sora-atmas_adaptive_trust_management_and_multi-llm_aligned_governance_for_future_smart_cities_direct_pdf.pdf"
+    },
+    {
+      "title": "Large language model empowered participatory urban planning",
+      "path": "output/quick-start-urban-showcase/pdfs/large_language_model_empowered_participatory_urban_planning_direct_pdf.pdf"
+    },
+    {
+      "title": "The Trilingual Triad Framework: Integrating Design, AI, and Domain Knowledge in No-code AI Smart City Course",
+      "path": "output/quick-start-urban-showcase/pdfs/the_trilingual_triad_framework_integrating_design_ai_and_domain_knowledge_in_no-code_ai_smart_city_c_direct_pdf.pdf"
+    },
+    {
+      "title": "Artificial Intelligence-Enabled Metaverse for Sustainable Smart Cities: Technologies, Applications, Challenges, and Future Directions",
+      "path": "output/quick-start-urban-showcase/pdfs/artificial_intelligence-enabled_metaverse_for_sustainable_smart_cities_technologies_applications_cha_publisher_mdpi.pdf"
+    },
+    {
+      "title": "Generative AI and Large Language Models in Industry 5.0: Shaping Smarter Sustainable Cities",
+      "path": "output/quick-start-urban-showcase/pdfs/generative_ai_and_large_language_models_in_industry_50_shaping_smarter_sustainable_cities_publisher_mdpi.pdf"
+    }
+  ],
+  "failed_papers": [
+    {
+      "id": "42323939",
+      "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+      "doi": "10.1016/j.socscimed.2026.119516",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "2403.14639v1",
+      "title": "On Defining Smart Cities using Transformer Neural Networks",
+      "doi": "10.24297/ijct.v24i.9579",
+      "url": "http://arxiv.org/abs/2403.14639v1",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "subscribed_papers": [
+    {
+      "id": "42323939",
+      "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+      "doi": "10.1016/j.socscimed.2026.119516",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "unavailable_papers": [
+    {
+      "id": "2403.14639v1",
+      "title": "On Defining Smart Cities using Transformer Neural Networks",
+      "doi": "10.24297/ijct.v24i.9579",
+      "url": "http://arxiv.org/abs/2403.14639v1",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "web_search_fallback_candidates": [
+    {
+      "id": "42323939",
+      "title": "Quantifying noise complaint intensity via multi-LLM and revealing vertical greenery mitigation thresholds.",
+      "doi": "10.1016/j.socscimed.2026.119516",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42323939/",
+      "failure_class": "publisher_paywalled",
+      "retrieval_status": "subscribed_unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "2403.14639v1",
+      "title": "On Defining Smart Cities using Transformer Neural Networks",
+      "doi": "10.24297/ijct.v24i.9579",
+      "url": "http://arxiv.org/abs/2403.14639v1",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "output_dir": "output/quick-start-urban-showcase/pdfs",
+  "download_engine": "FastCascadePDFDownloader"
+}

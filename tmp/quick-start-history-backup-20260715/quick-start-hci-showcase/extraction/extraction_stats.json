@@ -1,0 +1,11 @@
+{
+  "extracted_at": "2026-07-14T18:40:58.086176",
+  "total_pdfs": 20,
+  "processed": 18,
+  "errors": 0,
+  "web_search_fallback": 3,
+  "pending_web_search_fallback": 0,
+  "total_cost_usd": 0.10246849999999999,
+  "model": "gpt-5.4-mini",
+  "output_file": "output/quick-start-hci-showcase/extraction/extraction_results.jsonl"
+}

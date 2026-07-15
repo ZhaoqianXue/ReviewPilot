@@ -1,0 +1,83 @@
+{
+  "prompt_type": "extraction",
+  "system_prompt": "You are an expert researcher extracting structured information from papers about Using large language models in human-computer interaction in Human-Computer Interaction (HCI). Extract only information supported by the provided paper text.",
+  "user_prompt_template": "Extract information from the paper using these fields:\n\n1. datasets_used (Text, optional): Any datasets, corpora, logs, benchmarks, participant data, prompts, or task materials used to develop, train, test, or evaluate the LLM-based HCI work. Example: User study transcripts, ChatGPT interaction logs, UX workshop responses\n2. methods (Text, optional): The study design, system approach, experimental setup, or analytical method used to investigate LLM use in HCI. Example: Prototype system with mixed-method user study and comparative evaluation against baseline\n3. key_findings (Text, optional): The main results, conclusions, or observed effects reported by the paper regarding LLM use in HCI. Example: LLM support improved task completion and user satisfaction, but raised concerns about trust and controllability\n4. evaluation_metrics (Text, optional): Any quantitative or qualitative metrics used to assess performance, usability, quality, or user experience. Example: Accuracy, task completion rate, SUS, usability ratings, response quality scores\n5. hci_context (Text, optional): The specific HCI setting, application area, or interaction scenario in which the LLM is used. Example: UX education, conversational interface design, user research simulation\n6. llm_role (Text, optional): How the large language model is used in the HCI system or study. Example: User simulator, design assistant, conversational agent, coaching tool\n7. participants_or_users (Text, optional): Who interacted with the system or took part in the study, including target users, designers, students, or other stakeholders. Example: Undergraduate engineering students, UX practitioners, end users\n8. comparison_baseline (Text, optional): Any baseline, control condition, or comparison system used in the study. Example: Rule-based conversational agent, human coach, no-LLM baseline\n9. study_type (Text, optional): The overall type of evidence provided by the paper. Example: Proof-of-concept study, user study, system paper, evaluation study\n10. relevance_judgment (Text, optional): Whether the paper provides substantive evidence relevant to using large language models in human-computer interaction within the HCI domain, based only on the title and abstract. Example: True\n\nReturn ONLY valid JSON with exactly these schema field names. Use empty strings for unavailable optional values.\n\nPAPER CONTENT:\n{paper_text}\n\nYour JSON response:",
+  "extraction_fields": "datasets_used, methods, key_findings, evaluation_metrics, hci_context, llm_role, participants_or_users, comparison_baseline, study_type, relevance_judgment",
+  "output_structured": true,
+  "schema": {
+    "fields": [
+      {
+        "name": "datasets_used",
+        "type": "Text",
+        "description": "Any datasets, corpora, logs, benchmarks, participant data, prompts, or task materials used to develop, train, test, or evaluate the LLM-based HCI work.",
+        "required": false,
+        "example": "User study transcripts, ChatGPT interaction logs, UX workshop responses"
+      },
+      {
+        "name": "methods",
+        "type": "Text",
+        "description": "The study design, system approach, experimental setup, or analytical method used to investigate LLM use in HCI.",
+        "required": false,
+        "example": "Prototype system with mixed-method user study and comparative evaluation against baseline"
+      },
+      {
+        "name": "key_findings",
+        "type": "Text",
+        "description": "The main results, conclusions, or observed effects reported by the paper regarding LLM use in HCI.",
+        "required": false,
+        "example": "LLM support improved task completion and user satisfaction, but raised concerns about trust and controllability"
+      },
+      {
+        "name": "evaluation_metrics",
+        "type": "Text",
+        "description": "Any quantitative or qualitative metrics used to assess performance, usability, quality, or user experience.",
+        "required": false,
+        "example": "Accuracy, task completion rate, SUS, usability ratings, response quality scores"
+      },
+      {
+        "name": "hci_context",
+        "type": "Text",
+        "description": "The specific HCI setting, application area, or interaction scenario in which the LLM is used.",
+        "required": false,
+        "example": "UX education, conversational interface design, user research simulation"
+      },
+      {
+        "name": "llm_role",
+        "type": "Text",
+        "description": "How the large language model is used in the HCI system or study.",
+        "required": false,
+        "example": "User simulator, design assistant, conversational agent, coaching tool"
+      },
+      {
+        "name": "participants_or_users",
+        "type": "Text",
+        "description": "Who interacted with the system or took part in the study, including target users, designers, students, or other stakeholders.",
+        "required": false,
+        "example": "Undergraduate engineering students, UX practitioners, end users"
+      },
+      {
+        "name": "comparison_baseline",
+        "type": "Text",
+        "description": "Any baseline, control condition, or comparison system used in the study.",
+        "required": false,
+        "example": "Rule-based conversational agent, human coach, no-LLM baseline"
+      },
+      {
+        "name": "study_type",
+        "type": "Text",
+        "description": "The overall type of evidence provided by the paper.",
+        "required": false,
+        "example": "Proof-of-concept study, user study, system paper, evaluation study"
+      },
+      {
+        "name": "relevance_judgment",
+        "type": "Text",
+        "description": "Whether the paper provides substantive evidence relevant to using large language models in human-computer interaction within the HCI domain, based only on the title and abstract.",
+        "required": false,
+        "example": "True"
+      }
+    ]
+  },
+  "source": "user_finalized_schema",
+  "generated_at": "2026-07-14T18:38:01.964463"
+}

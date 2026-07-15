@@ -1,0 +1,11 @@
+{
+  "extracted_at": "2026-07-14T18:51:29.121881",
+  "total_pdfs": 20,
+  "processed": 24,
+  "errors": 0,
+  "web_search_fallback": 7,
+  "pending_web_search_fallback": 0,
+  "total_cost_usd": 0.14883050000000003,
+  "model": "gpt-5.4-mini",
+  "output_file": "output/quick-start-biomedical-showcase/extraction/extraction_results.jsonl"
+}

@@ -1,0 +1,297 @@
+{
+  "downloaded_at": "2026-07-14T18:47:27.913447",
+  "success": 17,
+  "failed": 7,
+  "skipped": 0,
+  "attempted": 24,
+  "pdf_count": 20,
+  "downloaded": [
+    {
+      "title": "Medical students' attitudes, usage patterns, and associated factors with DeepSeek adoption in education: a cross-sectional study in China.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/medical_students_attitudes_usage_patterns_and_associated_factors_with_deepseek_adoption_in_education_doi_static_html.pdf"
+    },
+    {
+      "title": "Reframing ontology fact acquisition during large language model fine-tuning as a time-to-event process.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/reframing_ontology_fact_acquisition_during_large_language_model_fine-tuning_as_a_time-to-event_proce_doi_static_html.pdf"
+    },
+    {
+      "title": "Applicability of Artificial Intelligence-Enabled Chatbots in Medical Physics.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/applicability_of_artificial_intelligence-enabled_chatbots_in_medical_physics_publisher_cureus.pdf"
+    },
+    {
+      "title": "Automated Review of Patient Records: Privacy-Preserving Large Language Models for Identifying Incident Nonarteritic Anterior Ischemic Optic Neuropathy at Scale.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/automated_review_of_patient_records_privacy-preserving_large_language_models_for_identifying_inciden_open_access_rescue.pdf"
+    },
+    {
+      "title": "Skyer: a novel benchmark for evaluating the effectiveness of large language models in emergency department triage.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/skyer_a_novel_benchmark_for_evaluating_the_effectiveness_of_large_language_models_in_emergency_depar_doi_static_html.pdf"
+    },
+    {
+      "title": "LMOD+: A Comprehensive Multimodal Dataset and Benchmark for Developing and Evaluating Multimodal Large Language Models in Ophthalmology.",
+      "path": "output/quick-start-biomedical-showcase/pdfs/lmod_a_comprehensive_multimodal_dataset_and_benchmark_for_developing_and_evaluating_multimodal_large_unpaywall.pdf"
+    },
+    {
+      "title": "Considerations for health care institutions training large language models on electronic health records",
+      "path": "output/quick-start-biomedical-showcase/pdfs/considerations_for_health_care_institutions_training_large_language_models_on_electronic_health_reco_direct_pdf.pdf"
+    },
+    {
+      "title": "Opportunities and Challenges for ChatGPT and Large Language Models in Biomedicine and Health",
+      "path": "output/quick-start-biomedical-showcase/pdfs/opportunities_and_challenges_for_chatgpt_and_large_language_models_in_biomedicine_and_health_direct_pdf.pdf"
+    },
+    {
+      "title": "Large Language Models are Powerful Electronic Health Record Encoders",
+      "path": "output/quick-start-biomedical-showcase/pdfs/large_language_models_are_powerful_electronic_health_record_encoders_direct_pdf.pdf"
+    },
+    {
+      "title": "Knowledge-Driven Agentic Scientific Corpus Distillation Framework for Biomedical Large Language Models Training",
+      "path": "output/quick-start-biomedical-showcase/pdfs/knowledge-driven_agentic_scientific_corpus_distillation_framework_for_biomedical_large_language_mode_direct_pdf.pdf"
+    },
+    {
+      "title": "AI for Biomedicine in the Era of Large Language Models",
+      "path": "output/quick-start-biomedical-showcase/pdfs/ai_for_biomedicine_in_the_era_of_large_language_models_direct_pdf.pdf"
+    },
+    {
+      "title": "A Survey for Large Language Models in Biomedicine",
+      "path": "output/quick-start-biomedical-showcase/pdfs/a_survey_for_large_language_models_in_biomedicine_direct_pdf.pdf"
+    },
+    {
+      "title": "Making Knowledge Accessible: Divergent Readability-Accuracy Strategies of Mistral and QWen in Biomedical Text Simplification",
+      "path": "output/quick-start-biomedical-showcase/pdfs/making_knowledge_accessible_divergent_readability-accuracy_strategies_of_mistral_and_qwen_in_biomedi_direct_pdf.pdf"
+    },
+    {
+      "title": "A scoping review of using Large Language Models (LLMs) to investigate Electronic Health Records (EHRs)",
+      "path": "output/quick-start-biomedical-showcase/pdfs/a_scoping_review_of_using_large_language_models_llms_to_investigate_electronic_health_records_ehrs_direct_pdf.pdf"
+    },
+    {
+      "title": "Retrieval-Augmented Generation in Biomedicine: A Survey of Technologies, Datasets, and Clinical Applications",
+      "path": "output/quick-start-biomedical-showcase/pdfs/retrieval-augmented_generation_in_biomedicine_a_survey_of_technologies_datasets_and_clinical_applica_doi_static_html.pdf"
+    },
+    {
+      "title": "BiomedRAG: A retrieval augmented large language model for biomedicine",
+      "path": "output/quick-start-biomedical-showcase/pdfs/biomedrag_a_retrieval_augmented_large_language_model_for_biomedicine_arxiv.pdf"
+    },
+    {
+      "title": "Data science opportunities of large language models for neuroscience and biomedicine",
+      "path": "output/quick-start-biomedical-showcase/pdfs/data_science_opportunities_of_large_language_models_for_neuroscience_and_biomedicine_unpaywall.pdf"
+    }
+  ],
+  "failed_papers": [
+    {
+      "id": "42438987",
+      "title": "Assessing the concordance between ChatGPT-4 and EAU guidelines indications in bladder cancer management: a real-world study.",
+      "doi": "10.23736/S2724-6051.26.06641-3",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42438987/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433625",
+      "title": "Leveraging artificial intelligence to streamline documentation and support patient-centered gynecologic oncology outpatient visits.",
+      "doi": "10.1016/j.gore.2026.102158",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433625/",
+      "failure_class": "pdf_endpoint_tdm_blocked",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433615",
+      "title": "Auditable large language model curation of clinical notes refines glucagon-like peptide-1 initiation, persistence ascertainment, and compounding use beyond prescription records.",
+      "doi": "10.1093/biomethods/bpag035",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433615/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4393094733",
+      "title": "Advancing entity recognition in biomedicine via instruction tuning of large language models",
+      "doi": "10.1093/bioinformatics/btae163",
+      "url": "https://openalex.org/W4393094733",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4406421570",
+      "title": "Improving large language model applications in biomedicine with retrieval-augmented generation: a systematic review, meta-analysis, and clinical development guidelines",
+      "doi": "10.1093/jamia/ocaf008",
+      "url": "https://openalex.org/W4406421570",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4401793114",
+      "title": "Large language models in biomedicine and health: current research landscape and future directions",
+      "doi": "10.1093/jamia/ocae202",
+      "url": "https://openalex.org/W4401793114",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4395067526",
+      "title": "Large language models for biomedicine: foundations, opportunities, challenges, and best practices",
+      "doi": "10.1093/jamia/ocae074",
+      "url": "https://openalex.org/W4395067526",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "subscribed_papers": [],
+  "unavailable_papers": [
+    {
+      "id": "42438987",
+      "title": "Assessing the concordance between ChatGPT-4 and EAU guidelines indications in bladder cancer management: a real-world study.",
+      "doi": "10.23736/S2724-6051.26.06641-3",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42438987/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433625",
+      "title": "Leveraging artificial intelligence to streamline documentation and support patient-centered gynecologic oncology outpatient visits.",
+      "doi": "10.1016/j.gore.2026.102158",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433625/",
+      "failure_class": "pdf_endpoint_tdm_blocked",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433615",
+      "title": "Auditable large language model curation of clinical notes refines glucagon-like peptide-1 initiation, persistence ascertainment, and compounding use beyond prescription records.",
+      "doi": "10.1093/biomethods/bpag035",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433615/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4393094733",
+      "title": "Advancing entity recognition in biomedicine via instruction tuning of large language models",
+      "doi": "10.1093/bioinformatics/btae163",
+      "url": "https://openalex.org/W4393094733",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4406421570",
+      "title": "Improving large language model applications in biomedicine with retrieval-augmented generation: a systematic review, meta-analysis, and clinical development guidelines",
+      "doi": "10.1093/jamia/ocaf008",
+      "url": "https://openalex.org/W4406421570",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4401793114",
+      "title": "Large language models in biomedicine and health: current research landscape and future directions",
+      "doi": "10.1093/jamia/ocae202",
+      "url": "https://openalex.org/W4401793114",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4395067526",
+      "title": "Large language models for biomedicine: foundations, opportunities, challenges, and best practices",
+      "doi": "10.1093/jamia/ocae074",
+      "url": "https://openalex.org/W4395067526",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "web_search_fallback_candidates": [
+    {
+      "id": "42438987",
+      "title": "Assessing the concordance between ChatGPT-4 and EAU guidelines indications in bladder cancer management: a real-world study.",
+      "doi": "10.23736/S2724-6051.26.06641-3",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42438987/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433625",
+      "title": "Leveraging artificial intelligence to streamline documentation and support patient-centered gynecologic oncology outpatient visits.",
+      "doi": "10.1016/j.gore.2026.102158",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433625/",
+      "failure_class": "pdf_endpoint_tdm_blocked",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "42433615",
+      "title": "Auditable large language model curation of clinical notes refines glucagon-like peptide-1 initiation, persistence ascertainment, and compounding use beyond prescription records.",
+      "doi": "10.1093/biomethods/bpag035",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/42433615/",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4393094733",
+      "title": "Advancing entity recognition in biomedicine via instruction tuning of large language models",
+      "doi": "10.1093/bioinformatics/btae163",
+      "url": "https://openalex.org/W4393094733",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4406421570",
+      "title": "Improving large language model applications in biomedicine with retrieval-augmented generation: a systematic review, meta-analysis, and clinical development guidelines",
+      "doi": "10.1093/jamia/ocaf008",
+      "url": "https://openalex.org/W4406421570",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4401793114",
+      "title": "Large language models in biomedicine and health: current research landscape and future directions",
+      "doi": "10.1093/jamia/ocae202",
+      "url": "https://openalex.org/W4401793114",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    },
+    {
+      "id": "W4395067526",
+      "title": "Large language models for biomedicine: foundations, opportunities, challenges, and best practices",
+      "doi": "10.1093/jamia/ocae074",
+      "url": "https://openalex.org/W4395067526",
+      "failure_class": "article_print_failed",
+      "retrieval_status": "unavailable",
+      "web_search_fallback_pending": true,
+      "web_search_fallback_eligible": true
+    }
+  ],
+  "output_dir": "output/quick-start-biomedical-showcase/pdfs",
+  "download_engine": "FastCascadePDFDownloader"
+}

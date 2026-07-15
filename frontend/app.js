@@ -261,6 +261,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     previewIndex: clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total),
     schemaJsonOpen: false,
     schemaJsonReturnFocus: false,
+    memoryEnabled: true,
+    memoryPending: false,
+    memoryError: '',
   };
   let actionTicker = null;
   let activeTaskMonitor = { key: '', generation: 0 };
@@ -860,6 +863,29 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     setData(payload.state || await fetchProjectState(projectId), false, { preserveView: true });
   }
 
+  async function loadMemorySetting() {
+    const res = await fetch('/memory/settings');
+    if (!res.ok) throw new Error('Memory is unavailable.');
+    const payload = await res.json();
+    state.memoryEnabled = payload.cross_project_memory_enabled === true;
+  }
+
+  async function updateMemorySetting(enabled) {
+    const res = await fetch('/memory/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cross_project_memory_enabled: enabled }),
+    });
+    if (!res.ok) throw new Error('Could not update Memory.');
+    const payload = await res.json();
+    state.memoryEnabled = payload.cross_project_memory_enabled === true;
+  }
+
+  async function clearMemory() {
+    const res = await fetch('/memory', { method: 'DELETE' });
+    if (!res.ok) throw new Error('Could not clear Memory.');
+  }
+
   async function updateProjectSetup(form) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId) return;
@@ -1084,6 +1110,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       setupDraft: state.setupDraft,
       showSetupDialog: state.dialog === 'setup',
       showKeywordDialog: state.dialog === 'keyword',
+      showMemoryDialog: state.dialog === 'memory',
+      memoryEnabled: state.memoryEnabled,
+      memoryPending: state.memoryPending,
+      memoryError: state.memoryError,
     };
   }
 
@@ -1252,6 +1282,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return `
 ${v.showSetupDialog ? setupDialog(v) : ''}
 ${v.showKeywordDialog ? keywordDialog(v) : ''}
+${v.showMemoryDialog ? memoryDialog(v) : ''}
 ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 <style>${workspaceResponsiveStyle()}</style>
 <div class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
@@ -1272,7 +1303,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       `).join('')}
     </div>
     <div style="flex:0 0 auto;border-top:1px solid #eef0ee;padding:7px 10px 9px;display:flex;flex-direction:column;gap:1px;">
-      <div style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13px;color:#6b746c;transition:background .12s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-gear-six" style="font-size:16px;"></i>Settings</div>
+      <button type="button" data-act="open-memory" style="display:flex;align-items:center;gap:11px;padding:9px 10px;width:100%;border:none;background:none;border-radius:9px;cursor:pointer;font:inherit;font-size:13px;color:#6b746c;transition:background .12s ease;text-align:left;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-gear-six" style="font-size:16px;"></i>Settings</button>
       <div style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13px;color:#6b746c;transition:background .12s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-question" style="font-size:16px;"></i>Help &amp; support</div>
     </div>
   </aside>
@@ -1804,6 +1835,24 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;"><form id="rp-keyword-dialog-form" style="width:360px;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;"><div style="font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;margin-bottom:12px;">Add keyword</div><input name="keyword" required autofocus value="${esc(state.keywordDraft)}" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;color:#1a1a1a;" placeholder="clinical NLP"><div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;">Add</button></div></form></div>`;
   }
 
+  function memoryDialog(v) {
+    const pending = v.memoryPending ? 'disabled aria-busy="true"' : '';
+    const switchStyle = v.memoryEnabled
+      ? 'background:#1a365d;border-color:#1a365d;justify-content:flex-end;'
+      : 'background:#e5e7eb;border-color:#d8ddd6;justify-content:flex-start;';
+    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;">
+      <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(420px,calc(100vw - 32px));background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;"><h2 id="rp-memory-title" style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;color:#1a1a1a;">Memory</h2><button type="button" data-act="close-dialog" aria-label="Close Memory" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
+        ${v.memoryError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${esc(v.memoryError)}</div>` : ''}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:4px 0 16px;">
+          <div><div style="font-size:13.5px;color:#1a1a1a;">Memory</div><div style="font-size:11.5px;color:#6b746c;margin-top:4px;line-height:1.4;">Reuse validated memory from previous projects.</div></div>
+          <button type="button" data-act="toggle-memory" role="switch" aria-checked="${v.memoryEnabled ? 'true' : 'false'}" ${pending} style="width:42px;height:24px;flex:0 0 42px;display:flex;align-items:center;border:1px solid;border-radius:999px;padding:2px;cursor:${v.memoryPending ? 'wait' : 'pointer'};${switchStyle}"><span aria-hidden="true" style="width:18px;height:18px;border-radius:999px;background:#fffefc;box-shadow:0 1px 3px rgba(0,0,0,.18);"></span></button>
+        </div>
+        <div style="border-top:1px solid #eef0ee;padding-top:14px;display:flex;justify-content:flex-end;"><button type="button" data-act="clear-memory" ${pending} style="border:1px solid #e5b8b8;background:#fffafa;color:#8a1f1f;border-radius:9px;padding:8px 11px;font:inherit;font-size:12px;cursor:${v.memoryPending ? 'wait' : 'pointer'};">Clear memory</button></div>
+      </section>
+    </div>`;
+  }
+
   function updateDraftFromForm(form) {
     const payload = Object.fromEntries(new FormData(form).entries());
     payload.derive_search_terms = !!form.elements.derive_search_terms?.checked;
@@ -2013,6 +2062,39 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         return;
       }
       else if (act === 'open-setup') state.dialog = 'setup';
+      else if (act === 'open-memory') {
+        state.dialog = 'memory';
+        state.memoryPending = true;
+        state.memoryError = '';
+        paint();
+        loadMemorySetting().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
+          state.memoryPending = false;
+          paint();
+        });
+        return;
+      }
+      else if (act === 'toggle-memory') {
+        if (state.memoryPending) return;
+        state.memoryPending = true;
+        state.memoryError = '';
+        paint();
+        updateMemorySetting(!state.memoryEnabled).catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
+          state.memoryPending = false;
+          paint();
+        });
+        return;
+      }
+      else if (act === 'clear-memory') {
+        if (state.memoryPending || !window.confirm('Clear memory?')) return;
+        state.memoryPending = true;
+        state.memoryError = '';
+        paint();
+        clearMemory().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
+          state.memoryPending = false;
+          paint();
+        });
+        return;
+      }
       else if (act === 'close-dialog') {
         state.dialog = '';
         state.actionError = '';

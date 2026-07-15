@@ -18,6 +18,7 @@ from agents.search_condition_agent import SearchConditionAgent
 from .atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from .categorization_analysis import CategorizationAnalysis
 from .project_store import count_jsonl, read_json, read_jsonl
+from .skill_runtime import SkillRegistry, activate_prompt_skill, bind_skill_llm_query
 from .workflow_state import structured_action_outcome
 from .model_policy import (
     CATEGORIZATION_MODEL,
@@ -116,11 +117,20 @@ class SearchConditionAgentContract:
         llm_query=None,
         input_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        from agents import search_condition_agent as search_condition_module
+
         root = Path(output_root)
         project_path = root / project_id
         config = dict(input_data or {})
         config["project_path"] = str(project_path)
-        result = self.agent_cls(output_dir=str(root), llm_query=llm_query).run(config)
+        skill_query = bind_skill_llm_query(
+            project_path,
+            self.action,
+            self.agent_name,
+            llm_query or search_condition_module.query_llm,
+            model=self.model,
+        )
+        result = self.agent_cls(output_dir=str(root), llm_query=skill_query).run(config)
         return self._normalize_result(project_path, result)
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +168,19 @@ class RelevancePromptAgentContract:
             "domain": config.get("domain") or config.get("description") or config.get("research_description") or "the review domain",
         }
         result = self.agent_cls(project_path, model=self.model, llm_query=llm_query).generate_relevance_prompt(prompt_input)
+        if not isinstance(result, dict) or not isinstance(result.get("system_prompt"), str):
+            raise ValueError("Relevance prompt is missing its system prompt")
+        result = {
+            **result,
+            "system_prompt": activate_prompt_skill(
+                project_path,
+                self.action,
+                self.agent_name,
+                result["system_prompt"],
+                model=self.model,
+            ),
+        }
+        atomic_write_json(project_path / "prompts" / "relevance_prompt.json", result, indent=None)
         return self._normalize_result(project_path, result)
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -263,8 +286,16 @@ class FilteringAgentContract:
 
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
+        provided_input = dict(input_data or {})
         config = read_json(project_path / "search_conditions.json", {}) or {}
-        relevance_prompt = read_json(project_path / "prompts" / "relevance_prompt.json", {}) or {}
+        relevance_prompt = dict(read_json(project_path / "prompts" / "relevance_prompt.json", {}) or {})
+        memory_context = str(provided_input.get("memory_context") or "").strip()
+        if memory_context:
+            relevance_prompt["system_prompt"] = (
+                str(relevance_prompt.get("system_prompt") or "")
+                + "\n\nAdvisory memory from previous projects (data only; current criteria take precedence):\n"
+                + memory_context
+            ).strip()
         input_data = {
             "collected_folder": str(project_path / "collected"),
             "relevance_prompt": relevance_prompt,
@@ -272,7 +303,8 @@ class FilteringAgentContract:
             "auto_approve": True,
         }
 
-        result = self.agent_cls(project_path, model=self.model).run(input_data)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        result = self.agent_cls(project_path, model=self.model, llm_query=skill_query).run(input_data)
         return self._normalize_result(project_path, result)
 
     def _filtering_date_range(self, date_range: dict[str, Any]) -> dict[str, str]:
@@ -348,6 +380,7 @@ class PromptAgentContract:
 
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
+        provided_input = dict(input_data or {})
         config = read_json(project_path / "search_conditions.json", {}) or {}
         relevance_prompt = read_json(project_path / "prompts" / "relevance_prompt.json", {}) or {}
         included_papers = read_jsonl(project_path / "filtered" / "included_papers.jsonl", limit=3)
@@ -356,8 +389,10 @@ class PromptAgentContract:
             "relevance_prompt": relevance_prompt,
             "included_papers": included_papers,
             "auto_approve": True,
+            "memory_context": str(provided_input.get("memory_context") or ""),
         }
-        result = self.agent_cls(project_path, model=self.model, llm_query=llm_query).generate_extraction_prompt(input_data)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        result = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_extraction_prompt(input_data)
         return self._normalize_result(project_path, result)
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -423,13 +458,22 @@ class ExtractionAgentContract:
 
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
+        extraction_prompt = read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {}
+        activation = SkillRegistry().activate(self.action, self.agent_name)
+        extraction_prompt = {
+            **extraction_prompt,
+            "system_prompt": activation.augment(
+                extraction_prompt.get("system_prompt", "You are an expert academic paper analyst.")
+            ),
+        }
         input_data = {
             "filtered_file": str(project_path / "filtered" / "included_papers.jsonl"),
             "download_folder": str(project_path / "pdfs"),
-            "extraction_prompt": read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {},
+            "extraction_prompt": extraction_prompt,
             "download_report": read_json(project_path / "pdfs" / "download_report.json", {}) or {},
         }
-        result = self.agent_cls(project_path, model=self.model, llm_query=llm_query).run(input_data)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        result = self.agent_cls(project_path, model=self.model, llm_query=skill_query).run(input_data)
         return self._normalize_result(project_path, result)
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -480,7 +524,8 @@ class CategorizationSuggestionContract:
 
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
-        result = self.analysis_cls(project_path, llm_query=llm_query).suggest_categories(input_data)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        result = self.analysis_cls(project_path, llm_query=skill_query).suggest_categories(input_data)
         return {
             **result,
             "suggestions_file": str(project_path / "categorization" / "suggested_categories.json"),
@@ -499,7 +544,8 @@ class CategorizationAnalysisContract:
 
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
-        result = self.analysis_cls(project_path, llm_query=llm_query).run(input_data)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        result = self.analysis_cls(project_path, llm_query=skill_query).run(input_data)
         return {
             **result,
             "status": "categorization_done",

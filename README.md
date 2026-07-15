@@ -1,61 +1,109 @@
 # ReviewPilot
 
-A local monolith web app for searching, filtering, downloading, extracting, and categorizing academic papers across multiple platforms.
+ReviewPilot is a multi-agent research assistant for systematic reviews. It helps researchers search for papers, screen them, retrieve full text, extract evidence, and organize the results for analysis.
 
-## Features
+The work is divided among six specialized Sub Agents. A Lead Agent coordinates their work, checks the result of each stage, and keeps the researcher in control of the review.
 
-- **Multi-platform search**: PubMed, OpenAlex, arXiv, Scopus, Web of Science, Google Scholar, CS Conferences
-- **New frontend web app**: Starlette serves the optimized ReviewPilot frontend and calls the Python pipeline directly
-- **Human-in-the-loop**: Project configuration and workflow actions are exposed through the web app
-- **LLM-powered filtering**: Relevance checking using GPT-5/Claude/Gemini
-- **Automated extraction**: Extract structured information from PDFs
-- **Resume capability**: Continue from any pipeline stage
-- **Real-time output**: JSONL streaming for large datasets
+## How a Review Works
 
-## Project Structure
+ReviewPilot guides the researcher through five steps:
 
-```
-ReviewPilot/
-├── web_app.py                  # Starlette monolith entrypoint
-├── reviewpilot_core/           # Project state projection and workflow actions
-├── frontend/                   # Optimized zero-build frontend
-├── main.py                     # Academic search adapter used by workflow actions
-├── requirements.txt
-├── README.md
-│
-├── agents/                     # Pipeline agents retained for backend workflows
-│   ├── base_agent.py
-│   ├── coordinator.py          # Pipeline orchestrator
-│   ├── search_condition_agent.py   # Asks user for search params
-│   ├── prompt_agent.py         # Generates LLM prompts
-│   ├── collection_agent.py     # Searches platforms
-│   ├── filtering_agent.py      # Dedup + relevance check
-│   ├── download_agent.py       # Downloads PDFs
-│   └── extraction_agent.py     # Extracts info from PDFs
-│
-├── searchers/                  # Platform modules
-│   ├── pubmed.py
-│   ├── openalex.py
-│   ├── arxiv_search.py
-│   ├── scopus.py
-│   ├── wos.py
-│   ├── google_scholar.py
-│   └── dblp.py
-│
-└── utils/
-    ├── llm.py                  # LLM API interface
-    ├── pdf_downloader.py       # PDF downloader
-    ├── jsonl_handler.py
-    └── human_interaction.py
+1. **Search Setup** — Describe the research question and confirm the keywords, academic sources, date range, and number of results.
+2. **Paper Screening** — Confirm the inclusion and exclusion criteria, then review which papers are included or excluded.
+3. **Full-Text Retrieval** — Retrieve PDFs for the included papers and record which papers are unavailable or require another source.
+4. **Information Extraction** — Decide which information should be collected from each paper, then produce a structured evidence table.
+5. **Categorization & Analysis** — Group the extracted evidence into meaningful categories and review the summarized results.
+
+The final project contains the search strategy, collected papers, screening decisions, full-text retrieval report, extracted evidence, and categorized results.
+
+## Lead Agent and Six Sub Agents
+
+### Overall Structure
+
+```text
+                         Lead Agent
+              Coordinates, assigns, checks, summarizes
+                              │
+       ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
+       │          │          │          │          │          │
+     Search      Task       Paper      Paper     Full-Text  Information
+     Setup    Preparation  Collection  Screening  Retrieval  Extraction
+     Agent       Agent       Agent       Agent       Agent       Agent
 ```
 
-> **Local-only note:** `agent_skill/` is a private scratch directory for a minor collaborator task. It is not part of the `agents/` system, not a project skill, and is intentionally ignored by Git.
+### Lead Agent
 
-## Quick Start
+The Lead Agent is responsible for the review as a whole. It:
 
-### 1. Install dependencies
+- Understands the researcher's request.
+- Determines the current stage of the review.
+- Assigns work to the appropriate Sub Agent.
+- Checks each result before the review moves forward.
+- Explains what has been completed and what the researcher can do next.
+- Organizes and presents the final results.
 
-On Apple Silicon, bootstrap a native ARM64 development environment:
+### Six Sub Agents
+
+| Agent | Responsibility |
+|---|---|
+| `SearchConditionAgent` | Turns the research question into keywords, academic sources, date ranges, and other search settings. |
+| `PromptAgent` | Prepares the instructions used for paper screening and information extraction. |
+| `CollectionAgent` | Collects papers from the selected academic sources. |
+| `FilteringAgent` | Removes duplicates and decides whether each paper matches the review criteria. |
+| `DownloadAgent` | Retrieves PDFs and records papers whose full text could not be obtained. |
+| `ExtractionAgent` | Extracts the required information from each paper using the approved fields. |
+
+### How the Agents Work Together
+
+```text
+SearchConditionAgent
+        ↓
+PromptAgent prepares the screening criteria
+        ↓
+CollectionAgent
+        ↓
+FilteringAgent
+        ↓
+PromptAgent prepares the extraction requirements
+        ↓
+DownloadAgent
+        ↓
+ExtractionAgent
+        ↓
+Lead Agent categorizes, summarizes, and presents the results
+```
+
+`PromptAgent` works at two different stages but remains one Sub Agent. Categorization and analysis are handled by the Lead Agent. ReviewPilot therefore has one Lead Agent and six Sub Agents.
+
+## Agent Skills
+
+An Agent Skill is a reusable professional method that helps an Agent complete a particular type of review task consistently.
+
+| Skill | Purpose | Used by |
+|---|---|---|
+| `systematic-review-search-strategy` | Designs and revises systematic-review search strategies. | `SearchConditionAgent` |
+| `evidence-screening` | Defines screening criteria and supports decisions about paper relevance. | `PromptAgent`, `FilteringAgent` |
+| `structured-evidence-extraction` | Designs extraction fields and guides evidence extraction. | `PromptAgent`, `ExtractionAgent` |
+| `evidence-synthesis-and-categorization` | Organizes extracted evidence into meaningful categories. | Lead Agent |
+
+ReviewPilot automatically selects the Skill required for the current task. It also records the Skill name and version so collaborators can trace which method was used.
+
+## Agent Memory
+
+ReviewPilot uses two forms of memory:
+
+- **Current-project memory** allows the Lead Agent to remember earlier conversations, decisions, and corrections within the same review project.
+- **Cross-project memory** allows confirmed search strategies, screening settings, extraction fields, and categorization settings from earlier projects to be reused as references.
+
+The researcher's current request and the confirmed results of the current project always take priority over previous memory. The Lead Agent manages memory and only shares information that is relevant to a Sub Agent's current task.
+
+## Installation and Startup
+
+Run the following commands from the ReviewPilot project folder.
+
+### Apple Silicon
+
+Create the development environment:
 
 ```bash
 PYTHON_BIN=python3 scripts/bootstrap_native_env.sh
@@ -63,115 +111,63 @@ file .venv-native/bin/python
 .venv-native/bin/python -c 'import platform; print(platform.machine())'
 ```
 
-Both architecture checks should report `arm64`. The bootstrap refuses to create the environment when the selected Python interpreter is not ARM64.
-If `.venv-native` already exists, the bootstrap leaves it untouched and exits. Remove or rename that directory intentionally before rebuilding it.
+Both checks should report `arm64`.
 
-On other platforms, use a conventional virtual environment and install the development requirements:
+Start ReviewPilot:
+
+```bash
+.venv-native/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
+```
+
+### Other Platforms
+
+Create a virtual environment and install the required packages:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 ```
 
-### 2. Configure API keys
-
-```bash
-# Create local config.py and secrets.txt if they are not already present.
-# These files are ignored by Git.
-```
-
-### 3. Run the web app
-
-On Apple Silicon:
-
-```bash
-.venv-native/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
-```
-
-On other platforms:
+Start ReviewPilot:
 
 ```bash
 .venv/bin/uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload
 ```
 
-Open http://127.0.0.1:5602, create a review project, then run collection, screening, PDF download, schema generation, extraction, and categorization from the optimized frontend.
-With `--reload`, Python backend edits restart the local server automatically.
-Frontend static edits under `frontend/` are picked up by a browser refresh.
+### API Configuration
 
-For the formal local inner-beta boundary, launch checklist, cohort protocol, and issue policy, see [`docs/internal-testing/INNER_BETA_RUNBOOK.md`](docs/internal-testing/INNER_BETA_RUNBOOK.md). The engineering release decision and three-example evidence are in [`docs/internal-testing/runs/2026-07-14-inner-beta-release-audit.md`](docs/internal-testing/runs/2026-07-14-inner-beta-release-audit.md).
-
-The old Streamlit and CLI entrypoints are kept only in `ReviewPilot_prototype/`
-for historical comparison.
-
-## Configuration
-
-### config.py (API credentials only)
+Create a local `config.py` file if one does not already exist:
 
 ```python
-EMAIL = "your-email@example.com"      # Required for PubMed/OpenAlex
-PUBMED_API_KEY = None                 # Optional
-SCOPUS_API_KEY = None                 # Optional
-MODEL = "gpt-5.4-mini"                # Default development LLM
+EMAIL = "your-email@example.com"
+PUBMED_API_KEY = None
+SCOPUS_API_KEY = None
+MODEL = "gpt-5.4-mini"
 ```
 
-### secrets.txt (LLM API keys)
+Create a local `secrets.txt` file and add the model providers you use:
 
-```
+```text
 openai_key, sk-your-openai-key
 claude_key, sk-ant-your-anthropic-key
 ```
 
+`PUBMED_API_KEY` is optional. `SCOPUS_API_KEY` is required only when Scopus is selected. At least one supported model-provider key is required for tasks that use a language model.
+
+After starting ReviewPilot, open:
+
+```text
+http://127.0.0.1:5602
+```
+
 ## Usage
 
-Use the platform-specific web app command in Quick Start: `.venv-native/bin/uvicorn` on Apple Silicon or `.venv/bin/uvicorn` on other platforms.
-
-## Pipeline Workflow
-
-1. **Project Setup** → New frontend writes `output/{project}/search_conditions.json`
-2. **Collection** → Searches configured platforms and saves JSONL outputs
-3. **Screening** → Deduplicates and checks relevance with LLM criteria
-4. **Full-Text Retrieval** → Downloads PDFs for included papers
-5. **Information Extraction** → Generates a schema and extracts structured JSONL from PDFs or metadata fallback
-6. **Categorization** → Groups extracted results with LLM-generated semantic categories for final analysis
-
-## Output Structure
-
-```
-output/{project_name}/
-├── search_conditions.json
-├── prompts/
-│   ├── relevance_prompt.json
-│   └── extraction_prompt.json
-├── collected/
-│   ├── pubmed.jsonl
-│   ├── arxiv.jsonl
-│   └── summary.json
-├── filtered/
-│   └── filtered_papers.jsonl
-├── pdfs/
-│   └── download_report.json
-├── extraction/
-│   ├── extraction_schema.json
-│   ├── extraction_prompt.json
-│   └── extraction_results.jsonl
-└── categorization/
-    ├── categorization_mapping.json
-    └── categorized_results.jsonl
-```
-
-## Local Prototype Snapshot
-
-`ReviewPilot_prototype/` may exist in local workspaces as the original handoff snapshot from the project owner. It is for historical comparison, regression investigation, and recovery of pre-migration behavior only. It is intentionally ignored by Git, marked read-only locally, and must not be edited as the active codebase or pushed with product changes.
-
-## Supported LLM Models
-
-| Provider | Models |
-|----------|--------|
-| OpenAI | gpt-5.4-mini, gpt-5.4, gpt-5.5, gpt-5-mini, gpt-5.1, gpt-5.2, gpt-4.1, o3, o4-mini |
-| Anthropic | claude-sonnet-4-5, claude-opus-4-5, claude-haiku-4-5 |
-| Google | gemini-2.5-pro, gemini-2.5-flash, gemini-3-pro |
-| Together | Llama-4, Qwen-2.5, QwQ-32B |
-
-## License
-
-MIT License
+1. Open ReviewPilot in a browser.
+2. Create a new review project.
+3. Enter the research question and confirm the Search Setup.
+4. Collect candidate papers and run Paper Screening.
+5. Run Full-Text Retrieval for the included papers.
+6. Review and confirm the fields for Information Extraction.
+7. Run Information Extraction.
+8. Categorize and summarize the extracted evidence.
+9. Review and export the final results.

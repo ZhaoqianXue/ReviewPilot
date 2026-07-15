@@ -15,6 +15,14 @@ This setting replaces the current implicit web assistant behavior with a real or
 ## UI/UX Boundary
 This architecture is a kernel/orchestration setting, not a redesign of the ReviewPilot web interface. The UI/UX interaction rules live in [LEAD_AGENT_UI_UX_BOUNDARY.md](LEAD_AGENT_UI_UX_BOUNDARY.md). Read that document together with this one before changing the frontend, especially the rule that all click interactions belong in the canvas while the chat box remains text-only.
 
+## Agent Skill Boundary
+
+The implemented Agent Skill layer is defined in [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md). Read that document together with this one before changing system prompts, adding reusable review methods, or assigning Skills to Agents. This document remains authoritative for the Agent roster, workflow, orchestration, and artifact contracts; the Agent Skill document remains authoritative for the four-Skill catalog, system-prompt boundary, assignment, activation, loading, provenance, and engineering verification policy.
+
+## Agent Memory Boundary
+
+The production Agent Memory design is defined in [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md). It is authoritative for invisible Lead-owned session context, cross-project memory, context assembly, storage, promotion, retrieval, failure behavior, and minimal cross-project user controls. Project artifacts and the workflow ledger remain authoritative state and must never be replaced by remembered context.
+
 ## Anthropic Basis
 This architecture follows Anthropic's orchestrator-worker guidance: a central agent decomposes work, delegates to specialized workers, and synthesizes results. Anthropic's research system uses a lead agent with subagents because subagents provide parallelism, isolated context windows, and separation of concerns. Anthropic also warns that agentic systems should add complexity only when the task value and complexity justify it; ReviewPilot qualifies because systematic reviews involve multi-stage research, search, screening, extraction, long context, and many external tools.
 

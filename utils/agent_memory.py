@@ -1,6 +1,10 @@
 """
 Two-layer memory system for ReviewPilot.
 
+LEGACY/UNWIRED: production Agent Memory is implemented in
+``reviewpilot_core.agent_memory``. This prototype is retained only for
+backward compatibility and must not be imported by the Web App runtime.
+
 memory/
 ├── runs/                        # Short-term: per-run state
 │   └── {project_name}/
@@ -18,6 +22,8 @@ memory/
 │   └── papers.jsonl             # Long-term: per-paper knowledge
 └── preferences.json             # Global user preferences
 """
+
+LEGACY_UNWIRED = True
 
 import json
 from pathlib import Path

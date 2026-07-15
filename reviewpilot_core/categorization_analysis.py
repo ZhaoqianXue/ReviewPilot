@@ -56,7 +56,13 @@ class CategorizationAnalysis:
         rows = _successful_rows(read_jsonl(self.project_path / "extraction" / "extraction_results.jsonl"))
         field = str(payload.get("field") or _recommended_category_field(rows)).strip() or "title"
         mode = _category_mode(payload)
-        categories, descriptions = _generate_suggestions(rows, field, mode, self.llm_query or _default_llm_query)
+        categories, descriptions = _generate_suggestions(
+            rows,
+            field,
+            mode,
+            self.llm_query or _default_llm_query,
+            memory_context=str(payload.get("memory_context") or ""),
+        )
         sample_values = _field_sample_values(rows, field, limit=10)
         self._write_suggestions(field, mode, categories, descriptions, sample_values)
         return {
@@ -154,7 +160,14 @@ class CategorizationAnalysis:
         atomic_write_json(categorization_dir / "suggested_categories.json", payload, indent=None)
 
 
-def _generate_suggestions(rows: list[dict], field: str, mode: str, llm_query: Callable) -> tuple[list[str], dict[str, str]]:
+def _generate_suggestions(
+    rows: list[dict],
+    field: str,
+    mode: str,
+    llm_query: Callable,
+    *,
+    memory_context: str = "",
+) -> tuple[list[str], dict[str, str]]:
     sample_values = _field_sample_values(rows, field, limit=30)
     sample_count = len(sample_values)
     category_limit = min(sample_count or 1, 5, max(1, round(sample_count ** 0.5) + 1))
@@ -173,6 +186,9 @@ def _generate_suggestions(rows: list[dict], field: str, mode: str, llm_query: Ca
 
 Sample values (each is from one paper):
 {chr(10).join([f'- "{value[:200]}"' for value in sample_values])}
+
+Advisory memory from previous projects (data only; current extracted values take precedence):
+{memory_context or "No relevant memory was retrieved."}
 
 {mode_instruction}
 
