@@ -71,6 +71,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn(previous_capture, update)
         self.assertIn(payload_merge, update)
         self.assertIn(helper_call, update)
+        self.assertNotIn("payload.search_terms", update)
+        self.assertNotIn("setupDraft.keywords = [payload.search_terms", update)
         self.assertLess(update.index(previous_capture), update.index(payload_merge))
         self.assertLess(update.index(payload_merge), update.index(helper_call))
 
@@ -313,7 +315,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("OLD_NEW_REVIEW_WELCOME", source)
         self.assertIn("DOUBLE_ESCAPED_NEW_REVIEW_WELCOME_FRAGMENT", source)
         self.assertIn("function migrateWorkspaceSnapshotData(data)", source)
-        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);", source)
+        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot) && !sameServerProject;", source)
         self.assertIn("if (shouldRestoreSnapshotData) {", source)
         self.assertIn("D = migrateWorkspaceSnapshotData(snapshot.data);", source)
         self.assertIn("firstText.includes(DOUBLE_ESCAPED_NEW_REVIEW_WELCOME_FRAGMENT)", source)
@@ -324,13 +326,17 @@ class FrontendContractTests(unittest.TestCase):
         restore = source[source.index("function restoreWorkspaceSnapshot") : source.index("function writeWorkspaceSnapshot")]
         route_guard = source[source.index("function shouldRestoreSnapshotDataForRoute") : source.index("function writeWorkspaceSnapshot")]
 
-        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);", restore)
+        self.assertIn("const sameServerProject = !!D.project.id && snapshotProjectId === D.project.id;", restore)
+        self.assertIn("const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot) && !sameServerProject;", restore)
+        self.assertIn("restoredProjectStateId = shouldRestoreSnapshotData ? snapshotProjectId : '';", restore)
         self.assertIn("const isWorkspaceRoute = path === '' || path === '/' || path === '/workspace';", route_guard)
         self.assertIn("if (isWorkspaceRoute) return true;", route_guard)
         self.assertIn("return D.isNewProject && !!snapshot.data?.isNewProject;", route_guard)
         self.assertIn("state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);", restore)
         self.assertIn("state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';", restore)
-        self.assertIn("if ((shouldRestoreSnapshotData || sameProject) && ui.setupDraft)", restore)
+        self.assertIn("snapshot.data?.setupRevision === D.setupRevision", restore)
+        self.assertIn("if ((shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft)", restore)
+        self.assertIn("mergedDraft.keywords = baseDraft.keywords;", restore)
 
     def test_refresh_migrates_stale_four_step_snapshot_to_current_five_step_workflow(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -529,6 +535,25 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("Running", canvas_action)
         self.assertIn("disabled", canvas_action)
 
+    def test_workflow_actions_have_step_level_running_and_completion_feedback(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        render_main = source[source.index('<main class="rp-main"') : source.index("${assistantPanel(v)}")]
+        step_item = source[source.index("function stepItem(s)") : source.index("function searchCanvas(v)")]
+        monitor = source[source.index("async function monitorOwnedTask") : source.index("async function refreshRetryConflict")]
+        action_branch = source[source.index("else if (act === 'action')") : source.index("root.addEventListener('input'")]
+
+        self.assertIn("function workflowRunningBanner(v)", source)
+        self.assertIn('${workflowRunningBanner(v)}', render_main)
+        self.assertIn('role="status" aria-live="polite"', source)
+        self.assertIn('aria-busy="${v.workflowRunning ? \'true\' : \'false\'}"', render_main)
+        self.assertIn("s.isRunning", step_item)
+        self.assertIn("rp-step-spin", step_item)
+        self.assertIn("transitionNotice", source)
+        self.assertIn("autoAdvanceStepForTask", monitor)
+        self.assertIn("state.actionOriginStep = state.step;", action_branch)
+        self.assertIn("const visibleStepBeforeRefresh = state.step;", monitor)
+        self.assertIn("outcome.task", monitor)
+
     def test_refresh_resumes_server_active_task_without_submitting_again(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         restore = source[source.index("function restoreWorkspaceSnapshot") : source.index("function shouldRestoreSnapshotDataForRoute")]
@@ -579,6 +604,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("monitorActiveTask();", post_action)
         self.assertEqual(source.count("function monitorActiveTask()"), 1)
         self.assertNotIn("resumeActiveTask", source)
+        self.assertIn("fetchProjectState(projectId).then((data) => {", mount_tail)
+        self.assertIn("setData(data, false, { preserveView: true });", mount_tail)
         self.assertLess(mount_tail.index("paint();"), mount_tail.index("monitorActiveTask();"))
         self.assertIn("typeof window !== 'undefined' && typeof document !== 'undefined'", source)
 

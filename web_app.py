@@ -44,6 +44,7 @@ from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
+from reviewpilot_core.screening_criteria import require_finalized_criteria, validate_criteria, criteria_state
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
@@ -197,7 +198,11 @@ async def project_chat(request):
         context_step = str(payload.get("step") or "").strip()
         if context_step not in {"search", "screening", "retrieval", "extraction", "categorize"}:
             context_step = None
-        result = LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
+        def respond():
+            return LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
+        result = task_runner.run_if_idle(project_id, respond) if context_step == "screening" else respond()
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse({"reply": result.reply, "lead_agent": result.to_dict(), "state": build_project_state(OUTPUT_ROOT, project_id)})
@@ -483,7 +488,7 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"save-criteria", "finalize-criteria", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -491,6 +496,12 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         return _submit_retry_action(output_root, project_id, input_data, llm_query)
 
     project_path = Path(output_root) / project_id
+    if action in {"save-criteria", "finalize-criteria"}:
+        validate_criteria(input_data or {})
+        if (input_data or {}).get("revision") != criteria_state(project_path)["revision"]:
+            raise ValueError("Screening criteria changed. Refresh before saving.")
+        return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
+            project_id=project_id, action=action, input_data=input_data).to_dict())
     if action == "preview-extraction":
         index = (input_data or {}).get("paper_index") if isinstance(input_data, dict) else None
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
@@ -510,6 +521,8 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
 
     def prepare_action():
         reconcile_setup_transaction(project_path)
+        if action == "screen":
+            require_finalized_criteria(project_path)
         replacements = stale_replacement_stages(project_path, action_stage)
         current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
         if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):

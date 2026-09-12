@@ -13,6 +13,7 @@ from urllib.parse import quote
 from ui_state import project_stage_label, schema_workbench_state
 
 from .extraction_schema import is_schema_finalized, load_schema_draft
+from .screening_criteria import criteria_state
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
@@ -295,6 +296,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "groups": _groups(categorization),
         "retrieved": _retrieved(included, download_report),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
+        "screeningCriteria": criteria_state(path),
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
@@ -475,7 +477,30 @@ def _platform_issues(platform_errors: dict) -> list[dict[str, str]]:
 
 
 def _keywords(config: dict) -> list[str]:
+    concept_blocks = config.get("concept_blocks") or []
+    if isinstance(concept_blocks, list) and concept_blocks:
+        labels: list[str] = []
+        seen_labels: set[str] = set()
+        for block in concept_blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("required_for_eligibility") is False:
+                continue
+            label = re.sub(r"\*+", "", unescape(str(block.get("label") or ""))).strip(" '\"")
+            key = label.casefold()
+            if not label or key in seen_labels:
+                continue
+            seen_labels.add(key)
+            labels.append(label)
+            if len(labels) >= 8:
+                break
+        if labels:
+            return labels
+
     candidates: list[str] = []
+    configured_keywords = config.get("keywords") or []
+    if isinstance(configured_keywords, list):
+        candidates.extend(str(keyword) for keyword in configured_keywords)
     candidates.extend(_descriptive_keyword_terms(str(config.get("primary_topic") or "")))
     candidates.extend(_descriptive_keyword_terms(str(config.get("domain") or "")))
 
@@ -487,7 +512,7 @@ def _keywords(config: dict) -> list[str]:
     seen: set[str] = set()
     keywords: list[str] = []
     for candidate in candidates:
-        label = candidate.strip(" ()'\"")
+        label = re.sub(r"\*+", "", candidate).strip(" ()'\"")
         if not label:
             continue
         key = label.casefold()
@@ -1067,7 +1092,7 @@ def _quiet_labels(path: Path, workflow_state: dict | None = None) -> dict[str, s
     extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     labels = {
         "search": "Run collection",
-        "screening": "Run screening",
+        "screening": "Run screening" if criteria_state(path)["status"] == "finalized" else "Finalize Criteria",
         "retrieval": "Download PDFs",
         "extraction": "Run extraction",
     }
@@ -1080,7 +1105,7 @@ def _quiet_actions(path: Path, workflow_state: dict | None = None) -> dict[str, 
     extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     actions = {
         "search": "collect",
-        "screening": "screen",
+        "screening": "screen" if criteria_state(path)["status"] == "finalized" else "finalize-criteria",
         "retrieval": "download-pdfs",
         "extraction": "run-extraction",
     }

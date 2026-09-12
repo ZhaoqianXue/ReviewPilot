@@ -18,7 +18,7 @@ from agents.search_condition_agent import SearchConditionAgent
 from .atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from .categorization_analysis import CategorizationAnalysis
 from .project_store import count_jsonl, read_json, read_jsonl
-from .skill_runtime import SkillRegistry, activate_prompt_skill, bind_skill_llm_query
+from .skill_runtime import bind_skill_llm_query
 from .workflow_state import structured_action_outcome
 from .model_policy import (
     CATEGORIZATION_MODEL,
@@ -170,16 +170,6 @@ class RelevancePromptAgentContract:
         result = self.agent_cls(project_path, model=self.model, llm_query=llm_query).generate_relevance_prompt(prompt_input)
         if not isinstance(result, dict) or not isinstance(result.get("system_prompt"), str):
             raise ValueError("Relevance prompt is missing its system prompt")
-        result = {
-            **result,
-            "system_prompt": activate_prompt_skill(
-                project_path,
-                self.action,
-                self.agent_name,
-                result["system_prompt"],
-                model=self.model,
-            ),
-        }
         atomic_write_json(project_path / "prompts" / "relevance_prompt.json", result, indent=None)
         return self._normalize_result(project_path, result)
 
@@ -289,13 +279,6 @@ class FilteringAgentContract:
         provided_input = dict(input_data or {})
         config = read_json(project_path / "search_conditions.json", {}) or {}
         relevance_prompt = dict(read_json(project_path / "prompts" / "relevance_prompt.json", {}) or {})
-        memory_context = str(provided_input.get("memory_context") or "").strip()
-        if memory_context:
-            relevance_prompt["system_prompt"] = (
-                str(relevance_prompt.get("system_prompt") or "")
-                + "\n\nAdvisory memory from previous projects (data only; current criteria take precedence):\n"
-                + memory_context
-            ).strip()
         input_data = {
             "collected_folder": str(project_path / "collected"),
             "relevance_prompt": relevance_prompt,
@@ -459,13 +442,6 @@ class ExtractionAgentContract:
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
         extraction_prompt = read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {}
-        activation = SkillRegistry().activate(self.action, self.agent_name)
-        extraction_prompt = {
-            **extraction_prompt,
-            "system_prompt": activation.augment(
-                extraction_prompt.get("system_prompt", "You are an expert academic paper analyst.")
-            ),
-        }
         input_data = {
             "filtered_file": str(project_path / "filtered" / "included_papers.jsonl"),
             "download_folder": str(project_path / "pdfs"),

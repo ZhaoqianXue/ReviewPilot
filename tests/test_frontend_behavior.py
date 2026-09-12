@@ -276,3 +276,35 @@ Promise.all([first, second]).then(async () => {
             ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_workflow_auto_advance_requires_a_local_success_and_unchanged_view(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask } = require('./frontend/app.js');
+const steps = [
+  {key:'search',status:'done'},
+  {key:'screening',status:'active'},
+  {key:'retrieval',status:'todo'},
+  {key:'extraction',status:'todo'},
+  {key:'categorize',status:'todo'},
+];
+
+assert.equal(workflowStepForAction('collect'), 'search');
+assert.equal(workflowStepForAction('suggest-categories'), 'categorize');
+assert.equal(workflowActionLabel('download-pdfs'), 'Full-text retrieval');
+assert.equal(workflowStepForAction('unknown-action'), '');
+
+assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'completed',originStep:'search',visibleStep:'search',steps}), 'screening');
+assert.equal(autoAdvanceStepForTask({action:'download-pdfs',taskStatus:'partial',originStep:'retrieval',visibleStep:'retrieval',steps}), 'extraction');
+assert.equal(autoAdvanceStepForTask({action:'finalize-and-run-extraction',taskStatus:'completed',originStep:'extraction',visibleStep:'extraction',steps}), 'categorize');
+
+assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'failed',originStep:'search',visibleStep:'search',steps}), '');
+assert.equal(autoAdvanceStepForTask({action:'generate-schema',taskStatus:'completed',originStep:'extraction',visibleStep:'extraction',steps}), '');
+assert.equal(autoAdvanceStepForTask({action:'retry-failed-downloads',taskStatus:'completed',originStep:'retrieval',visibleStep:'retrieval',steps}), '');
+assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'completed',originStep:'search',visibleStep:'screening',steps}), '');
+assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'completed',originStep:'',visibleStep:'search',steps}), '');
+"""
+        result = subprocess.run(
+            ["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)

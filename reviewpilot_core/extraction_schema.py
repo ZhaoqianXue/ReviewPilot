@@ -147,23 +147,20 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
 
 
 def build_extraction_prompts(config: dict[str, Any], schema: dict[str, Any]) -> tuple[str, str, str]:
-    topic = config.get("primary_topic") or config.get("project_name") or "the review topic"
-    domain = config.get("domain") or "the target domain"
-    system_prompt = (
-        f"You are an expert researcher extracting structured information from papers about {topic} in {domain}. "
-        "Extract only information supported by the provided paper text."
-    )
-    lines = []
-    for index, field in enumerate(schema["fields"], start=1):
-        required = "required" if field.get("required") else "optional"
-        example = field.get("example") or "Not specified"
-        lines.append(f"{index}. {field['name']} ({field['type']}, {required}): {field['description']} Example: {example}")
-    extraction_prompt = (
-        "Extract information from the paper using these fields:\n\n"
-        + "\n".join(lines)
-        + "\n\nReturn ONLY valid JSON with exactly these schema field names. Use empty strings for unavailable optional values."
-    )
-    user_prompt_template = f"{extraction_prompt}\n\nPAPER CONTENT:\n{{paper_text}}\n\nYour JSON response:"
+    scope = {
+        "research_description": config.get("description") or config.get("research_description") or "",
+        "primary_topic": config.get("primary_topic") or "",
+        "domain": config.get("domain") or "",
+    }
+    system_prompt = "You extract source-grounded structured evidence from scholarly papers into a supplied review schema."
+    extraction_prompt = f"""RESEARCH SCOPE DATA:
+{json.dumps(scope, ensure_ascii=False)}
+
+FINALIZED EXTRACTION SCHEMA:
+{json.dumps(schema, ensure_ascii=False)}
+
+Populate every declared schema field from the supplied paper evidence. Preserve reported units, denominators, time points, comparison groups, and uncertainty. Use an empty string when the supplied evidence does not support a field. Return exactly one JSON object containing every declared field name and no additional fields."""
+    user_prompt_template = f"{extraction_prompt}\n\nPAPER EVIDENCE DATA:\n{{paper_text}}\n\nJSON response:"
     return system_prompt, extraction_prompt, user_prompt_template
 
 

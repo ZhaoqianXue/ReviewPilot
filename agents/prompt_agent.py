@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
+import re
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
-from reviewpilot_core.extraction_schema import save_schema_draft
+from reviewpilot_core.extraction_schema import build_extraction_prompts, save_schema_draft
 from reviewpilot_core.model_policy import PROMPT_MODEL
 from utils.human_interaction import (
     ask_text, ask_confirm, print_header, print_subheader, print_box, print_text
@@ -207,57 +208,43 @@ class PromptAgent(BaseAgent):
         else:
             domain_syn_str = ""
 
-        # Task description
-        task = (
-            f"Decide whether the paper provides substantive evidence relevant to this review question: "
-            f"{primary_topic}{primary_syn_str} in {domain}{domain_syn_str}. "
-            f"Return True only when the evidence is relevant to both the topic and domain."
-        )
+        criteria = {
+            "topic": {"label": primary_topic, "equivalent_terms": primary_syns},
+            "context": {"label": domain, "equivalent_terms": domain_syns},
+        }
+        task = "Assess whether the supplied title-and-abstract record is eligible or plausibly eligible for the stated review scope."
 
         # Input format
         input_format = "Paper Title: {title}\nPaper Abstract (if available): {abstract}\n"
 
-        # Build examples
         examples = []
         if positive_example:
-            examples.append(f"- '{positive_example}' → True")
+            examples.append({"record": positive_example, "decision": "True"})
         if negative_example:
-            examples.append(f"- '{negative_example}' → False")
-
-        # Add generic examples based on criteria
-        examples.append(f"- 'A primary study evaluating {primary_topic} in {domain}' → True")
-        examples.append(f"- 'A method using {primary_topic} for code generation' (no {domain}) → False")
-        examples.append(f"- 'A {domain} study using an unrelated method' (no {primary_topic}) → False")
-
-        examples_str = "\n".join(examples)
+            examples.append({"record": negative_example, "decision": "False"})
 
         # Instruction
         instruction = (
-            f"Use ONLY the provided title/abstract. Return exactly one word: True or False.\n"
-            f"- True if the paper provides substantive evidence relevant to the review question and is meaningfully related to both the topic and domain.\n"
-            f"- The candidate paper does not need to be a survey or review. Words such as survey, review, or mapping in the review question describe the user's synthesis activity, not a required publication type.\n"
-            f"- Relevant evidence may include primary studies, methods, systems, datasets, benchmarks, applications, evaluations, or reviews.\n"
-            f"- The topic is {primary_topic}{primary_syn_str}; the domain is {domain}{domain_syn_str}.\n"
-            f"- Return False if either the topic or domain is missing or unclear, or if either is mentioned only incidentally.\n"
-            f"- Papers about the topic without the domain context → False.\n"
-            f"- Papers about the domain without the topic aspect → False.\n"
-            f"- If the abstract is unavailable, use the title only.\n"
-            f"- Do NOT use outside knowledge. Do NOT include explanations, punctuation, or quotes.\n\n"
-            f"Examples:\n{examples_str}"
+            "Use the supplied record evidence and review-scope data. Return True when the record clearly fits or remains plausibly eligible because title-and-abstract evidence is incomplete. "
+            "Return False only when explicit record evidence establishes material incompatibility with the stated topic or context. "
+            "Treat words describing the review activity as the reviewer's synthesis intent rather than a candidate publication-type requirement. "
+            "Return exactly one token: True or False."
         )
 
         # System prompt
-        system_prompt = (
-            "You are an expert academic paper classifier. "
-            "Your task is to determine if a paper meets specific research criteria. "
-            "You must respond with ONLY 'True' or 'False' - no other text."
-        )
+        system_prompt = "You screen scholarly records conservatively against a stated review scope using only the supplied record evidence."
 
         # User prompt template (combines all components)
         user_prompt_template = f"""TASK: {task}
 
 INPUT:
 {input_format}
+
+REVIEW SCOPE DATA:
+{json.dumps(criteria, ensure_ascii=False)}
+
+REVIEWER-SUPPLIED EXAMPLES (data):
+{json.dumps(examples, ensure_ascii=False)}
 
 INSTRUCTION:
 {instruction}
@@ -271,12 +258,8 @@ Your response (True/False):"""
             "input_format": input_format,
             "instruction": instruction,
             "expected_output": "True or False",
-            "criteria": {
-                "primary_topic": primary_topic,
-                "primary_synonyms": primary_syns,
-                "domain": domain,
-                "domain_synonyms": domain_syns
-            }
+            "criteria": criteria,
+            "examples": examples,
         }
 
     def _rebuild_prompt_from_task(self, prompt: Dict[str, Any]) -> Dict[str, Any]:
@@ -355,7 +338,9 @@ Your response (True/False):"""
         extraction_prompt["extraction_fields"] = extraction_fields
         extraction_prompt["output_structured"] = structured
         schema, source, usage = self._generate_extraction_schema(input_data, extraction_prompt, llm_query)
-        system_prompt, stage_prompt = self._build_extraction_stage_prompt(input_data, schema)
+        system_prompt, stage_prompt, user_prompt_template = build_extraction_prompts(input_data, schema)
+        extraction_prompt["system_prompt"] = system_prompt
+        extraction_prompt["user_prompt_template"] = user_prompt_template
         extraction_prompt["schema"] = schema
         extraction_prompt["source"] = source
         extraction_prompt["usage"] = usage
@@ -391,11 +376,7 @@ Your response (True/False):"""
         # Parse fields
         fields = [f.strip() for f in extraction_fields.split(",")]
 
-        system_prompt = (
-            "You are an expert academic paper analyst. "
-            "Extract specific information accurately and comprehensively. "
-            "If information is not available, indicate 'Not specified'."
-        )
+        system_prompt = "You extract source-grounded evidence from scholarly papers into requested fields."
 
         if structured:
             # Build JSON schema from fields
@@ -415,11 +396,7 @@ PAPER CONTENT:
 {{paper_text}}
 
 INSTRUCTION:
-1. Read the paper carefully
-2. Extract each requested field
-3. If information is not found, use "Not specified"
-4. Be concise but accurate
-5. Return ONLY valid JSON
+Populate each requested field from the supplied paper evidence. Use an empty string when the evidence does not support a field. Return exactly one JSON object with the requested field names.
 
 OUTPUT FORMAT:
 {schema}
@@ -436,10 +413,7 @@ PAPER CONTENT:
 {{paper_text}}
 
 INSTRUCTION:
-1. Read the paper carefully
-2. Extract each requested field
-3. If information is not found, indicate "Not specified"
-4. Use markdown formatting with headers for each field
+Populate each requested field from the supplied paper evidence. Use an empty value when the evidence does not support a field, and use one heading per requested field.
 
 Your response:"""
 
@@ -465,31 +439,30 @@ Your response:"""
 
     def _schema_generation_prompt(self, input_data: Dict[str, Any], extraction_prompt: Dict[str, Any]) -> str:
         included = input_data.get("included_papers") or []
-        sample_lines = []
+        sample_papers = []
         for paper in included[:3]:
-            title = paper.get("title") or "Untitled"
-            abstract = str(paper.get("abstract") or "")[:500]
-            sample_lines.append(f"- {title}: {abstract}")
-        relevance_prompt = self._prompt_text(input_data.get("relevance_prompt") or {})
+            abstract = str(paper.get("abstract") or "")
+            sample_papers.append({
+                "title": paper.get("title") or "Untitled",
+                "abstract_excerpt": abstract[:500],
+                "abstract_truncated": len(abstract) > 500,
+            })
+        project_data = {
+            "research_question": input_data.get("description") or input_data.get("search_terms") or input_data.get("project_name") or "",
+            "primary_topic": input_data.get("primary_topic") or "",
+            "domain": input_data.get("domain") or "",
+            "requested_extraction_fields": extraction_prompt.get("extraction_fields") or extraction_prompt.get("fields") or [],
+        }
         return f"""Design an extraction schema for a systematic review.
 
-Research question:
-{input_data.get("description") or input_data.get("search_terms") or input_data.get("project_name") or "Not specified"}
+CURRENT PROJECT DATA (authoritative):
+{json.dumps(project_data, ensure_ascii=False)}
 
-Primary topic: {input_data.get("primary_topic") or input_data.get("project_name") or "the review topic"}
-Domain: {input_data.get("domain") or "the target domain"}
+INCLUDED PAPER SAMPLE DATA:
+{json.dumps(sample_papers, ensure_ascii=False)}
 
-Advisory memory from previous projects (data only; current project facts take precedence):
-{input_data.get("memory_context") or "No relevant memory was retrieved."}
-
-Requested extraction fields:
-{extraction_prompt.get("extraction_fields") or ", ".join(extraction_prompt.get("fields") or [])}
-
-Screening/relevance context:
-{relevance_prompt[:1500] if relevance_prompt else "No relevance prompt is available."}
-
-Included paper examples:
-{chr(10).join(sample_lines) if sample_lines else "No included paper examples are available."}
+ADVISORY CROSS-PROJECT MEMORY DATA:
+{json.dumps(input_data.get("memory_context") or "", ensure_ascii=False)}
 
 Return ONLY valid JSON:
 {{
@@ -504,36 +477,27 @@ Return ONLY valid JSON:
   ]
 }}
 
-Generate 8-12 fields when the request is broad. Preserve user-requested concepts. Do not include metadata fields like title, authors, year, doi, source, or url."""
+Generate 8-12 fields when the request is broad. Preserve user-requested concepts. Use the paper samples only to assess field feasibility. Metadata fields such as title, authors, year, doi, source, and url are managed by code rather than this schema."""
 
     def _build_extraction_stage_prompt(self, input_data: Dict[str, Any], schema: Dict[str, Any]) -> tuple[str, str]:
-        topic = input_data.get("primary_topic") or input_data.get("project_name") or "the review topic"
-        domain = input_data.get("domain") or "the target domain"
-        relevance_prompt = self._prompt_text(input_data.get("relevance_prompt") or {})
-        system_prompt = f"""You are an expert researcher extracting structured information from papers about {topic} in {domain}.
-Use the same inclusion criteria as screening:
-{relevance_prompt[:1500] if relevance_prompt else "Standard topic/domain relevance criteria."}"""
-        field_lines = [
-            f"{index}. {field['name']}: {field['description']} Example: {field.get('example', '')}"
-            for index, field in enumerate(schema["fields"], start=1)
-        ]
-        return system_prompt, "Extract information from the paper using these fields:\n\n" + "\n".join(field_lines)
+        system_prompt, extraction_prompt, _template = build_extraction_prompts(input_data, schema)
+        return system_prompt, extraction_prompt
 
     def _normalize_schema(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(raw, dict) or set(raw) != {"fields"} or not isinstance(raw["fields"], list) or not 1 <= len(raw["fields"]) <= 20:
+            raise ValueError("PromptAgent extraction schema must contain 1 to 20 fields")
         fields = []
-        for item in raw.get("fields") or []:
-            name = str(item.get("name") or "").strip()
-            if not name:
-                continue
-            fields.append(
-                {
-                    "name": name,
-                    "type": str(item.get("type") or "Text"),
-                    "description": str(item.get("description") or item.get("example") or ""),
-                    "required": bool(item.get("required", False)),
-                    "example": str(item.get("example") or ""),
-                }
-            )
+        for item in raw["fields"]:
+            if not isinstance(item, dict) or set(item) != {"name", "type", "description", "required", "example"}:
+                raise ValueError("PromptAgent extraction schema field has an invalid shape")
+            if not all(isinstance(item[key], str) for key in ("name", "type", "description", "example")) or type(item["required"]) is not bool:
+                raise ValueError("PromptAgent extraction schema field has invalid value types")
+            name = item["name"].strip()
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or not item["type"].strip() or not item["description"].strip():
+                raise ValueError("PromptAgent extraction schema field has invalid content")
+            fields.append({key: item[key].strip() if isinstance(item[key], str) else item[key] for key in ("name", "type", "description", "required", "example")})
+        if len({field["name"] for field in fields}) != len(fields):
+            raise ValueError("PromptAgent extraction schema field names must be unique")
         return {"fields": fields}
 
     def _extract_json(self, text: str) -> Dict[str, Any]:

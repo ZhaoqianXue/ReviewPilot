@@ -114,7 +114,7 @@ class ExtractionPreviewProjectionTests(unittest.TestCase):
         result = run_project_preview(
             self.project,
             0,
-            llm_query=lambda **kwargs: (json.dumps({"methods": "Survey"}), {"total_tokens": 1}),
+            llm_query=lambda **kwargs: (json.dumps({"methods": "Survey", "key_findings": ""}), {"total_tokens": 1}),
             pdf_reader=lambda path: "paper text",
         )
 

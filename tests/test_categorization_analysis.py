@@ -62,18 +62,17 @@ class CategorizationAnalysisTests(unittest.TestCase):
             )
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
-                if "Create 3-8 meaningful categories" in text_prompt:
+                if "Create a semantic category plan" in text_prompt:
                     return (
                         json.dumps(
                             {
-                                "field": "key_findings",
                                 "categories": ["Clinical support"],
                                 "category_descriptions": {"Clinical support": "Clinical support use cases"},
                             }
                         ),
                         {},
                     )
-                return ("Clinical support", {})
+                return (json.dumps({"category": "Clinical support"}), {})
 
             result = CategorizationAnalysis(project_dir, llm_query=fake_llm_query).run()
             rows = read_jsonl(project_dir / "categorization" / "categorized_results.jsonl")
@@ -98,18 +97,17 @@ class CategorizationAnalysisTests(unittest.TestCase):
             )
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
-                if "Create 3-8 meaningful categories" in text_prompt:
+                if "Create a semantic category plan" in text_prompt:
                     return (
                         json.dumps(
                             {
-                                "field": "key_findings",
-                                "categories": ["Clinical support", "Unused category"],
-                                "category_descriptions": {"Clinical support": "Clinical use", "Unused category": "No papers"},
+                                "categories": ["Clinical support"],
+                                "category_descriptions": {"Clinical support": "Clinical use"},
                             }
                         ),
                         {},
                     )
-                return ("Clinical support", {})
+                return (json.dumps({"category": "Clinical support"}), {})
 
             result = CategorizationAnalysis(project_dir, llm_query=fake_llm_query).run()
             mapping = json.loads((project_dir / "categorization" / "categorization_mapping.json").read_text(encoding="utf-8"))
@@ -135,7 +133,8 @@ class CategorizationAnalysisTests(unittest.TestCase):
             )
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
-                self.assertIn('Analyze these values from the "methods" field', text_prompt)
+                self.assertIn("Create a semantic category plan", text_prompt)
+                self.assertIn('"selected_field": "methods"', text_prompt)
                 self.assertIn("at most 2 broad, reusable categories", text_prompt)
                 self.assertIn("materially fewer categories than papers", text_prompt)
                 return (
@@ -175,8 +174,8 @@ class CategorizationAnalysisTests(unittest.TestCase):
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
                 self.assertIn("at most 4 broad, reusable categories", text_prompt)
-                self.assertIn("do not create paper-specific categories", text_prompt)
-                return json.dumps({"categories": ["A", "B", "C", "D"]}), {}
+                self.assertIn("reuse labels across papers", text_prompt)
+                return json.dumps({"categories": ["A", "B", "C", "D"], "category_descriptions": {"A": "A evidence", "B": "B evidence", "C": "C evidence", "D": "D evidence"}}), {}
 
             result = CategorizationAnalysis(project_dir, llm_query=fake_llm_query).suggest_categories(
                 {"field": "methods", "mode": "multiple"}
@@ -202,8 +201,8 @@ class CategorizationAnalysisTests(unittest.TestCase):
 
             def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
                 if "Paper A" in text_prompt:
-                    return ("Qualitative studies", {})
-                return ("Benchmark studies", {})
+                    return (json.dumps({"category": "Qualitative studies"}), {})
+                return (json.dumps({"category": "Benchmark studies"}), {})
 
             result = CategorizationAnalysis(project_dir, llm_query=fake_llm_query).run(
                 {
@@ -225,12 +224,12 @@ class CategorizationAnalysisTests(unittest.TestCase):
         self.assertEqual(rows[0]["methods_category"], "Qualitative studies")
         self.assertEqual(rows[1]["methods_category"], "Benchmark studies")
 
-    def test_assign_category_does_not_force_json_mode_for_plain_category(self):
+    def test_assign_category_requires_exact_json_contract(self):
         seen = []
 
         def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
             seen.append((text_prompt, system_prompt))
-            return ("Clinical Decision Support", {})
+            return (json.dumps({"category": "Clinical Decision Support"}), {})
 
         category = _assign_category(
             {"title": "Paper"},
@@ -241,7 +240,7 @@ class CategorizationAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual(category, "Clinical Decision Support")
-        self.assertNotIn("json", (seen[0][0] + seen[0][1]).lower())
+        self.assertIn("JSON object", seen[0][0])
 
     def test_assign_category_accepts_json_object_response(self):
         def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
@@ -259,7 +258,7 @@ class CategorizationAnalysisTests(unittest.TestCase):
 
     def test_assign_category_normalizes_case_and_spacing_to_allowed_category(self):
         def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
-            return ("  user experience outcomes  ", {})
+            return (json.dumps({"category": "  user experience outcomes  "}), {})
 
         category = _assign_category(
             {"title": "Paper"},

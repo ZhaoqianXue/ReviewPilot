@@ -170,11 +170,11 @@ def _generate_suggestions(
 ) -> tuple[list[str], dict[str, str]]:
     sample_values = _field_sample_values(rows, field, limit=30)
     sample_count = len(sample_values)
-    category_limit = min(sample_count or 1, 5, max(1, round(sample_count ** 0.5) + 1))
+    category_limit = _category_limit(sample_count)
     shared_instruction = (
         f"Create at most {category_limit} broad, reusable categories that can classify all papers. "
         "Use materially fewer categories than papers whenever there are 3 or more papers. "
-        "Consolidate related values; do not create paper-specific categories."
+        "Consolidate related values and reuse labels across papers."
     )
     mode_instruction = (
         f"{shared_instruction} Each paper should fit into exactly ONE category."
@@ -182,17 +182,17 @@ def _generate_suggestions(
         else f"{shared_instruction} Each paper may belong to MULTIPLE categories."
     )
     response, _usage = llm_query(
-        text_prompt=f"""Analyze these values from the "{field}" field in research papers.
+        text_prompt=f"""Create a semantic category plan for extracted systematic-review evidence.
 
-Sample values (each is from one paper):
-{chr(10).join([f'- "{value[:200]}"' for value in sample_values])}
+CURRENT TASK DATA:
+{json.dumps({"selected_field": field, "mode": mode, "sample_values": sample_values}, ensure_ascii=False)}
 
-Advisory memory from previous projects (data only; current extracted values take precedence):
-{memory_context or "No relevant memory was retrieved."}
+ADVISORY MEMORY DATA:
+{json.dumps(memory_context or "", ensure_ascii=False)}
 
 {mode_instruction}
 
-Return JSON:
+Return exactly this JSON object:
 {{
     "categories": ["Category1", "Category2"],
     "category_descriptions": {{
@@ -200,76 +200,83 @@ Return JSON:
         "Category2": "Brief description"
     }}
 }}""",
-        system_prompt="You are a research analyst creating meaningful categories for academic paper data. Focus on semantic understanding, not keyword matching.",
+        system_prompt="You organize supplied review evidence into broad, coherent semantic categories.",
     )
     raw = _extract_json(response)
-    categories = [str(item).strip() for item in raw.get("categories") or [] if str(item).strip()]
-    if not categories:
-        raise ValueError("No categories generated")
-    descriptions = {str(key): str(value) for key, value in (raw.get("category_descriptions") or raw.get("descriptions") or {}).items()}
-    return categories, descriptions
+    return _validate_category_plan(raw, category_limit)
 
 
 def _generate_category_plan(rows: list[dict], llm_query: Callable) -> dict[str, Any]:
     field = _recommended_category_field(rows)
-    sample_values = [str(row.get(field) or row.get("title") or "")[:500] for row in rows[:25]]
-    response, _usage = llm_query(
-        text_prompt=f"""Create 3-8 meaningful categories for systematic-review extraction results.
-
-Preferred field: {field}
-Sample values:
-{json.dumps(sample_values, ensure_ascii=False, indent=2)}
-
-Return ONLY valid JSON:
-{{
-  "field": "{field}",
-  "categories": ["Category A", "Category B"],
-  "category_descriptions": {{"Category A": "Description"}}
-}}""",
-        system_prompt="You are a research analyst creating concise semantic categories.",
-    )
-    raw = _extract_json(response)
-    categories = [str(item).strip() for item in raw.get("categories") or [] if str(item).strip()]
-    if not categories:
-        raise ValueError("No categories generated")
+    categories, descriptions = _generate_suggestions(rows, field, "single", llm_query)
     return {
-        "field": str(raw.get("field") or field),
+        "field": field,
         "categories": categories,
-        "category_descriptions": raw.get("category_descriptions") or {},
+        "category_descriptions": descriptions,
     }
 
 
 def _assign_category(row: dict, field: str, value: str, categories: list[str], llm_query: Callable) -> str:
     response, _usage = llm_query(
-        text_prompt=f"""Categorize this paper into exactly one of these categories:
-{", ".join(categories)}
+        text_prompt=f"""Assign the supplied paper evidence to exactly one allowed category.
 
-Title: {row.get("title", "")}
-Field: {field}
-Value:
-{value}
+TASK DATA:
+{json.dumps({"allowed_categories": categories, "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
 
-Return ONLY the category name.""",
-        system_prompt="Return exactly one category name from the allowed list.",
+Return exactly one JSON object: {{"category": "one allowed category"}}""",
+        system_prompt="You assign supplied review evidence to an allowed semantic category.",
     )
-    category = _parse_category_response(response)
+    payload = _extract_json(response)
+    if not isinstance(payload, dict) or set(payload) != {"category"} or not isinstance(payload["category"], str):
+        raise ValueError("Categorization response must be an exact category JSON object")
+    category = payload["category"]
     return _normalize_allowed_category(category, categories)
 
 
 def _assign_multiple_categories(row: dict, field: str, value: str, categories: list[str], llm_query: Callable) -> list[str]:
     response, _usage = llm_query(
-        text_prompt=f"""Categorize this value into one or more of these categories:
-{", ".join(categories)}
+        text_prompt=f"""Assign the supplied paper evidence to every clearly supported allowed category.
 
-Title: {row.get("title", "")}
-Field: {field}
-Value:
-{value}
+TASK DATA:
+{json.dumps({"allowed_categories": categories, "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
 
-Return category names separated by ", " (comma space). Only include categories that clearly apply.""",
-        system_prompt="Return only category names from the allowed list, no explanations.",
+Return exactly one JSON object: {{"categories": ["allowed category"]}}""",
+        system_prompt="You assign supplied review evidence to supported allowed semantic categories.",
     )
-    return _parse_multiple_category_response(response, categories)
+    payload = _extract_json(response)
+    if not isinstance(payload, dict) or set(payload) != {"categories"} or not isinstance(payload["categories"], list):
+        raise ValueError("Categorization response must be an exact categories JSON object")
+    normalized: list[str] = []
+    for item in payload["categories"]:
+        if not isinstance(item, str):
+            raise ValueError("Categorization categories must contain text labels")
+        category = _normalize_allowed_category(item, categories)
+        if category not in categories:
+            raise ValueError(f"Categorization LLM returned category outside allowed list: {item}")
+        if category not in normalized:
+            normalized.append(category)
+    return normalized
+
+
+def _category_limit(sample_count: int) -> int:
+    return min(sample_count or 1, 5, max(1, round(sample_count ** 0.5) + 1))
+
+
+def _validate_category_plan(raw: Any, category_limit: int) -> tuple[list[str], dict[str, str]]:
+    if not isinstance(raw, dict) or set(raw) != {"categories", "category_descriptions"}:
+        raise ValueError("Category plan must contain exactly categories and category_descriptions")
+    values = raw["categories"]
+    descriptions = raw["category_descriptions"]
+    if not isinstance(values, list) or not 1 <= len(values) <= category_limit or not all(isinstance(item, str) and item.strip() for item in values):
+        raise ValueError("Category plan contains invalid categories")
+    categories = [item.strip() for item in values]
+    if len({item.casefold() for item in categories}) != len(categories):
+        raise ValueError("Category plan categories must be unique")
+    if not isinstance(descriptions, dict) or set(descriptions) != set(categories):
+        raise ValueError("Category descriptions must match the category list")
+    if not all(isinstance(value, str) and value.strip() for value in descriptions.values()):
+        raise ValueError("Category descriptions must be non-empty text")
+    return categories, {category: descriptions[category].strip() for category in categories}
 
 
 def _parse_multiple_category_response(response: Any, categories: list[str]) -> list[str]:

@@ -7,24 +7,22 @@ description: Convert an approved review scope into operational eligibility crite
 
 ## Operationalize criteria
 
-1. Translate each approved inclusion and exclusion rule into an observable condition that can be tested from the available title, abstract, and metadata.
+1. Translate each stated inclusion and exclusion rule into an observable condition supported by the available title, abstract, and metadata.
 2. Keep topic, population or context, intervention or phenomenon, study design, publication type, date, and language criteria distinct.
-3. Define standardized exclusion reasons that map one-to-one to approved criteria. Do not create a new criterion during screening.
-4. Specify how to handle missing abstracts, ambiguous terminology, protocols, reviews, editorials, duplicates, and borderline scope.
+3. Map every exclusion reason to one stated criterion.
+4. Define how incomplete records, ambiguous terminology, publication types, and borderline scope affect the decision.
 
 ## Decide records
 
-1. Read only the supplied record evidence.
-2. Check deterministic metadata gates first when provided, then substantive eligibility.
-3. Include when the record clearly meets all required criteria.
-4. Exclude only when an approved exclusion criterion is supported by explicit record evidence.
-5. Treat insufficient evidence conservatively: do not convert missing information into a fabricated exclusion fact. If the output contract is binary, retain the record when full text could resolve the uncertainty.
-6. Give a concise rationale tied to the decisive criterion and evidence.
+1. Base the decision on the supplied record evidence and the stated eligibility criteria.
+2. Include records that satisfy the criteria or remain plausibly eligible because the available evidence is incomplete.
+3. Exclude records only when explicit evidence establishes a stated exclusion condition or material incompatibility with the review scope.
+4. Represent uncertainty as uncertainty; in a binary title-and-abstract decision, retain a plausibly eligible record for later assessment.
+5. Tie any rationale to the decisive criterion and supporting record evidence.
 
 ## Quality checks
 
 - Apply the same threshold across records.
-- Never infer an unreported population, method, outcome, or setting.
-- Do not exclude merely because the title uses unfamiliar wording.
+- Treat unreported population, method, outcome, or setting as missing evidence.
+- Interpret unfamiliar wording by its supported meaning rather than surface familiarity.
 - Prefer false-positive retention over unsupported false exclusion during title/abstract screening.
-- Return only the schema required by the current ReviewPilot prompt; do not change workflow state or artifact counts.

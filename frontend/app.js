@@ -159,6 +159,38 @@ function workflowProgressIndexForSteps(steps) {
   return 0;
 }
 
+const WORKFLOW_ACTION_META = Object.freeze({
+  collect: { step: 'search', label: 'Paper collection', advances: true },
+  screen: { step: 'screening', label: 'Paper screening', advances: true },
+  'save-criteria': { step: 'screening', label: 'Saving criteria', advances: false },
+  'finalize-criteria': { step: 'screening', label: 'Finalizing criteria', advances: false },
+  'download-pdfs': { step: 'retrieval', label: 'Full-text retrieval', advances: true },
+  'retry-failed-downloads': { step: 'retrieval', label: 'Failed-download recovery', advances: false },
+  'generate-schema': { step: 'extraction', label: 'Schema generation', advances: false },
+  'regenerate-schema': { step: 'extraction', label: 'Schema regeneration', advances: false },
+  'preview-extraction': { step: 'extraction', label: 'Extraction preview', advances: false },
+  'finalize-and-run-extraction': { step: 'extraction', label: 'Information extraction', advances: true },
+  'run-extraction': { step: 'extraction', label: 'Information extraction', advances: true },
+  'suggest-categories': { step: 'categorize', label: 'Category generation', advances: false },
+  categorize: { step: 'categorize', label: 'Categorization', advances: false },
+});
+
+function workflowStepForAction(action) {
+  return WORKFLOW_ACTION_META[action]?.step || '';
+}
+
+function workflowActionLabel(action) {
+  return WORKFLOW_ACTION_META[action]?.label || 'Workflow task';
+}
+
+function autoAdvanceStepForTask({ action, taskStatus, originStep, visibleStep, steps }) {
+  const meta = WORKFLOW_ACTION_META[action];
+  if (!meta?.advances || !['completed', 'partial'].includes(taskStatus)) return '';
+  if (!originStep || originStep !== meta.step || visibleStep !== originStep) return '';
+  const originIndex = steps.findIndex((step) => step.key === originStep);
+  return originIndex >= 0 ? (steps[originIndex + 1]?.key || '') : '';
+}
+
 function workflowOutcomeBanner(notice) {
   if (!notice || !['partial', 'failed'].includes(notice.status)) return '';
   const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -177,13 +209,14 @@ function workflowOutcomeBanner(notice) {
 
 async function resolveTaskAndRefresh(taskPromise, projectId, fetchProjectStateFn) {
   let error = '';
+  let task = null;
   try {
-    await taskPromise;
+    task = await taskPromise;
   } catch (err) {
     error = err && err.message ? err.message : String(err);
   }
   const data = await fetchProjectStateFn(projectId);
-  return { data, error };
+  return { data, error, task };
 }
 
 function clampPreviewIndex(index, total) {
@@ -211,7 +244,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
+  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
 }
 
 /* ReviewPilot workspace UI.
@@ -254,6 +287,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     quickStartOpen: false,
     actionPending: D.activeTask?.action || '',
     actionStartedAt: D.activeTask ? (Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt) : 0,
+    actionOriginStep: '',
+    transitionNotice: null,
+    stepTransitionUntil: 0,
     preservedChatMessages: [],
     catDraft: categorizationDraftFromData(D),
     retrySelection: reconcileRetrySelection(null, D.retrievalRecovery),
@@ -266,6 +302,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     memoryError: '',
   };
   let actionTicker = null;
+  let transitionNoticeTimer = null;
+  let restoredProjectStateId = '';
   let activeTaskMonitor = { key: '', generation: 0 };
   const activeTaskPolls = createTaskPollRegistry(waitForTask);
   let paintWorkspace = () => {};
@@ -316,7 +354,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function restoreWorkspaceSnapshot() {
     const snapshot = readWorkspaceSnapshot();
     if (!snapshot) return;
-    const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot);
+    const snapshotProjectId = (snapshot.data && snapshot.data.project && snapshot.data.project.id) || snapshot.ui?.activeProjectId || '';
+    const sameServerProject = !!D.project.id && snapshotProjectId === D.project.id;
+    const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot) && !sameServerProject;
+    restoredProjectStateId = shouldRestoreSnapshotData ? snapshotProjectId : '';
     const authoritativeActiveTask = D.activeTask;
     const authoritativeRetrievalRecovery = D.retrievalRecovery;
     const authoritativeHistory = D.history;
@@ -329,8 +370,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     MAX = maxPlatformValue(D.platforms);
 
     const ui = snapshot.ui || {};
-    const snapshotProjectId = (snapshot.data && snapshot.data.project && snapshot.data.project.id) || ui.activeProjectId || '';
     const sameProject = !!D.project.id && snapshotProjectId === D.project.id;
+    const sameSetupRevision = sameProject
+      && !!D.setupRevision
+      && snapshot.data?.setupRevision === D.setupRevision;
     const stepKeys = new Set(D.steps.map((s) => s.key));
     state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);
     state.tab = (shouldRestoreSnapshotData || sameProject) && ui.tab === 'preview' ? 'preview' : 'fields';
@@ -343,8 +386,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.actionError = '';
     state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';
     const baseDraft = setupDraftFromData(D);
-    if ((shouldRestoreSnapshotData || sameProject) && ui.setupDraft) {
+    if ((shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft) {
       const mergedDraft = { ...baseDraft, ...ui.setupDraft };
+      mergedDraft.keywords = baseDraft.keywords;
       mergedDraft.source_limits = normalizeSourceLimits(
         mergedDraft.source_limits || baseDraft.source_limits,
         mergedDraft.platforms || baseDraft.platforms,
@@ -452,6 +496,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ctxLabels: data.ctxLabels || {},
       history: data.history || [],
       screeningMetrics: data.screeningMetrics || { identified: 0, afterDedup: 0, included: 0 },
+      screeningCriteria: data.screeningCriteria || { inclusion: [], exclusion: [], status: 'draft', revision: '', prompt: '' },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
       retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
       categorizationSummary: data.categorizationSummary || { papers: 0, groups: 0 },
@@ -599,6 +644,18 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.actionStartedAt = activeTask ? (Number.isNaN(startedAt) ? Date.now() : startedAt) : 0;
   }
 
+  function showTransitionNotice(projectId, message) {
+    const notice = { projectId, message };
+    state.transitionNotice = notice;
+    if (transitionNoticeTimer) clearTimeout(transitionNoticeTimer);
+    transitionNoticeTimer = setTimeout(() => {
+      if (state.transitionNotice === notice) {
+        state.transitionNotice = null;
+        paintWorkspace();
+      }
+    }, 5000);
+  }
+
   function setData(data, alreadyEscaped = false, { preserveView = false } = {}) {
     const previousProjectId = D.project.id || '';
     const previousStep = state.step;
@@ -616,6 +673,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     syncActionState(D.activeTask);
     monitorActiveTask();
     const sameProject = !!previousProjectId && previousProjectId === D.project.id;
+    if (!sameProject) {
+      state.actionOriginStep = '';
+      state.transitionNotice = null;
+      state.stepTransitionUntil = 0;
+    }
     state.retrySelection = reconcileRetrySelection(
       sameProject ? state.retrySelection : null,
       D.retrievalRecovery
@@ -681,6 +743,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (preview?.status === 'missing' && generateIfMissing) {
       state.actionPending = 'preview-extraction';
       state.actionStartedAt = Date.now();
+      state.actionOriginStep = state.step;
       paintWorkspace();
       await postAction('preview-extraction', { paper_index: state.previewIndex });
       return;
@@ -715,6 +778,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   async function monitorOwnedTask(taskId, projectId, key, generation) {
     const monitoredAction = D.activeTask?.action || '';
     const monitoredPaperIndex = D.activeTask?.paper_index ?? state.previewIndex;
+    const monitoredOriginStep = state.actionOriginStep;
     const ownsTask = () => (
       activeTaskMonitor.key === key
       && ownsProjectGeneration(state, D, activeTaskMonitor, projectId, generation, taskId)
@@ -722,9 +786,30 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     try {
       const outcome = await resolveTaskAndRefresh(waitForActiveTaskOnce(taskId, key), projectId, fetchProjectState);
       if (!ownsTask()) return;
+      if (!outcome.error && ['save-criteria', 'finalize-criteria'].includes(monitoredAction)) state.criteriaDraft = null;
+      const visibleStepBeforeRefresh = state.step;
       setData(outcome.data, false, { preserveView: true });
       if (monitoredAction === 'preview-extraction') {
         await fetchExtractionPreview(monitoredPaperIndex, projectId);
+      }
+      const taskStatus = outcome.task?.status || '';
+      const advanceStep = autoAdvanceStepForTask({
+        action: monitoredAction,
+        taskStatus,
+        originStep: monitoredOriginStep,
+        visibleStep: visibleStepBeforeRefresh,
+        steps: D.steps,
+      });
+      if (advanceStep) {
+        const destination = D.steps.find((step) => step.key === advanceStep);
+        state.step = advanceStep;
+        state.tab = 'fields';
+        state.stepTransitionUntil = Date.now() + 700;
+        const outcomeLabel = taskStatus === 'partial' ? 'completed with items to review' : 'completed';
+        showTransitionNotice(projectId, `${workflowActionLabel(monitoredAction)} ${outcomeLabel}. Moved to ${destination?.label || 'the next step'}.`);
+      } else if (['completed', 'partial'].includes(taskStatus) && monitoredOriginStep) {
+        const outcomeLabel = taskStatus === 'partial' ? 'completed with items to review' : 'completed';
+        showTransitionNotice(projectId, `${workflowActionLabel(monitoredAction)} ${outcomeLabel}.`);
       }
       state.actionError = outcome.error;
       paintWorkspace();
@@ -732,6 +817,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       if (!ownsTask()) return;
       state.actionError = err.message || String(err);
     } finally {
+      state.actionOriginStep = '';
       if (!ownsTask()) return;
       D.activeTask = null;
       syncActionState(null);
@@ -805,6 +891,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     } catch (err) {
       if (isCurrentProject()) {
         state.actionError = err.message || String(err);
+        state.actionOriginStep = '';
         syncActionState(null);
         paintWorkspace();
       }
@@ -1004,8 +1091,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const retrievalPct = D.retrievalSummary.total
       ? Math.max(0, Math.min(100, Math.round((D.retrievalSummary.retrieved / D.retrievalSummary.total) * 100)))
       : 0;
-    const activeAction = D.quietActions[step] || '';
+    if (state.criteriaDraft && (state.criteriaDraft.projectId !== D.project.id || state.criteriaDraft.revision !== D.screeningCriteria.revision)) state.criteriaDraft = null;
+    const activeAction = step === 'screening' && state.criteriaDraft ? 'finalize-criteria' : (D.quietActions[step] || '');
     const canvasActionPending = !!state.actionPending && state.actionPending === activeAction;
+    const workflowRunningStepKey = workflowStepForAction(state.actionPending);
+    const workflowRunning = !!state.actionPending && !!workflowRunningStepKey;
+    const workflowElapsedLabel = workflowRunning && state.actionStartedAt
+      ? formatElapsed(Date.now() - state.actionStartedAt)
+      : '';
     const retryRecoveryRunning = state.actionPending === 'retry-failed-downloads';
     const retryRecovery = D.retrievalRecovery;
     const retrySelectedIds = orderedRetryIds(retryRecovery, state.retrySelection);
@@ -1019,11 +1112,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const retrievalHasTerminalOutput = ['completed', 'partial', 'failed'].includes(
       D.stageState.retrieval?.status
     );
-    const canvasActionElapsedLabel = canvasActionPending && state.actionStartedAt
-      ? formatElapsed(Date.now() - state.actionStartedAt)
-      : '';
-    const activity = canvasActionPending
-      ? [{ t: 'now', tag: 'running', msg: `${D.quietLabels[step] || 'Workflow action'} in progress${canvasActionElapsedLabel ? ` · ${canvasActionElapsedLabel}` : ''}` }, ...(D.activityByStep[step] || [])]
+    const canvasActionElapsedLabel = canvasActionPending ? workflowElapsedLabel : '';
+    const activity = workflowRunning && step === workflowRunningStepKey
+      ? [{ t: 'now', tag: 'running', msg: `${workflowActionLabel(state.actionPending)} in progress${workflowElapsedLabel ? ` · ${workflowElapsedLabel}` : ''}` }, ...(D.activityByStep[step] || [])]
       : (D.activityByStep[step] || []);
     const activityMessages = activityMessagesForVisibleSteps(steps, progressIndex, step, activity);
     const chatMessages = conversationMessagesWithActivity(
@@ -1037,6 +1128,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       researchQuestion: D.researchQuestion,
       steps: steps.map((s, i, arr) => ({
         ...draftStep(s),
+        isRunning: workflowRunning && s.key === workflowRunningStepKey,
+        runningElapsedLabel: workflowRunning && s.key === workflowRunningStepKey ? workflowElapsedLabel : '',
         canView: i <= progressIndex,
         active: s.key === step,
         notActive: s.key !== step,
@@ -1086,14 +1179,23 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         && !!D.quietLabels[step]
         && !retryRecoveryVisible
         && !(step === 'retrieval' && retrievalHasTerminalOutput),
-      canvasActionLabel: D.quietLabels[step] || '',
-      canvasActionName: D.quietActions[step] || '',
+      canvasActionLabel: activeAction === 'finalize-criteria' ? 'Finalize Criteria' : (D.quietLabels[step] || ''),
+      canvasActionName: activeAction,
       canvasActionPending,
       canvasActionElapsedLabel,
+      workflowRunning,
+      workflowRunningStepKey,
+      workflowRunningStepLabel: steps.find((candidate) => candidate.key === workflowRunningStepKey)?.label || '',
+      workflowRunningActionLabel: workflowActionLabel(state.actionPending),
+      workflowElapsedLabel,
+      transitionNotice: state.transitionNotice?.projectId === D.project.id ? state.transitionNotice : null,
+      stepJustAdvanced: Date.now() < state.stepTransitionUntil,
       historyGroups: historyGroupsForView(D.history),
       actionError: state.actionError,
       workflowNotice: D.workflowNotices[({search:'collection',screening:'screening',retrieval:'retrieval',extraction:'extraction',categorize:'categorization'})[step]] || null,
       screeningMetrics: D.screeningMetrics,
+      screeningCriteria: D.screeningCriteria,
+      criteriaDraft: state.criteriaDraft,
       retrievalSummary: D.retrievalSummary,
       retryRecoveryVisible,
       retryRecoveryRunning,
@@ -1258,7 +1360,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function workspaceResponsiveStyle() {
-    return `@keyframes rp-thinking-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .42; } 40% { transform: translateY(-3px); opacity: 1; } } @keyframes rp-action-spin { to { transform: rotate(360deg); } }
+    return `@keyframes rp-thinking-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .42; } 40% { transform: translateY(-3px); opacity: 1; } } @keyframes rp-action-spin { to { transform: rotate(360deg); } } @keyframes rp-step-spin { to { transform: rotate(360deg); } } @keyframes rp-step-arrive { from { opacity: .35; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } } @keyframes rp-progress-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+.rp-step-enter { animation:rp-step-arrive .38s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .rp-motion, .rp-step-enter { animation:none !important; } }
 @media (max-width: 760px) {
   body { overflow:auto !important; }
   #app { height:auto !important; min-height:100vh !important; }
@@ -1308,17 +1412,21 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     </div>
   </aside>
 
-  <main class="rp-main" style="flex:1;min-width:0;display:flex;flex-direction:column;">
+  <main class="rp-main" aria-busy="${v.workflowRunning ? 'true' : 'false'}" style="flex:1;min-width:0;display:flex;flex-direction:column;">
     ${workspaceHeader(v)}
     <div class="rp-scroll rp-main-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:20px 22px;">
+      ${workflowRunningBanner(v)}
+      ${transitionNoticeBanner(v)}
       ${actionErrorBanner(v)}
       ${workflowOutcomeBanner(v.workflowNotice)}
-      ${v.isSearch ? searchCanvas(v) : ''}
-      ${v.isScreening ? screeningCanvas(v) : ''}
-      ${v.isRetrieval ? retrievalCanvas(v) : ''}
-      ${v.isExtraction ? extractionCanvas(v) : ''}
-      ${v.isCategorize ? categorizeCanvas(v) : ''}
-      ${canvasActionButton(v)}
+      <div data-ui="workflow-step-content" class="${v.stepJustAdvanced ? 'rp-step-enter' : ''}">
+        ${v.isSearch ? searchCanvas(v) : ''}
+        ${v.isScreening ? screeningCanvas(v) : ''}
+        ${v.isRetrieval ? retrievalCanvas(v) : ''}
+        ${v.isExtraction ? extractionCanvas(v) : ''}
+        ${v.isCategorize ? categorizeCanvas(v) : ''}
+        ${canvasActionButton(v)}
+      </div>
     </div>
   </main>
   ${assistantPanel(v)}
@@ -1365,18 +1473,19 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     const actionAttrs = s.canView ? `data-act="step" data-step="${s.key}"` : `data-step="${s.key}" data-disabled="true" aria-disabled="true" title="${s.label} is not available yet"`;
     const stepStyle = `position:relative;flex:1;display:flex;flex-direction:column;cursor:${s.canView ? 'pointer' : 'default'};padding:0 6px 12px;transition:opacity .12s ease;opacity:${s.canView ? '1' : '.48'};`;
     const hoverAttr = s.canView ? 'data-hover="opacity:0.74;"' : '';
-    return `<div ${actionAttrs} style="${stepStyle}" ${hoverAttr}>
+    return `<div ${actionAttrs} ${s.active ? 'aria-current="step"' : ''} ${s.isRunning ? 'aria-busy="true"' : ''} style="${stepStyle}" ${hoverAttr}>
       <div style="display:flex;align-items:center;height:40px;">
         ${s.noLeft ? '<span style="flex:1;"></span>' : ''}
         ${s.leftNavy ? '<span style="flex:1;height:2px;background:#1a365d;"></span>' : ''}
         ${s.leftGray ? '<span style="flex:1;height:2px;background:#e3e8ef;"></span>' : ''}
         <span style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin:0 7px;">
-          ${s.isDone ? '<i class="ph-fill ph-check-circle" style="font-size:19px;color:#1a365d;"></i>' : ''}
-          ${s.isPartial ? '<i class="ph-fill ph-warning-circle" aria-label="Partially completed" style="font-size:19px;color:#b45309;"></i>' : ''}
-          ${s.isFailed ? '<i class="ph-fill ph-x-circle" aria-label="Failed" style="font-size:19px;color:#b42318;"></i>' : ''}
-          ${s.isActive ? '<span style="width:18px;height:18px;border-radius:999px;border:2px solid #1a365d;display:flex;align-items:center;justify-content:center;background:#fffefc;"><span style="width:7px;height:7px;border-radius:999px;background:#1a365d;"></span></span>' : ''}
-          ${s.isTodo ? '<span style="width:16px;height:16px;border-radius:999px;border:1.5px solid #cdd5e0;background:#fffefc;"></span>' : ''}
-          ${s.isStale ? '<i class="ph ph-arrow-counter-clockwise" aria-label="Needs rerun" style="font-size:19px;color:#b45309;"></i>' : ''}
+          ${s.isRunning ? '<span class="rp-motion rp-step-spin" role="status" aria-label="Running" style="width:18px;height:18px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-step-spin .7s linear infinite;"></span>' : ''}
+          ${!s.isRunning && s.isDone ? '<i class="ph-fill ph-check-circle" style="font-size:19px;color:#1a365d;"></i>' : ''}
+          ${!s.isRunning && s.isPartial ? '<i class="ph-fill ph-warning-circle" aria-label="Partially completed" style="font-size:19px;color:#b45309;"></i>' : ''}
+          ${!s.isRunning && s.isFailed ? '<i class="ph-fill ph-x-circle" aria-label="Failed" style="font-size:19px;color:#b42318;"></i>' : ''}
+          ${!s.isRunning && s.isActive ? '<span style="width:18px;height:18px;border-radius:999px;border:2px solid #1a365d;display:flex;align-items:center;justify-content:center;background:#fffefc;"><span style="width:7px;height:7px;border-radius:999px;background:#1a365d;"></span></span>' : ''}
+          ${!s.isRunning && s.isTodo ? '<span style="width:16px;height:16px;border-radius:999px;border:1.5px solid #cdd5e0;background:#fffefc;"></span>' : ''}
+          ${!s.isRunning && s.isStale ? '<i class="ph ph-arrow-counter-clockwise" aria-label="Needs rerun" style="font-size:19px;color:#b45309;"></i>' : ''}
         </span>
         ${s.noRight ? '<span style="flex:1;"></span>' : ''}
         ${s.rightNavy ? '<span style="flex:1;height:2px;background:#1a365d;"></span>' : ''}
@@ -1384,9 +1493,10 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       </div>
       <div style="text-align:center;margin-top:2px;">
         <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;white-space:nowrap;">${s.label}</div>
-        ${s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
-        ${s.isPartial ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Partial · review failures</div>' : ''}
-        ${s.isFailed ? '<div style="font-size:10px;color:#b42318;margin-top:2px;">Failed · recovery required</div>' : ''}
+        ${s.isRunning ? `<div style="font-size:10px;color:#1a365d;margin-top:2px;">Running${s.runningElapsedLabel ? ` · ${s.runningElapsedLabel}` : ''}</div>` : ''}
+        ${!s.isRunning && s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
+        ${!s.isRunning && s.isPartial ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Partial · review failures</div>' : ''}
+        ${!s.isRunning && s.isFailed ? '<div style="font-size:10px;color:#b42318;margin-top:2px;">Failed · recovery required</div>' : ''}
       </div>
       ${s.active ? '<span style="position:absolute;left:8px;right:8px;bottom:-1px;height:2px;border-radius:2px;background:#1a365d;"></span>' : ''}
     </div>`;
@@ -1462,6 +1572,20 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     </div>`;
   }
 
+  function workflowRunningBanner(v) {
+    if (!v.workflowRunning) return '';
+    return `<section data-ui="workflow-running-banner" role="status" aria-live="polite" style="position:relative;overflow:hidden;border:1px solid #b9cde3;background:#f5f9fe;border-radius:12px;padding:13px 15px;margin-bottom:14px;display:flex;align-items:center;gap:12px;box-shadow:0 6px 18px rgba(26,54,93,.06);">
+      <span class="rp-motion" aria-hidden="true" style="width:20px;height:20px;flex:0 0 20px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
+      <div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a365d;font-weight:500;">ReviewPilot is working on ${v.workflowRunningActionLabel}</div><div style="font-size:11.5px;color:#6b746c;margin-top:3px;line-height:1.4;">${v.workflowRunningStepLabel}${v.workflowElapsedLabel ? ` · ${v.workflowElapsedLabel} elapsed` : ''} · This workspace will update automatically when the task finishes.</div></div>
+      <div aria-hidden="true" style="position:absolute;left:0;right:0;bottom:0;height:3px;background:#e6eef8;overflow:hidden;"><span class="rp-motion" style="display:block;width:38%;height:100%;background:linear-gradient(90deg,transparent,#6f96bf,transparent);animation:rp-progress-sweep 1.35s ease-in-out infinite;"></span></div>
+    </section>`;
+  }
+
+  function transitionNoticeBanner(v) {
+    if (!v.transitionNotice) return '';
+    return `<div data-ui="workflow-transition-notice" role="status" aria-live="polite" style="border:1px solid #bdd8c7;background:#f4fbf6;color:#245c37;border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:9px;font-size:12.5px;line-height:1.4;"><i class="ph-fill ph-check-circle" aria-hidden="true" style="font-size:17px;flex:0 0 auto;"></i><span>${esc(v.transitionNotice.message)}</span></div>`;
+  }
+
   function actionErrorBanner(v) {
     if (!v.actionError) return '';
     return `<div data-ui="canvas-action-error" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:14px;line-height:1.45;">${esc(v.actionError)}</div>`;
@@ -1469,12 +1593,28 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 
   function screeningCanvas(v) {
     return `${v.isNewProject ? gate('Paper Screening starts after collection', 'Create the Search Setup first, then run collection before screening records.', 'ph-funnel') : ''}
+      ${!v.isNewProject ? screeningCriteriaPanel(v) : ''}
       <div style="display:flex;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:16px;">
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.identified}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">identified</div></div>
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.afterDedup}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
         <div style="flex:1;padding:18px;text-align:center;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a365d;">${v.screeningMetrics.included}</div><div style="font-size:11px;color:#1a365d;margin-top:4px;">included</div></div>
       </div>
       <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}</div>`;
+  }
+
+  function screeningCriteriaPanel(v) {
+    const criteria = v.screeningCriteria;
+    const editing = !!v.criteriaDraft || criteria.status !== 'finalized';
+    const draft = v.criteriaDraft || { inclusion: criteria.inclusion.join('\n'), exclusion: criteria.exclusion.join('\n') };
+    const disabled = !editing || v.workflowRunning || v.chatPending ? 'disabled' : '';
+    return `<section data-ui="screening-criteria" style="border:1px solid #d8e2f0;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h3 style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Eligibility criteria</h3><span style="font-size:12px;color:#6b746c;">${editing ? 'Draft' : 'Finalized'}</span></div>
+      <p style="font-size:12px;color:#6b746c;line-height:1.5;">Review inclusion and exclusion rules below, or refine them in chat. Enter one rule per line, then finalize before screening. Changes are saved locally.</p>
+      ${['inclusion', 'exclusion'].map(key => `<label style="display:block;font-size:13px;margin-top:12px;">${key === 'inclusion' ? 'Inclusion Criteria' : 'Exclusion Criteria'}<textarea data-criteria="${key}" ${disabled} rows="4" style="display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;line-height:1.5;background:#fffefc;color:#243449;">${esc(draft[key])}</textarea></label>`).join('')}
+      <p style="font-size:11.5px;color:#6b746c;">Plausibly eligible records with incomplete evidence are retained for later review.</p>
+      <button type="button" data-act="${editing ? 'action' : 'edit-criteria'}" data-action="save-criteria" ${v.workflowRunning || v.chatPending ? 'disabled' : ''} style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer;">${editing ? 'Save Draft' : 'Edit Criteria'}</button>
+      ${criteria.prompt ? `<details style="margin-top:12px;font-size:12px;"><summary>View saved screening prompt</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.5;">${esc(criteria.prompt)}</pre></details>` : ''}
+    </section>`;
   }
 
   function retrievalCanvas(v) {
@@ -1844,6 +1984,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(420px,calc(100vw - 32px));background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;"><h2 id="rp-memory-title" style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;color:#1a1a1a;">Memory</h2><button type="button" data-act="close-dialog" aria-label="Close Memory" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
         ${v.memoryError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${esc(v.memoryError)}</div>` : ''}
+        <p style="font-size:12px;color:#6b746c;line-height:1.5;">Project conversations and saved review settings stay on this computer and are read when you reopen a project. The option below controls reuse between projects; clearing it preserves each project's saved work.</p>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:4px 0 16px;">
           <div><div style="font-size:13.5px;color:#1a1a1a;">Memory</div><div style="font-size:11.5px;color:#6b746c;margin-top:4px;line-height:1.4;">Reuse validated memory from previous projects.</div></div>
           <button type="button" data-act="toggle-memory" role="switch" aria-checked="${v.memoryEnabled ? 'true' : 'false'}" ${pending} style="width:42px;height:24px;flex:0 0 42px;display:flex;align-items:center;border:1px solid;border-radius:999px;padding:2px;cursor:${v.memoryPending ? 'wait' : 'pointer'};${switchStyle}"><span aria-hidden="true" style="width:18px;height:18px;border-radius:999px;background:#fffefc;box-shadow:0 1px 3px rgba(0,0,0,.18);"></span></button>
@@ -1859,9 +2000,6 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     const previousMaxResults = state.setupDraft.max_results;
     const mergedDraft = { ...state.setupDraft, ...payload };
     state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);
-    if (payload.search_terms && !state.setupDraft.keywords.includes(payload.search_terms)) {
-      state.setupDraft.keywords = [payload.search_terms, ...state.setupDraft.keywords].slice(0, 8);
-    }
   }
 
   function updateSetupDraftField(field, value) {
@@ -2014,6 +2152,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         if (state.actionPending) return;
         state.actionPending = 'preview-extraction';
         state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
         state.actionError = '';
         paint();
         postAction('preview-extraction', { paper_index: state.previewIndex }).catch(() => {});
@@ -2155,6 +2294,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         };
         state.actionPending = 'retry-failed-downloads';
         state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
         state.actionError = '';
         paint();
         postAction('retry-failed-downloads', payload).catch(() => {});
@@ -2163,7 +2303,9 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       else if (act === 'action') {
         if (state.actionPending) return;
         const actionName = t.getAttribute('data-action');
-        const payload = ['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null;
+        const payload = ['save-criteria', 'finalize-criteria'].includes(actionName)
+          ? { revision: D.screeningCriteria.revision, ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, (root.querySelector(`[data-criteria="${key}"]`)?.value || '').split('\n').map(line => line.trim()).filter(Boolean)])) }
+          : (['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null);
         if (actionName === 'categorize' && (!payload.categories || !payload.categories.length)) {
           state.actionError = 'Confirm at least one category before applying categorization.';
           paint();
@@ -2171,10 +2313,15 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         }
         state.actionPending = actionName;
         state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
         state.actionError = '';
         paint();
         postAction(actionName, payload).catch(() => {});
         return;
+      }
+      else if (act === 'edit-criteria') {
+        if (state.actionPending || state.chatPending) return;
+        state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision, inclusion: D.screeningCriteria.inclusion.join('\n'), exclusion: D.screeningCriteria.exclusion.join('\n')};
       }
       paint();
     });
@@ -2188,6 +2335,11 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     });
 
     root.addEventListener('input', (e) => {
+      if (e.target.matches('[data-criteria]')) {
+        state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision,
+          ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, root.querySelector(`[data-criteria="${key}"]`)?.value || '']))};
+        return;
+      }
       if (e.target.matches && e.target.matches('[data-ui="research-topic-input"]')) {
         if (!state.quickStartOpen) {
           state.quickStartOpen = true;
@@ -2270,7 +2422,20 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 
     paintWorkspace = paint;
     paint();
-    monitorActiveTask();
+    if (restoredProjectStateId) {
+      const projectId = restoredProjectStateId;
+      restoredProjectStateId = '';
+      fetchProjectState(projectId).then((data) => {
+        if (state.activeProjectId !== projectId) return;
+        setData(data, false, { preserveView: true });
+        paint();
+      }).catch((err) => {
+        state.actionError = err.message || String(err);
+        paint();
+      });
+    } else {
+      monitorActiveTask();
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);

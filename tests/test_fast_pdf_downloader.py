@@ -750,6 +750,10 @@ class FastPdfDownloaderTests(unittest.TestCase):
                 self.browser_urls.append(url)
                 return Path("/tmp/reviewpilot-test-pdfs/browser.pdf")
 
+            def _download_pdf_with_curl_cffi(self, *args, **kwargs):
+                # This browser-policy test must not fall through to live HTTP.
+                return None
+
         url = "https://www.techrxiv.org/doi/pdf/10.36227/techrxiv.177223091.15657802"
         downloader = BrowserTrackingDownloader()
         downloader.session = FakeSession(

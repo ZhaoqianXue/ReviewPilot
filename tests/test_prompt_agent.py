@@ -19,10 +19,11 @@ class PromptAgentTests(unittest.TestCase):
             )
 
         instruction = prompt["instruction"]
-        self.assertIn("provides substantive evidence relevant to the review question", instruction)
-        self.assertIn("does not need to be a survey or review", instruction)
-        self.assertIn("primary studies, methods, systems, datasets, benchmarks, applications, evaluations, or reviews", instruction)
-        self.assertIn("both the topic and domain", instruction)
+        self.assertIn("plausibly eligible", instruction)
+        self.assertIn("reviewer's synthesis intent", instruction)
+        self.assertIn("explicit record evidence", instruction)
+        self.assertNotIn("code generation", prompt["user_prompt_template"])
+        self.assertEqual(prompt["examples"], [])
         self.assertEqual(prompt["expected_output"], "True or False")
 
     def test_generate_extraction_prompt_calls_llm_and_writes_stage_artifacts(self):
@@ -47,10 +48,15 @@ class PromptAgentTests(unittest.TestCase):
                                     "name": "key_findings",
                                     "type": "Long text",
                                     "description": "Main findings",
+                                    "required": False,
+                                    "example": "clinical outcomes",
                                 },
                                 {
                                     "name": "limitations",
+                                    "type": "Text",
                                     "description": "Study limitations",
+                                    "required": False,
+                                    "example": "small sample",
                                 },
                             ]
                         }
@@ -83,7 +89,8 @@ class PromptAgentTests(unittest.TestCase):
         self.assertEqual(schema["fields"][0]["type"], "Select")
         self.assertTrue(schema["fields"][0]["required"])
         self.assertEqual(schema["fields"][2]["type"], "Text")
-        self.assertIn("Extract information", extraction_prompt["extraction_prompt"])
+        self.assertIn("FINALIZED EXTRACTION SCHEMA", extraction_prompt["extraction_prompt"])
+        self.assertIn("Use an empty string", extraction_prompt["extraction_prompt"])
         self.assertEqual(extraction_prompt["schema"]["fields"][1]["name"], "key_findings")
 
 

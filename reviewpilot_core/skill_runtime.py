@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 SKILL_ASSIGNMENTS = {
     "save-search-setup": ("SearchConditionAgent", "systematic-review-search-strategy"),
-    "generate-relevance-prompt": ("PromptAgent", "evidence-screening"),
     "screen": ("FilteringAgent", "evidence-screening"),
     "generate-schema": ("PromptAgent", "structured-evidence-extraction"),
     "run-extraction": ("ExtractionAgent", "structured-evidence-extraction"),
@@ -22,10 +21,10 @@ SKILL_ASSIGNMENTS = {
 }
 
 SKILL_VERSIONS = {
-    "systematic-review-search-strategy": "1.0.0",
-    "evidence-screening": "1.0.0",
-    "structured-evidence-extraction": "1.0.0",
-    "evidence-synthesis-and-categorization": "1.0.0",
+    "systematic-review-search-strategy": "2.1.0",
+    "evidence-screening": "2.0.0",
+    "structured-evidence-extraction": "2.0.0",
+    "evidence-synthesis-and-categorization": "2.0.0",
 }
 
 _START_MARKER = "<reviewpilot-agent-skill"

@@ -92,7 +92,11 @@ class ExtractionAgentTests(unittest.TestCase):
                             {
                                 "filtered_file": str(included_file),
                                 "download_folder": str(project_dir / "pdfs"),
-                                "extraction_prompt": {},
+                                "extraction_prompt": {
+                                    "system_prompt": "Extract declared evidence fields.",
+                                    "user_prompt_template": "PAPER EVIDENCE DATA:\n{paper_text}",
+                                    "schema": {"fields": [{"name": "key_findings"}]},
+                                },
                             }
                         )
 

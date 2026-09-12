@@ -43,6 +43,68 @@ def write_legacy_stage_chain(project: Path, through: str) -> None:
 
 
 class StateProjectionTests(unittest.TestCase):
+    def test_keywords_use_semantic_labels_without_query_wildcards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "biomedical"
+            write_json(
+                project / "search_conditions.json",
+                {
+                    "project_name": "biomedical",
+                    "primary_topic": "large language models",
+                    "domain": "biomedical research",
+                    "keywords": ["large language models", "LLMs", "biomedical research"],
+                    "search_terms": '("large language model*" OR LLM*) AND biomedical*',
+                },
+            )
+
+            keywords = build_rp_data(root, "biomedical")["keywords"]
+
+        self.assertEqual(keywords[:3], ["large language models", "LLMs", "biomedical research"])
+        self.assertFalse(any("*" in keyword for keyword in keywords))
+
+    def test_query_derived_keyword_labels_remove_wildcards_for_legacy_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "legacy"
+            write_json(
+                project / "search_conditions.json",
+                {
+                    "project_name": "legacy",
+                    "search_terms": '("large language model*" OR LLM*) AND biomedical*',
+                },
+            )
+
+            keywords = build_rp_data(root, "legacy")["keywords"]
+
+        self.assertIn("large language model", keywords)
+        self.assertIn("LLM", keywords)
+        self.assertFalse(any("*" in keyword for keyword in keywords))
+
+    def test_generated_concept_blocks_are_the_only_display_keyword_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "biomedical"
+            write_json(
+                project / "search_conditions.json",
+                {
+                    "project_name": "biomedical",
+                    "keywords": ["Large language models (LLMs)", "Biomedical research", "Clinical care"],
+                    "concept_blocks": [
+                        {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "large language models", "LLM", "LLMs"]},
+                        {"label": "Biomedical research", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["biomedical research"]},
+                        {"label": "Clinical care", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["clinical care"]},
+                    ],
+                    "primary_topic": "Large language models (LLMs)",
+                    "domain": "Biomedical research, Clinical care",
+                    "search_terms": '("large language model" OR "large language models" OR LLM OR LLMs) AND ("biomedical research" OR "clinical care")',
+                },
+            )
+
+            keywords = build_rp_data(root, "biomedical")["keywords"]
+
+        self.assertEqual(keywords, ["Large language models (LLMs)", "Biomedical research", "Clinical care"])
+
     def test_descriptive_keyword_parentheses_do_not_render_as_truncated_editable_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

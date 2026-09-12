@@ -418,7 +418,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "relevance_prompt_generated")
         self.assertEqual(result["prompt_path"], str(project_dir / "prompts" / "relevance_prompt.json"))
         self.assertEqual(prompt["task"], "Include LLM systems in biomedicine.")
-        self.assertIn('<reviewpilot-agent-skill name="evidence-screening"', prompt["system_prompt"])
+        self.assertNotIn("<reviewpilot-agent-skill", prompt["system_prompt"])
 
     def test_collection_contract_runs_collection_agent_against_search_conditions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -669,15 +669,23 @@ class WorkflowActionAdapterTests(unittest.TestCase):
                 def __init__(self, project_path, model, llm_query=None):
                     calls.append(("init", Path(project_path), model, llm_query))
                     self.project_path = Path(project_path)
+                    self.llm_query = llm_query
 
                 def run(self, input_data):
                     calls.append(("run", dict(input_data)))
+                    self.llm_query(
+                        text_prompt="paper evidence",
+                        system_prompt="Extract the declared fields.",
+                        model=EXTRACTION_MODEL,
+                        provider="openai",
+                    )
                     output_file = self.project_path / "extraction" / "extraction_results.jsonl"
                     output_file.write_text(json.dumps({"title": "Paper A", "key_findings": "Finding"}) + "\n", encoding="utf-8")
                     return {"output_file": str(output_file), "processed": 1, "errors": 0}
 
-            def fake_llm_query():
-                return "llm"
+            def fake_llm_query(**kwargs):
+                calls.append(("llm", kwargs))
+                return "{}", {}
 
             result = ExtractionAgentContract(agent_cls=FakeExtractionAgent).run(output_root, "demo", llm_query=fake_llm_query)
 
@@ -689,7 +697,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(calls[1][1]["extraction_prompt"]["prompt_type"], "extraction")
         self.assertIn(
             '<reviewpilot-agent-skill name="structured-evidence-extraction"',
-            calls[1][1]["extraction_prompt"]["system_prompt"],
+            calls[2][1]["system_prompt"],
         )
         self.assertEqual(calls[1][1]["download_report"], {"success": 1, "failed": 0, "downloaded": [{"title": "Paper A"}], "failed_papers": []})
         self.assertEqual(result["status"], "extraction_done")
@@ -715,18 +723,17 @@ class WorkflowActionAdapterTests(unittest.TestCase):
             )
 
             def fake_llm(*, text_prompt, system_prompt):
-                if "Create 3-8 meaningful categories" in text_prompt:
+                if "Create a semantic category plan" in text_prompt:
                     return (
                         json.dumps(
                             {
-                                "field": "key_findings",
                                 "categories": ["Clinical Decision Support"],
                                 "category_descriptions": {"Clinical Decision Support": "Clinical support systems"},
                             }
                         ),
                         {},
                     )
-                return ("Clinical Decision Support", {})
+                return (json.dumps({"category": "Clinical Decision Support"}), {})
 
             result = CategorizationAnalysisContract().run(output_root, "demo", llm_query=fake_llm)
             mapping = read_json(project_dir / "categorization" / "categorization_mapping.json")

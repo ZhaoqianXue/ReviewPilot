@@ -331,12 +331,21 @@ class FilteringAgent(BaseAgent):
             show_progress(i + 1, total, prefix="  Checking relevance")
 
             title = paper.get("title", "")
-            abstract = paper.get("abstract", "")[:1000]  # Truncate abstract
+            raw_abstract = str(paper.get("abstract") or "")
+            abstract = raw_abstract[:1000]
+            if len(raw_abstract) > len(abstract):
+                abstract += "\n[Abstract truncated by ReviewPilot after 1000 characters]"
 
-            # Format prompt
-            user_prompt = user_template.format(
-                title=title,
-                abstract=abstract if abstract else "No abstract available"
+            # Substitute only the two declared record placeholders. The generated
+            # template also contains JSON scope data whose braces are literal data.
+            record_values = {
+                "title": title,
+                "abstract": abstract if abstract else "No abstract available",
+            }
+            user_prompt = re.sub(
+                r"\{(title|abstract)\}",
+                lambda match: record_values[match.group(1)],
+                user_template,
             )
 
             try:
@@ -348,7 +357,10 @@ class FilteringAgent(BaseAgent):
                     provider="openai"
                 )
 
-                is_relevant = response.strip().lower() == "true"
+                decision = response.strip().casefold()
+                if decision not in {"true", "false"}:
+                    raise ValueError("Relevance model response must be exactly True or False")
+                is_relevant = decision == "true"
 
                 # Add relevance info to paper
                 paper["is_relevant"] = is_relevant

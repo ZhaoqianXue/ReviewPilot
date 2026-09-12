@@ -6,6 +6,7 @@ and publisher-specific URL patterns.
 """
 
 import requests
+import json
 import time
 import re
 import os
@@ -338,27 +339,29 @@ class CascadePDFDownloader:
         if not journal and not doi:
             return None
 
-        prompt = f"""Identify the publisher for this academic paper. Return ONLY the publisher name in lowercase.
+        allowed_publishers = {
+            "nature", "springer", "elsevier", "cell", "wiley", "oxford", "plos", "mdpi", "frontiers", "bmc",
+            "ieee", "acm", "science", "jama", "bmj", "taylor", "sage", "acs", "peerj", "elife", "arxiv",
+            "biorxiv", "medrxiv", "unknown",
+        }
+        prompt = f"""Classify the publisher or preprint server for the supplied paper metadata.
 
-Journal: {journal}
-DOI: {doi}
-Title: {title}
+PAPER METADATA DATA:
+{json.dumps({"journal": journal, "doi": doi, "title": title}, ensure_ascii=False)}
 
-Common publishers: nature, springer, elsevier, cell, wiley, oxford, plos, mdpi, frontiers, bmc, ieee, acm, science, jama, bmj, taylor, sage, acs, peerj, elife
+ALLOWED OUTPUT LABELS:
+{json.dumps(sorted(allowed_publishers))}
 
-If it's a preprint server, return: arxiv, biorxiv, or medrxiv
-If you cannot determine, return: unknown
-
-Return ONLY the publisher name, nothing else."""
+Return exactly one allowed lowercase label."""
 
         try:
             response, _ = self.llm_query_func(
                 text_prompt=prompt,
-                system_prompt="You identify academic publishers. Return only the publisher name.",
+                system_prompt="You classify scholarly paper metadata into a supplied publisher vocabulary.",
                 model=os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
             )
             publisher = response.strip().lower()
-            if publisher and publisher != "unknown":
+            if publisher in allowed_publishers and publisher != "unknown":
                 return publisher
         except:
             pass

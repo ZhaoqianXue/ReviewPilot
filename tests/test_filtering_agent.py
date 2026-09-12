@@ -15,7 +15,7 @@ class FilteringAgentTests(unittest.TestCase):
             collected_dir = project_dir / "collected"
             collected_dir.mkdir(parents=True)
             (collected_dir / "openalex.jsonl").write_text(
-                json.dumps({"id": "keep", "title": "Keep", "abstract": "Relevant", "year": 2024}) + "\n",
+                json.dumps({"id": "keep", "title": "Keep {abstract}", "abstract": "Relevant", "year": 2024}) + "\n",
                 encoding="utf-8",
             )
             (collected_dir / "summary.json").write_text(
@@ -34,13 +34,14 @@ class FilteringAgentTests(unittest.TestCase):
                         "collected_folder": str(collected_dir),
                         "relevance_prompt": {
                             "system_prompt": "Return true or false.",
-                            "user_prompt_template": "{title}\n{abstract}",
+                            "user_prompt_template": '{title}\n{abstract}\nSCOPE DATA: {"topic": "robots"}',
                         },
                         "auto_approve": True,
                     }
                 )
 
-        self.assertNotIn("json", (seen_prompts[0][0] + seen_prompts[0][1]).lower())
+        self.assertIn("Keep {abstract}\nRelevant", seen_prompts[0][0])
+        self.assertIn('{"topic": "robots"}', seen_prompts[0][0])
 
     def test_run_writes_stage_contract_artifacts_for_relevance_screening(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,6 +91,36 @@ class FilteringAgentTests(unittest.TestCase):
         self.assertEqual(screening_stats["total_screened"], 2)
         self.assertEqual(screening_stats["included_count"], 1)
         self.assertEqual(screening_stats["excluded_count"], 1)
+
+    def test_malformed_relevance_response_retains_plausibly_eligible_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            collected_dir = project_dir / "collected"
+            collected_dir.mkdir(parents=True)
+            long_abstract = "Relevant evidence. " * 100
+            (collected_dir / "openalex.jsonl").write_text(
+                json.dumps({"id": "uncertain", "title": "Potentially eligible", "abstract": long_abstract, "year": 2024}) + "\n",
+                encoding="utf-8",
+            )
+            (collected_dir / "summary.json").write_text(json.dumps({"platform_stats": {"openalex": 1}}), encoding="utf-8")
+            seen = {}
+
+            def fake_query_llm(text_prompt, system_prompt, model, provider):
+                seen["prompt"] = text_prompt
+                return ("The evidence is uncertain", {"total_tokens": 1})
+
+            result = FilteringAgent(project_dir, llm_query=fake_query_llm).run(
+                {
+                    "collected_folder": str(collected_dir),
+                    "relevance_prompt": {"system_prompt": "Screen conservatively.", "user_prompt_template": "{title}\n{abstract}"},
+                    "auto_approve": True,
+                }
+            )
+            rows = read_jsonl(project_dir / "filtered" / "included_papers.jsonl")
+
+        self.assertEqual(result["included_count"], 1)
+        self.assertIsNone(rows[0]["is_relevant"])
+        self.assertIn("Abstract truncated by ReviewPilot", seen["prompt"])
 
     def test_collection_rerun_excludes_removed_source_artifacts_from_screening(self):
         with tempfile.TemporaryDirectory() as tmp:

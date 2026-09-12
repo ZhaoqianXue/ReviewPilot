@@ -12,6 +12,7 @@ from starlette.testclient import TestClient
 from agents.extraction_agent import ExtractionAgent
 from reviewpilot_core.state_projection import build_rp_data
 from reviewpilot_core.task_runner import TaskRunner
+from reviewpilot_core.screening_criteria import criteria_state, save_criteria
 from web_app import create_project, render_index_html, render_workspace_html
 
 
@@ -199,6 +200,7 @@ class WebAppTests(unittest.TestCase):
                         raise RuntimeError("private failure /Users/name/file")
 
                 with patch.object(web_app, "LeadAgent", FailingLeadAgent):
+                    save_criteria(project_dir, criteria_state(project_dir), finalized=True)
                     failed_id = web_app.submit_project_action(output_root, "demo", "screen")
                     self.assertEqual(web_app.task_runner.wait(failed_id, 2)["status"], "failed")
                 failed = json.loads((project_dir / "workflow_state.json").read_text(encoding="utf-8"))
@@ -578,22 +580,11 @@ class WebAppTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": "LLM generated this Search Setup.",
-                            "project_name": "LLM Biomedicine Review",
                             "research_description": "Survey LLM systems in biomedicine",
-                            "search_terms": "LLM_JSON_QUERY",
-                            "search_queries": [{"name": "main", "query": "LLM_JSON_QUERY"}],
-                            "platforms": ["pubmed", "openalex", "arxiv"],
-                            "date_range": {"start": "2022-01-01", "end": ""},
-                            "max_results": 50,
-                            "source_limits": {"pubmed": 50, "openalex": 50, "arxiv": 50},
-                            "primary_topic": "LLM systems",
-                            "domain": "biomedicine",
-                            "extracted_concepts": {
-                                "primary_topics": ["LLM systems"],
-                                "domains": ["biomedicine"],
-                                "methods": ["survey"],
-                            },
-                            "keywords": ["LLM systems", "biomedicine"],
+                            "concept_blocks": [
+                                {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
+                                {"label": "Biomedicine", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["biomedicine", "biomedical"]},
+                            ],
                         }
                     ),
                     {"model": "gpt-5.4-mini"},
@@ -617,11 +608,12 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][2], "gpt-5.4-mini")
         self.assertIn('<reviewpilot-agent-skill name="systematic-review-search-strategy"', calls[0][1])
-        self.assertEqual(project["title"], "LLM Biomedicine Review")
-        self.assertEqual(config["project_name"], "LLM Biomedicine Review")
-        self.assertEqual(config["search_terms"], "LLM_JSON_QUERY")
-        self.assertEqual(config["search_queries"], [{"name": "main", "query": "LLM_JSON_QUERY"}])
-        self.assertEqual(config["primary_topic"], "LLM systems")
+        expected_query = '("large language model" OR LLM) AND (biomedicine OR biomedical)'
+        self.assertEqual(project["title"], "LLM Biomedicine Search")
+        self.assertEqual(config["project_name"], "LLM Biomedicine Search")
+        self.assertEqual(config["search_terms"], expected_query)
+        self.assertEqual(config["search_queries"], [{"name": "main", "query": expected_query}])
+        self.assertEqual(config["primary_topic"], "Large language models (LLMs)")
         self.assertEqual(config["generated_by"], "llm")
         self.assertEqual(config["lead_agent_reply"], "LLM generated this Search Setup.")
 
@@ -1044,9 +1036,9 @@ class WebAppTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "fields": [
-                                    {"name": "tool_type", "type": "Text", "description": "Tool type"},
-                                    {"name": "key_findings", "type": "Long text", "description": "Findings"},
-                                    {"name": "limitations", "description": "Limitations"},
+                                    {"name": "tool_type", "type": "Text", "description": "Tool type", "required": False, "example": "model"},
+                                    {"name": "key_findings", "type": "Long text", "description": "Findings", "required": False, "example": "finding"},
+                                    {"name": "limitations", "type": "Text", "description": "Limitations", "required": False, "example": "limitation"},
                                 ]
                             }
                         ),
@@ -1098,30 +1090,31 @@ class WebAppTests(unittest.TestCase):
                             json.dumps(
                                 {
                                     "fields": [
-                                        {"name": "tool_type", "type": "Text", "description": "Tool type"},
-                                        {"name": "key_findings", "type": "Long text", "description": "Findings"},
-                                        {"name": "limitations", "description": "Limitations"},
+                                        {"name": "tool_type", "type": "Text", "description": "Tool type", "required": False, "example": "model"},
+                                        {"name": "key_findings", "type": "Long text", "description": "Findings", "required": False, "example": "finding"},
+                                        {"name": "limitations", "type": "Text", "description": "Limitations", "required": False, "example": "limitation"},
                                     ]
                                 }
                             ),
                             {},
                         )
-                    if "Create 3-8 meaningful categories" in kwargs.get("text_prompt", ""):
+                    if "Create a semantic category plan" in kwargs.get("text_prompt", ""):
                         return (
                             json.dumps(
                                 {
-                                    "field": "key_findings",
                                     "categories": ["AI Tools"],
                                     "category_descriptions": {"AI Tools": "AI tool studies"},
                                 }
                             ),
                             {},
                         )
-                    if "Categorize this paper" in kwargs.get("text_prompt", ""):
-                        return ("AI Tools", {})
+                    if "Assign the supplied paper evidence" in kwargs.get("text_prompt", ""):
+                        return (json.dumps({"category": "AI Tools"}), {})
                     return (json.dumps({"reply": "LLM action reply."}), {})
 
                 for action in actions:
+                    if action == "screen":
+                        save_criteria(project_dir, criteria_state(project_dir), finalized=True)
                     task_id = web_app.submit_project_action(output_root, "demo", action, llm_query=fake_llm)
                     task = web_app.task_runner.wait(task_id, timeout=2)
                     stages.append(task["result"]["stage"])
@@ -1205,18 +1198,11 @@ class WebAppTests(unittest.TestCase):
                             json.dumps(
                                 {
                                     "reply": "Search setup ready.",
-                                    "project_name": "LLM Biomedicine Smoke",
                                     "research_description": "Survey LLMs in biomedicine",
-                                    "search_terms": "LLM AND biomedicine",
-                                    "search_queries": [{"name": "main", "query": "LLM AND biomedicine"}],
-                                    "platforms": ["openalex"],
-                                    "date_range": {"start": "2020-01-01", "end": ""},
-                                    "max_results": 2,
-                                    "source_limits": {"openalex": 2},
-                                    "primary_topic": "LLM",
-                                    "domain": "biomedicine",
-                                    "extracted_concepts": {"primary_topics": ["LLM"], "domains": ["biomedicine"], "methods": []},
-                                    "keywords": ["LLM", "biomedicine"],
+                                    "concept_blocks": [
+                                        {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
+                                        {"label": "Biomedicine", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["biomedicine", "biomedical"]},
+                                    ],
                                 }
                             ),
                             {"total_tokens": 100},
@@ -1226,19 +1212,18 @@ class WebAppTests(unittest.TestCase):
                             json.dumps(
                                 {
                                     "fields": [
-                                        {"name": "key_findings", "type": "Long text", "description": "Main findings"},
-                                        {"name": "limitations", "type": "Long text", "description": "Limitations"},
-                                        {"name": "application_area", "type": "Text", "description": "Application area"},
+                                        {"name": "key_findings", "type": "Long text", "description": "Main findings", "required": False, "example": "finding"},
+                                        {"name": "limitations", "type": "Long text", "description": "Limitations", "required": False, "example": "limitation"},
+                                        {"name": "application_area", "type": "Text", "description": "Application area", "required": False, "example": "clinical care"},
                                     ]
                                 }
                             ),
                             {"total_tokens": 50},
                         )
-                    if "Create 3-8 meaningful categories" in prompt:
+                    if "Create a semantic category plan" in prompt:
                         return (
                             json.dumps(
                                 {
-                                    "field": "key_findings",
                                     "categories": ["Clinical Support", "Implementation"],
                                     "category_descriptions": {
                                         "Clinical Support": "Clinical use cases",
@@ -1248,9 +1233,10 @@ class WebAppTests(unittest.TestCase):
                             ),
                             {"total_tokens": 30},
                         )
-                    if "Categorize this paper" in prompt:
-                        return ("Implementation" if "barriers" in prompt else "Clinical Support", {"total_tokens": 10})
-                    if "PAPER CONTENT" in prompt or "Extract information from the paper" in prompt:
+                    if "Assign the supplied paper evidence" in prompt:
+                        category = "Implementation" if "barriers" in prompt else "Clinical Support"
+                        return (json.dumps({"category": category}), {"total_tokens": 10})
+                    if "PAPER EVIDENCE DATA" in prompt:
                         return (
                             json.dumps(
                                 {
@@ -1301,6 +1287,9 @@ class WebAppTests(unittest.TestCase):
                     project_id = response.json()["id"]
                     stages = []
                     for action in ["collect", "screen", "generate-schema", "finalize-schema", "download-pdfs", "run-extraction", "categorize"]:
+                        if action == "screen":
+                            criteria_task = web_app.submit_project_action(output_root, project_id, "finalize-criteria", input_data=criteria_state(output_root / project_id))
+                            self.assertEqual(web_app.task_runner.wait(criteria_task, timeout=5)["status"], "completed")
                         task_id = web_app.submit_project_action(output_root, project_id, action, llm_query=fake_llm)
                         task = web_app.task_runner.wait(task_id, timeout=5)
                         self.assertEqual(task["status"], "partial" if action == "download-pdfs" else "completed", task.get("error"))

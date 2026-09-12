@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core.extraction_schema import build_extraction_prompts
 from reviewpilot_core.atomic_files import atomic_output_path
 from reviewpilot_core.model_policy import EXTRACTION_MODEL
 from utils.jsonl_handler import read_jsonl, append_jsonl, save_json
@@ -126,8 +127,19 @@ class ExtractionAgent(BaseAgent):
             self._init_client()
 
         # Get prompts
-        system_prompt = extraction_prompt.get("system_prompt", "You are an expert academic paper analyst.")
-        user_template = extraction_prompt.get("user_prompt_template") or f"{extraction_prompt.get('extraction_prompt', 'Summarize this paper.')}\n\nPAPER CONTENT:\n{{paper_text}}"
+        system_prompt = extraction_prompt.get("system_prompt")
+        user_template = extraction_prompt.get("user_prompt_template")
+        schema_fields = (extraction_prompt.get("schema") or {}).get("fields") if isinstance(extraction_prompt.get("schema"), dict) else None
+        if schema_fields and (not isinstance(system_prompt, str) or not system_prompt.strip() or not isinstance(user_template, str) or not user_template.strip()):
+            config_path = self.project_path / "search_conditions.json"
+            try:
+                config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+            except (OSError, json.JSONDecodeError):
+                config = {}
+            system_prompt, _stage_prompt, user_template = build_extraction_prompts(config, extraction_prompt["schema"])
+            extraction_prompt = {**extraction_prompt, "system_prompt": system_prompt, "user_prompt_template": user_template}
+        if not isinstance(system_prompt, str) or not system_prompt.strip() or not isinstance(user_template, str) or not user_template.strip():
+            raise ValueError("Extraction requires an explicit extraction prompt")
 
         # Process PDFs
         output_file = output_dir / "extraction_results.jsonl"
@@ -255,10 +267,13 @@ class ExtractionAgent(BaseAgent):
                 return self._error_record(paper, row_number, "Could not extract text from PDF", pdf_file)
             if active_llm_query is None and self.client is None:
                 self._init_client()
-            system_prompt = extraction_prompt.get("system_prompt", "You are an expert academic paper analyst.")
-            user_template = extraction_prompt.get("user_prompt_template") or f"{extraction_prompt.get('extraction_prompt', 'Summarize this paper.')}\n\nPAPER CONTENT:\n{{paper_text}}"
+            system_prompt = extraction_prompt.get("system_prompt")
+            user_template = extraction_prompt.get("user_prompt_template")
+            if not isinstance(system_prompt, str) or not isinstance(user_template, str):
+                raise ValueError("Extraction requires a finalized prompt")
             extracted, cost = self._extract_with_llm(text, system_prompt, user_template, active_llm_query)
             extracted_data = self._parse_extracted_data(extracted)
+            extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, set())
             return {
                 "paper_id": paper.get("id", "unknown"),
                 "source": paper.get("source", "unknown"),
@@ -304,6 +319,7 @@ class ExtractionAgent(BaseAgent):
             response, usage = self._query_web_search_extraction(paper, extraction_prompt)
 
         extracted_data = self._parse_extracted_data(response)
+        extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, {"source_urls", "sources", "confidence"})
         source_urls = self._normalize_source_urls(extracted_data.get("source_urls") or extracted_data.get("sources") or [])
         if not source_urls:
             source_urls = self._metadata_source_urls(paper)
@@ -376,8 +392,8 @@ class ExtractionAgent(BaseAgent):
                     "content": (
                         f"{extraction_prompt.get('system_prompt', '')}\n\n"
                         "Extract only information supported by cited web sources. "
-                        "Return only valid JSON. Include source_urls and confidence. "
-                        "If a schema field is unsupported, return an empty value and low confidence."
+                        "Return one JSON object containing the declared schema fields and confidence. "
+                        "Use an empty value for an unsupported schema field."
                     ),
                 },
                 {
@@ -409,10 +425,9 @@ Extraction schema:
 
 Return ONLY valid JSON with:
 - every supported schema field by its field name
-- source_urls: non-empty list of URLs that support the extracted values
-- confidence: "high", "medium", or "low"
+- confidence: "high", "medium", or "low" for the response as a whole
 
-Do not claim full-text extraction. Use empty strings for unsupported fields."""
+Treat this as web fallback evidence rather than full-text extraction. Use empty strings for unsupported fields."""
 
     def _normalize_source_urls(self, value: Any) -> list[str]:
         if isinstance(value, str):
@@ -510,9 +525,36 @@ Do not claim full-text extraction. Use empty strings for unsupported fields."""
             text = text.split("```", 1)[1].split("```", 1)[0]
         try:
             parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return {"extracted_text": str(extracted or "")}
-        return parsed if isinstance(parsed, dict) else {"extracted_text": str(extracted or "")}
+        except json.JSONDecodeError as exc:
+            raise ValueError("Extraction model response must be valid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("Extraction model response must be a JSON object")
+        return parsed
+
+    def _validate_schema_data(
+        self,
+        data: Dict[str, Any],
+        extraction_prompt: Dict[str, Any],
+        auxiliary_fields: set[str],
+    ) -> Dict[str, Any]:
+        schema = extraction_prompt.get("schema") if isinstance(extraction_prompt.get("schema"), dict) else {}
+        expected = [
+            field["name"].strip()
+            for field in schema.get("fields") or []
+            if isinstance(field, dict) and isinstance(field.get("name"), str) and field["name"].strip()
+        ]
+        if not expected:
+            return data
+        missing = set(expected) - set(data)
+        unexpected = set(data) - set(expected) - auxiliary_fields
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing fields: {', '.join(sorted(missing))}")
+            if unexpected:
+                details.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
+            raise ValueError("Extraction model response violates schema: " + "; ".join(details))
+        return data
 
     def _get_row_number(self, filename: str) -> Optional[int]:
         """Extract row number from filename like 'row2_pubmed_2025_...'"""

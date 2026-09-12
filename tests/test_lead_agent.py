@@ -285,7 +285,7 @@ class LeadAgentTests(unittest.TestCase):
             )
 
             def fake_llm_query(*, text_prompt, system_prompt, model, provider):
-                self.assertIn("Return ONLY valid JSON for a schema command", system_prompt)
+                self.assertIn("translate a user's extraction-schema request", system_prompt)
                 return (
                     json.dumps(
                         {
@@ -548,9 +548,9 @@ class LeadAgentTests(unittest.TestCase):
         self.assertIn("LLM systems", relevance_prompt["task"])
         self.assertIn(str(project_dir / "prompts" / "relevance_prompt.json"), result.artifacts)
         self.assertIn(str(project_dir / "collected" / "summary.json"), result.artifacts)
-        self.assertEqual(result.reply, "LLM action reply for CollectionAgent.")
+        self.assertEqual(result.reply, "Collection completed: 1 paper collected. Next action: Paper Screening.")
         self.assertEqual(chat_rows[-1]["role"], "a")
-        self.assertEqual(chat_rows[-1]["text"], "LLM action reply for CollectionAgent.")
+        self.assertEqual(chat_rows[-1]["text"], "Collection completed: 1 paper collected. Next action: Paper Screening.")
 
     def test_handle_collect_action_fails_when_collection_artifact_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -659,9 +659,9 @@ class LeadAgentTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "fields": [
-                                    {"name": "tool_type", "description": "AI tool type"},
-                                    {"name": "key_findings", "description": "Main findings"},
-                                    {"name": "limitations", "description": "Limitations"},
+                                    {"name": "tool_type", "type": "Text", "description": "AI tool type", "required": False, "example": "model"},
+                                    {"name": "key_findings", "type": "Long text", "description": "Main findings", "required": False, "example": "finding"},
+                                    {"name": "limitations", "type": "Text", "description": "Limitations", "required": False, "example": "limitation"},
                                 ]
                             }
                         ),
@@ -718,7 +718,7 @@ class LeadAgentTests(unittest.TestCase):
                     json.dumps(
                         {
                             "fields": [
-                                {"name": f"field_{index}", "type": "Text", "description": f"Field {index}"}
+                                {"name": f"field_{index}", "type": "Text", "description": f"Field {index}", "required": False, "example": f"Value {index}"}
                                 for index in range(10)
                             ]
                         }
@@ -879,7 +879,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertIn("blocked", result.reply)
         self.assertIn("ExtractionAgent will use web-search fallback", result.reply)
 
-    def test_stage_reply_prompt_pins_next_canvas_action_policy(self):
+    def test_stage_reply_uses_deterministic_next_canvas_action_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
@@ -914,14 +914,13 @@ class LeadAgentTests(unittest.TestCase):
                 seen_prompts.append(kwargs["text_prompt"])
                 return (json.dumps({"reply": "Collection completed. Next canvas action: Paper Screening."}), {})
 
-            LeadAgent(output_root, workflow_adapter=FakeWorkflowAdapter(), llm_query=fake_llm_query).handle_message(
+            result = LeadAgent(output_root, workflow_adapter=FakeWorkflowAdapter(), llm_query=fake_llm_query).handle_message(
                 project_id="demo",
                 action="collect",
             )
 
-        self.assertIn("collection -> Paper Screening", seen_prompts[0])
-        self.assertIn("filtering -> Full-Text Retrieval", seen_prompts[0])
-        self.assertIn("extraction -> Categorization & Analysis", seen_prompts[0])
+        self.assertEqual(seen_prompts, [])
+        self.assertEqual(result.reply, "Collection completed: 0 papers collected. Next action: Paper Screening.")
 
     def test_run_extraction_uses_finalized_schema_after_download(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1301,15 +1300,14 @@ class LeadAgentTests(unittest.TestCase):
 
             def fake_llm_query(*args, **kwargs):
                 llm_calls.append(kwargs.get("text_prompt", ""))
-                if 'Analyze these values from the "methods" field' not in kwargs.get("text_prompt", ""):
+                if "Create a semantic category plan" not in kwargs.get("text_prompt", ""):
                     raise AssertionError("Category suggestion routing must not call a second LLM")
                 return (
                     json.dumps(
                         {
-                            "categories": ["Clinical studies", "Benchmark studies"],
+                            "categories": ["Clinical studies"],
                             "category_descriptions": {
                                 "Clinical studies": "Clinical applications",
-                                "Benchmark studies": "Benchmark evaluations",
                             },
                         }
                     ),
@@ -1326,7 +1324,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(len(llm_calls), 1)
         self.assertEqual(
             result.reply,
-            "Generated 2 category suggestions for methods. Review them, select Confirm Categories, then select Apply Categorization.",
+            "Generated 1 category suggestion for methods. Review it, select Confirm Categories, then select Apply Categorization.",
         )
         self.assertIn("review", result.reply.lower())
         self.assertIn("Confirm Categories", result.reply)
@@ -1382,19 +1380,18 @@ class LeadAgentTests(unittest.TestCase):
             )
 
             def fake_llm_query(*args, **kwargs):
-                if "Create 3-8 meaningful categories" in kwargs.get("text_prompt", ""):
+                if "Create a semantic category plan" in kwargs.get("text_prompt", ""):
                     return (
                         json.dumps(
                             {
-                                "field": "key_findings",
                                 "categories": ["Clinical Decision Support"],
                                 "category_descriptions": {"Clinical Decision Support": "Clinical support systems"},
                             }
                         ),
                         {},
                     )
-                if "Categorize this paper" in kwargs.get("text_prompt", ""):
-                    return ("Clinical Decision Support", {})
+                if "Assign the supplied paper evidence" in kwargs.get("text_prompt", ""):
+                    return (json.dumps({"category": "Clinical Decision Support"}), {})
                 return (json.dumps({"reply": "Categorization completed."}), {})
 
             result = LeadAgent(output_root, llm_query=fake_llm_query).handle_message(
@@ -1407,7 +1404,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(result.data["contract_stage"], "categorization")
         self.assertEqual(result.data["sub_agent"], "LeadAgentCategorization")
         self.assertEqual(result.data["status"], "categorization_done")
-        self.assertEqual(result.reply, "Categorization completed.")
+        self.assertEqual(result.reply, "Categorization & Analysis completed: 1 category, 1 row categorized. No next canvas action is required.")
         self.assertEqual(result.next_actions, [])
         self.assertIn("Clinical Decision Support", mapping["categories"])
 

@@ -97,6 +97,10 @@ ReviewPilot uses two forms of memory:
 
 The researcher's current request and the confirmed results of the current project always take priority over previous memory. The Lead Agent manages memory and only shares information that is relevant to a Sub Agent's current task.
 
+Current-project memory uses the files already saved under `output/<project>/`: conversation history in `chat/messages.jsonl`, eligibility rules and their draft/finalized status in `prompts/relevance_prompt.json`, and the saved extraction schema, category settings, and workflow state. The Lead Agent reads these files again on each conversation, including after reopening the app. No embedding service or separate project-memory database is required. Optional cross-project presets remain in the local `output/.agent_memory/memory.sqlite3` database; turning them off or clearing them preserves project history and settings.
+
+In Step 2, edit Inclusion Criteria and Exclusion Criteria directly (one rule per line), or refine them in chat. **Save Draft** persists changes; **Finalize Criteria** confirms them and enables **Run screening**. Editing a saved rule requires confirmation again and marks existing screening and downstream outputs as stale. Existing projects without a recorded criteria confirmation must review and finalize their criteria before screening again.
+
 ## Installation and Startup
 
 Run the following commands from the ReviewPilot project folder.
