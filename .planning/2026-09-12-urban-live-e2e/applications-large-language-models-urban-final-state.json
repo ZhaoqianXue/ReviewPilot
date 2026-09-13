@@ -1,0 +1,828 @@
+{
+  "isNewProject": false,
+  "project": {
+    "id": "applications-large-language-models-urban",
+    "title": "Urban Settings Validation",
+    "status": "Active \u00b7 Step 1 of 5",
+    "model": "gpt-5.4-mini",
+    "date": "Sep 12, 2026"
+  },
+  "researchQuestion": "Applications of large language models in urban planning or urban governance.",
+  "setup": {
+    "project_name": "Urban Settings Validation",
+    "description": "Applications of large language models in urban planning or urban governance.",
+    "primary_topic": "Large language models (LLMs)",
+    "domain": "Urban planning, Urban governance",
+    "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR GPT) AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"metropolitan planning\" OR \"urban design\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"urban administration\")",
+    "platforms": [
+      "arxiv"
+    ],
+    "max_results": 5,
+    "source_limits": {
+      "arxiv": 5
+    },
+    "date_start": "2023-01-01",
+    "date_end": "2026-09-12",
+    "model": "gpt-5.4-mini",
+    "derive_search_terms": false
+  },
+  "searchReuseDraft": null,
+  "confirmedDecisions": {
+    "search_setup": {
+      "configuration": {
+        "description": "Applications of large language models in urban planning or urban governance.",
+        "primary_topic": "Large language models (LLMs)",
+        "domain": "Urban planning, Urban governance",
+        "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR GPT) AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"metropolitan planning\" OR \"urban design\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"urban administration\")",
+        "search_queries": [
+          {
+            "name": "main",
+            "query": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR GPT) AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"metropolitan planning\" OR \"urban design\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"urban administration\")"
+          }
+        ],
+        "platforms": [
+          "arxiv"
+        ],
+        "date_range": {
+          "start": "2023-01-01",
+          "end": "2026-09-12"
+        },
+        "source_limits": {
+          "arxiv": 5
+        },
+        "max_results": 5
+      },
+      "revision": "b87c561876ee8857ffbd0833eab87f56b00b11905f7567044454f43e6686bc2e",
+      "stale": false,
+      "editing": false
+    }
+  },
+  "setupRevision": "1dcd01a53ed0ed526126f8974608b60295d8b87bda0899ba770877f93693a4c1",
+  "stageState": {
+    "collection": {
+      "status": "failed",
+      "attempt": 1,
+      "updated_at": "2026-09-13T02:25:49.800+00:00",
+      "error": "Action produced no successful outputs (1 failed).",
+      "counts": {
+        "succeeded": 0,
+        "failed": 1,
+        "collected": 0
+      },
+      "stale": false,
+      "last_valid": null
+    },
+    "screening": {
+      "status": "not_started",
+      "attempt": 0,
+      "updated_at": "2026-09-13T02:21:34.695+00:00",
+      "error": null,
+      "counts": {},
+      "stale": false,
+      "last_valid": null
+    },
+    "retrieval": {
+      "status": "not_started",
+      "attempt": 0,
+      "updated_at": "2026-09-13T02:21:34.696+00:00",
+      "error": null,
+      "counts": {},
+      "stale": false,
+      "last_valid": null
+    },
+    "extraction": {
+      "status": "not_started",
+      "attempt": 0,
+      "updated_at": "2026-09-13T02:21:34.696+00:00",
+      "error": null,
+      "counts": {},
+      "stale": false,
+      "last_valid": null
+    },
+    "categorization": {
+      "status": "not_started",
+      "attempt": 0,
+      "updated_at": "2026-09-13T02:21:34.696+00:00",
+      "error": null,
+      "counts": {},
+      "stale": false,
+      "last_valid": null
+    }
+  },
+  "workflowNotices": {
+    "collection": {
+      "kind": "structured",
+      "status": "failed",
+      "succeeded": 0,
+      "failed": 1,
+      "failedItems": [
+        "arXiv"
+      ],
+      "retryable": true,
+      "nextAction": ""
+    }
+  },
+  "steps": [
+    {
+      "n": 1,
+      "key": "search",
+      "label": "Search Setup",
+      "status": "failed",
+      "stale": false,
+      "sub": "1 sources",
+      "desc": ""
+    },
+    {
+      "n": 2,
+      "key": "screening",
+      "label": "Paper Screening",
+      "status": "todo",
+      "stale": false,
+      "sub": "0 / 0",
+      "desc": ""
+    },
+    {
+      "n": 3,
+      "key": "retrieval",
+      "label": "Full-Text Retrieval",
+      "status": "todo",
+      "stale": false,
+      "sub": "0 / 0",
+      "desc": ""
+    },
+    {
+      "n": 4,
+      "key": "extraction",
+      "label": "Information Extraction",
+      "status": "todo",
+      "stale": false,
+      "sub": "0 fields",
+      "desc": ""
+    },
+    {
+      "n": 5,
+      "key": "categorize",
+      "label": "Categorization & Analysis",
+      "status": "todo",
+      "stale": false,
+      "sub": "0 groups",
+      "desc": ""
+    }
+  ],
+  "optionalCapabilities": [],
+  "fields": [],
+  "schemaWorkbench": {
+    "status": "missing",
+    "primary_action": "Generate Schema",
+    "can_finalize": false
+  },
+  "platforms": [
+    [
+      "arXiv",
+      0
+    ]
+  ],
+  "platformIssues": [
+    {
+      "platform": "arxiv",
+      "label": "arXiv",
+      "message": "arXiv search failed (HTTP 429). Retry collection later.",
+      "severity": "warning"
+    }
+  ],
+  "keywords": [
+    "large language model",
+    "Urban planning, Urban governance",
+    "large language models",
+    "LLM",
+    "LLMs",
+    "foundation model",
+    "foundation models",
+    "generative pre-trained transformer"
+  ],
+  "groups": [],
+  "retrieved": [],
+  "screeningMetrics": {
+    "identified": 0,
+    "afterDedup": 0,
+    "included": 0
+  },
+  "screeningCriteria": {
+    "inclusion": [
+      "Study addresses the review topic: Large language models (LLMs).",
+      "Study addresses the review context: Urban planning, Urban governance."
+    ],
+    "exclusion": [
+      "Explicit evidence shows incompatibility with the stated review scope."
+    ],
+    "status": "draft",
+    "revision": "12f854a63363b8a86a21816217840039f01fd9e0eb0fba0d3038b7401d3574e7",
+    "prompt": "TASK: Assess whether the supplied title-and-abstract record is eligible or plausibly eligible for the stated review scope.\n\nINPUT:\nPaper Title: {title}\nPaper Abstract (if available): {abstract}\n\n\nREVIEW SCOPE DATA:\n{\"topic\": {\"label\": \"Large language models (LLMs)\", \"equivalent_terms\": []}, \"context\": {\"label\": \"Urban planning, Urban governance\", \"equivalent_terms\": []}}\n\nREVIEWER-SUPPLIED EXAMPLES (data):\n[]\n\nINSTRUCTION:\nUse the supplied record evidence and review-scope data. Return True when the record clearly fits or remains plausibly eligible because title-and-abstract evidence is incomplete. Return False only when explicit record evidence establishes material incompatibility with the stated topic or context. Treat words describing the review activity as the reviewer's synthesis intent rather than a candidate publication-type requirement. Return exactly one token: True or False.\n\nYour response (True/False):"
+  },
+  "retrievalSummary": {
+    "retrieved": 0,
+    "total": 0,
+    "openAccess": 0,
+    "viaInstitution": 0,
+    "unknownAccess": 0,
+    "unavailable": 0
+  },
+  "retrievalRecovery": {
+    "canRetry": false,
+    "reportRevision": "",
+    "items": []
+  },
+  "categorizationSummary": {
+    "papers": 0,
+    "groups": 0
+  },
+  "categorizationWorkflow": {
+    "done": false,
+    "metrics": {
+      "papersExtracted": 0,
+      "fields": 0
+    },
+    "fieldNames": [],
+    "recommendedField": "",
+    "selectedField": "",
+    "mode": "multiple",
+    "suggestedCategories": [],
+    "categoryDescriptions": {},
+    "fieldProfiles": {},
+    "analysisDistributions": [],
+    "categorizedDistribution": {
+      "field": "category",
+      "values": []
+    },
+    "fullResults": {
+      "columns": [
+        "title"
+      ],
+      "rows": [],
+      "total": 0
+    },
+    "decisions": {
+      "revision": "6433483bba296d55725f542a6ac6c3f012db0e70e62ba709f35903c7f8716cce",
+      "confirmed": false,
+      "skipped": false,
+      "finalized": false,
+      "selection": {},
+      "editing": false,
+      "outdated": false
+    }
+  },
+  "resultOverview": [
+    {
+      "label": "Identified",
+      "value": "0"
+    },
+    {
+      "label": "Screened",
+      "value": "0"
+    },
+    {
+      "label": "Included",
+      "value": "0"
+    },
+    {
+      "label": "PDFs retrieved",
+      "value": "0 / 0"
+    },
+    {
+      "label": "Subscribed/unavailable",
+      "value": "0"
+    },
+    {
+      "label": "Extracted",
+      "value": "0"
+    },
+    {
+      "label": "Categorized",
+      "value": "0"
+    },
+    {
+      "label": "Sources",
+      "value": "arXiv"
+    },
+    {
+      "label": "Date range",
+      "value": "2023-01-01 to 2026-09-12"
+    },
+    {
+      "label": "Search strategy",
+      "value": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR GPT) AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"metropolitan planning\" OR \"urban design\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"urban administration\")"
+    }
+  ],
+  "evidenceMatrix": [],
+  "categorizationAnalysis": {
+    "field": "category",
+    "categories": []
+  },
+  "exportPackage": [
+    {
+      "key": "search-setup",
+      "label": "Search setup",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/search-setup",
+      "exists": true
+    },
+    {
+      "key": "relevance-prompt",
+      "label": "Relevance prompt",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/relevance-prompt",
+      "exists": true
+    },
+    {
+      "key": "included-papers",
+      "label": "Included papers",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/included-papers",
+      "exists": false
+    },
+    {
+      "key": "download-report",
+      "label": "Download report",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/download-report",
+      "exists": false
+    },
+    {
+      "key": "extraction-results",
+      "label": "Extraction results",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/extraction-results",
+      "exists": false
+    },
+    {
+      "key": "categorization-mapping",
+      "label": "Categorization mapping",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/categorization-mapping",
+      "exists": false
+    },
+    {
+      "key": "categorized-results",
+      "label": "Categorized results",
+      "downloadUrl": "/projects/applications-large-language-models-urban/exports/categorized-results",
+      "exists": false
+    }
+  ],
+  "extractionPreview": {
+    "index": 0,
+    "total": 0,
+    "canPrevious": false,
+    "canNext": false,
+    "status": "missing",
+    "paper": {
+      "id": "",
+      "title": "No paper preview available",
+      "ref": ""
+    },
+    "fields": [],
+    "source": "",
+    "error": ""
+  },
+  "schemaJson": {
+    "fields": []
+  },
+  "messages": [
+    {
+      "step": 1,
+      "role": "a",
+      "text": "Welcome to **ReviewPilot**!\n\nReviewPilot helps you turn a research topic into a literature review:\n\n| Step | Description |\n|------|-------------|\n| **1. Search Setup** | Define your research topic and search parameters |\n| **2. Paper Screening** | Collect papers, filter, and check relevance |\n| **3. Full-Text Retrieval** | Download full-text PDFs for included papers |\n| **4. Information Extraction** | Extract structured information from papers |\n| **5. Categorization & Analysis** | Generate the final Categorization & Analysis report |\n\n**Choose a starter topic on the canvas, or describe your own topic in the chat.**"
+    },
+    {
+      "step": 1,
+      "role": "u",
+      "text": "Review applications of large language models in urban planning OR urban governance. Use only arXiv, at most 5 papers, from 2023-01-01 to 2026-09-12. Name the session Urban Settings Validation. This is a small workflow test."
+    },
+    {
+      "step": 1,
+      "role": "a",
+      "text": "Search setup generated for the requested review scope, with concepts focused on large language models and the urban planning/governance application context."
+    },
+    {
+      "step": 1,
+      "role": "a",
+      "text": "Collection failed: 0 completed, 1 failed. This stage is blocked until its failed items are recovered."
+    }
+  ],
+  "activityByStep": {
+    "search": [
+      {
+        "t": "--:--:--",
+        "tag": "collection",
+        "msg": "0 records"
+      },
+      {
+        "t": "--:--:--",
+        "tag": "arxiv",
+        "msg": "arXiv search failed (HTTP 429). Retry collection later."
+      },
+      {
+        "t": "--:--:--",
+        "tag": "failed",
+        "msg": "0 completed \u00b7 1 failed \u00b7 recovery required"
+      }
+    ],
+    "screening": [
+      {
+        "t": "--:--:--",
+        "tag": "screening",
+        "msg": "0 included"
+      }
+    ],
+    "retrieval": [
+      {
+        "t": "--:--:--",
+        "tag": "retrieval",
+        "msg": "0 PDFs fetched"
+      }
+    ],
+    "extraction": [
+      {
+        "t": "--:--:--",
+        "tag": "schema",
+        "msg": "0 fields"
+      }
+    ],
+    "categorize": [
+      {
+        "t": "--:--:--",
+        "tag": "categorize",
+        "msg": "0 groups"
+      }
+    ]
+  },
+  "quietLabels": {
+    "search": "Run collection",
+    "screening": "Finalize Criteria",
+    "retrieval": "Download PDFs",
+    "extraction": "Run extraction"
+  },
+  "quietActions": {
+    "search": "collect",
+    "screening": "finalize-criteria",
+    "retrieval": "download-pdfs",
+    "extraction": "run-extraction"
+  },
+  "ctxLabels": {
+    "search": "Ready",
+    "screening": "Ready",
+    "retrieval": "Ready",
+    "extraction": "Waiting",
+    "categorize": "Waiting"
+  },
+  "history": [
+    {
+      "label": "Examples",
+      "items": [
+        {
+          "id": "quick-start-biomedical-showcase",
+          "title": "LLM for Biomedical",
+          "protected": true,
+          "active": false
+        },
+        {
+          "id": "quick-start-hci-showcase",
+          "title": "LLM for HCI",
+          "protected": true,
+          "active": false
+        },
+        {
+          "id": "quick-start-urban-showcase",
+          "title": "LLM for Urban",
+          "protected": true,
+          "active": false
+        }
+      ]
+    },
+    {
+      "label": "Chats",
+      "items": [
+        {
+          "id": "applications-large-language-models-urban",
+          "title": "Urban Settings Validation",
+          "active": true,
+          "protected": false
+        },
+        {
+          "id": "review-project",
+          "title": "Urban Planning Governance Live E2E 20260912",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-6",
+          "title": "How LLMs Are Used Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-5",
+          "title": "How LLMs Are Used Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-4",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r3",
+          "title": "inner-beta-biomedicine-r3",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r7",
+          "title": "inner-beta-biomedicine-r7",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-spatial-authoring-r1",
+          "title": "inner-beta-spatial-authoring-r1",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r3",
+          "title": "inner-beta-hci-r3",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r2",
+          "title": "inner-beta-hci-r2",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r1",
+          "title": "inner-beta-hci-r1",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r6",
+          "title": "inner-beta-biomedicine-r6",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r4",
+          "title": "inner-beta-biomedicine-r4",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r2",
+          "title": "inner-beta-biomedicine-r2",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-hci-20260701-181434",
+          "title": "LLM for Human-Computer Interaction Review",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-3",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-2",
+          "title": "LLMs in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-support-urban-planning",
+          "title": "How LLMs Support Urban Planning",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llms-human-computer-interaction",
+          "title": "LLMs Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-urban-20260701-181434",
+          "title": "LLM for Urban Planning and Smart Cities",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-biomedical-20260701-181434",
+          "title": "LLM for Biomedical Systematic Review",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-urban-planning-and-smart",
+          "title": "LLM in Urban Planning and Smart Cities",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-human-computer-interaction",
+          "title": "LLM Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedical-2",
+          "title": "LLM Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedical",
+          "title": "LLM Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-hci",
+          "title": "LLM in Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-urban",
+          "title": "LLM Urban",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-10",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-9",
+          "title": "LLM in Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-8",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-7",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-final-20260701-062348",
+          "title": "Live Smoke Final 20260701-062348",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-included-20260701-062042",
+          "title": "Live Smoke Included 20260701-062042",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-data-20260701-061937",
+          "title": "Live Smoke Data 20260701-061937",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-contract-20260701-061822",
+          "title": "Live Smoke Contract 20260701-061822",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-llm-biomedicine-20260701-061241",
+          "title": "Large Language Models in Biomedicine: Clinical Applications and Evaluation",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-6",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-5",
+          "title": "LLM in Biomedicine Survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-4",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "sub",
+          "title": "Sub",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-human-computer-interaction-search",
+          "title": "LLM Human Computer Interaction Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-3",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-2",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-agent-test",
+          "title": "LLM Biomedicine Agent Test",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-survey",
+          "title": "llm-biomedicine-survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-for-human-computer-interaction-survey",
+          "title": "llm-for-human-computer-interaction-survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "ai-assisted-3d-spatial-authoring-vr-ar-mr",
+          "title": "ai-assisted-3d-spatial-authoring-vr-ar-mr",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "HCI-AI-3D-Design",
+          "title": "HCI-AI-3D-Design",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-survey-step3-sim",
+          "title": "llm-biomedicine-survey-step3-sim",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-microbiome-study",
+          "title": "llm-microbiome-study",
+          "active": false,
+          "protected": false
+        }
+      ]
+    }
+  ],
+  "reviewWorkbench": {
+    "revision": "efed5415862c539870ce8114a4aa9d1e7b0a6a3eaeae8b7fd450cc98b619f0f2",
+    "screening": [],
+    "extraction": [],
+    "removed": [],
+    "canReviewScreening": false,
+    "canReviewExtraction": false,
+    "screeningStale": false,
+    "extractionStale": false,
+    "changes": [],
+    "liveSample": null
+  },
+  "readOnlyExample": false,
+  "exampleOrigin": null,
+  "activeTask": null
+}

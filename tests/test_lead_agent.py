@@ -443,7 +443,7 @@ class LeadAgentTests(unittest.TestCase):
 
         self.assertEqual(marker_after, marker_before)
 
-    def test_schema_chat_show_prompt_returns_prompt_content_and_finalize_updates_next_actions(self):
+    def test_schema_chat_show_prompt_returns_prompt_content_and_requests_canvas_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             project_dir = output_root / "demo"
@@ -473,7 +473,8 @@ class LeadAgentTests(unittest.TestCase):
 
         self.assertIn("Extract faithfully.", shown.reply)
         self.assertIn("Return methods", shown.reply)
-        self.assertEqual(finalized.next_actions, ["edit_schema", "run_extraction"])
+        self.assertEqual(finalized.next_actions, ["finalize_schema", "download_pdfs"])
+        self.assertEqual(finalized.data["status"], "confirmation_required")
 
     def test_handle_collect_action_generates_relevance_prompt_before_collection_and_verifies_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:

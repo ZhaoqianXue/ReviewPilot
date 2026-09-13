@@ -1,0 +1,14 @@
+{
+  "project_name": "Urban Settings Validation",
+  "platforms": [
+    "arxiv"
+  ],
+  "source_limits": {
+    "arxiv": 5
+  },
+  "date_range": {
+    "start": "2023-01-01",
+    "end": "2026-09-12"
+  },
+  "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR GPT) AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"metropolitan planning\" OR \"urban design\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"urban administration\")"
+}

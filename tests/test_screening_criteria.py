@@ -81,6 +81,7 @@ class ScreeningCriteriaTests(unittest.TestCase):
 
     def test_chat_refines_and_new_agent_recalls_local_state_without_cross_project_memory(self):
         save_criteria(self.project, self.payload(), finalized=True)
+        LeadAgent(self.root).handle_message('review', action='edit-criteria', input_data={'revision': criteria_state(self.project)['revision']})
         update = {'reply': 'Added the exclusion.', 'criteria': {'inclusion': ['Adult clinical studies'], 'exclusion': ['Exclude reviews']}}
         LeadAgent(self.root, llm_query=lambda **kw: (json.dumps(update), {})).handle_message(
             'review', message='Exclude reviews', context_step='screening')

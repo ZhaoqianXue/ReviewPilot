@@ -197,6 +197,8 @@ class DownloadAgent(BaseAgent):
         return matched if matched and self._is_valid_pdf(matched) else None
 
     def _matching_pdf_for_paper(self, row_number: int, paper: Dict[str, Any], pdf_files: List[Path]) -> Path | None:
+        if paper.get("pdf_identity_required"):
+            return None
         row_prefix = f"row{row_number}_"
         for pdf_file in pdf_files:
             if pdf_file.name.startswith(row_prefix):

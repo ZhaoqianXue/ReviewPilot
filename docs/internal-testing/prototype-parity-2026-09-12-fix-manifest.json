@@ -1,0 +1,47 @@
+{
+  "baseline_head": "2fe48ee",
+  "scope": "G01–G09 working tree implementation; includes prior authorized uncommitted changes in shared files",
+  "sha256": {
+    "frontend/app.js": "fab9c65fdfe30429351c40dc4e6483436378e77b375ae1a45a888bd924a3d5cb",
+    "frontend/review.js": "c0e00d678f875fdcdfac501728dabf37b893e22f81579e082401e4f12b445001",
+    "web_app.py": "17d45c9b93e4810365ea1813c38f4a91e30d72d6daf701fc7610efd3cb9bbf4c",
+    "main.py": "92916d260b753f619a4d60d909c111b4ae20a0d071e3357548e0ea104be693ed",
+    "agents/collection_agent.py": "b612ca1f633f8949b215f0491dc7f897f0191fedb0c41d798c3ad94916f431d6",
+    "agents/filtering_agent.py": "3c39ab5687b6b349b93bff1f122eaf432a2e359b3fb74536e2148713aa3a3c78",
+    "agents/extraction_agent.py": "df94a215fdc1e65b983e8e1b86ab22d56e157c83a3d7b55ed4af450ef8e94484",
+    "searchers/pubmed.py": "fc6a428df70f8ad4d98e25f001868cb8931c925fd945092f856b929c6efbc249",
+    "searchers/arxiv_search.py": "75a302cf231239d0c5e94b71cef887699379dc4579cfaeb20930fa43bd923788",
+    "searchers/openalex.py": "0a0ad26523233faed903ca510b13745dc990e95579eb4d2325944a2c82613b99",
+    "reviewpilot_core/publication_dates.py": "70fe3a08d78837f1d5c846b9614e3afe6cf29a1f3dc999ee6d3160126a64be01",
+    "reviewpilot_core/query_syntax.py": "b9e43c7996077724e05d0a6c36cbc2766be1106051d6e650f87e14e36aae3314",
+    "reviewpilot_core/workflow_decisions.py": "bad959799229215c6829fdb1b12193de59704028218470cd5fd05acd061c29bf",
+    "reviewpilot_core/field_values.py": "95f496e8b8859c1088b2e718793f199c5a56d05ad5ae1c61ea98e8c48f5fb3b3",
+    "reviewpilot_core/record_review.py": "601d66d05cc44ff61c99cd50c6740117e2d17bd3cbcbbd21c8ef2caf7657ebf2",
+    "reviewpilot_core/extraction_schema.py": "6111969b3de05807c6f01c5d2d0cf7bbdfbb363a2a961a4fd609c06c84513a27",
+    "reviewpilot_core/state_projection.py": "aee750ebee10ee00938ba2abe68a094d8560ea78ba81c606e0c3012d384d425c",
+    "tests/test_parity_fixes.py": "3f5a30be5cb61edb5a90bc7b2687a3c05eec451361a6ad64002a74b1690465e6",
+    "tests/test_frontend_contract.py": "ab94db67f8b9ff035f164a4925b569fb2bb654de82153ccd6999700bcd880cf4",
+    "tests/test_setup_revision.py": "c5042d38faa7807cd5f1bc7063bc514f24c7860c2ef24e1f10c9b2bbdb454861",
+    "tests/test_state_projection.py": "a51b66babf2b5679d3761ed274acd8c5b6eb05e92dcd739fb08b75f888d9fb9e",
+    "tests/test_openalex_search.py": "e830a49162c324eb7cc7e1972b36678f8d09aaf13353dfee7b1ab51864e6f804",
+    "docs/internal-testing/scripts/prototype_parity_probes.py": "33fa9a8883e8f8279515002382e99d3ad174023f93a16ccee77db8e089c4b633"
+  },
+  "validation": {
+    "full_suite": {
+      "passed": 825,
+      "command": ".venv/bin/python -m unittest discover -s tests"
+    },
+    "subsequent_parity_suite": {
+      "passed": 16,
+      "includes_new_save_to_collection_integration_case": true
+    },
+    "audit_probes_passed": 7,
+    "browser": [
+      "query/date save+reload",
+      "three readonly examples next-paper",
+      "confirm/skip/finalize/reopen persistence",
+      "failed extraction retry and review restrictions",
+      "70 results including records 51 and 70"
+    ]
+  }
+}

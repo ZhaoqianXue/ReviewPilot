@@ -13,6 +13,7 @@ from .project_store import read_jsonl
 
 
 METADATA_FIELDS = {
+    "field_evidence", "human_fields", "screening_evidence", "human_screening", "pdf_identity_required",
     "paper_id",
     "title",
     "authors",

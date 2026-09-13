@@ -1,0 +1,38 @@
+{
+  "system_prompt": "You screen scholarly records against reviewer-approved eligibility criteria using only supplied record evidence.",
+  "user_prompt_template": "REVIEWER ELIGIBILITY CRITERIA DATA:\n{\"inclusion\": [\"Uses a large language model as a substantive part of an application or evaluation.\", \"Addresses urban planning OR urban governance, including spatial planning, land use, public participation, policy, or municipal services.\", \"Reports an implemented system, empirical experiment, benchmark, or evaluated case study.\", \"Published between 2023-01-01 and 2026-09-12; retain plausible matches when abstracts are incomplete.\"], \"exclusion\": [\"No substantive large language model application or evaluation.\", \"No urban planning or urban governance setting.\", \"Pure commentary, perspective, or literature review without an original application or evaluation.\"]}\n\nPaper Title: {title}\nPaper Abstract: {abstract}\n\nApply the inclusion and exclusion criteria. Return False when explicit evidence establishes an exclusion condition or material incompatibility with an inclusion criterion. Retain plausibly eligible records when evidence is incomplete. Return exactly one token: True or False.",
+  "task": "Assess whether the supplied title-and-abstract record is eligible or plausibly eligible for the stated review scope.",
+  "input_format": "Paper Title: {title}\nPaper Abstract (if available): {abstract}\n",
+  "instruction": "Apply the inclusion and exclusion criteria. Return False when explicit evidence establishes an exclusion condition or material incompatibility with an inclusion criterion. Retain plausibly eligible records when evidence is incomplete. Return exactly one token: True or False.",
+  "expected_output": "True or False",
+  "criteria": {
+    "topic": {
+      "label": "Large language models",
+      "equivalent_terms": []
+    },
+    "context": {
+      "label": "Urban planning and urban governance",
+      "equivalent_terms": []
+    }
+  },
+  "examples": [],
+  "prompt_type": "relevance_check",
+  "generated_at": "2026-09-12T19:00:20.122364",
+  "based_on_search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")",
+  "primary_topic": "Large language models",
+  "domain": "Urban planning and urban governance",
+  "eligibility": {
+    "inclusion": [
+      "Uses a large language model as a substantive part of an application or evaluation.",
+      "Addresses urban planning OR urban governance, including spatial planning, land use, public participation, policy, or municipal services.",
+      "Reports an implemented system, empirical experiment, benchmark, or evaluated case study.",
+      "Published between 2023-01-01 and 2026-09-12; retain plausible matches when abstracts are incomplete."
+    ],
+    "exclusion": [
+      "No substantive large language model application or evaluation.",
+      "No urban planning or urban governance setting.",
+      "Pure commentary, perspective, or literature review without an original application or evaluation."
+    ]
+  },
+  "criteria_finalized": true
+}

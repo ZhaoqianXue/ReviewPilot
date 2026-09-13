@@ -1,0 +1,1733 @@
+{
+  "isNewProject": false,
+  "project": {
+    "id": "review-project",
+    "title": "Urban Planning Governance Live E2E 20260912",
+    "status": "Complete",
+    "model": "gpt-5.4-mini",
+    "date": "Sep 12, 2026"
+  },
+  "researchQuestion": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations.",
+  "setup": {
+    "project_name": "Urban Planning Governance Live E2E 20260912",
+    "description": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations.",
+    "primary_topic": "Large language models",
+    "domain": "Urban planning and urban governance",
+    "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")",
+    "platforms": [
+      "openalex"
+    ],
+    "max_results": 5,
+    "source_limits": {
+      "openalex": 5
+    },
+    "date_start": "2023-01-01",
+    "date_end": "2026-09-12",
+    "model": "gpt-5.4-mini",
+    "derive_search_terms": false
+  },
+  "searchReuseDraft": null,
+  "confirmedDecisions": {
+    "search_setup": {
+      "configuration": {
+        "description": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations.",
+        "primary_topic": "Large language models",
+        "domain": "Urban planning and urban governance",
+        "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")",
+        "search_queries": [
+          {
+            "name": "main",
+            "query": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")"
+          }
+        ],
+        "platforms": [
+          "openalex"
+        ],
+        "date_range": {
+          "start": "2023-01-01",
+          "end": "2026-09-12"
+        },
+        "source_limits": {
+          "openalex": 5
+        },
+        "max_results": 5
+      },
+      "revision": "671b09cacda96d93cfca892b983e3c9ea24edad63cd1ddafe540397091c20a7b",
+      "stale": false,
+      "editing": false
+    },
+    "screening_profile": {
+      "configuration": {
+        "inclusion": [
+          "Uses a large language model as a substantive part of an application or evaluation.",
+          "Addresses urban planning OR urban governance, including spatial planning, land use, public participation, policy, or municipal services.",
+          "Reports an implemented system, empirical experiment, benchmark, or evaluated case study.",
+          "Published between 2023-01-01 and 2026-09-12; retain plausible matches when abstracts are incomplete."
+        ],
+        "exclusion": [
+          "No substantive large language model application or evaluation.",
+          "No urban planning or urban governance setting.",
+          "Pure commentary, perspective, or literature review without an original application or evaluation."
+        ]
+      },
+      "revision": "07d712cacefcdb5fdcfd043ec9e0cf87203b8fdb121410f0efb15b19be6a2769",
+      "stale": false,
+      "editing": false
+    },
+    "extraction_schema": {
+      "configuration": {
+        "fields": [
+          {
+            "name": "application_setting",
+            "type": "Text",
+            "description": "The urban planning or urban governance setting in which the large language model application is used, such as planning decision support, land use and spatial planning, public participation, urban policy, or public service governance. Include whether the setting is implemented in an urban planning context, an urban governance context, or both.",
+            "required": true,
+            "example": "Public participation in urban policy consultation"
+          },
+          {
+            "name": "application_purpose",
+            "type": "Text",
+            "description": "The specific task or function performed by the large language model application within the urban domain.",
+            "required": true,
+            "example": "Summarizing citizen comments for planning hearings"
+          },
+          {
+            "name": "implementation_status",
+            "type": "Categorical",
+            "description": "Whether the paper reports a conceptual proposal, prototype, implemented system, or empirical evaluation of an implemented application. Allowed values: conceptual, prototype, implemented, empirical_evaluation, not_reported.",
+            "required": true,
+            "example": "empirical_evaluation"
+          },
+          {
+            "name": "llm_model_or_family",
+            "type": "Text",
+            "description": "The large language model or model family used in the study, including any named base model, fine-tuned variant, or multi-model setup.",
+            "required": false,
+            "example": "GPT-4"
+          },
+          {
+            "name": "datasets_used",
+            "type": "Text",
+            "description": "All datasets, corpora, documents, records, or data sources used to develop, test, or evaluate the application. Preserve dataset names and brief source descriptions when available.",
+            "required": true,
+            "example": "City council meeting transcripts; zoning ordinance documents; 1,200 public comments"
+          },
+          {
+            "name": "methods",
+            "type": "Text",
+            "description": "The main methods, workflow, or system design used in the study, including prompting, retrieval-augmented generation, fine-tuning, agentic workflows, human-in-the-loop processes, or comparative baselines.",
+            "required": true,
+            "example": "Retrieval-augmented prompting with human review and baseline comparison to rule-based summarization"
+          },
+          {
+            "name": "evaluation_metrics",
+            "type": "Text",
+            "description": "All reported evaluation metrics, measures, or assessment criteria used to judge the application, including quantitative and qualitative metrics. Preserve metric names, directionality if stated, and any reported thresholds or scores.",
+            "required": true,
+            "example": "Accuracy, F1, response latency, and expert usefulness ratings"
+          },
+          {
+            "name": "key_findings",
+            "type": "Text",
+            "description": "The main findings or conclusions relevant to the review question, including performance, benefits, limitations, and observed impacts in urban planning or governance.",
+            "required": true,
+            "example": "The system improved comment clustering and reduced analyst time, but struggled with ambiguous policy language"
+          },
+          {
+            "name": "comparison_or_baseline",
+            "type": "Text",
+            "description": "Any comparator, baseline, or alternative approach used in the study for evaluation, such as human experts, traditional machine learning, rule-based systems, or another LLM.",
+            "required": false,
+            "example": "Rule-based text summarization and manual coding by planners"
+          },
+          {
+            "name": "study_context_and_participants",
+            "type": "Text",
+            "description": "The empirical context of the study, including city, organization, planning process, stakeholder group, or participant type if reported. Use this field for contextual details that help interpret the evidence.",
+            "required": false,
+            "example": "Municipal planning department; urban residents and planning staff"
+          },
+          {
+            "name": "evidence_limitations",
+            "type": "Text",
+            "description": "Important limitations, caveats, or uncertainty statements reported by the authors that affect interpretation of the application or evaluation.",
+            "required": false,
+            "example": "Small sample size and limited generalizability to other cities"
+          }
+        ]
+      },
+      "revision": "10a017e32e304ce3b6d615018d56b5e91a255554c0a4e15a6f412a41c116fdfe",
+      "stale": false,
+      "editing": false
+    },
+    "categorization_profile": {
+      "configuration": {
+        "field": "methods",
+        "mode": "multiple",
+        "categories": [
+          "Hybrid spatio-temporal LLM forecasting pipeline"
+        ],
+        "category_descriptions": {
+          "Hybrid spatio-temporal LLM forecasting pipeline": "Methods that combine spatio-temporal feature encoding or dependency modeling with large-language-model adaptation, including alignment/projection modules, instruction-tuning or prompt formatting, and a prediction head for forecasting outputs."
+        }
+      },
+      "revision": "3aff3a7c1060c762976bc20548a026374b54fb2f3f033dec4bd228da49149de4",
+      "stale": false,
+      "editing": false
+    }
+  },
+  "setupRevision": "0b2ee8414f642f627d899eda032ef38ae322c39f1a8c7c4e6b1f910e12f12f17",
+  "stageState": {
+    "collection": {
+      "status": "completed",
+      "attempt": 3,
+      "updated_at": "2026-09-13T02:05:05.022+00:00",
+      "error": null,
+      "counts": {
+        "succeeded": 1,
+        "failed": 0,
+        "collected": 5
+      },
+      "stale": false,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 3,
+        "updated_at": "2026-09-13T02:05:05.022+00:00",
+        "counts": {
+          "succeeded": 1,
+          "failed": 0,
+          "collected": 5
+        }
+      }
+    },
+    "screening": {
+      "status": "completed",
+      "attempt": 1,
+      "updated_at": "2026-09-13T02:07:28.151+00:00",
+      "error": null,
+      "counts": {
+        "filtered_count": 5,
+        "included_count": 1,
+        "excluded_count": 4,
+        "included": 1,
+        "excluded": 4,
+        "final_count": 1,
+        "after_relevance_check": 1,
+        "total_screened": 5
+      },
+      "stale": false,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 1,
+        "updated_at": "2026-09-13T02:07:28.151+00:00",
+        "counts": {
+          "filtered_count": 5,
+          "included_count": 1,
+          "excluded_count": 4,
+          "included": 1,
+          "excluded": 4,
+          "final_count": 1,
+          "after_relevance_check": 1,
+          "total_screened": 5
+        }
+      }
+    },
+    "retrieval": {
+      "status": "completed",
+      "attempt": 2,
+      "updated_at": "2026-09-13T02:18:55.185+00:00",
+      "error": null,
+      "counts": {
+        "succeeded": 1,
+        "failed": 0
+      },
+      "stale": false,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 2,
+        "updated_at": "2026-09-13T02:18:55.185+00:00",
+        "counts": {
+          "succeeded": 1,
+          "failed": 0
+        }
+      }
+    },
+    "extraction": {
+      "status": "completed",
+      "attempt": 4,
+      "updated_at": "2026-09-13T02:21:22.066+00:00",
+      "error": null,
+      "counts": {
+        "succeeded": 1,
+        "failed": 0
+      },
+      "stale": false,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 4,
+        "updated_at": "2026-09-13T02:21:22.066+00:00",
+        "counts": {
+          "succeeded": 1,
+          "failed": 0
+        }
+      }
+    },
+    "categorization": {
+      "status": "completed",
+      "attempt": 2,
+      "updated_at": "2026-09-13T02:23:42.766+00:00",
+      "error": null,
+      "counts": {
+        "categories": 1,
+        "rows": 1
+      },
+      "stale": false,
+      "last_valid": {
+        "status": "completed",
+        "attempt": 2,
+        "updated_at": "2026-09-13T02:23:42.766+00:00",
+        "counts": {
+          "categories": 1,
+          "rows": 1
+        }
+      }
+    }
+  },
+  "workflowNotices": {},
+  "steps": [
+    {
+      "n": 1,
+      "key": "search",
+      "label": "Search Setup",
+      "status": "done",
+      "stale": false,
+      "sub": "1 sources",
+      "desc": ""
+    },
+    {
+      "n": 2,
+      "key": "screening",
+      "label": "Paper Screening",
+      "status": "done",
+      "stale": false,
+      "sub": "1 / 5",
+      "desc": ""
+    },
+    {
+      "n": 3,
+      "key": "retrieval",
+      "label": "Full-Text Retrieval",
+      "status": "done",
+      "stale": false,
+      "sub": "1 / 1",
+      "desc": ""
+    },
+    {
+      "n": 4,
+      "key": "extraction",
+      "label": "Information Extraction",
+      "status": "done",
+      "stale": false,
+      "sub": "11 fields",
+      "desc": ""
+    },
+    {
+      "n": 5,
+      "key": "categorize",
+      "label": "Categorization & Analysis",
+      "status": "done",
+      "stale": false,
+      "sub": "1 groups",
+      "desc": ""
+    }
+  ],
+  "optionalCapabilities": [],
+  "fields": [
+    [
+      "application_setting",
+      "Text",
+      "The urban planning or urban governance setting in which the large language model application is used, such as planning decision support, land use and spatial planning, public participation, urban policy, or public service governance. Include whether the setting is implemented in an urban planning context, an urban governance context, or both.",
+      true
+    ],
+    [
+      "application_purpose",
+      "Text",
+      "The specific task or function performed by the large language model application within the urban domain.",
+      true
+    ],
+    [
+      "implementation_status",
+      "Categorical",
+      "Whether the paper reports a conceptual proposal, prototype, implemented system, or empirical evaluation of an implemented application. Allowed values: conceptual, prototype, implemented, empirical_evaluation, not_reported.",
+      true
+    ],
+    [
+      "llm_model_or_family",
+      "Text",
+      "The large language model or model family used in the study, including any named base model, fine-tuned variant, or multi-model setup.",
+      false
+    ],
+    [
+      "datasets_used",
+      "Text",
+      "All datasets, corpora, documents, records, or data sources used to develop, test, or evaluate the application. Preserve dataset names and brief source descriptions when available.",
+      true
+    ],
+    [
+      "methods",
+      "Text",
+      "The main methods, workflow, or system design used in the study, including prompting, retrieval-augmented generation, fine-tuning, agentic workflows, human-in-the-loop processes, or comparative baselines.",
+      true
+    ],
+    [
+      "evaluation_metrics",
+      "Text",
+      "All reported evaluation metrics, measures, or assessment criteria used to judge the application, including quantitative and qualitative metrics. Preserve metric names, directionality if stated, and any reported thresholds or scores.",
+      true
+    ],
+    [
+      "key_findings",
+      "Text",
+      "The main findings or conclusions relevant to the review question, including performance, benefits, limitations, and observed impacts in urban planning or governance.",
+      true
+    ],
+    [
+      "comparison_or_baseline",
+      "Text",
+      "Any comparator, baseline, or alternative approach used in the study for evaluation, such as human experts, traditional machine learning, rule-based systems, or another LLM.",
+      false
+    ],
+    [
+      "study_context_and_participants",
+      "Text",
+      "The empirical context of the study, including city, organization, planning process, stakeholder group, or participant type if reported. Use this field for contextual details that help interpret the evidence.",
+      false
+    ],
+    [
+      "evidence_limitations",
+      "Text",
+      "Important limitations, caveats, or uncertainty statements reported by the authors that affect interpretation of the application or evaluation.",
+      false
+    ]
+  ],
+  "schemaWorkbench": {
+    "status": "finalized",
+    "primary_action": "Run Extraction",
+    "can_finalize": false
+  },
+  "platforms": [
+    [
+      "Openalex",
+      5
+    ]
+  ],
+  "platformIssues": [],
+  "keywords": [
+    "large language model",
+    "Urban planning",
+    "urban governance",
+    "large language models",
+    "LLM",
+    "LLMs",
+    "city planning",
+    "city governance"
+  ],
+  "groups": [
+    {
+      "name": "Hybrid spatio-temporal LLM forecasting pipeline",
+      "n": 1,
+      "desc": "Methods that combine spatio-temporal feature encoding or dependency modeling with large-language-model adaptation, including alignment/projection modules, instruction-tuning or prompt formatting, and a prediction head for forecasting outputs."
+    }
+  ],
+  "retrieved": [
+    {
+      "t": "UrbanGPT: Spatio-Temporal Large Language Models",
+      "v": "openalex \u00b7 2024"
+    }
+  ],
+  "screeningMetrics": {
+    "identified": 5,
+    "afterDedup": 5,
+    "included": 1
+  },
+  "screeningCriteria": {
+    "inclusion": [
+      "Uses a large language model as a substantive part of an application or evaluation.",
+      "Addresses urban planning OR urban governance, including spatial planning, land use, public participation, policy, or municipal services.",
+      "Reports an implemented system, empirical experiment, benchmark, or evaluated case study.",
+      "Published between 2023-01-01 and 2026-09-12; retain plausible matches when abstracts are incomplete."
+    ],
+    "exclusion": [
+      "No substantive large language model application or evaluation.",
+      "No urban planning or urban governance setting.",
+      "Pure commentary, perspective, or literature review without an original application or evaluation."
+    ],
+    "status": "finalized",
+    "revision": "752fa9caa405ea099de7ee38b189b02dc84a4c9564970ba585fcb811deb274fc",
+    "prompt": "REVIEWER ELIGIBILITY CRITERIA DATA:\n{\"inclusion\": [\"Uses a large language model as a substantive part of an application or evaluation.\", \"Addresses urban planning OR urban governance, including spatial planning, land use, public participation, policy, or municipal services.\", \"Reports an implemented system, empirical experiment, benchmark, or evaluated case study.\", \"Published between 2023-01-01 and 2026-09-12; retain plausible matches when abstracts are incomplete.\"], \"exclusion\": [\"No substantive large language model application or evaluation.\", \"No urban planning or urban governance setting.\", \"Pure commentary, perspective, or literature review without an original application or evaluation.\"]}\n\nPaper Title: {title}\nPaper Abstract: {abstract}\n\nApply the inclusion and exclusion criteria. Return False when explicit evidence establishes an exclusion condition or material incompatibility with an inclusion criterion. Retain plausibly eligible records when evidence is incomplete. Return exactly one token: True or False."
+  },
+  "retrievalSummary": {
+    "retrieved": 1,
+    "total": 1,
+    "openAccess": 0,
+    "viaInstitution": 0,
+    "unknownAccess": 1,
+    "unavailable": 0
+  },
+  "retrievalRecovery": {
+    "canRetry": false,
+    "reportRevision": "",
+    "items": []
+  },
+  "categorizationSummary": {
+    "papers": 1,
+    "groups": 1
+  },
+  "categorizationWorkflow": {
+    "done": true,
+    "metrics": {
+      "papersExtracted": 1,
+      "fields": 11
+    },
+    "fieldNames": [
+      "application_setting",
+      "application_purpose",
+      "implementation_status",
+      "llm_model_or_family",
+      "datasets_used",
+      "methods",
+      "evaluation_metrics",
+      "key_findings",
+      "comparison_or_baseline",
+      "study_context_and_participants",
+      "evidence_limitations"
+    ],
+    "recommendedField": "methods",
+    "selectedField": "methods",
+    "mode": "multiple",
+    "suggestedCategories": [
+      "Hybrid spatio-temporal LLM forecasting pipeline"
+    ],
+    "categoryDescriptions": {
+      "Hybrid spatio-temporal LLM forecasting pipeline": "Methods that combine spatio-temporal feature encoding or dependency modeling with large-language-model adaptation, including alignment/projection modules, instruction-tuning or prompt formatting, and a prediction head for forecasting outputs."
+    },
+    "fieldProfiles": {
+      "application_setting": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource ..."
+        ],
+        "distribution": [
+          {
+            "label": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource ...",
+            "count": 1
+          }
+        ]
+      },
+      "application_purpose": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework."
+        ],
+        "distribution": [
+          {
+            "label": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework.",
+            "count": 1
+          }
+        ]
+      },
+      "implementation_status": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "empirical_evaluation"
+        ],
+        "distribution": [
+          {
+            "label": "empirical_evaluation",
+            "count": 1
+          }
+        ]
+      },
+      "llm_model_or_family": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies."
+        ],
+        "distribution": [
+          {
+            "label": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies.",
+            "count": 1
+          }
+        ]
+      },
+      "datasets_used": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in ..."
+        ],
+        "distribution": [
+          {
+            "label": "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in ...",
+            "count": 1
+          }
+        ]
+      },
+      "methods": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into ..."
+        ],
+        "distribution": [
+          {
+            "label": "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into ...",
+            "count": 1
+          }
+        ]
+      },
+      "evaluation_metrics": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Regression tasks: MAE and RMSE; classification tasks: Recall and Macro-F1. The paper also reports qualitative zero-shot case-study comparisons of predicted sequences."
+        ],
+        "distribution": [
+          {
+            "label": "Regression tasks: MAE and RMSE; classification tasks: Recall and Macro-F1. The paper also reports qualitative zero-shot case-study comparisons of predicted sequences.",
+            "count": 1
+          }
+        ]
+      },
+      "key_findings": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "UrbanGPT consistently outperformed state-of-the-art baselines in zero-shot and supervised spatio-temporal prediction, including on unseen regions and cross-city settings. It showed strong gains in sparse/high-variance regions and ..."
+        ],
+        "distribution": [
+          {
+            "label": "UrbanGPT consistently outperformed state-of-the-art baselines in zero-shot and supervised spatio-temporal prediction, including on unseen regions and cross-city settings. It showed strong gains in sparse/high-variance regions and ...",
+            "count": 1
+          }
+        ]
+      },
+      "comparison_or_baseline": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Baselines include AGCRN, ASTGCN, GWN, MTGNN, STWA, STSGCN, STGCN, TGCN, DMVSTNET, ST-LSTM, GPT4TS, TimesNet, and direct LLM case-study comparisons against LLaMA-70B, ChatGPT, and Claude-2.1."
+        ],
+        "distribution": [
+          {
+            "label": "Baselines include AGCRN, ASTGCN, GWN, MTGNN, STWA, STSGCN, STGCN, TGCN, DMVSTNET, ST-LSTM, GPT4TS, TimesNet, and direct LLM case-study comparisons against LLaMA-70B, ChatGPT, and Claude-2.1.",
+            "count": 1
+          }
+        ]
+      },
+      "study_context_and_participants": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "Experiments use grid regions in New York City and Chicago. NYC-taxi has 263 regions, NYC-bike and NYC-crime have 2162 regions, and CHI-taxi has 77 regions. Training used 80 NYC regions; testing included unseen NYC regions and Chicago data. ..."
+        ],
+        "distribution": [
+          {
+            "label": "Experiments use grid regions in New York City and Chicago. NYC-taxi has 263 regions, NYC-bike and NYC-crime have 2162 regions, and CHI-taxi has 77 regions. Training used 80 NYC regions; testing included unseen NYC regions and Chicago data. ...",
+            "count": 1
+          }
+        ]
+      },
+      "evidence_limitations": {
+        "papersWithValue": 1,
+        "uniqueValuesCount": 1,
+        "sampleValues": [
+          "The paper notes that the model still has limitations to be addressed in future work, including the need for more diverse urban data and improved interpretability/explainability. It also acknowledges that direct textual generation is ..."
+        ],
+        "distribution": [
+          {
+            "label": "The paper notes that the model still has limitations to be addressed in future work, including the need for more diverse urban data and improved interpretability/explainability. It also acknowledges that direct textual generation is ...",
+            "count": 1
+          }
+        ]
+      }
+    },
+    "analysisDistributions": [
+      {
+        "field": "application_setting",
+        "values": [
+          {
+            "label": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource ...",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "field": "application_purpose",
+        "values": [
+          {
+            "label": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework.",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "field": "implementation_status",
+        "values": [
+          {
+            "label": "empirical_evaluation",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "field": "llm_model_or_family",
+        "values": [
+          {
+            "label": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies.",
+            "count": 1
+          }
+        ]
+      },
+      {
+        "field": "datasets_used",
+        "values": [
+          {
+            "label": "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in ...",
+            "count": 1
+          }
+        ]
+      }
+    ],
+    "categorizedDistribution": {
+      "field": "methods_category",
+      "values": [
+        {
+          "label": "Hybrid spatio-temporal LLM forecasting pipeline",
+          "count": 1
+        }
+      ]
+    },
+    "fullResults": {
+      "columns": [
+        "title",
+        "application_setting",
+        "application_purpose",
+        "implementation_status",
+        "llm_model_or_family",
+        "datasets_used",
+        "methods",
+        "evaluation_metrics",
+        "key_findings",
+        "comparison_or_baseline",
+        "study_context_and_participants",
+        "evidence_limitations",
+        "methods_category"
+      ],
+      "rows": [
+        {
+          "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+          "application_setting": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource ...",
+          "application_purpose": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework.",
+          "implementation_status": "empirical_evaluation",
+          "llm_model_or_family": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies.",
+          "datasets_used": "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in ...",
+          "methods": "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into ...",
+          "evaluation_metrics": "Regression tasks: MAE and RMSE; classification tasks: Recall and Macro-F1. The paper also reports qualitative zero-shot case-study comparisons of predicted sequences.",
+          "key_findings": "UrbanGPT consistently outperformed state-of-the-art baselines in zero-shot and supervised spatio-temporal prediction, including on unseen regions and cross-city settings. It showed strong gains in sparse/high-variance regions and ...",
+          "comparison_or_baseline": "Baselines include AGCRN, ASTGCN, GWN, MTGNN, STWA, STSGCN, STGCN, TGCN, DMVSTNET, ST-LSTM, GPT4TS, TimesNet, and direct LLM case-study comparisons against LLaMA-70B, ChatGPT, and Claude-2.1.",
+          "study_context_and_participants": "Experiments use grid regions in New York City and Chicago. NYC-taxi has 263 regions, NYC-bike and NYC-crime have 2162 regions, and CHI-taxi has 77 regions. Training used 80 NYC regions; testing included unseen NYC regions and Chicago data. ...",
+          "evidence_limitations": "The paper notes that the model still has limitations to be addressed in future work, including the need for more diverse urban data and improved interpretability/explainability. It also acknowledges that direct textual generation is ...",
+          "methods_category": "Hybrid spatio-temporal LLM forecasting pipeline"
+        }
+      ],
+      "total": 1
+    },
+    "decisions": {
+      "revision": "5f2a62504f53cfa6cce0bde81b0f5f0cfabe7c68a2474ee127d9ec33b62c6326",
+      "confirmed": true,
+      "skipped": false,
+      "finalized": true,
+      "selection": {
+        "decision_revision": "0f88f01339ffb81925f0cd9e2afdb68a86118b44e2c9d94beadc31e020e5f117",
+        "field": "methods",
+        "mode": "multiple",
+        "categories": [
+          "Hybrid spatio-temporal LLM forecasting pipeline"
+        ],
+        "category_descriptions": {
+          "Hybrid spatio-temporal LLM forecasting pipeline": "Methods that combine spatio-temporal feature encoding or dependency modeling with large-language-model adaptation, including alignment/projection modules, instruction-tuning or prompt formatting, and a prediction head for forecasting outputs."
+        }
+      },
+      "editing": false,
+      "outdated": false
+    }
+  },
+  "resultOverview": [
+    {
+      "label": "Identified",
+      "value": "5"
+    },
+    {
+      "label": "Screened",
+      "value": "5"
+    },
+    {
+      "label": "Included",
+      "value": "1"
+    },
+    {
+      "label": "PDFs retrieved",
+      "value": "1 / 1"
+    },
+    {
+      "label": "Subscribed/unavailable",
+      "value": "0"
+    },
+    {
+      "label": "Extracted",
+      "value": "1"
+    },
+    {
+      "label": "Categorized",
+      "value": "1"
+    },
+    {
+      "label": "Sources",
+      "value": "Openalex"
+    },
+    {
+      "label": "Date range",
+      "value": "2023-01-01 to 2026-09-12"
+    },
+    {
+      "label": "Search strategy",
+      "value": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")"
+    }
+  ],
+  "evidenceMatrix": [
+    {
+      "idx": 1,
+      "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+      "source": "openalex",
+      "year": "",
+      "retrievalStatus": "",
+      "extractionSource": "pdf",
+      "category": "['Hybrid spatio-temporal LLM forecasting pipeline']",
+      "sourceUrls": [],
+      "confidence": "",
+      "fields": [
+        {
+          "name": "application_setting",
+          "value": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource allocation, public safety, traffic light control, and security scheduling."
+        },
+        {
+          "name": "application_purpose",
+          "value": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework."
+        },
+        {
+          "name": "implementation_status",
+          "value": "empirical_evaluation"
+        },
+        {
+          "name": "llm_model_or_family",
+          "value": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies."
+        }
+      ]
+    }
+  ],
+  "categorizationAnalysis": {
+    "field": "methods",
+    "categories": [
+      {
+        "name": "Hybrid spatio-temporal LLM forecasting pipeline",
+        "description": "Methods that combine spatio-temporal feature encoding or dependency modeling with large-language-model adaptation, including alignment/projection modules, instruction-tuning or prompt formatting, and a prediction head for forecasting outputs.",
+        "count": 1,
+        "papers": [
+          {
+            "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+            "evidence": "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into LLM hidden space, special tokens (<ST_start>, <ST_HIS>, <ST_end>) for instruction formatting, and a regression layer to map forecasting-token representations to numeric predictions; training uses instruction-tuning with multiple datasets and zero-shot evaluation."
+          }
+        ]
+      }
+    ]
+  },
+  "exportPackage": [
+    {
+      "key": "workflow-decisions",
+      "label": "Project decisions",
+      "downloadUrl": "/projects/review-project/exports/workflow-decisions",
+      "exists": true
+    },
+    {
+      "key": "removed-records",
+      "label": "Date exclusions and duplicates",
+      "downloadUrl": "/projects/review-project/exports/removed-records",
+      "exists": true
+    },
+    {
+      "key": "review-changes",
+      "label": "Human review history",
+      "downloadUrl": "/projects/review-project/exports/review-changes",
+      "exists": true
+    },
+    {
+      "key": "excluded-papers",
+      "label": "Excluded papers",
+      "downloadUrl": "/projects/review-project/exports/excluded-papers",
+      "exists": true
+    },
+    {
+      "key": "search-setup",
+      "label": "Search setup",
+      "downloadUrl": "/projects/review-project/exports/search-setup",
+      "exists": true
+    },
+    {
+      "key": "relevance-prompt",
+      "label": "Relevance prompt",
+      "downloadUrl": "/projects/review-project/exports/relevance-prompt",
+      "exists": true
+    },
+    {
+      "key": "included-papers",
+      "label": "Included papers",
+      "downloadUrl": "/projects/review-project/exports/included-papers",
+      "exists": true
+    },
+    {
+      "key": "download-report",
+      "label": "Download report",
+      "downloadUrl": "/projects/review-project/exports/download-report",
+      "exists": true
+    },
+    {
+      "key": "extraction-results",
+      "label": "Extraction results",
+      "downloadUrl": "/projects/review-project/exports/extraction-results",
+      "exists": true
+    },
+    {
+      "key": "categorization-mapping",
+      "label": "Categorization mapping",
+      "downloadUrl": "/projects/review-project/exports/categorization-mapping",
+      "exists": true
+    },
+    {
+      "key": "categorized-results",
+      "label": "Categorized results",
+      "downloadUrl": "/projects/review-project/exports/categorized-results",
+      "exists": true
+    }
+  ],
+  "extractionPreview": {
+    "index": 0,
+    "total": 1,
+    "canPrevious": false,
+    "canNext": false,
+    "status": "ready",
+    "paper": {
+      "id": "W4401863317",
+      "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+      "ref": "openalex \u00b7 2024"
+    },
+    "fields": [
+      {
+        "name": "application_setting",
+        "label": "Application Setting",
+        "type": "Text",
+        "required": true,
+        "value": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource allocation, public safety, traffic light control, and security scheduling."
+      },
+      {
+        "name": "application_purpose",
+        "label": "Application Purpose",
+        "type": "Text",
+        "required": true,
+        "value": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework."
+      },
+      {
+        "name": "implementation_status",
+        "label": "Implementation Status",
+        "type": "Categorical",
+        "required": true,
+        "value": "empirical_evaluation"
+      },
+      {
+        "name": "llm_model_or_family",
+        "label": "Llm Model Or Family",
+        "type": "Text",
+        "required": false,
+        "value": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies."
+      },
+      {
+        "name": "datasets_used",
+        "label": "Datasets Used",
+        "type": "Text",
+        "required": true,
+        "value": "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in Chicago."
+      },
+      {
+        "name": "methods",
+        "label": "Methods",
+        "type": "Text",
+        "required": true,
+        "value": "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into LLM hidden space, special tokens (<ST_start>, <ST_HIS>, <ST_end>) for instruction formatting, and a regression layer to map forecasting-token representations to numeric predictions; training uses instruction-tuning with multiple datasets and zero-shot evaluation."
+      },
+      {
+        "name": "evaluation_metrics",
+        "label": "Evaluation Metrics",
+        "type": "Text",
+        "required": true,
+        "value": "Regression tasks: MAE and RMSE; classification tasks: Recall and Macro-F1. The paper also reports qualitative zero-shot case-study comparisons of predicted sequences."
+      },
+      {
+        "name": "key_findings",
+        "label": "Key Findings",
+        "type": "Text",
+        "required": true,
+        "value": "UrbanGPT consistently outperformed state-of-the-art baselines in zero-shot and supervised spatio-temporal prediction, including on unseen regions and cross-city settings. It showed strong gains in sparse/high-variance regions and maintained advantages across different LLM backbones. The authors conclude that spatio-temporal instruction-tuning helps LLMs capture transferable urban patterns and improves numerical forecasting."
+      },
+      {
+        "name": "comparison_or_baseline",
+        "label": "Comparison Or Baseline",
+        "type": "Text",
+        "required": false,
+        "value": "Baselines include AGCRN, ASTGCN, GWN, MTGNN, STWA, STSGCN, STGCN, TGCN, DMVSTNET, ST-LSTM, GPT4TS, TimesNet, and direct LLM case-study comparisons against LLaMA-70B, ChatGPT, and Claude-2.1."
+      },
+      {
+        "name": "study_context_and_participants",
+        "label": "Study Context And Participants",
+        "type": "Text",
+        "required": false,
+        "value": "Experiments use grid regions in New York City and Chicago. NYC-taxi has 263 regions, NYC-bike and NYC-crime have 2162 regions, and CHI-taxi has 77 regions. Training used 80 NYC regions; testing included unseen NYC regions and Chicago data. No human participants are reported."
+      },
+      {
+        "name": "evidence_limitations",
+        "label": "Evidence Limitations",
+        "type": "Text",
+        "required": false,
+        "value": "The paper notes that the model still has limitations to be addressed in future work, including the need for more diverse urban data and improved interpretability/explainability. It also acknowledges that direct textual generation is suboptimal for precise numerical regression."
+      }
+    ],
+    "source": "pdf",
+    "error": ""
+  },
+  "schemaJson": {
+    "fields": [
+      {
+        "name": "application_setting",
+        "type": "Text",
+        "description": "The urban planning or urban governance setting in which the large language model application is used, such as planning decision support, land use and spatial planning, public participation, urban policy, or public service governance. Include whether the setting is implemented in an urban planning context, an urban governance context, or both.",
+        "required": true,
+        "example": "Public participation in urban policy consultation"
+      },
+      {
+        "name": "application_purpose",
+        "type": "Text",
+        "description": "The specific task or function performed by the large language model application within the urban domain.",
+        "required": true,
+        "example": "Summarizing citizen comments for planning hearings"
+      },
+      {
+        "name": "implementation_status",
+        "type": "Categorical",
+        "description": "Whether the paper reports a conceptual proposal, prototype, implemented system, or empirical evaluation of an implemented application. Allowed values: conceptual, prototype, implemented, empirical_evaluation, not_reported.",
+        "required": true,
+        "example": "empirical_evaluation"
+      },
+      {
+        "name": "llm_model_or_family",
+        "type": "Text",
+        "description": "The large language model or model family used in the study, including any named base model, fine-tuned variant, or multi-model setup.",
+        "required": false,
+        "example": "GPT-4"
+      },
+      {
+        "name": "datasets_used",
+        "type": "Text",
+        "description": "All datasets, corpora, documents, records, or data sources used to develop, test, or evaluate the application. Preserve dataset names and brief source descriptions when available.",
+        "required": true,
+        "example": "City council meeting transcripts; zoning ordinance documents; 1,200 public comments"
+      },
+      {
+        "name": "methods",
+        "type": "Text",
+        "description": "The main methods, workflow, or system design used in the study, including prompting, retrieval-augmented generation, fine-tuning, agentic workflows, human-in-the-loop processes, or comparative baselines.",
+        "required": true,
+        "example": "Retrieval-augmented prompting with human review and baseline comparison to rule-based summarization"
+      },
+      {
+        "name": "evaluation_metrics",
+        "type": "Text",
+        "description": "All reported evaluation metrics, measures, or assessment criteria used to judge the application, including quantitative and qualitative metrics. Preserve metric names, directionality if stated, and any reported thresholds or scores.",
+        "required": true,
+        "example": "Accuracy, F1, response latency, and expert usefulness ratings"
+      },
+      {
+        "name": "key_findings",
+        "type": "Text",
+        "description": "The main findings or conclusions relevant to the review question, including performance, benefits, limitations, and observed impacts in urban planning or governance.",
+        "required": true,
+        "example": "The system improved comment clustering and reduced analyst time, but struggled with ambiguous policy language"
+      },
+      {
+        "name": "comparison_or_baseline",
+        "type": "Text",
+        "description": "Any comparator, baseline, or alternative approach used in the study for evaluation, such as human experts, traditional machine learning, rule-based systems, or another LLM.",
+        "required": false,
+        "example": "Rule-based text summarization and manual coding by planners"
+      },
+      {
+        "name": "study_context_and_participants",
+        "type": "Text",
+        "description": "The empirical context of the study, including city, organization, planning process, stakeholder group, or participant type if reported. Use this field for contextual details that help interpret the evidence.",
+        "required": false,
+        "example": "Municipal planning department; urban residents and planning staff"
+      },
+      {
+        "name": "evidence_limitations",
+        "type": "Text",
+        "description": "Important limitations, caveats, or uncertainty statements reported by the authors that affect interpretation of the application or evaluation.",
+        "required": false,
+        "example": "Small sample size and limited generalizability to other cities"
+      }
+    ]
+  },
+  "messages": [
+    {
+      "step": 1,
+      "role": "a",
+      "text": "Welcome to **ReviewPilot**!\n\nReviewPilot helps you turn a research topic into a literature review:\n\n| Step | Description |\n|------|-------------|\n| **1. Search Setup** | Define your research topic and search parameters |\n| **2. Paper Screening** | Collect papers, filter, and check relevance |\n| **3. Full-Text Retrieval** | Download full-text PDFs for included papers |\n| **4. Information Extraction** | Extract structured information from papers |\n| **5. Categorization & Analysis** | Generate the final Categorization & Analysis report |\n\n**Choose a starter topic on the canvas, or describe your own topic in the chat.**"
+    },
+    {
+      "step": 1,
+      "role": "u",
+      "text": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations."
+    },
+    {
+      "step": 5,
+      "role": "a",
+      "text": "The final Categorization & Analysis report is ready."
+    }
+  ],
+  "activityByStep": {
+    "search": [
+      {
+        "t": "--:--:--",
+        "tag": "collection",
+        "msg": "5 records"
+      },
+      {
+        "t": "19:05:05",
+        "tag": "collection",
+        "msg": "Collection completed: 5 papers collected. Next action: Paper Screening."
+      }
+    ],
+    "screening": [
+      {
+        "t": "--:--:--",
+        "tag": "screening",
+        "msg": "1 included"
+      },
+      {
+        "t": "19:07:28",
+        "tag": "screening",
+        "msg": "Paper Screening completed: 5 included, 0 excluded. Next action: Full-Text Retrieval."
+      }
+    ],
+    "retrieval": [
+      {
+        "t": "--:--:--",
+        "tag": "retrieval",
+        "msg": "1 PDFs fetched"
+      },
+      {
+        "t": "19:18:55",
+        "tag": "retrieval",
+        "msg": "Full-Text Retrieval completed: 1 available, 0 failed. Next action: Information Extraction."
+      }
+    ],
+    "extraction": [
+      {
+        "t": "--:--:--",
+        "tag": "schema",
+        "msg": "11 fields"
+      },
+      {
+        "t": "19:20:47",
+        "tag": "schema",
+        "msg": "Extraction schema finalized. Run Information Extraction when ready."
+      },
+      {
+        "t": "19:21:22",
+        "tag": "extraction",
+        "msg": "Information Extraction completed: 1 processed, 0 errors. Next action: Categorization & Analysis."
+      }
+    ],
+    "categorize": [
+      {
+        "t": "--:--:--",
+        "tag": "categorize",
+        "msg": "1 groups"
+      },
+      {
+        "t": "19:23:42",
+        "tag": "categorize",
+        "msg": "Categorization & Analysis completed: 1 category, 1 row categorized. No next canvas action is required."
+      }
+    ]
+  },
+  "quietLabels": {
+    "search": "Run collection",
+    "screening": "Run screening",
+    "retrieval": "Download PDFs",
+    "extraction": "Run extraction",
+    "categorize": "Apply categorization"
+  },
+  "quietActions": {
+    "search": "collect",
+    "screening": "screen",
+    "retrieval": "download-pdfs",
+    "extraction": "run-extraction",
+    "categorize": "categorize"
+  },
+  "ctxLabels": {
+    "search": "Ready",
+    "screening": "Ready",
+    "retrieval": "Ready",
+    "extraction": "Schema ready for review",
+    "categorize": "Ready for analysis"
+  },
+  "history": [
+    {
+      "label": "Examples",
+      "items": [
+        {
+          "id": "quick-start-biomedical-showcase",
+          "title": "LLM for Biomedical",
+          "protected": true,
+          "active": false
+        },
+        {
+          "id": "quick-start-hci-showcase",
+          "title": "LLM for HCI",
+          "protected": true,
+          "active": false
+        },
+        {
+          "id": "quick-start-urban-showcase",
+          "title": "LLM for Urban",
+          "protected": true,
+          "active": false
+        }
+      ]
+    },
+    {
+      "label": "Chats",
+      "items": [
+        {
+          "id": "applications-large-language-models-urban",
+          "title": "Urban Settings Validation",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "review-project",
+          "title": "Urban Planning Governance Live E2E 20260912",
+          "active": true,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-6",
+          "title": "How LLMs Are Used Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-5",
+          "title": "How LLMs Are Used Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-4",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r3",
+          "title": "inner-beta-biomedicine-r3",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r7",
+          "title": "inner-beta-biomedicine-r7",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-spatial-authoring-r1",
+          "title": "inner-beta-spatial-authoring-r1",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r3",
+          "title": "inner-beta-hci-r3",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r2",
+          "title": "inner-beta-hci-r2",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-hci-r1",
+          "title": "inner-beta-hci-r1",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r6",
+          "title": "inner-beta-biomedicine-r6",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r4",
+          "title": "inner-beta-biomedicine-r4",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "inner-beta-biomedicine-r2",
+          "title": "inner-beta-biomedicine-r2",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-hci-20260701-181434",
+          "title": "LLM for Human-Computer Interaction Review",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-3",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical-2",
+          "title": "LLMs in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-are-used-biomedical",
+          "title": "How LLMs Are Used in Biomedical Research and Clinical Care",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "how-llms-support-urban-planning",
+          "title": "How LLMs Support Urban Planning",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llms-human-computer-interaction",
+          "title": "LLMs Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-urban-20260701-181434",
+          "title": "LLM for Urban Planning and Smart Cities",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "qa-live-llm-biomedical-20260701-181434",
+          "title": "LLM for Biomedical Systematic Review",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-urban-planning-and-smart",
+          "title": "LLM in Urban Planning and Smart Cities",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-human-computer-interaction",
+          "title": "LLM Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedical-2",
+          "title": "LLM Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedical",
+          "title": "LLM Biomedical",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-hci",
+          "title": "LLM in Human-Computer Interaction",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-urban",
+          "title": "LLM Urban",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-10",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-9",
+          "title": "LLM in Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-8",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-7",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-final-20260701-062348",
+          "title": "Live Smoke Final 20260701-062348",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-included-20260701-062042",
+          "title": "Live Smoke Included 20260701-062042",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-data-20260701-061937",
+          "title": "Live Smoke Data 20260701-061937",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-contract-20260701-061822",
+          "title": "Live Smoke Contract 20260701-061822",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "live-smoke-llm-biomedicine-20260701-061241",
+          "title": "Large Language Models in Biomedicine: Clinical Applications and Evaluation",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-6",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-5",
+          "title": "LLM in Biomedicine Survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-4",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "sub",
+          "title": "Sub",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-human-computer-interaction-search",
+          "title": "LLM Human Computer Interaction Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-3",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search-2",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-search",
+          "title": "LLM Biomedicine Search",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-agent-test",
+          "title": "LLM Biomedicine Agent Test",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-survey",
+          "title": "llm-biomedicine-survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-for-human-computer-interaction-survey",
+          "title": "llm-for-human-computer-interaction-survey",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "ai-assisted-3d-spatial-authoring-vr-ar-mr",
+          "title": "ai-assisted-3d-spatial-authoring-vr-ar-mr",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "HCI-AI-3D-Design",
+          "title": "HCI-AI-3D-Design",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-biomedicine-survey-step3-sim",
+          "title": "llm-biomedicine-survey-step3-sim",
+          "active": false,
+          "protected": false
+        },
+        {
+          "id": "llm-microbiome-study",
+          "title": "llm-microbiome-study",
+          "active": false,
+          "protected": false
+        }
+      ]
+    }
+  ],
+  "reviewWorkbench": {
+    "revision": "51e1444363393182c577b080fc390cbac89de88e449cad457f462b3aeefed337",
+    "screening": [
+      {
+        "key": "bac44df5603b6b9f6c247e61",
+        "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+        "abstract": "Spatio-temporal prediction aims to forecast and gain insights into the ever-changing dynamics of urban environments across both time and space. Its purpose is to anticipate future patterns, trends, and events in diverse facets of urban life, including transportation, population movement, and crime rates. Although numerous efforts have been dedicated to developing neural network techniques for accurate predictions on spatio-temporal data, it is important to note that many of these methods heavily depend on having sufficient labeled data to generate precise spatio-temporal representations. Unfortunately, the issue of data scarcity is pervasive in practical urban sensing scenarios. In certain cases, it becomes challenging to collect any labeled data from downstream scenarios, intensifying the problem further. Consequently, it becomes necessary to build a spatio-temporal model that can exhibit strong generalization capabilities across diverse spatio-temporal learning scenarios.",
+        "year": "2024",
+        "decision": "include",
+        "reason": "The record is plausibly eligible because it is about an urban setting and presents a model for urban spatio-temporal prediction, but the abstract does not explicitly show a substantive large language model application or an implemented/evaluated case study. Per screening rules, incomplete evidence should be retained.",
+        "criterion": "Uses a large language model as a substantive part of an application or evaluation.",
+        "quote": "",
+        "reviewed": false,
+        "uncertain": true,
+        "origin": "model"
+      },
+      {
+        "key": "00acde4d88d20f87705ec00a",
+        "title": "Integrating large language model and digital twins in the context of industry 5.0: Framework, challenges and opportunities",
+        "abstract": "",
+        "year": "2025",
+        "decision": "exclude",
+        "reason": "Full-text assessment: this paper reviews LLM and digital-twin literature and proposes the conceptual Interactive-DT framework for Industry 5.0. The extracted implementation status is conceptual and no urban application setting or original eligible urban evaluation is established.",
+        "criterion": "Pure commentary, perspective, or literature review without an original application or evaluation.",
+        "quote": "Integrating large language model and digital twins in the context of industry 5.0: Framework, challenges and opportunities",
+        "reviewed": true,
+        "uncertain": false,
+        "origin": "human"
+      },
+      {
+        "key": "db313c93e80f3e6e1a46aed4",
+        "title": "Large Language Model based Multi-Agents: A Survey of Progress and Challenges",
+        "abstract": "Large Language Models (LLMs) have achieved remarkable success across a wide array of tasks. Due to the impressive planning and reasoning abilities of LLMs, they have been used as autonomous agents to do many tasks automatically. Recently, based on the development of using one LLM as a single planning or decision-making agent, LLM-based multi-agent systems have achieved considerable progress in complex problem-solving and world simulation. To provide the community with an overview of this dynamic field, we present this survey to offer an in-depth discussion on the essential aspects of multi-agent systems based on LLMs, as well as the challenges. Our goal is for readers to gain substantial insights on the following questions: What domains and environments do LLM-based multi-agents simulate? How are these agents profiled and how do they communicate? What mechanisms contribute to the growth of agents' capacities? For those interested in delving into this field of study, we also summarize the commonly used datasets or benchmarks for them to have convenient access. To keep researchers updated on the latest studies, we maintain an open-source GitHub repository, dedicated to outlining the research on LLM-based multi-agent systems.",
+        "year": "2024",
+        "decision": "exclude",
+        "reason": "The title identifies a survey; the abstract says it provides an overview of LLM multi-agent systems and summarizes existing datasets and benchmarks. It does not report an original eligible urban evaluation.",
+        "criterion": "Pure commentary, perspective, or literature review without an original application or evaluation.",
+        "quote": "",
+        "reviewed": true,
+        "uncertain": false,
+        "origin": "human"
+      },
+      {
+        "key": "5bfa40091e98c542ecaa9ef5",
+        "title": "Large Language Models for Forecasting and Anomaly Detection: A Systematic Literature Review",
+        "abstract": "This systematic literature review comprehensively examines the application of Large Language Models (LLMs) in forecasting and anomaly detection, highlighting the current state of research, inherent challenges, and prospective future directions. LLMs have demonstrated significant potential in parsing and analyzing extensive datasets to identify patterns, predict future events, and detect anomalous behavior across various domains. However, this review identifies several critical challenges that impede their broader adoption and effectiveness, including the reliance on vast historical datasets, issues with generalizability across different contexts, the phenomenon of model hallucinations, limitations within the models' knowledge boundaries, and the substantial computational resources required. Through detailed analysis, this review discusses potential solutions and strategies to overcome these obstacles, such as integrating multimodal data, advancements in learning methodologies, and emphasizing model explainability and computational efficiency. Moreover, this review outlines critical trends that are likely to shape the evolution of LLMs in these fields, including the push toward real-time processing, the importance of sustainable modeling practices, and the value of interdisciplinary collaboration. Conclusively, this review underscores the transformative impact LLMs could have on forecasting and anomaly detection while emphasizing the need for continuous innovation, ethical considerations, and practical solutions to realize their full potential.",
+        "year": "2024",
+        "decision": "exclude",
+        "reason": "The title and abstract explicitly describe a systematic literature review, with discussion of challenges and future directions rather than an original urban application or evaluation.",
+        "criterion": "Pure commentary, perspective, or literature review without an original application or evaluation.",
+        "quote": "",
+        "reviewed": true,
+        "uncertain": false,
+        "origin": "human"
+      },
+      {
+        "key": "53398c7a2652e8af6914a850",
+        "title": "Large language models empowered agent-based modeling and simulation: a survey and perspectives",
+        "abstract": "Abstract Agent-based modeling and simulation have evolved as a powerful tool for modeling complex systems, offering insights into emergent behaviors and interactions among diverse agents. Recently, integrating large language models into agent-based modeling and simulation presents a promising avenue for enhancing simulation capabilities. This paper surveys the landscape of utilizing large language models in agent-based modeling and simulation, discussing their challenges and promising future directions. In this survey, since this is an interdisciplinary field, we first introduce the background of agent-based modeling and simulation and large language model-empowered agents. We then discuss the motivation for applying large language models to agent-based simulation and systematically analyze the challenges in environment perception, human alignment, action generation, and evaluation. Most importantly, we provide a comprehensive overview of the recent works of large language model-empowered agent-based modeling and simulation in multiple scenarios, which can be divided into four domains: cyber, physical, social, and hybrid, covering simulation of both real-world and virtual environments, and how these works address the above challenges. Finally, since this area is new and quickly evolving, we discuss the open problems and promising future directions. We summarize the representative papers along with their code repositories in https://github.com/tsinghua-fib-lab/LLM-Agent-Based-Modeling-and-Simulation .",
+        "year": "2024",
+        "decision": "exclude",
+        "reason": "The title identifies a survey and perspectives article; the abstract states that it surveys the landscape and reviews prior work, without reporting an original urban application or evaluation.",
+        "criterion": "Pure commentary, perspective, or literature review without an original application or evaluation.",
+        "quote": "",
+        "reviewed": true,
+        "uncertain": false,
+        "origin": "human"
+      }
+    ],
+    "extraction": [
+      {
+        "key": "bac44df5603b6b9f6c247e61",
+        "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+        "source": "pdf",
+        "fields": [
+          {
+            "name": "application_setting",
+            "type": "Text",
+            "value": "Urban computing spatio-temporal prediction in an urban planning/urban governance context, specifically forecasting taxi flow, bike flow, and crime patterns across city regions; the paper frames this as relevant to urban planning, resource allocation, public safety, traffic light control, and security scheduling.",
+            "reviewed": false
+          },
+          {
+            "name": "application_purpose",
+            "type": "Text",
+            "value": "Predict future spatio-temporal urban patterns from historical numeric geo-series data, including taxi inflow/outflow, bike inflow/outflow, and crime occurrence, using an LLM-based instruction-tuned forecasting framework.",
+            "reviewed": false
+          },
+          {
+            "name": "implementation_status",
+            "type": "Categorical",
+            "value": "empirical_evaluation",
+            "reviewed": false
+          },
+          {
+            "name": "llm_model_or_family",
+            "type": "Text",
+            "value": "Vicuna-7B as the main backbone; additional experiments with Llama-2-7B, and comparisons to LLaMA-70B, ChatGPT, and Claude-2.1 in case studies.",
+            "reviewed": false
+          },
+          {
+            "name": "datasets_used",
+            "type": "Text",
+            "value": "NYC-taxi, NYC-bike, NYC-crime, and CHI-taxi datasets; NYC datasets include taxi travel records, bike trajectories, and crime incidents in New York City, with POI and geographic region information; CHI-taxi contains taxi travel data in Chicago.",
+            "reviewed": false
+          },
+          {
+            "name": "methods",
+            "type": "Text",
+            "value": "UrbanGPT combines a spatio-temporal dependency encoder with a spatio-temporal instruction-tuning paradigm; it uses a multi-level temporal convolutional network, a lightweight alignment module to project spatio-temporal representations into LLM hidden space, special tokens (<ST_start>, <ST_HIS>, <ST_end>) for instruction formatting, and a regression layer to map forecasting-token representations to numeric predictions; training uses instruction-tuning with multiple datasets and zero-shot evaluation.",
+            "reviewed": false
+          },
+          {
+            "name": "evaluation_metrics",
+            "type": "Text",
+            "value": "Regression tasks: MAE and RMSE; classification tasks: Recall and Macro-F1. The paper also reports qualitative zero-shot case-study comparisons of predicted sequences.",
+            "reviewed": false
+          },
+          {
+            "name": "key_findings",
+            "type": "Text",
+            "value": "UrbanGPT consistently outperformed state-of-the-art baselines in zero-shot and supervised spatio-temporal prediction, including on unseen regions and cross-city settings. It showed strong gains in sparse/high-variance regions and maintained advantages across different LLM backbones. The authors conclude that spatio-temporal instruction-tuning helps LLMs capture transferable urban patterns and improves numerical forecasting.",
+            "reviewed": false
+          },
+          {
+            "name": "comparison_or_baseline",
+            "type": "Text",
+            "value": "Baselines include AGCRN, ASTGCN, GWN, MTGNN, STWA, STSGCN, STGCN, TGCN, DMVSTNET, ST-LSTM, GPT4TS, TimesNet, and direct LLM case-study comparisons against LLaMA-70B, ChatGPT, and Claude-2.1.",
+            "reviewed": false
+          },
+          {
+            "name": "study_context_and_participants",
+            "type": "Text",
+            "value": "Experiments use grid regions in New York City and Chicago. NYC-taxi has 263 regions, NYC-bike and NYC-crime have 2162 regions, and CHI-taxi has 77 regions. Training used 80 NYC regions; testing included unseen NYC regions and Chicago data. No human participants are reported.",
+            "reviewed": false
+          },
+          {
+            "name": "evidence_limitations",
+            "type": "Text",
+            "value": "The paper notes that the model still has limitations to be addressed in future work, including the need for more diverse urban data and improved interpretability/explainability. It also acknowledges that direct textual generation is suboptimal for precise numerical regression.",
+            "reviewed": false
+          }
+        ],
+        "status": "success"
+      }
+    ],
+    "removed": [],
+    "canReviewScreening": true,
+    "canReviewExtraction": true,
+    "screeningStale": false,
+    "extractionStale": false,
+    "changes": [
+      {
+        "kind": "screening",
+        "key": "53398c7a2652e8af6914a850",
+        "field": null,
+        "reason": "The title identifies a survey and perspectives article; the abstract states that it surveys the landscape and reviews prior work, without reporting an original urban application or evaluation.",
+        "at": "2026-09-13T02:08:38.380379+00:00"
+      },
+      {
+        "kind": "screening",
+        "key": "5bfa40091e98c542ecaa9ef5",
+        "field": null,
+        "reason": "The title and abstract explicitly describe a systematic literature review, with discussion of challenges and future directions rather than an original urban application or evaluation.",
+        "at": "2026-09-13T02:09:22.104506+00:00"
+      },
+      {
+        "kind": "screening",
+        "key": "db313c93e80f3e6e1a46aed4",
+        "field": null,
+        "reason": "The title identifies a survey; the abstract says it provides an overview of LLM multi-agent systems and summarizes existing datasets and benchmarks. It does not report an original eligible urban evaluation.",
+        "at": "2026-09-13T02:09:31.069683+00:00"
+      },
+      {
+        "kind": "screening",
+        "key": "00acde4d88d20f87705ec00a",
+        "field": null,
+        "reason": "Full-text assessment: this paper reviews LLM and digital-twin literature and proposes the conceptual Interactive-DT framework for Industry 5.0. The extracted implementation status is conceptual and no urban application setting or original eligible urban evaluation is established.",
+        "at": "2026-09-13T02:17:18.458332+00:00"
+      }
+    ],
+    "liveSample": null
+  },
+  "readOnlyExample": false,
+  "exampleOrigin": null,
+  "activeTask": null
+}

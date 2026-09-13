@@ -14,6 +14,7 @@ from ui_state import project_stage_label, schema_workbench_state
 
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .screening_criteria import criteria_state
+from .project_decisions import confirmed_decisions
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
@@ -68,6 +69,7 @@ DEMO_HISTORY_DIRECTIONS = [
 ]
 
 METADATA_FIELDS = {
+    "field_evidence", "human_fields", "screening_evidence", "human_screening", "pdf_identity_required",
     "paper_id",
     "title",
     "authors",
@@ -75,6 +77,8 @@ METADATA_FIELDS = {
     "doi",
     "source",
     "pdf_path",
+    "pdf_file",
+    "row_number",
     "title_match",
     "title_similarity",
     "extraction_source",
@@ -83,6 +87,10 @@ METADATA_FIELDS = {
 }
 
 EXPORT_ARTIFACTS = {
+    "workflow-decisions": ("Project decisions", Path("review/workflow_decisions.json"), "application/json"),
+    "removed-records": ("Date exclusions and duplicates", Path("filtered/removed_records.jsonl"), "application/x-ndjson"),
+    "review-changes": ("Human review history", Path("review/changes.json"), "application/json"),
+    "excluded-papers": ("Excluded papers", Path("filtered/excluded_papers.jsonl"), "application/x-ndjson"),
     "search-setup": ("Search setup", Path("search_conditions.json"), "application/json"),
     "relevance-prompt": ("Relevance prompt", Path("prompts/relevance_prompt.json"), "application/json"),
     "included-papers": ("Included papers", Path("filtered/included_papers.jsonl"), "application/x-ndjson"),
@@ -94,12 +102,19 @@ EXPORT_ARTIFACTS = {
 
 
 def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
+    from .record_review import recover
+    recover(project_path)
     reconcile_setup_transaction(project_path)
     artifact = EXPORT_ARTIFACTS.get(export_key)
     if not artifact or project_path.is_symlink() or (project_path / ".setup_update_pending.json").exists():
         return None
+    if export_key == 'workflow-decisions':
+        from .workflow_decisions import projection
+        decision = projection(project_path)
+        if decision['outdated']:
+            return None
     export_stage = {
-        "relevance-prompt": "collection", "included-papers": "screening", "download-report": "retrieval",
+        "relevance-prompt": "collection", "included-papers": "screening", "excluded-papers": "screening", "removed-records": "screening", "download-report": "retrieval",
         "extraction-results": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
     }.get(export_key)
     if export_stage:
@@ -126,6 +141,12 @@ def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
     return candidate
 
 
+def _session_activity(path: Path) -> float:
+    candidates = [path, path / "session.json", path / "search_conditions.json", path / "workflow_state.json"]
+    candidates.append(path / "chat" / "messages.jsonl")
+    return max((item.stat().st_mtime for item in candidates if item.exists()), default=0)
+
+
 def list_projects(output_root: Path | str = Path("output")) -> list[dict]:
     projects = []
     for path in iter_project_dirs(Path(output_root)):
@@ -133,12 +154,12 @@ def list_projects(output_root: Path | str = Path("output")) -> list[dict]:
         projects.append(
             {
                 "id": path.name,
-                "title": config.get("project_name") or path.name,
+                "title": read_json(path / "session.json", {}).get("title") or config.get("project_name") or path.name,
                 "path": str(path),
                 "modified": _format_mtime(path),
             }
         )
-    return projects
+    return sorted(projects, key=lambda item: _session_activity(Path(item["path"])), reverse=True)
 
 
 def build_new_project_data(output_root: Path | str) -> dict:
@@ -235,6 +256,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     included = _unescape_strings(read_jsonl(path / "filtered" / "included_papers.jsonl"))
     download_report = _unescape_strings(read_json(path / "pdfs" / "download_report.json", {}) or {})
     schema = _unescape_strings(load_schema_draft(path))
+    schema_marker = read_json(path / "extraction/schema_finalized.json", {}) or {}
+    schema_matches_setup = schema_marker.get("setup_revision") == setup_revision(config) and is_schema_finalized(path)
     extraction_rows, extraction_failed_items = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
     extraction_rows = _unescape_strings(extraction_rows)
     extraction_failed_items = _unescape_strings(extraction_failed_items)
@@ -257,7 +280,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     if workflow_state["stages"]["retrieval"]["stale"]:
         download_report = {}
     if workflow_state["stages"]["extraction"]["stale"]:
-        if not _fresh_ready_output(workflow_state["stages"]["extraction"]):
+        if not _fresh_ready_output(workflow_state["stages"]["extraction"]) and not schema_matches_setup:
             schema = {}
         extraction_rows, extraction_results = [], []
     if workflow_state["stages"]["categorization"]["stale"]:
@@ -268,7 +291,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     stage = project_stage_label(current_step)
     fields = _schema_fields(schema)
     extraction_stage = workflow_state["stages"]["extraction"]
-    schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage)) and is_schema_finalized(path)
+    schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage) or schema_matches_setup) and is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
     retrieval_recovery = disabled_retry_projection() if setup_update_pending or retry_update_pending else _retrieval_recovery(path)
 
@@ -276,13 +299,15 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "isNewProject": False,
         "project": {
             "id": project_id,
-            "title": config.get("project_name") or path.name,
+            "title": read_json(path / "session.json", {}).get("title") or config.get("project_name") or path.name,
             "status": f"Active · {stage}",
             "model": config.get("model") or LEAD_AGENT_DEV_MODEL,
             "date": _format_mtime(path),
         },
         "researchQuestion": _research_question(config),
         "setup": _setup(config),
+        "searchReuseDraft": ({**_setup(read_json(path / "memory/search_setup_draft.json", {})), "keywords": _keywords(read_json(path / "memory/search_setup_draft.json", {}))} if (path / "memory/search_setup_draft.json").exists() else None),
+        "confirmedDecisions": confirmed_decisions(path),
         "setupRevision": setup_revision(config),
         "stageState": workflow_state["stages"],
         "workflowNotices": workflow_notices,
@@ -695,7 +720,15 @@ def _retrieval_summary(path: Path, included: list[dict], download_report: dict, 
     total = len(included)
     failed = download_report.get("failed")
     unavailable = int(failed) if isinstance(failed, int) else max(total - retrieved, 0)
-    return {"retrieved": retrieved, "total": total, "openAccess": retrieved, "viaInstitution": 0, "unavailable": unavailable}
+    # Classify only explicitly reported access paths. A downloadable PDF alone
+    # does not establish an OA license or institutional authentication.
+    successes = download_report.get('downloaded') or []
+    successes = [r for r in successes if isinstance(r, dict)] if isinstance(successes, list) else []
+    oa = sum(1 for row in successes if row.get('access_method') == 'open_access')
+    institution = sum(1 for row in successes if row.get('access_method') == 'institution')
+    oa = min(oa, retrieved)
+    institution = min(institution, retrieved - oa)
+    return {"retrieved": retrieved, "total": total, "openAccess": oa, "viaInstitution": institution, "unknownAccess": max(0, retrieved - oa - institution), "unavailable": unavailable}
 
 
 def _categorization_summary(categorization: dict) -> dict:
@@ -787,6 +820,11 @@ def _evidence_fields(row: dict) -> list[dict[str, str]]:
         "extraction_model",
         "extraction_cost_usd",
         "extracted_data",
+        "field_evidence",
+        "human_fields",
+        "human_screening",
+        "screening_evidence",
+        "pdf_identity_required",
         "extraction_status",
         "error_message",
         "source_urls",
@@ -1062,9 +1100,9 @@ def _full_results(rows: list[dict], field_names: list[str], categorized_field: s
     elif any("category" in row for row in rows):
         columns.append("category")
     normalized_rows = []
-    for row in rows[:50]:
+    for row in rows:
         normalized_rows.append({column: _profile_value(row.get(column)) for column in columns})
-    return {"columns": columns, "rows": normalized_rows}
+    return {"columns": columns, "rows": normalized_rows, "total": len(normalized_rows)}
 
 
 def _paper_mapped_category(categorization: dict, row: dict) -> str:
@@ -1085,6 +1123,7 @@ def _export_package(path: Path) -> list[dict[str, Any]]:
             "exists": export_artifact_path(path, key) is not None,
         }
         for key, (label, _relative_path, _media_type) in EXPORT_ARTIFACTS.items()
+        if key not in {"review-changes", "excluded-papers", "removed-records", "workflow-decisions"} or (path / _relative_path).exists()
     ]
 
 
@@ -1177,12 +1216,13 @@ def _messages(
     extraction_stale: bool = False,
     extraction_status: str = "not_started",
 ) -> list[dict]:
-    description = _initial_user_topic(path, config)
-    messages = [
-        {"step": 1, "role": "a", "text": NEW_REVIEW_WELCOME},
-        {"step": 1, "role": "u", "text": str(description)},
-    ]
-    if config.get("lead_agent_reply"):
+    initial = [row for row in read_jsonl(path / "chat/messages.jsonl") if row.get("source") == "initial_setup" and row.get("role") in {"u", "a"} and row.get("text")]
+    messages = [{"step": 1, "role": "a", "text": NEW_REVIEW_WELCOME}]
+    if initial:
+        messages.extend({"step": 1, "role": row["role"], "text": safe_display_text(str(row["text"]), fallback="Message details hidden because they contained a local path.") if row["role"] == "a" else str(row["text"])} for row in initial)
+    else:
+        messages.append({"step": 1, "role": "u", "text": _initial_user_topic(path, config)})
+    if not initial and config.get("lead_agent_reply"):
         messages.append(
             {
                 "step": 1,
@@ -1229,7 +1269,8 @@ def _workflow_outcome_messages(notices: dict[str, dict[str, Any]]) -> list[dict]
 
 
 def _initial_user_topic(path: Path, config: dict) -> str:
-    demo_direction = _demo_direction_for_project(path, config)
+    from .demo_projects import is_example
+    demo_direction = _demo_direction_for_project(path, config) if is_example(path.parent, path.name) else None
     if demo_direction and demo_direction.get("starter_topic"):
         return str(demo_direction["starter_topic"])
     return str(config.get("user_prompt") or config.get("description") or config.get("search_terms") or "Review project")
@@ -1469,9 +1510,12 @@ def _ctx_labels(current_step: int, *, has_schema: bool) -> dict:
 
 
 def _history(output_root: Path, active_project_id: str) -> list[dict]:
-    items = [{"id": "", "title": "Untitled review", "active": not active_project_id, "isNewProject": True}]
-    items.extend(_demo_history_project_items(output_root, active_project_id))
-    return [{"label": "Historys", "items": items}]
+    examples = _demo_history_project_items(output_root, active_project_id)
+    protected = {item["id"] for item in examples if item["id"]}
+    chats = [{"id": project["id"], "title": project["title"],
+              "active": project["id"] == active_project_id, "protected": False}
+             for project in list_projects(output_root) if project["id"] not in protected]
+    return [{"label": "Examples", "items": examples}, {"label": "Chats", "items": chats}]
 
 
 def _new_project_history(output_root: Path) -> list[dict]:
@@ -1489,6 +1533,7 @@ def _demo_history_project_items(output_root: Path, active_project_id: str) -> li
                 {
                     "id": "",
                     "title": str(direction["label"]),
+                    "protected": True,
                     "active": False,
                     "starterTopic": str(direction["starter_topic"]),
                 }
@@ -1499,6 +1544,7 @@ def _demo_history_project_items(output_root: Path, active_project_id: str) -> li
             {
                 "id": match["id"],
                 "title": str(direction["label"]),
+                "protected": True,
                 "active": match["id"] == active_project_id,
             }
         )
@@ -1506,6 +1552,7 @@ def _demo_history_project_items(output_root: Path, active_project_id: str) -> li
 
 
 def _best_demo_project(projects: list[dict], direction: dict, used_ids: set[str]) -> dict | None:
+    projects = sorted(projects, key=lambda project: (not project["id"].endswith("-showcase"), project["id"]))
     for prefix in direction["id_prefixes"]:
         for project in projects:
             project_id = str(project.get("id") or "")
@@ -1513,11 +1560,4 @@ def _best_demo_project(projects: list[dict], direction: dict, used_ids: set[str]
                 continue
             if project_id.lower().startswith(prefix):
                 return project
-    for project in projects:
-        project_id = str(project.get("id") or "")
-        if project_id in used_ids:
-            continue
-        haystack = f"{project_id} {project.get('title') or ''}".lower()
-        if any(keyword in haystack for keyword in direction["keywords"]):
-            return project
     return None

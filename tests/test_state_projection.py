@@ -424,15 +424,12 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(list(data["setup"]["source_limits"]), ["pubmed", "arxiv", "openalex"])
         self.assertEqual(data["setup"]["source_limits"], {"pubmed": 10, "openalex": 10, "arxiv": 10})
         self.assertEqual(data["platforms"], [["PubMed", 0], ["arXiv", 0], ["Openalex", 0]])
-        self.assertEqual(data["history"][0]["label"], "Historys")
-        self.assertEqual(
-            data["history"][0]["items"][0],
-            {"id": "", "title": "Untitled review", "active": True, "isNewProject": True},
-        )
+        self.assertEqual(data["history"][0]["label"], "Examples")
+        self.assertEqual(data["history"][1], {"label": "Chats", "items": []})
         self.assertEqual(
             [
                 (item["title"], item.get("starterTopic"))
-                for item in data["history"][0]["items"][1:]
+                for item in data["history"][0]["items"]
             ],
             [
                 ("LLM for Biomedical", "I want to review how LLMs are used in biomedical research and clinical care."),
@@ -450,20 +447,11 @@ class StateProjectionTests(unittest.TestCase):
             data = build_rp_data(output_root, "inner-beta-hci-r3")
 
         items = data["history"][0]["items"]
-        self.assertEqual([item["title"] for item in items[1:]], ["LLM for Biomedical", "LLM for HCI", "LLM for Urban"])
-        self.assertEqual(items[1]["id"], "inner-beta-biomedicine-r7")
-        self.assertEqual(items[2]["id"], "inner-beta-hci-r3")
-        self.assertEqual(
-            items[3],
-            {
-                "id": "",
-                "title": "LLM for Urban",
-                "active": False,
-                "starterTopic": "I want to review how LLMs support urban planning and smart cities.",
-            },
-        )
+        self.assertEqual([item["title"] for item in items], ["LLM for Biomedical", "LLM for HCI", "LLM for Urban"])
+        self.assertTrue(all(item.get("starterTopic") and item["protected"] for item in items))
+        self.assertEqual({item["id"] for item in data["history"][1]["items"]}, {"inner-beta-biomedicine-r7", "inner-beta-hci-r3"})
 
-    def test_demo_history_limits_sidebar_to_new_and_three_showcase_directions(self):
+    def test_history_separates_three_examples_and_ordinary_chats(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             write_json(output_root / "qa-live-llm-biomedical-20260701-181434" / "search_conditions.json", {"project_name": "LLM for Biomedical Systematic Review"})
@@ -477,13 +465,13 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(
             [(item["id"], item["title"], item["active"]) for item in items],
             [
-                ("", "Untitled review", False),
                 ("qa-live-llm-biomedical-20260701-181434", "LLM for Biomedical", False),
                 ("qa-live-llm-hci-20260701-181434", "LLM for HCI", True),
                 ("qa-live-llm-urban-20260701-181434", "LLM for Urban", False),
             ],
         )
-        self.assertTrue(items[0]["isNewProject"])
+        self.assertTrue(all(item["protected"] for item in items))
+        self.assertEqual(data["history"][1]["items"][0]["id"], "unrelated-newer-project")
 
     def test_demo_history_prefers_live_showcase_runs_over_older_keyword_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -500,7 +488,6 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(
             [item["id"] for item in data["history"][0]["items"]],
             [
-                "",
                 "qa-live-llm-biomedical-20260701-181434",
                 "qa-live-llm-hci-20260701-181434",
                 "qa-live-llm-urban-20260701-181434",
@@ -525,7 +512,7 @@ class StateProjectionTests(unittest.TestCase):
             data = build_rp_data(output_root, "quick-start-hci-showcase")
 
         self.assertEqual(
-            [item["id"] for item in data["history"][0]["items"][1:]],
+            [item["id"] for item in data["history"][0]["items"]],
             ["quick-start-biomedical-showcase", "quick-start-hci-showcase", "quick-start-urban-showcase"],
         )
 
@@ -607,7 +594,7 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(overview["Search strategy"], '("large language model" OR LLM) AND medicine')
         self.assertNotIn("&quot;", data["messages"][0]["text"])
 
-    def test_non_demo_projects_do_not_enter_demo_history_sidebar(self):
+    def test_ordinary_projects_appear_separately_from_examples(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             write_json(output_root / "alpha" / "search_conditions.json", {"project_name": "Alpha"})
@@ -618,9 +605,11 @@ class StateProjectionTests(unittest.TestCase):
         history_items = data["history"][0]["items"]
         self.assertEqual(
             [item["title"] for item in history_items],
-            ["Untitled review", "LLM for Biomedical", "LLM for HCI", "LLM for Urban"],
+            ["LLM for Biomedical", "LLM for HCI", "LLM for Urban"],
         )
-        self.assertTrue(all(item.get("starterTopic") for item in history_items[1:]))
+        self.assertTrue(all(item.get("starterTopic") for item in history_items))
+        self.assertEqual({item["id"] for item in data["history"][1]["items"]}, {"alpha", "beta"})
+        self.assertTrue(next(item for item in data["history"][1]["items"] if item["id"] == "alpha")["active"])
 
     def test_canvas_action_chat_messages_render_as_activity_not_chat_bubbles(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -718,7 +707,7 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(data["steps"][1]["sub"], "4 / 12")
         self.assertEqual(data["steps"][2]["sub"], "3 / 4")
         self.assertEqual(data["screeningMetrics"], {"identified": 12, "afterDedup": 10, "included": 4})
-        self.assertEqual(data["retrievalSummary"], {"retrieved": 3, "total": 4, "openAccess": 3, "viaInstitution": 0, "unavailable": 1})
+        self.assertEqual(data["retrievalSummary"], {"retrieved": 3, "total": 4, "openAccess": 0, "viaInstitution": 0, "unknownAccess": 3, "unavailable": 1})
         self.assertEqual(data["setup"]["source_limits"], {"pubmed": 10, "openalex": 25})
         self.assertIn("Welcome to **ReviewPilot**!", data["messages"][0]["text"])
         self.assertEqual(data["messages"][1]["text"], "Survey retrieval augmented generation in medicine")

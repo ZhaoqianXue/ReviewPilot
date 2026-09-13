@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+import requests
+from unittest.mock import Mock, patch
 
 from searchers.arxiv_search import ArxivSearcher
 
@@ -35,6 +36,32 @@ class RecordingArxivSearcher(ArxivSearcher):
 
 
 class ArxivSearcherTests(unittest.TestCase):
+    def test_exhausted_rate_limit_is_not_an_empty_success(self):
+        response = Mock(status_code=429)
+        response.raise_for_status.side_effect = requests.HTTPError(response=response)
+        with patch("searchers.arxiv_search.requests.get", return_value=response) as get, patch("searchers.arxiv_search.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                ArxivSearcher().search('LLM AND urban', max_results=5)
+        self.assertEqual(get.call_count, 3)
+
+    def test_network_timeout_retries_are_bounded(self):
+        with patch("searchers.arxiv_search.requests.get", side_effect=requests.Timeout) as get, patch("searchers.arxiv_search.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "3 attempts"):
+                ArxivSearcher().search('urban', max_results=5)
+        self.assertEqual(get.call_count, 3)
+
+    def test_date_filter_keeps_numeric_pagination_offset(self):
+        response = Mock(status_code=200, text="feed")
+        searcher = ArxivSearcher()
+        searcher._date_range = {"start": "2023-01-01", "end": "2026-09-12"}
+        with patch("searchers.arxiv_search.requests.get", return_value=response) as get, \
+             patch.object(searcher, "_parse_response", side_effect=[[{"id": "first"}], [{"id": "second"}]]), \
+             patch("searchers.arxiv_search.time.sleep"):
+            rows = searcher._search_simple("urban planning", 2)
+        self.assertEqual([row["id"] for row in rows], ["first", "second"])
+        self.assertEqual([call.kwargs["params"]["start"] for call in get.call_args_list], [0, 1])
+        self.assertIn("submittedDate:[202301010000 TO 202609122359]", get.call_args.kwargs["params"]["search_query"])
+
     def test_complex_boolean_query_tries_native_query_before_split(self):
         searcher = RecordingArxivSearcher()
 

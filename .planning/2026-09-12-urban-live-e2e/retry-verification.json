@@ -1,0 +1,28 @@
+{
+  "retrieval": {
+    "attempt": 3,
+    "counts": {
+      "failed": 0,
+      "succeeded": 2
+    },
+    "error": null,
+    "last_valid": {
+      "attempt": 3,
+      "counts": {
+        "failed": 0,
+        "succeeded": 2
+      },
+      "status": "completed",
+      "updated_at": "2026-09-13T02:17:10.759+00:00"
+    },
+    "stale": false,
+    "status": "completed",
+    "updated_at": "2026-09-13T02:17:10.759+00:00"
+  },
+  "canRetry": false,
+  "original_unchanged": true,
+  "pdf_count": 2,
+  "injected_failure": true,
+  "successful_retry_transport": "HTTP API confirmation; browser verified resulting state",
+  "browser_native_confirm": "Browser tool cancelled native confirmation; not treated as a product defect"
+}

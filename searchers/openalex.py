@@ -38,7 +38,7 @@ class OpenAlexSearcher:
         self.last_error = ""
 
     def search(self, query: str, max_results: int = 100,
-               output_file: Optional[str] = None) -> List[Dict]:
+               output_file: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
         """
         Search OpenAlex and return article metadata.
 
@@ -50,6 +50,9 @@ class OpenAlexSearcher:
         Returns:
             List of article dictionaries
         """
+        from reviewpilot_core.publication_dates import resolve_range
+        self._date_range = resolve_range(date_range) if date_range is not None else None
+
         # Load existing articles if output file exists (for resume)
         seen_ids = set()
         existing_articles = []
@@ -70,6 +73,12 @@ class OpenAlexSearcher:
 
         query_param_sets = self._build_query_param_sets(query)
 
+        if self._date_range:
+            for params in query_param_sets:
+                filters = [params.get('filter', ''), f"to_publication_date:{self._date_range['end']}"]
+                if self._date_range['start']:
+                    filters.append(f"from_publication_date:{self._date_range['start']}")
+                params['filter'] = ','.join(part for part in filters if part)
         articles = list(existing_articles)
 
         for base_params in query_param_sets:
@@ -173,27 +182,10 @@ class OpenAlexSearcher:
         return str(exc)
 
     def _build_query_param_sets(self, query: str) -> List[Dict[str, str]]:
-        search_text = self._clean_query_text(query)
-        param_sets = [{"search": search_text}] if search_text else [{"search": query}]
-        groups = self._parse_boolean_groups(query)
-        if len(groups) >= 2:
-            # OpenAlex title_and_abstract.search does not support arbitrary
-            # nested Boolean syntax. Start with one broad search request, then
-            # fall back to focused AND-combinations only when that does not
-            # fill the requested quota. This avoids request fan-out against
-            # the anonymous search rate limit.
-            trimmed_groups = [group[:8] for group in groups[:3] if group]
-            for combo in itertools.product(*trimmed_groups):
-                filter_value = ",".join(
-                    f"title_and_abstract.search:{term}"
-                    for term in combo
-                    if term
-                )
-                if filter_value:
-                    param_sets.append({"filter": filter_value})
-                if len(param_sets) >= 120:
-                    break
-        return param_sets
+        # Native search supports Boolean operators, parentheses and exact phrases.
+        # Sending a cleaned bag of words silently changes the approved scope.
+        from reviewpilot_core.query_syntax import parse, render, phrase
+        return [{'search': render(parse(query), phrase)}]
 
     def _parse_boolean_groups(self, query: str) -> List[List[str]]:
         groups = []
@@ -278,6 +270,7 @@ class OpenAlexSearcher:
                 "authors": authors,
                 "journal": journal,
                 "year": year,
+                    "publication_date": result.get("publication_date", ""),
                 "doi": doi,
                 "url": result.get("id", ""),
                 "citations": result.get("cited_by_count", 0),
@@ -311,7 +304,7 @@ class OpenAlexSearcher:
 
 
 def search(query: str, max_results: int = 100, email: Optional[str] = None,
-           output_file: Optional[str] = None, api_key: Optional[str] = None) -> List[Dict]:
+           output_file: Optional[str] = None, api_key: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
     """
     Convenience function to search OpenAlex.
 
@@ -326,7 +319,7 @@ def search(query: str, max_results: int = 100, email: Optional[str] = None,
         List of article dictionaries
     """
     searcher = OpenAlexSearcher(email=email, api_key=api_key)
-    return searcher.search(query, max_results, output_file=output_file)
+    return searcher.search(query, max_results, output_file=output_file, date_range=date_range)
 
 
 if __name__ == "__main__":

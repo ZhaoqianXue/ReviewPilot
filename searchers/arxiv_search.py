@@ -14,7 +14,7 @@ from typing import List, Dict, Optional
 
 
 class ArxivSearcher:
-    BASE_URL = "http://export.arxiv.org/api/query"
+    BASE_URL = "https://export.arxiv.org/api/query"
 
     def __init__(self):
         """Initialize arXiv searcher."""
@@ -22,7 +22,7 @@ class ArxivSearcher:
 
     def search(self, query: str, max_results: int = 100,
                categories: Optional[List[str]] = None,
-               output_file: Optional[str] = None) -> List[Dict]:
+               output_file: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
         """
         Search arXiv and return article metadata.
 
@@ -35,6 +35,9 @@ class ArxivSearcher:
         Returns:
             List of article dictionaries
         """
+        from reviewpilot_core.publication_dates import resolve_range
+        self._date_range = resolve_range(date_range) if date_range is not None else None
+
         # Check if query is complex and needs to be split
         parsed_groups = self._parse_query(query)
 
@@ -74,6 +77,7 @@ class ArxivSearcher:
         start = 0
         max_per_request = 100
         seen_ids = set()
+        network_failures = 0
         self._last_status_code = None
 
         # If output file exists, load existing IDs to avoid duplicates
@@ -98,6 +102,12 @@ class ArxivSearcher:
         if categories:
             cat_query = " OR ".join([f"cat:{cat}" for cat in categories])
             search_query = f"({search_query}) AND ({cat_query})"
+
+        bounds = getattr(self, '_date_range', None)
+        if bounds:
+            start_date = (bounds['start'] or '0001-01-01').replace('-', '')
+            end_date = bounds['end'].replace('-', '')
+            search_query = f"({search_query}) AND submittedDate:[{start_date}0000 TO {end_date}2359]"
 
         print(f"  arXiv query: {search_query[:80]}...")
 
@@ -127,6 +137,7 @@ class ArxivSearcher:
                         self._last_status_code = response.status_code
 
                 response.raise_for_status()
+                network_failures = 0
 
                 new_articles = self._parse_response(response.text)
 
@@ -154,7 +165,10 @@ class ArxivSearcher:
                 # Rate limiting (arXiv recommends longer delays for bulk queries)
                 time.sleep(3)
 
-            except requests.exceptions.Timeout:
+            except requests.exceptions.Timeout as exc:
+                network_failures += 1
+                if network_failures >= 3:
+                    raise RuntimeError("arXiv search timed out after 3 attempts. Retry collection later.") from exc
                 print(f"  Timeout at {len(articles)} articles, retrying in 10s...")
                 time.sleep(10)
                 continue
@@ -162,9 +176,11 @@ class ArxivSearcher:
                 response = getattr(e, "response", None)
                 if response is not None:
                     self._last_status_code = response.status_code
-                print(f"  arXiv API error: {e}")
-                break
+                raise RuntimeError(f"arXiv search failed (HTTP {self._last_status_code}). Retry collection later.") from e
             except requests.exceptions.ConnectionError as e:
+                network_failures += 1
+                if network_failures >= 3:
+                    raise RuntimeError("arXiv search connection failed after 3 attempts. Retry collection later.") from e
                 print(f"  Connection error at {len(articles)} articles, retrying in 10s...")
                 time.sleep(10)
                 continue
@@ -173,21 +189,8 @@ class ArxivSearcher:
 
     def _parse_query(self, query: str) -> Optional[tuple]:
         """Parse query into groups for complex boolean queries."""
-        if not query or ' AND ' not in query.upper():
-            return None
-
-        and_parts = re.split(r'\bAND\b', query, flags=re.IGNORECASE)
-        groups = []
-
-        for part in and_parts:
-            part = part.strip().strip('()')
-            part = part.replace("'", "").replace('"', "")
-            or_terms = re.split(r'\bOR\b', part, flags=re.IGNORECASE)
-            terms = [t.strip() for t in or_terms if t.strip()]
-            if terms:
-                groups.append(terms)
-
-        return tuple(groups) if groups else None
+        from reviewpilot_core.query_syntax import parse, conjunctive_groups
+        return conjunctive_groups(parse(query)) if query else None
 
     def _search_split(self, groups: tuple, max_results: int,
                      categories: Optional[List[str]] = None,
@@ -299,86 +302,8 @@ class ArxivSearcher:
         - AND, OR, ANDNOT for boolean operators
         - Quotes for phrases: all:"machine learning"
         """
-        # First, check if it looks like it's already formatted for arXiv
-        if 'all:' in query or 'ti:' in query or 'abs:' in query:
-            return query
-
-        # Parse the boolean query
-        # Simple approach: replace quoted phrases with placeholders
-        phrases = {}
-        placeholder_idx = 0
-
-        def replace_phrase(match):
-            nonlocal placeholder_idx
-            key = f"__PHRASE_{placeholder_idx}__"
-            phrases[key] = match.group(1)
-            placeholder_idx += 1
-            return key
-
-        # Extract quoted phrases
-        temp_query = re.sub(r'"([^"]+)"', replace_phrase, query)
-        temp_query = re.sub(r"'([^']+)'", replace_phrase, temp_query)
-
-        # Remove remaining parentheses (grouping)
-        temp_query = temp_query.replace('(', ' ').replace(')', ' ')
-        temp_query = ' '.join(temp_query.split())
-
-        # Check if it has boolean operators
-        has_and = ' AND ' in temp_query.upper()
-        has_or = ' OR ' in temp_query.upper()
-
-        if not has_and and not has_or:
-            # Simple query - restore phrases and format
-            for key, phrase in phrases.items():
-                temp_query = temp_query.replace(key, phrase)
-            if ' ' in temp_query:
-                return f'all:"{temp_query}"'
-            return f'all:{temp_query}'
-
-        # Split by AND (case insensitive)
-        and_parts = re.split(r'\s+AND\s+', temp_query, flags=re.IGNORECASE)
-
-        formatted_groups = []
-        for part in and_parts:
-            part = part.strip()
-            if not part:
-                continue
-
-            # Split by OR within this group
-            or_terms = re.split(r'\s+OR\s+', part, flags=re.IGNORECASE)
-            formatted_terms = []
-
-            for term in or_terms:
-                term = term.strip()
-                if not term:
-                    continue
-
-                # Restore any phrase placeholders
-                for key, phrase in phrases.items():
-                    if key in term:
-                        term = term.replace(key, phrase)
-
-                # Format the term
-                if ' ' in term:
-                    formatted_terms.append(f'all:"{term}"')
-                else:
-                    formatted_terms.append(f'all:{term}')
-
-            if formatted_terms:
-                if len(formatted_terms) == 1:
-                    formatted_groups.append(formatted_terms[0])
-                else:
-                    formatted_groups.append(f"({' OR '.join(formatted_terms)})")
-
-        if not formatted_groups:
-            # Fallback
-            for key, phrase in phrases.items():
-                temp_query = temp_query.replace(key, phrase)
-            return f'all:"{temp_query}"'
-        elif len(formatted_groups) == 1:
-            return formatted_groups[0]
-        else:
-            return ' AND '.join(formatted_groups)
+        from reviewpilot_core.query_syntax import parse, render, phrase
+        return render(parse(query), lambda value: value if re.match(r'^(all|ti|abs|au|cat):', value) else 'all:' + phrase(value), negative='ANDNOT')
 
     def _parse_response(self, xml_text: str) -> List[Dict]:
         """Parse arXiv Atom feed response."""
@@ -449,6 +374,7 @@ class ArxivSearcher:
                     "authors": authors,
                     "journal": "arXiv",
                     "year": year,
+                    "publication_date": published,
                     "doi": doi,
                     "url": arxiv_url,
                     "pdf_url": pdf_url,
@@ -464,7 +390,7 @@ class ArxivSearcher:
 
 def search(query: str, max_results: int = 100,
            categories: Optional[List[str]] = None,
-           output_file: Optional[str] = None) -> List[Dict]:
+           output_file: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
     """
     Convenience function to search arXiv.
 
@@ -478,7 +404,7 @@ def search(query: str, max_results: int = 100,
         List of article dictionaries
     """
     searcher = ArxivSearcher()
-    return searcher.search(query, max_results, categories, output_file)
+    return searcher.search(query, max_results, categories, output_file, date_range=date_range)
 
 
 if __name__ == "__main__":

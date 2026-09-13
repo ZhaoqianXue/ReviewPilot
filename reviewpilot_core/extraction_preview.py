@@ -15,7 +15,17 @@ from .project_store import read_json, read_jsonl
 from .safe_text import safe_display_text
 
 
-PREVIEW_CACHE_VERSION = 1
+PREVIEW_CACHE_VERSION = 2
+
+
+def source_revision(project: Path) -> str:
+    digest = hashlib.sha256()
+    for name in ('search_conditions.json', 'prompts/relevance_prompt.json',
+                 'filtered/included_papers.jsonl', 'pdfs/download_report.json'):
+        path = Path(project) / name
+        digest.update(name.encode())
+        digest.update(path.read_bytes() if path.is_file() else b'')
+    return digest.hexdigest()
 
 
 def schema_revision(schema: dict[str, Any]) -> str:
@@ -39,6 +49,8 @@ def load_preview_cache(project: Path, schema: dict[str, Any]) -> dict[str, dict[
         return {}
     if payload.get("schema_revision") != schema_revision(schema):
         return {}
+    if payload.get('source_revision') != source_revision(project):
+        return {}
     items = payload.get("items")
     if not isinstance(items, dict):
         return {}
@@ -54,6 +66,7 @@ def write_preview_cache(project: Path, schema: dict[str, Any], key: str, row: di
         {
             "version": PREVIEW_CACHE_VERSION,
             "schema_revision": schema_revision(schema),
+            "source_revision": source_revision(project),
             "items": items,
         },
     )
@@ -73,6 +86,8 @@ def project_preview_projection(project: Path, index: int) -> dict[str, Any]:
     row = _formal_row(project, paper, index)
     if row is None:
         row = load_preview_cache(project, schema).get(key)
+        if row is not None and not _same_paper(row, paper):
+            row = None
 
     status = "missing"
     error = ""
@@ -148,6 +163,7 @@ def run_project_preview(
     if not schema.get("fields"):
         raise ValueError("extraction schema is required for preview")
     revision = schema_revision(schema)
+    source_version = source_revision(project)
     prompt = draft_extraction_prompt(project, schema)
     pdf_folder = project / "pdfs"
     row = ExtractionAgent(
@@ -165,21 +181,45 @@ def run_project_preview(
     current_schema = load_schema_draft(project)
     if schema_revision(current_schema) != revision:
         raise ValueError("extraction schema changed while preview was running")
+    if source_revision(project) != source_version:
+        raise ValueError("extraction source changed while preview was running")
     write_preview_cache(project, schema, paper_key(papers[index], index), row)
     return {"status": "preview_ready", "paper_index": index, "total": len(papers)}
 
 
+def _same_paper(row, paper):
+    source = str(paper.get('source') or '').strip().casefold()
+    row_source = str(row.get('source') or '').strip().casefold()
+    if source not in {'', 'unknown'} and row_source not in {'', 'unknown'} and source != row_source:
+        return False
+    identities = lambda r: {str(r.get(k) or '').strip().casefold() for k in ('paper_id','id','doi')} - {'', 'unknown'}
+    wanted, actual = identities(paper), identities(row)
+    if wanted and actual:
+        return bool(wanted & actual)
+    title, row_title = str(paper.get('title') or '').strip(), str(row.get('title') or '').strip()
+    return not row_title or title == row_title
+
+
 def _formal_row(project: Path, paper: dict[str, Any], index: int) -> dict[str, Any] | None:
+    ledger = read_json(project / 'workflow_state.json', {})
+    stage = (ledger.get('stages') or {}).get('extraction') or {}
+    if stage.get('stale') or stage.get('status') in {'failed', 'running'}:
+        return None
     rows = read_jsonl(project / "extraction" / "extraction_results.jsonl")
     key = paper_key(paper, index)
     title = str(paper.get("title") or "").strip()
+    matches = []
     for row in rows:
         identities = {str(row.get(name) or "").strip() for name in ("paper_id", "id", "doi")}
-        if key in identities or (title and str(row.get("title") or "").strip() == title):
-            return row
-    if index < len(rows):
+        if _same_paper(row, paper) and (key in identities or (title and str(row.get("title") or "").strip() == title)):
+            matches.append(row)
+    if matches:
+        return matches[0] if len(matches) == 1 else None
+    if not paper.get("pdf_identity_required") and index < len(rows):
         row_number = rows[index].get("row_number")
-        if row_number in (None, index + 1):
+        legacy = rows[index]
+        has_identity = any(str(legacy.get(k) or '').strip() not in {'', 'unknown'} for k in ('paper_id','id','doi','title'))
+        if not has_identity and _same_paper(legacy, paper) and row_number in (None, index + 1):
             return rows[index]
     return None
 

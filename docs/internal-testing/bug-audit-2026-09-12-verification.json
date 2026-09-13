@@ -1,0 +1,59 @@
+{
+  "verified_at": "2026-09-13T01:44:35.032538+00:00",
+  "full_suite": {
+    "command": ".venv/bin/python -m unittest discover -s tests",
+    "passed": true,
+    "tests": 842,
+    "seconds": 76.68,
+    "log": "/tmp/rp-bug-audit-final-full.log"
+  },
+  "new_regression_tests": 16,
+  "fixed_issue_groups": 15,
+  "static_checks": [
+    "git diff --check",
+    "node --check frontend/app.js",
+    "node --check frontend/review.js",
+    "python3 -m compileall -q agents reviewpilot_core searchers web_app.py"
+  ],
+  "browser": {
+    "environment": "isolated localhost:8769 with temporary fixtures",
+    "passed": [
+      "skip then finalize then reload",
+      "remove quoted query group and reload draft",
+      "help open/close",
+      "390x844 history toggle and switch project",
+      "protected example help and navigation"
+    ],
+    "console_errors": [],
+    "cleanup": "tab closed, viewport reset, server stopped"
+  },
+  "limits": [
+    "No comprehensive live scholarly API/model quality/institutional PDF verification",
+    "No production deployment or historical data repair"
+  ],
+  "sha256": {
+    "agents/extraction_agent.py": "f222321dd2cd8d0b7154dcba969a1e646c746a80a860054cf48feb6db95e6a5d",
+    "agents/prompt_agent.py": "456d27c2e6b274bb77f07b3e4b9573bff9a25fba2d14dcdad692e8676ff2670a",
+    "frontend/app.js": "7378559702c6a09e16305d521a8a5c678d923ed63ec7e837ed1ffd172e64ea17",
+    "frontend/review.js": "c0e00d678f875fdcdfac501728dabf37b893e22f81579e082401e4f12b445001",
+    "web_app.py": "eb4c596f864036e72506e81d75963e4dc3daf64625e69808705536ba1f82fd1c",
+    "reviewpilot_core/record_review.py": "a410fae2e74cc3680d11c98032a5f7702cfe5eb0bfce6830134b98f1c9a731e7",
+    "reviewpilot_core/workflow_decisions.py": "b9ef106fc1fc4dd67e41f3073def34a65292e984a9318599d328d32fb76fd87a",
+    "reviewpilot_core/extraction_schema.py": "0884eb157787c210878fed7d26b24a3d79059112aec44f88503e636f7073e913",
+    "reviewpilot_core/extraction_preview.py": "6f7343408d8edeac0d72de80b3aaa48ed71cc5483554b41e37b7979f33c61734",
+    "reviewpilot_core/field_values.py": "988bd7dbfa68d65c9f2e05d3b5d82f60392782adda89394e35f2a209ea415cbf",
+    "reviewpilot_core/publication_dates.py": "f529aa77928ec742706ad8e6fabe3c51888590c146934b2970fc58e391d5a457",
+    "reviewpilot_core/query_syntax.py": "b9e43c7996077724e05d0a6c36cbc2766be1106051d6e650f87e14e36aae3314",
+    "tests/test_bug_audit.py": "d64d807897ca4e6dbbb2f2674fe42b936cd8b11a93badd2d2a7451500d22cabe",
+    "tests/test_frontend_contract.py": "a91218bd6ff78ac312c4228e1cc21baf1ad311b51c728a73d330288c17aadd15",
+    "docs/internal-testing/bug-audit-2026-09-12.md": "85a54ce3c40ad249af8629ce81f62ec3f8f465794101f402fd1c9a8628a0dabc"
+  },
+  "log_sha256": {
+    "/tmp/rp-bug-audit-baseline.log": "b818514f3beebb56a031e03c1533ff56a03c3b0836fddc3417630aa7771cce8c",
+    "/tmp/rp-bug-audit-reproductions.log": "deef023b63addc219dc4dfd7a6218799e297bfb13e52a76b7a79a4fe59ea658d",
+    "/tmp/rp-bug-audit-reproductions-extra.log": "f23e538d4441c8b66152f332b1068ff41751bdcd448b98676034176a42297969",
+    "/tmp/rp-bug-audit-preview-reproductions.log": "13a8a131daab66346f758286d75ba85f61cdc059633af100713b6d89dce7f7b6",
+    "/tmp/rp-bug-audit-legacy.log": "6959aa4b20eeebcbcce52fd43941441d313dd699ce63847632b2b82b4fc7c080",
+    "/tmp/rp-bug-audit-final-full.log": "025b47713215bf944a2d7a23adf4baf89194f7d43c7d43c0842ac058962725b1"
+  }
+}

@@ -17,6 +17,9 @@ data/
 writing/
 agent_skill/
 
+# Temporary downloads, manuscript renders, and local scratch artifacts
+/tmp/
+
 # Local handoff snapshot from the original project owner.
 # Kept on this machine for historical comparison only; do not commit or push.
 ReviewPilot_prototype/

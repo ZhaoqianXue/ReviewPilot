@@ -1,0 +1,137 @@
+{
+  "scope": "deterministic local probes, no network/model calls; false means a confirmed gap, not an ordinary passing regression suite",
+  "results": [
+    {
+      "id": "G02-date-precision",
+      "expected": "Exclude early; flag unknown for review",
+      "observed": [
+        "within",
+        "unknown"
+      ],
+      "passed": true
+    },
+    {
+      "id": "G02-open-end",
+      "expected": "Blank end must enforce current day",
+      "observed": [],
+      "passed": true
+    },
+    {
+      "id": "G07-full-results",
+      "expected": "All 65 rows or explicit pagination metadata",
+      "observed": {
+        "rows": 65,
+        "keys": [
+          "columns",
+          "rows",
+          "total"
+        ]
+      },
+      "passed": true
+    },
+    {
+      "id": "G08-access-provenance",
+      "expected": "Unknown provenance must not be asserted as open access",
+      "observed": {
+        "retrieved": 2,
+        "total": 2,
+        "openAccess": 0,
+        "viaInstitution": 0,
+        "unknownAccess": 2,
+        "unavailable": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "G09-schema-types",
+      "expected": "Reject nonnumeric value for integer field",
+      "observed": {
+        "rejected": "Field participants must match type integer."
+      },
+      "passed": true
+    },
+    {
+      "id": "G03-all-removals",
+      "expected": "Every removed record has a inspectable reason and identity",
+      "observed": {
+        "removed_counts": {
+          "by_date": 1,
+          "by_exact_dedup": 1,
+          "by_similarity": 0,
+          "by_relevance": 1
+        },
+        "excluded_ids": [
+          "animal"
+        ],
+        "removed_ledger": [
+          {
+            "id": "old",
+            "title": "Historical report",
+            "year": 2010,
+            "collection_record_id": "record-3",
+            "date_assessment": {
+              "excluded": true,
+              "needs_review": false,
+              "precision": "year",
+              "earliest": "2010-01-01",
+              "latest": "2010-12-31",
+              "bounds": {
+                "start": "2020-01-01",
+                "end": "2026-09-12"
+              },
+              "reason": "Publication date is outside the inclusive review range."
+            },
+            "removal": {
+              "kind": "date",
+              "reason": "Publication date is outside the inclusive review range.",
+              "representative": null,
+              "duplicate_group": null
+            }
+          },
+          {
+            "id": "dup",
+            "title": "Clinical trial alpha",
+            "abstract": "same trial",
+            "year": 2025,
+            "collection_record_id": "record-2",
+            "date_assessment": {
+              "excluded": false,
+              "needs_review": false,
+              "precision": "year",
+              "earliest": "2025-01-01",
+              "latest": "2025-12-31",
+              "bounds": {
+                "start": "2020-01-01",
+                "end": "2026-09-12"
+              },
+              "reason": "Publication date falls within the review range."
+            },
+            "removal": {
+              "kind": "exact_duplicate",
+              "reason": "Identical normalized title.",
+              "representative": {
+                "collection_record_id": "record-1",
+                "id": "a",
+                "doi": null,
+                "source": null,
+                "title": "Clinical trial alpha"
+              },
+              "duplicate_group": "record-1"
+            }
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "id": "G01-keyword-save",
+      "expected": "Changed keyword must be transmitted or update effective query",
+      "observed": {
+        "query": "(clinical) AND (AI) AND (auditmarker)",
+        "keyword_field": null,
+        "concept_field": null
+      },
+      "passed": true
+    }
+  ]
+}

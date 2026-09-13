@@ -128,20 +128,20 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('data-ui="research-topic-input"', source)
         self.assertIn("Describe your research topic...", source)
 
-    def test_sidebar_uses_historys_and_keeps_new_review_in_history(self):
+    def test_sidebar_uses_real_history_and_protected_examples(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         project_nav_item = source[source.index("function projectNavItem") : source.index("function workspaceHeader")]
         click_router = source[source.index("root.addEventListener('click'") : source.index("root.addEventListener('focusin'")]
         restore_snapshot = source[source.index("function restoreWorkspaceSnapshot") : source.index("function shouldRestoreSnapshotDataForRoute")]
 
-        self.assertIn("label: 'Historys'", source)
+        self.assertIn("!item.isNewProject", source)
         self.assertIn('data-ui="history-label"', source)
         self.assertNotIn('data-ui="history-label" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase', source)
         self.assertNotIn(">PROJECTS</div>", source)
         self.assertIn("historyGroupsForView(D.history)", source)
         self.assertIn('? `data-act="new-project"`', project_nav_item)
         self.assertIn("h.isNewProject", project_nav_item)
-        self.assertIn("title: 'Untitled review'", source)
+        self.assertIn("h.id && !h.protected", source)
         self.assertIn("const icon = h.active ? 'ph-fill ph-chat-circle' : 'ph ph-chat-circle';", project_nav_item)
         self.assertIn('data-act="history-quick-start"', project_nav_item)
         self.assertIn("h.starterTopic", project_nav_item)
@@ -237,7 +237,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("root.addEventListener('focusin'", source)
         self.assertIn("[data-ui=\"research-topic-input\"]", focus_router)
         self.assertIn("state.quickStartOpen = true", focus_router)
-        self.assertIn("setTimeout(paint, 0)", focus_router)
+        self.assertNotIn("setTimeout(paint, 0)", focus_router)
+        self.assertIn("area.insertAdjacentHTML('afterbegin', chatQuickStartPopover())", focus_router)
         self.assertIn("act === 'chat-quick-start'", click_router)
         self.assertIn("const topic = t.getAttribute('data-topic') || '';", click_router)
         self.assertIn("const pending = handleChatSubmit(topic);", click_router)
@@ -332,11 +333,12 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("const isWorkspaceRoute = path === '' || path === '/' || path === '/workspace';", route_guard)
         self.assertIn("if (isWorkspaceRoute) return true;", route_guard)
         self.assertIn("return D.isNewProject && !!snapshot.data?.isNewProject;", route_guard)
-        self.assertIn("state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);", restore)
+        self.assertIn("state.step = (shouldRestoreSnapshotData || sameProject) && savedStepAvailable ? ui.step : initialStep(D);", restore)
+        self.assertIn("D.steps.findIndex(s => s.key === ui.step) <= workflowProgressIndexForSteps(D.steps)", restore)
         self.assertIn("state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';", restore)
         self.assertIn("snapshot.data?.setupRevision === D.setupRevision", restore)
-        self.assertIn("if ((shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft)", restore)
-        self.assertIn("mergedDraft.keywords = baseDraft.keywords;", restore)
+        self.assertIn("if (!D.searchReuseDraft && (shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft)", restore)
+        self.assertIn("mergedDraft.keywords = queryClauses(mergedDraft.search_terms);", restore)
 
     def test_refresh_migrates_stale_four_step_snapshot_to_current_five_step_workflow(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -373,13 +375,13 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("D = nextData;", source)
         self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", source)
 
-    def test_new_review_uses_fixed_demo_history_template(self):
+    def test_new_review_preserves_live_history(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         new_project_click = source[source.index("else if (act === 'new-project')") : source.index("else if (act === 'project')")]
         new_project_data = source[source.index("function newProjectDataWithCurrentHistory") : source.index("function sourceChecklist")]
 
         self.assertIn("function newProjectDataWithCurrentHistory()", source)
-        self.assertIn("return normalizeData(JSON.parse(JSON.stringify(NEW_PROJECT_TEMPLATE)));", new_project_data)
+        self.assertIn("history: D.history.map", new_project_data)
         self.assertNotIn("function inactiveProjectItemsFromHistory", source)
         self.assertNotIn("if (!D.isNewProject && D.project.id)", source)
         self.assertIn("setData(newProjectDataWithCurrentHistory(), true);", new_project_click)
@@ -638,7 +640,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("schemaJsonReturnFocus", source)
         self.assertIn("jsonTrigger.focus", source)
         self.assertNotIn('data-action="edit-schema"', extraction_ui + assistant)
-        self.assertNotIn('data-action="run-extraction"', extraction_ui + assistant)
+        self.assertIn('data-action="run-extraction"', extraction_ui)
+        self.assertIn("Retry extraction with this schema", extraction_ui)
 
     def test_same_project_chat_and_actions_preserve_visible_step_and_tab(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -746,7 +749,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("function workspaceResponsiveStyle()", source)
         self.assertIn("@media (max-width: 760px)", source)
         self.assertIn('class="rp-shell"', source)
-        self.assertIn('class="rp-sidebar"', source)
+        self.assertIn('class="rp-sidebar ${state.sidebarOpen', source)
         self.assertIn('class="rp-main"', source)
         self.assertIn('class="rp-assistant"', source)
         self.assertIn(".rp-sidebar { display:none !important; }", source)

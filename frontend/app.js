@@ -35,6 +35,11 @@ function createProjectNavigationOwnership(initialProjectId = '') {
   let projectId = initialProjectId;
   let generation = 0;
   return {
+    begin(nextProjectId) {
+      projectId = nextProjectId;
+      generation += 1;
+      return { projectId, generation };
+    },
     adoptProject(nextProjectId) {
       if (nextProjectId === projectId) return;
       projectId = nextProjectId;
@@ -162,6 +167,7 @@ function workflowProgressIndexForSteps(steps) {
 const WORKFLOW_ACTION_META = Object.freeze({
   collect: { step: 'search', label: 'Paper collection', advances: true },
   screen: { step: 'screening', label: 'Paper screening', advances: true },
+  'edit-criteria': { step: 'screening', label: 'Opening criteria draft', advances: false },
   'save-criteria': { step: 'screening', label: 'Saving criteria', advances: false },
   'finalize-criteria': { step: 'screening', label: 'Finalizing criteria', advances: false },
   'download-pdfs': { step: 'retrieval', label: 'Full-text retrieval', advances: true },
@@ -277,6 +283,13 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   const state = {
     step: initialStep(D),
     tab: 'fields',
+    sessionMenu: '',
+    sessionDialog: null,
+    sessionError: '',
+    sessionBusy: false,
+    historySearch: '',
+    navigationPending: '',
+    chatDrafts: {},
     dialog: '',
     actionError: '',
     activeProjectId: D.project.id || '',
@@ -297,16 +310,20 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     previewIndex: clampPreviewIndex(D.activeTask?.paper_index ?? D.extractionPreview.index, D.extractionPreview.total),
     schemaJsonOpen: false,
     schemaJsonReturnFocus: false,
-    memoryEnabled: true,
+    reuseOptions: [],
+    reusePreview: null,
+    reuseTarget: '',
     memoryPending: false,
     memoryError: '',
   };
+  let chatSubmission = 0;
   let actionTicker = null;
   let transitionNoticeTimer = null;
   let restoredProjectStateId = '';
   let activeTaskMonitor = { key: '', generation: 0 };
   const activeTaskPolls = createTaskPollRegistry(waitForTask);
   let paintWorkspace = () => {};
+  const reviewUI = window.ReviewWorkbench.create({getData:()=>D, paint:()=>paintWorkspace(), setData:(data)=>setData(data,false,{preserveView:true}), navigate:selectProject, postAction, busy:()=>!!state.actionPending || !!state.chatPending || !!state.decisionPending || !!state.navigationPending});
 
   restoreWorkspaceSnapshot();
   projectNavigation.adoptProject(D.project.id || '');
@@ -354,6 +371,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function restoreWorkspaceSnapshot() {
     const snapshot = readWorkspaceSnapshot();
     if (!snapshot) return;
+    const cachedId = snapshot.data?.project?.id;
+    if (cachedId && !D.history.some(group => group.items.some(item => item.id === cachedId))) return;
     const snapshotProjectId = (snapshot.data && snapshot.data.project && snapshot.data.project.id) || snapshot.ui?.activeProjectId || '';
     const sameServerProject = !!D.project.id && snapshotProjectId === D.project.id;
     const shouldRestoreSnapshotData = shouldRestoreSnapshotDataForRoute(snapshot) && !sameServerProject;
@@ -370,12 +389,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     MAX = maxPlatformValue(D.platforms);
 
     const ui = snapshot.ui || {};
+    state.chatDrafts = ui.chatDrafts || {};
     const sameProject = !!D.project.id && snapshotProjectId === D.project.id;
     const sameSetupRevision = sameProject
       && !!D.setupRevision
       && snapshot.data?.setupRevision === D.setupRevision;
     const stepKeys = new Set(D.steps.map((s) => s.key));
-    state.step = shouldRestoreSnapshotData && stepKeys.has(ui.step) ? ui.step : initialStep(D);
+    const savedStepAvailable = stepKeys.has(ui.step)
+      && D.steps.findIndex(s => s.key === ui.step) <= workflowProgressIndexForSteps(D.steps);
+    state.step = (shouldRestoreSnapshotData || sameProject) && savedStepAvailable ? ui.step : initialStep(D);
     state.tab = (shouldRestoreSnapshotData || sameProject) && ui.tab === 'preview' ? 'preview' : 'fields';
     state.previewIndex = (shouldRestoreSnapshotData || sameProject)
       ? clampPreviewIndex(ui.previewIndex, D.extractionPreview.total)
@@ -386,9 +408,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.actionError = '';
     state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';
     const baseDraft = setupDraftFromData(D);
-    if ((shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft) {
+    if (!D.searchReuseDraft && (shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft) {
       const mergedDraft = { ...baseDraft, ...ui.setupDraft };
-      mergedDraft.keywords = baseDraft.keywords;
+      mergedDraft.keywords = queryClauses(mergedDraft.search_terms);
       mergedDraft.source_limits = normalizeSourceLimits(
         mergedDraft.source_limits || baseDraft.source_limits,
         mergedDraft.platforms || baseDraft.platforms,
@@ -399,9 +421,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       state.setupDraft = baseDraft;
     }
     state.keywordDraft = '';
-    state.catDraft = (shouldRestoreSnapshotData || sameProject) && ui.catDraft
-      ? { ...categorizationDraftFromData(D), ...ui.catDraft }
-      : categorizationDraftFromData(D);
+    // Server-confirmed configuration wins over an old browser confirmation flag.
+    state.catDraft = categorizationDraftFromData(D);
     state.chatInputFocus = false;
   }
 
@@ -425,6 +446,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         savedAt: Date.now(),
         data: snapshotData(D),
         ui: {
+          chatDrafts: state.chatDrafts,
           step: state.step,
           tab: state.tab,
           previewIndex: state.previewIndex,
@@ -470,6 +492,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function normalizeData(data) {
     return {
+      readOnlyExample: !!data.readOnlyExample,
+      exampleOrigin: data.exampleOrigin || null,
+      reviewWorkbench: data.reviewWorkbench || {screening: [], extraction: [], changes: []},
       isNewProject: !!data.isNewProject,
       activeTask: data.activeTask || null,
       project: data.project || { id: '', title: 'ReviewPilot', status: 'No project', model: '', date: '' },
@@ -496,6 +521,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ctxLabels: data.ctxLabels || {},
       history: data.history || [],
       screeningMetrics: data.screeningMetrics || { identified: 0, afterDedup: 0, included: 0 },
+      searchReuseDraft: data.searchReuseDraft || null,
+      confirmedDecisions: data.confirmedDecisions || {},
       screeningCriteria: data.screeningCriteria || { inclusion: [], exclusion: [], status: 'draft', revision: '', prompt: '' },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
       retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
@@ -532,8 +559,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       field: workflow.selectedField || workflow.recommendedField || (workflow.fieldNames && workflow.fieldNames[0]) || '',
       mode: workflow.mode || 'multiple',
       categoriesText: categories.join('\n'),
-      confirmed: !!workflow.done && categories.length > 0,
-      skipped: false,
+      confirmed: !!workflow.decisions?.confirmed || !workflow.decisions?.editing && !!workflow.done && categories.length > 0,
+      skipped: !!workflow.decisions?.skipped,
+      finalized: !!workflow.decisions?.finalized,
     };
   }
 
@@ -559,10 +587,46 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   }
 
+  // Keep OR groups, nested expressions and quoted phrases intact. Chips are
+  // executable top-level conjuncts, never descriptive labels detached from a query.
+  function queryClauses(query) {
+    const text = unescapePayloadValue(query || '').trim();
+    const parts = []; let depth = 0, quote = '', start = 0;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quote) { if (ch === quote && text[i-1] !== '\\') quote = ''; continue; }
+      if (ch === "'" && i > 0 && /[\p{L}\p{N}]/u.test(text[i-1])) continue;
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      if (ch === '(') depth++;
+      if (ch === ')') depth--;
+      if (depth === 0 && /^\s+OR\s+/i.test(text.slice(i))) return [esc(text)];
+      if (depth === 0 && /^\s+AND\s+/i.test(text.slice(i))) {
+        const match = text.slice(i).match(/^\s+AND\s+/i)[0];
+        parts.push(text.slice(start,i).trim()); i += match.length-1; start = i+1;
+      }
+    }
+    parts.push(text.slice(start).trim());
+    return parts.filter(Boolean).map(esc);
+  }
+
+  function editQueryClauses(clauses) {
+    if (!clauses.length) { state.actionError = 'Keep at least one query group, or replace the query in search setup.'; return; }
+    state.setupDraft.keywords = clauses;
+    state.setupDraft.search_terms = clauses.map(c => `(${unescapePayloadValue(c)})`).join(' AND ');
+    state.setupDraft.derive_search_terms = false;
+  }
+
+  function removeQueryClause(keyword) {
+    editQueryClauses(state.setupDraft.keywords.filter(kw => unescapePayloadValue(kw) !== keyword));
+  }
+
   function setupDraftFromData(data) {
+    if (data.searchReuseDraft) data = {...data, keywords: data.searchReuseDraft.keywords || [],
+      setup: {...data.setup, ...data.searchReuseDraft, project_name: data.setup.project_name, model: data.setup.model, derive_search_terms: false}};
     const material = materialSetupValues(data);
     const sourceNames = data.platforms.map((p) => platformKey(p[0]));
-    const setup = data.setup || {};
+    const setup = Object.fromEntries(Object.entries(data.setup || {}).map(([key, value]) =>
+      [key, typeof value === 'string' ? unescapePayloadValue(value) : value]));
     const selectedPlatforms = (setup.platforms && setup.platforms.length) ? setup.platforms : (sourceNames.length ? sourceNames : ['pubmed', 'arxiv', 'openalex']);
     const fallbackMaxResults = String(setup.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM);
     return {
@@ -578,7 +642,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       date_end: setup.date_end || '',
       model: material.model || data.project.model || '',
       derive_search_terms: material.derive_search_terms,
-      keywords: data.keywords.length ? data.keywords.slice(0, 8) : [],
+      keywords: queryClauses(setup.search_terms || data.keywords[0] || ''),
     };
   }
 
@@ -673,6 +737,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     syncActionState(D.activeTask);
     monitorActiveTask();
     const sameProject = !!previousProjectId && previousProjectId === D.project.id;
+    if (!sameProject && state.dialog === 'memory') { state.dialog = ''; state.reusePreview = null; }
     if (!sameProject) {
       state.actionOriginStep = '';
       state.transitionNotice = null;
@@ -715,7 +780,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   async function fetchProjectState(projectId) {
     const res = await fetch(`/projects/${encodeURIComponent(projectId)}/state`);
-    if (!res.ok) throw new Error(`State refresh failed: ${res.status}`);
+    if (!res.ok) { const error = new Error(`Could not load conversation (${res.status}).`); error.status = res.status; throw error; }
     return res.json();
   }
 
@@ -751,8 +816,93 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     paintWorkspace();
   }
 
-  async function selectProject(projectId) {
-    setData(await fetchProjectState(projectId));
+  function startNavigation(projectId) {
+    reviewUI.reset();
+    state.sidebarOpen = false;
+    chatSubmission += 1;
+    state.preservedChatMessages = [];
+    state.chatPending = false;
+    state.criteriaDraft = null;
+    state.decisionPending = false;
+    state.sessionMenu = '';
+    state.sessionDialog = null;
+    state.dialog = '';
+    state.schemaJsonOpen = false;
+    state.quickStartOpen = false;
+    activeTaskMonitor = { key: '', generation: activeTaskMonitor.generation + 1 };
+    return projectNavigation.begin(projectId);
+  }
+
+  function sessionUrl(projectId, replace = false) {
+    const url = projectId ? `/projects/${encodeURIComponent(projectId)}` : '/projects/new';
+    if (window.location.pathname !== url) window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
+  }
+
+  async function refreshHistory() {
+    const res = await fetch('/sessions');
+    if (!res.ok) throw new Error('Could not refresh conversation history.');
+    const body = await res.json();
+    D.history = escapeData(body.history).map(group => ({...group, items: group.items.map(item => ({...item, active: !!item.id && item.id === D.project.id}))}));
+  }
+
+  async function selectProject(projectId, pushUrl = true) {
+    const ownership = startNavigation(projectId);
+    state.navigationPending = projectId;
+    paintWorkspace();
+    try {
+      const data = await fetchProjectState(projectId);
+      if (!projectNavigation.owns(ownership)) return;
+      setData(data);
+      if (pushUrl) sessionUrl(projectId);
+    } catch (err) {
+      if (projectNavigation.owns(ownership)) {
+        state.navigationPending = '';
+        projectNavigation.adoptProject(D.project.id || '');
+        if (err.status === 404) {
+          startNavigation('');
+          setData(newProjectDataWithCurrentHistory(), true);
+          sessionUrl('', true);
+          await refreshHistory();
+          state.actionError = 'This conversation is no longer available.';
+        } else state.actionError = err.message || String(err);
+        monitorActiveTask();
+      }
+    } finally {
+      if (projectNavigation.owns(ownership)) state.navigationPending = '';
+      paintWorkspace();
+    }
+  }
+
+  async function saveSessionChange(title) {
+    const dialog = state.sessionDialog;
+    if (!dialog || state.sessionBusy) return;
+    state.sessionBusy = true;
+    state.sessionError = '';
+    paintWorkspace();
+    try {
+      const res = await fetch(`/projects/${encodeURIComponent(dialog.id)}`, {
+        method: dialog.kind === 'delete' ? 'DELETE' : 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        ...(dialog.kind === 'rename' ? {body: JSON.stringify({title})} : {}),
+      });
+      const rawBody = await res.text();
+      let body;
+      try { body = JSON.parse(rawBody); } catch (_) { body = {detail: rawBody}; }
+      if (!res.ok) throw new Error(body.detail || 'Could not update conversation.');
+      if (dialog.kind === 'delete') {
+        delete state.chatDrafts[dialog.id];
+        if (D.project.id === dialog.id) {
+          startNavigation('');
+          setData(newProjectDataWithCurrentHistory(), true);
+          sessionUrl('', true);
+          state.historySearch = '';
+          state.chatInputFocus = true;
+        }
+      } else if (D.project.id === dialog.id) D.project.title = esc(title.trim());
+      D.history = escapeData(body.history).map(group => ({...group, items: group.items.map(item => ({...item, active: !!item.id && item.id === D.project.id}))}));
+      state.sessionDialog = null;
+    } catch (err) { state.sessionError = err.message || String(err); }
+    finally { state.sessionBusy = false; paintWorkspace(); }
   }
 
   function monitorActiveTask() {
@@ -915,10 +1065,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       source_limits: sourceLimits,
       max_results: maxResultsFromSourceLimits(sourceLimits, state.setupDraft.max_results),
       derive_search_terms: true,
+      interpret_chat_settings: true,
     }));
   }
 
   async function createProjectFromPayload(payload) {
+    const ownership = projectNavigation.capture(D.project.id || '');
     const res = await fetch('/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -929,7 +1081,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       throw new Error(body.detail || `Project creation failed: ${res.status}`);
     }
     const project = await res.json();
-    setData(await fetchProjectState(project.id));
+    const data = await fetchProjectState(project.id);
+    if (!projectNavigation.owns(ownership)) { await refreshHistory(); return; }
+    setData(data);
+    sessionUrl(project.id);
   }
 
   async function sendProjectChat(message) {
@@ -946,31 +1101,43 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       throw new Error(body.detail || `Project chat failed: ${res.status}`);
     }
     const payload = await res.json();
+    const data = payload.state || await fetchProjectState(projectId);
     if (!projectNavigation.owns(ownership)) return;
-    setData(payload.state || await fetchProjectState(projectId), false, { preserveView: true });
+    setData(data, false, { preserveView: true });
   }
 
-  async function loadMemorySetting() {
-    const res = await fetch('/memory/settings');
-    if (!res.ok) throw new Error('Memory is unavailable.');
-    const payload = await res.json();
-    state.memoryEnabled = payload.cross_project_memory_enabled === true;
+  async function loadReuseOptions() {
+    const projectId = D.project.id;
+    state.reuseTarget = projectId;
+    state.reuseOptions = [];
+    state.reusePreview = null;
+    if (!projectId) return;
+    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/configuration-reuse`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || 'Could not load project configurations.');
+    if (D.project.id === projectId && state.reuseTarget === projectId) state.reuseOptions = body.configurations || [];
   }
 
-  async function updateMemorySetting(enabled) {
-    const res = await fetch('/memory/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cross_project_memory_enabled: enabled }),
+  async function reuseConfiguration(operation, selection) {
+    const projectId = state.reuseTarget;
+    if (!projectId || projectId !== D.project.id) throw new Error('Open the current project configuration picker again.');
+    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/configuration-reuse/${operation}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(selection),
     });
-    if (!res.ok) throw new Error('Could not update Memory.');
-    const payload = await res.json();
-    state.memoryEnabled = payload.cross_project_memory_enabled === true;
-  }
-
-  async function clearMemory() {
-    const res = await fetch('/memory', { method: 'DELETE' });
-    if (!res.ok) throw new Error('Could not clear Memory.');
+    const body = await res.json();
+    if (!res.ok) {
+      if (res.status === 409) state.reusePreview = null;
+      throw new Error(body.detail || 'Configuration reuse failed.');
+    }
+    if (D.project.id !== projectId || state.reuseTarget !== projectId) return;
+    if (operation === 'preview') { state.reusePreview = body; return; }
+    const updated = await fetchProjectState(projectId);
+    if (D.project.id !== projectId) return;
+    setData(updated, false, {preserveView: true});
+    state.step = body.step;
+    state.dialog = body.step === 'search' ? 'setup' : '';
+    state.reusePreview = null;
+    showTransitionNotice(projectId, 'Configuration imported as a draft. Review and confirm it before use.');
   }
 
   async function updateProjectSetup(form) {
@@ -1029,7 +1196,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   async function handleChatSubmit(text) {
     const message = String(text || '').trim();
-    if (!message) return;
+    if (!message || state.chatPending || state.navigationPending || D.readOnlyExample) return;
+    const submission = ++chatSubmission;
+    state.chatDrafts[D.project.id || ''] = '';
     appendMessage('u', message);
     state.preservedChatMessages = D.messages.slice();
     state.chatPending = true;
@@ -1039,15 +1208,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         return;
       }
       await sendProjectChat(message);
+    } catch (err) {
+      if (submission === chatSubmission) throw err;
     } finally {
-      state.chatPending = false;
-      state.preservedChatMessages = [];
+      if (submission === chatSubmission) {
+        state.chatPending = false;
+        state.preservedChatMessages = [];
+      }
     }
   }
 
   function projectNameFromTopic(topic) {
     const words = String(topic || '')
-      .replace(/[^\w\s-]/g, ' ')
+      .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
       .replace(/\b(i|we|want|to|do|a|an|the|survey|review|study|of|for|in|terms|project|give|me)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -1109,7 +1282,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       selected: retrySelectedSet.has(item.retryId),
     }));
     const retryRecoveryVisible = retryRecovery.canRetry || retryRecoveryRunning;
-    const retrievalHasTerminalOutput = ['completed', 'partial', 'failed'].includes(
+    const retrievalHasTerminalOutput = !D.stageState.retrieval?.stale && ['completed', 'partial', 'failed'].includes(
       D.stageState.retrieval?.status
     );
     const canvasActionElapsedLabel = canvasActionPending ? workflowElapsedLabel : '';
@@ -1213,7 +1386,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       showSetupDialog: state.dialog === 'setup',
       showKeywordDialog: state.dialog === 'keyword',
       showMemoryDialog: state.dialog === 'memory',
-      memoryEnabled: state.memoryEnabled,
+      reuseOptions: state.reuseOptions,
+      reusePreview: state.reusePreview,
+      confirmedDecisions: D.confirmedDecisions,
       memoryPending: state.memoryPending,
       memoryError: state.memoryError,
     };
@@ -1306,19 +1481,15 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   const buttonStyle = 'border:1px solid #c8d8e8;background:#fffefc;color:#1a365d;border-radius:9px;padding:8px 11px;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;';
 
   function historyGroupsForView(history) {
-    const groups = (history.length ? history : [{ label: 'Historys', items: [] }]).map((gr) => ({
-      ...gr,
-      label: gr.label === 'Projects' ? 'Historys' : gr.label,
-      items: gr.items.map((it) => ({ ...it, notActive: !it.active })),
-    }));
-    const first = groups[0] || { label: 'Historys', items: [] };
-    if (first.items.some((item) => item.isNewProject)) return groups;
-    const draft = { id: '', title: 'Untitled review', active: D.isNewProject, notActive: !D.isNewProject, isNewProject: true };
-    return [{ ...first, label: 'Historys', items: [draft, ...first.items] }, ...groups.slice(1)];
+    return history.map(group => ({...group, items: group.items
+      .filter(item => !item.isNewProject && (item.protected || !state.historySearch || unescapePayloadValue(item.title).toLocaleLowerCase().includes(state.historySearch.toLocaleLowerCase())))
+      .map(item => ({...item, active: state.navigationPending ? item.id === state.navigationPending : item.active}))}));
   }
 
   function newProjectDataWithCurrentHistory() {
-    return normalizeData(JSON.parse(JSON.stringify(NEW_PROJECT_TEMPLATE)));
+    state.navigationPending = '';
+    return normalizeData({...JSON.parse(JSON.stringify(NEW_PROJECT_TEMPLATE)),
+      history: D.history.map(group => ({...group, items: group.items.filter(item => !item.isNewProject).map(item => ({...item, active: false}))}))});
   }
 
   function sourceChecklist(sources, sourceLimits, fallbackMaxResults) {
@@ -1340,7 +1511,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function dateRangeCard(setupDraft) {
-    const start = esc(setupDraft.date_start || '2020-01-01');
+    const start = esc(setupDraft.date_start || '');
     const end = esc(setupDraft.date_end || '');
     return `<div data-ui="date-range-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:11px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
@@ -1355,19 +1526,22 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
             <input data-draft-field="date_end" value="${end}" placeholder="blank=now" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
           </label>
         </div>
-        <div data-ui="date-range-note" style="margin-top:auto;border-top:1px solid #eef0ee;padding-top:8px;font-size:11px;color:#6b746c;line-height:1.35;letter-spacing:-0.01em;">Blank end date uses the current day.</div>
+        <div data-ui="date-range-note" style="margin-top:auto;border-top:1px solid #eef0ee;padding-top:8px;font-size:11px;color:#6b746c;line-height:1.35;letter-spacing:-0.01em;">Blank end date is fixed to today when saved. Incomplete dates are retained for review. Source limits bound coverage; increase limits if the range removes many records.</div>
       </div>`;
   }
 
   function workspaceResponsiveStyle() {
     return `@keyframes rp-thinking-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: .42; } 40% { transform: translateY(-3px); opacity: 1; } } @keyframes rp-action-spin { to { transform: rotate(360deg); } } @keyframes rp-step-spin { to { transform: rotate(360deg); } } @keyframes rp-step-arrive { from { opacity: .35; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } } @keyframes rp-progress-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
 .rp-step-enter { animation:rp-step-arrive .38s ease-out both; }
+.rp-mobile-nav { display:none; }
 @media (prefers-reduced-motion: reduce) { .rp-motion, .rp-step-enter { animation:none !important; } }
 @media (max-width: 760px) {
   body { overflow:auto !important; }
   #app { height:auto !important; min-height:100vh !important; }
   .rp-shell { flex-direction:column !important; height:auto !important; min-height:100vh !important; overflow:visible !important; }
   .rp-sidebar { display:none !important; }
+  .rp-sidebar.rp-sidebar-open { display:flex !important; width:100% !important; flex:0 0 auto !important; height:55vh; border-bottom:1px solid #e5e7eb; }
+  .rp-mobile-nav { display:flex; position:sticky; top:0; z-index:20; align-items:center; justify-content:space-between; padding:10px 12px; background:#f8f9fb; border-bottom:1px solid #e5e7eb; }
   .rp-main { width:100% !important; flex:0 0 auto !important; min-height:58vh !important; }
   .rp-main-scroll { overflow:visible !important; padding:14px 12px !important; }
   .rp-workspace-header > div:first-child { padding:12px 12px 0 !important; }
@@ -1387,10 +1561,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 ${v.showSetupDialog ? setupDialog(v) : ''}
 ${v.showKeywordDialog ? keywordDialog(v) : ''}
 ${v.showMemoryDialog ? memoryDialog(v) : ''}
+${state.dialog === 'help' ? helpDialog() : ''}
 ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
-<style>${workspaceResponsiveStyle()}</style>
-<div class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
-  <aside class="rp-sidebar" style="width:175px;flex:0 0 175px;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
+${state.sessionDialog ? sessionManagementDialog() : ''}
+${reviewUI.dialog()}
+<style>${workspaceResponsiveStyle()}
+.rp-history-row:hover {background:#eef1f6;}
+.rp-history-menu {opacity:0;}
+.rp-history-row:hover .rp-history-menu, .rp-history-row:focus-within .rp-history-menu, .rp-history-menu[aria-expanded="true"] {opacity:1;}
+@media (hover:none) {.rp-history-menu {opacity:1;}}
+</style>
+<div ${state.sessionDialog || reviewUI.isOpen() || state.dialog === 'help' ? 'inert' : ''} class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
+  <div class="rp-mobile-nav"><strong>ReviewPilot</strong><button type="button" data-act="toggle-sidebar" aria-controls="rp-conversations" aria-expanded="${!!state.sidebarOpen}" style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;">${state.sidebarOpen ? 'Close conversations' : 'Conversations'}</button></div>
+  <aside id="rp-conversations" class="rp-sidebar ${state.sidebarOpen ? 'rp-sidebar-open' : ''}" style="width:220px;flex:0 0 220px;background:#f8f9fb;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
     <div style="display:flex;align-items:center;gap:8px;padding:13px 10px 8px 12px;">
       <div title="ReviewPilot · Workspace" style="display:flex;align-items:center;gap:8px;min-width:0;">
         ${logo(22)}
@@ -1400,21 +1583,25 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     <div style="padding:4px 10px 10px;">
       <button data-act="new-project" style="display:flex;align-items:center;justify-content:center;gap:6px;width:100%;background:#fffefc;border:1px solid #d8e2f0;border-radius:10px;padding:9px 8px;font-size:12.5px;font-family:inherit;color:#1a365d;letter-spacing:-0.02em;cursor:pointer;transition:background .15s ease;white-space:nowrap;" data-hover="background:#eef4fb;"><i class="ph ph-plus" style="font-size:14px;flex:0 0 auto;"></i>New Review</button>
     </div>
+      <div style="padding:0 10px 8px;"><input data-ui="history-search" aria-label="Search chats" placeholder="Search chats" value="${esc(state.historySearch)}" style="width:100%;box-sizing:border-box;border:1px solid #e1e5eb;border-radius:9px;background:transparent;padding:8px 10px;font:inherit;font-size:12px;"></div>
       <div class="rp-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:2px 10px 12px;">
       ${v.historyGroups.map((g) => `
         <div data-ui="history-label" style="font-size:10px;letter-spacing:0.04em;color:#9aa39b;padding:11px 8px 5px;">${g.label}</div>
         ${g.items.map((h) => projectNavItem(h)).join('')}
+        ${!g.items.length ? `<div style="padding:10px 8px;color:#89929d;font-size:12px;">${state.historySearch ? 'No matching chats' : 'Your conversations will appear here'}</div>` : ''}
       `).join('')}
     </div>
     <div style="flex:0 0 auto;border-top:1px solid #eef0ee;padding:7px 10px 9px;display:flex;flex-direction:column;gap:1px;">
       <button type="button" data-act="open-memory" style="display:flex;align-items:center;gap:11px;padding:9px 10px;width:100%;border:none;background:none;border-radius:9px;cursor:pointer;font:inherit;font-size:13px;color:#6b746c;transition:background .12s ease;text-align:left;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-gear-six" style="font-size:16px;"></i>Settings</button>
-      <div style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13px;color:#6b746c;transition:background .12s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-question" style="font-size:16px;"></i>Help &amp; support</div>
+      <button type="button" data-act="open-help" style="border:none;background:none;text-align:left;font:inherit;display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13px;color:#6b746c;transition:background .12s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-question" style="font-size:16px;"></i>Help &amp; support</button>
     </div>
   </aside>
 
-  <main class="rp-main" aria-busy="${v.workflowRunning ? 'true' : 'false'}" style="flex:1;min-width:0;display:flex;flex-direction:column;">
+  <main class="rp-main" ${state.navigationPending ? 'inert' : ''} aria-busy="${v.workflowRunning ? 'true' : 'false'}" style="flex:1;min-width:0;display:flex;flex-direction:column;">
+    ${state.navigationPending ? '<div role="status" style="padding:10px 22px;background:#eaf0f7;font-size:13px;">Loading conversation…</div>' : ''}
     ${workspaceHeader(v)}
     <div class="rp-scroll rp-main-scroll" style="flex:1;min-height:0;overflow-y:auto;padding:20px 22px;">
+      ${reviewUI.banner()}
       ${workflowRunningBanner(v)}
       ${transitionNoticeBanner(v)}
       ${actionErrorBanner(v)}
@@ -1443,10 +1630,26 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         ? `data-act="project" data-project="${h.id}"`
         : (h.starterTopic ? `data-act="history-quick-start" data-topic="${h.starterTopic}"` : ''));
     const clickable = h.isNewProject || h.id || h.starterTopic;
-    return `<div ${actionAttrs} style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;cursor:${clickable ? 'pointer' : 'default'};${activeStyle}" data-hover="background:#eef4fb;">
-      <i class="${icon}" style="font-size:15px;color:${color};flex:0 0 auto;"></i>
-      <span style="font-size:13px;letter-spacing:-0.01em;color:${h.active ? '#1a365d' : '#1a1a1a'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.title}</span>
+    return `<div class="rp-history-row" style="position:relative;border-radius:9px;${activeStyle}">
+      <div style="display:flex;align-items:center;">
+        <button type="button" ${actionAttrs} aria-current="${h.active ? 'page' : 'false'}" title="${h.title}" style="display:flex;align-items:center;gap:9px;flex:1;min-width:0;padding:10px 8px;border:0;background:none;text-align:left;cursor:pointer;font:inherit;">
+          <i class="${icon}" style="font-size:15px;color:${color};"></i><span style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${h.title}</span>
+        </button>
+        ${h.id && !h.protected ? `<button type="button" class="rp-history-menu" data-act="session-menu" data-project="${h.id}" aria-label="Options for ${h.title}" aria-expanded="${state.sessionMenu === h.id}" style="border:0;background:none;border-radius:6px;padding:7px;cursor:pointer;color:#586777;"><i class="ph ph-dots-three" style="font-size:19px;"></i></button>` : ''}
+      </div>
+      ${state.sessionMenu === h.id && h.id && !h.protected ? `<div style="margin:0 5px 6px;padding:4px;background:#fff;border:1px solid #e1e5eb;border-radius:9px;box-shadow:0 4px 12px #18263a10;">${['rename','delete'].map(kind => `<button data-act="session-${kind}" data-project="${h.id}" style="display:block;text-align:left;width:100%;padding:8px;border:0;border-radius:6px;background:none;font:inherit;font-size:12px;cursor:pointer;color:${kind === 'delete' ? '#bd3636' : '#26364b'};">${kind === 'rename' ? 'Rename' : 'Delete'}</button>`).join('')}</div>` : ''}
     </div>`;
+  }
+
+  function sessionManagementDialog() {
+    const d = state.sessionDialog;
+    const deleting = d.kind === 'delete';
+    return `<div style="position:fixed;inset:0;background:#11182755;display:flex;align-items:center;justify-content:center;z-index:80;" data-ui="session-dialog-backdrop"><form id="rp-session-form" role="dialog" aria-modal="true" aria-labelledby="session-dialog-title" style="width:min(400px,calc(100vw - 40px));background:#fffefc;border-radius:16px;padding:24px;box-sizing:border-box;box-shadow:0 20px 60px #0002;">
+      <h2 id="session-dialog-title" style="margin:0 0 16px;font-size:20px;">${deleting ? 'Delete conversation?' : 'Rename conversation'}</h2>
+      ${deleting ? `<p style="font-size:14px;line-height:1.6;overflow-wrap:anywhere;">This will remove <strong>${d.title}</strong> from your history. A local recovery copy will be kept.</p>` : `<input name="title" aria-label="Conversation name" required maxlength="120" value="${d.title}" style="box-sizing:border-box;width:100%;padding:11px;border:1px solid #cbd5e1;border-radius:9px;font:inherit;">`}
+      ${state.sessionError ? `<p role="alert" style="color:#bd3636;font-size:13px;">${esc(state.sessionError)}</p>` : ''}
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;"><button type="button" data-act="session-cancel" ${state.sessionBusy ? 'disabled' : ''} style="${buttonStyle}">Cancel</button><button type="submit" ${state.sessionBusy ? 'disabled' : ''} style="${buttonStyle};background:${deleting ? '#bc3535' : '#1a365d'};color:#fff;">${state.sessionBusy ? 'Saving…' : deleting ? 'Delete' : 'Save'}</button></div>
+    </form></div>`;
   }
 
   function workspaceHeader(v) {
@@ -1519,6 +1722,9 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
         <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:11px;">Keywords</div>
         ${keywordGrid(v.keywords, true)}
+        <p style="font-size:11px;color:#68798c;">Each chip is a required query group. Alternatives inside a group stay together. Added keywords are exact phrases.</p>
+        <div data-ui="effective-query" style="font:12px monospace;overflow-wrap:anywhere;">${esc(unescapePayloadValue(v.setupDraft.search_terms))}</div>
+        <button data-act="open-setup" style="${buttonStyle};margin-top:10px;">Review and save search setup</button>
       </div>
       <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch;">
         <div data-ui="sources-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;">
@@ -1599,7 +1805,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.afterDedup}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
         <div style="flex:1;padding:18px;text-align:center;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a365d;">${v.screeningMetrics.included}</div><div style="font-size:11px;color:#1a365d;margin-top:4px;">included</div></div>
       </div>
-      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}</div>`;
+      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}</div>${!v.isNewProject ? reviewUI.screening() : ''}`;
   }
 
   function screeningCriteriaPanel(v) {
@@ -1624,7 +1830,8 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         <div style="flex:1;border:1px solid #e5e7eb;border-radius:12px;padding:14px 18px;display:flex;flex-direction:column;justify-content:center;gap:9px;">
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Open access</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.openAccess}</span></div>
           <div style="height:1px;background:#f2f4f1;"></div>
-          <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Via institution</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.viaInstitution}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Access provenance unknown</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unknownAccess ?? v.retrievalSummary.retrieved}</span></div>
+          ${v.retrievalSummary.viaInstitution > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12.5px;"><span>Verified institutional retrieval</span><span>${v.retrievalSummary.viaInstitution}</span></div>` : ''}
           <div style="height:1px;background:#f2f4f1;"></div>
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Unavailable</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unavailable}</span></div>
         </div>
@@ -1671,7 +1878,9 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         ${!v.isNewProject ? `<button data-act="action" data-action="${schemaAction}" ${pending ? 'disabled aria-busy="true"' : ''} style="${buttonStyle};margin-left:auto;${pending ? 'opacity:.72;cursor:wait;' : ''}"><i class="ph ph-${wb.status === 'missing' ? 'sparkle' : 'arrows-clockwise'}" style="font-size:13px;"></i>${schemaLabel}</button>` : ''}
       </div>
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
-      ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}`;
+      ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;"><button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale ? 'Rerun extraction with this schema' : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button><button data-act="schema-json" style="${buttonStyle}">Schema JSON</button></div>` : ''}
+      ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}
+      ${!v.isNewProject ? reviewUI.extraction() : ''}`;
   }
 
   function fieldsTable(v) {
@@ -1709,7 +1918,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${workflow.done ? `${formatCount(v.categorizationSummary.papers, 'paper')} · ${formatCount(v.categorizationSummary.groups, 'category', 'categories')}` : `${formatCount(workflow.metrics.papersExtracted, 'paper')} · ${formatCount(workflow.metrics.fields, 'field')}`}</div>
       </div>
       ${categorizationMetrics(workflow)}
-      ${(workflow.done || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : categorizationSetupPanel(v, workflow)}`;
+      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : categorizationSetupPanel(v, workflow)}`;
   }
 
   function categorizationMetrics(workflow) {
@@ -1731,7 +1940,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       <select data-cat-field="1" style="width:100%;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;margin-bottom:12px;">
         ${workflow.fieldNames.map((field) => `<option value="${field}" ${field === draft.field ? 'selected' : ''}>${evidenceFieldLabel(field)}${field === workflow.recommendedField ? ' · recommended' : ''}</option>`).join('')}
       </select>
-      <div style="font-size:12.5px;color:#3a4252;margin-bottom:10px;"><strong>${profile.papersWithValue} papers</strong> have values for this field</div>
+      <div style="font-size:12.5px;color:#3a4252;margin-bottom:10px;"><strong>${formatCount(profile.papersWithValue, 'paper')}</strong> ${Number(profile.papersWithValue) === 1 ? 'has a value' : 'have values'} for this field</div>
       <details open style="border:1px solid #eef0ee;border-radius:10px;padding:10px 12px;margin-bottom:14px;background:#fbfcfa;">
         <summary style="cursor:pointer;color:#1a365d;font-size:12.5px;">Sample Values</summary>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:9px;">${profile.sampleValues.map((value) => `<div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#3a4252;line-height:1.45;">• ${value}</div>`).join('') || emptyHint('No values found for this field')}</div>
@@ -1774,7 +1983,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
   }
 
   function categorizationAnalysisSummary(v, workflow) {
-    const skipped = v.catDraft.skipped && !workflow.done;
+    const skipped = v.catDraft.skipped;
     return `<section>
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin:4px 0 10px;">Analysis Summary</div>
       ${skipped ? `<div style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:10px;padding:11px 12px;margin-bottom:14px;font-size:12.5px;color:#1a365d;">Categorization skipped. You can still review extracted field distributions and full results.</div>` : ''}
@@ -1784,7 +1993,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
       ${exportPackageSection(v.exportPackage)}
-      <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="edit-categories" style="${buttonStyle};margin-right:8px;">Reopen categorization</button><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
       ${v.catDraft.finalized ? `<div style="margin-top:10px;font-size:12px;color:#1a365d;text-align:right;">Project Complete!</div>` : ''}
     </section>`;
   }
@@ -1837,7 +2046,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     const columns = (table && table.columns) || [];
     const rows = (table && table.rows) || [];
     if (!columns.length || !rows.length) return emptyHint('No results available');
-    return `<div class="rp-scroll" style="border:1px solid #e5e7eb;border-radius:10px;overflow:auto;max-height:300px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${columns.map((column) => `<th style="text-align:left;padding:8px 10px;background:#f8fbff;color:#9aa39b;font-size:10px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid #eef0ee;white-space:nowrap;">${evidenceFieldLabel(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td style="vertical-align:top;padding:8px 10px;border-bottom:1px solid #f4f6f3;color:#3a4252;line-height:1.4;min-width:120px;">${row[column] || ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    return `<p data-ui="full-results-count" style="font-size:12px;color:#68798c;">All ${formatCount(rows.length, 'result')} · scroll to browse every paper</p><div class="rp-scroll" style="border:1px solid #e5e7eb;border-radius:10px;overflow:auto;max-height:300px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${columns.map((column) => `<th style="text-align:left;padding:8px 10px;background:#f8fbff;color:#9aa39b;font-size:10px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid #eef0ee;white-space:nowrap;">${evidenceFieldLabel(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td style="vertical-align:top;padding:8px 10px;border-bottom:1px solid #f4f6f3;color:#3a4252;line-height:1.4;min-width:120px;">${row[column] || ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   }
 
   function evidenceFieldLabel(name) {
@@ -1861,7 +2070,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 
   function activityMessage(m) {
     return `<div data-ui="assistant-activity-message" style="display:flex;gap:8px;align-items:flex-start;"><span style="flex:0 0 20px;margin-top:1px;">${logo(20)}</span><div data-ui="assistant-activity-card" style="flex:1;min-width:0;border:1px solid #e5e7eb;border-radius:12px;padding:12px 13px;background:#fffefc;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="display:flex;align-items:center;gap:8px;min-width:0;"><i class="ph ph-pulse" style="font-size:15px;color:#1a365d;flex:0 0 auto;"></i><span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#9aa39b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Activity · ${m.activityTitle}</span></div><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#1a365d;flex:0 0 auto;"><span style="width:6px;height:6px;border-radius:999px;background:#1a365d;"></span>live</span></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;"><div style="display:flex;align-items:center;gap:8px;min-width:0;"><i class="ph ph-pulse" style="font-size:15px;color:#1a365d;flex:0 0 auto;"></i><span style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:#9aa39b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Activity · ${m.activityTitle}</span></div><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#1a365d;flex:0 0 auto;"><span style="width:6px;height:6px;border-radius:999px;background:#1a365d;"></span>${m.activity.some(item => item.tag === 'running') ? 'live' : 'saved'}</span></div>
       ${m.activity.map((l) => `<div style="display:grid;grid-template-columns:54px 72px minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid #f4f6f3;align-items:baseline;"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#bcc4bb;">${l.t}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${l.tag}</span><span style="font-size:12px;color:#6b746c;letter-spacing:-0.01em;line-height:1.35;min-width:0;">${l.msg}</span></div>`).join('')}
     </div></div>`;
   }
@@ -1936,14 +2145,14 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
   }
 
   function assistantPanel(v) {
-    return `<aside class="rp-assistant" style="width:407px;flex:0 0 407px;border-left:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
+    return `<aside ${state.navigationPending ? 'inert' : ''} class="rp-assistant" style="width:407px;flex:0 0 407px;border-left:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
       <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div><button data-act="open-setup" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button></div>
       <div class="rp-scroll" id="rp-conv" style="flex:1;min-height:0;overflow-y:auto;padding:16px 15px;display:flex;flex-direction:column;gap:13px;">
         ${v.chat.map(chatMessage).join('')}
         ${extractionDecisionCard(v)}
         ${v.chatPending ? thinkingBubble() : ''}
       </div>
-      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" placeholder="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...'}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:#1a365d;color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
+      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...'}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:#1a365d;color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
     </aside>`;
   }
 
@@ -1976,22 +2185,38 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
   }
 
   function memoryDialog(v) {
-    const pending = v.memoryPending ? 'disabled aria-busy="true"' : '';
-    const switchStyle = v.memoryEnabled
-      ? 'background:#1a365d;border-color:#1a365d;justify-content:flex-end;'
-      : 'background:#e5e7eb;border-color:#d8ddd6;justify-content:flex-start;';
-    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;">
-      <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(420px,calc(100vw - 32px));background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;"><h2 id="rp-memory-title" style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;color:#1a1a1a;">Memory</h2><button type="button" data-act="close-dialog" aria-label="Close Memory" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
-        ${v.memoryError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${esc(v.memoryError)}</div>` : ''}
-        <p style="font-size:12px;color:#6b746c;line-height:1.5;">Project conversations and saved review settings stay on this computer and are read when you reopen a project. The option below controls reuse between projects; clearing it preserves each project's saved work.</p>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:4px 0 16px;">
-          <div><div style="font-size:13.5px;color:#1a1a1a;">Memory</div><div style="font-size:11.5px;color:#6b746c;margin-top:4px;line-height:1.4;">Reuse validated memory from previous projects.</div></div>
-          <button type="button" data-act="toggle-memory" role="switch" aria-checked="${v.memoryEnabled ? 'true' : 'false'}" ${pending} style="width:42px;height:24px;flex:0 0 42px;display:flex;align-items:center;border:1px solid;border-radius:999px;padding:2px;cursor:${v.memoryPending ? 'wait' : 'pointer'};${switchStyle}"><span aria-hidden="true" style="width:18px;height:18px;border-radius:999px;background:#fffefc;box-shadow:0 1px 3px rgba(0,0,0,.18);"></span></button>
-        </div>
-        <div style="border-top:1px solid #eef0ee;padding-top:14px;display:flex;justify-content:flex-end;"><button type="button" data-act="clear-memory" ${pending} style="border:1px solid #e5b8b8;background:#fffafa;color:#8a1f1f;border-radius:9px;padding:8px 11px;font:inherit;font-size:12px;cursor:${v.memoryPending ? 'wait' : 'pointer'};">Clear memory</button></div>
-      </section>
-    </div>`;
+    const disabled = v.memoryPending ? 'disabled' : '';
+    const reuseButtonStyle = 'border:1px solid #d8e2f0;border-radius:8px;background:#fffefc;color:#1a365d;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer;';
+    const preview = v.reusePreview;
+    return `<div style="position:fixed;inset:0;background:rgba(26,54,93,.12);display:flex;align-items:center;justify-content:center;z-index:90;">
+      <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(640px,calc(100vw - 32px));max-height:85vh;overflow:auto;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 id="rp-memory-title" style="font-family:Newsreader,Georgia,serif;font-weight:400;margin:0;">Reuse project configuration</h2><button type="button" data-act="close-dialog" aria-label="Close configuration reuse" style="${reuseButtonStyle}">Close</button></div>
+        <p style="font-size:13px;color:#6b746c;line-height:1.5;">Confirmed decisions and full conversation history are saved locally. Other projects are used only when you select a configuration below and import it as a draft.</p>
+        ${v.memoryError ? `<p role="alert" style="color:#8a1f1f;">${esc(v.memoryError)}</p>` : ''}
+        ${v.isNewProject ? '<p>Open or create a project to import a configuration.</p>' : ''}
+        ${Object.keys(v.confirmedDecisions || {}).length ? `<details style="margin:12px 0;"><summary>Current project's confirmed decisions</summary>${confirmedDecisionPreview(v.confirmedDecisions)}</details>` : ''}
+        ${v.memoryPending ? '<p role="status">Loading configuration…</p>' : ''}
+        ${preview ? `<h3 style="font-size:16px;">${esc(preview.source_title)} · ${esc(preview.label)}</h3>${configurationPreview(preview.configuration)}<p style="font-size:12px;">Importing replaces this section's editable draft. Your last confirmed decisions are preserved. Review the imported draft before confirming it for this project.</p><div style="display:flex;gap:10px;"><button type="button" data-act="apply-reuse" style="${reuseButtonStyle}" ${disabled}>Import as draft</button><button type="button" data-act="reuse-back" style="${reuseButtonStyle}" ${disabled}>Choose another configuration</button></div>` : `<div style="display:grid;gap:8px;">${v.reuseOptions.map((option, index) => `<button type="button" data-act="preview-reuse" data-index="${index}" ${disabled} style="padding:12px;text-align:left;border:1px solid #d8e2f0;border-radius:8px;background:#fff;"><strong>${esc(option.source_title)}</strong><br><span>${esc(option.label)}</span></button>`).join('')}</div>${!v.memoryPending && !v.isNewProject && !v.reuseOptions.length ? '<p>No confirmed configurations are available from other projects yet.</p>' : ''}`}
+      </section></div>`;
+  }
+
+  function confirmedDecisionPreview(decisions) {
+    const labels = {search_setup: 'Search setup', screening_profile: 'Inclusion / exclusion criteria', extraction_schema: 'Extraction fields', categorization_profile: 'Categories'};
+    return Object.entries(decisions).map(([kind, decision]) => `<section><h3 style="font-size:14px;margin-bottom:4px;">${esc(labels[kind] || kind)}</h3><p style="font-size:12px;color:#6b746c;">${decision.stale ? 'Previous confirmed decision · results need updating' : (decision.editing ? 'Last confirmed decision · a new draft is being edited' : 'Confirmed')}</p>${configurationPreview(decision.configuration, true)}</section>`).join('');
+  }
+
+  function helpDialog() {
+    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px;"><section role="dialog" aria-modal="true" aria-labelledby="rp-help-title" style="max-width:540px;max-height:85vh;overflow:auto;background:#fffefc;border-radius:12px;padding:22px;font:14px/1.65 system-ui;color:#25364a;"><h2 id="rp-help-title" style="margin-top:0;">Using ReviewPilot</h2><ol><li><strong>Search:</strong> set your question, sources, query and date range. Save setup before collecting papers.</li><li><strong>Screen:</strong> review and confirm inclusion/exclusion criteria, then screen. You can inspect and correct individual decisions.</li><li><strong>Retrieve:</strong> download available full texts and retry failed downloads.</li><li><strong>Extract:</strong> review the schema, finalize it and run extraction. Inspect source evidence before accepting field values.</li><li><strong>Categorize:</strong> confirm and apply your categories, or explicitly skip categorization; then finalize and export.</li></ol><p>Project decisions are saved locally. Settings lets you explicitly reuse another project's configuration. The three examples are read-only; create a copy to edit them.</p><p>If an action fails, read the error, refresh the project state and use the stage's retry control. Changes to earlier stages can require rerunning later stages.</p><button type="button" data-act="close-dialog" style="padding:9px 14px;border:1px solid #c8d8e8;border-radius:8px;background:#eef4fb;font:inherit;">Close help</button></section></div>`;
+  }
+
+  function configurationPreview(configuration, alreadyEscaped = false) {
+    const text = value => alreadyEscaped ? String(value ?? '') : esc(String(value ?? ''));
+    const renderValue = value => {
+      if (Array.isArray(value)) return value.length ? `<ul style="margin:4px 0;padding-left:20px;">${value.map(item => `<li>${renderValue(item)}</li>`).join('')}</ul>` : '<span>None</span>';
+      if (value && typeof value === 'object') return `<dl style="margin:0;">${Object.entries(value).map(([key, item]) => `<dt style="font-weight:600;margin-top:8px;">${esc(key.replace(/_/g, ' ').replace(/^./, ch => ch.toUpperCase()))}</dt><dd style="margin:4px 0 0;">${renderValue(item)}</dd>`).join('')}</dl>`;
+      return text(typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value);
+    };
+    return `<div style="font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;">${renderValue(configuration)}</div>`;
   }
 
   function updateDraftFromForm(form) {
@@ -2000,6 +2225,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     const previousMaxResults = state.setupDraft.max_results;
     const mergedDraft = { ...state.setupDraft, ...payload };
     state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);
+    state.setupDraft.keywords = queryClauses(state.setupDraft.search_terms);
   }
 
   function updateSetupDraftField(field, value) {
@@ -2037,11 +2263,30 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       .filter(Boolean);
   }
 
+  async function saveWorkflowDecision(operation) {
+    if (state.actionPending || state.chatPending || state.decisionPending || state.navigationPending) return;
+    const projectId = D.project.id, ownership = projectNavigation.capture(projectId);
+    const ownsDecision = () => D.project.id === projectId && projectNavigation.owns(ownership);
+    state.decisionPending = true; state.actionError = ''; paintWorkspace();
+    try {
+      const res = await fetch(`/projects/${encodeURIComponent(projectId)}/review/decisions`, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({operation, revision:D.categorizationWorkflow.decisions?.revision,
+          selection: categorizationActionPayload()}),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || 'Could not save project decision.');
+      if (ownsDecision()) setData(body.state, false, {preserveView:true});
+    } catch(error) { if (ownsDecision()) state.actionError = error.message; }
+    finally { if (ownsDecision()) { state.decisionPending = false; paintWorkspace(); } }
+  }
+
   function categorizationActionPayload() {
     return {
-      field: state.catDraft.field,
+      decision_revision: D.categorizationWorkflow.decisions?.revision,
+      field: unescapePayloadValue(state.catDraft.field),
       mode: state.catDraft.mode,
-      categories: categorizationCategoriesFromDraft(),
+      categories: categorizationCategoriesFromDraft().map(unescapePayloadValue),
       category_descriptions: D.categorizationWorkflow.categoryDescriptions || {},
     };
   }
@@ -2075,9 +2320,41 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
   function mount() {
     const root = document.getElementById('app');
     function paint() {
+      const focused = document.activeElement;
+      const focusKey = focused?.getAttribute('data-ui');
+      const selection = [focused?.selectionStart, focused?.selectionEnd];
+      const dialogInput = root.querySelector('#rp-session-form input');
+      if (dialogInput && state.sessionDialog?.kind === 'rename') state.sessionDialog.title = esc(dialogInput.value);
+      const dialogAlreadyOpen = !!root.querySelector('#rp-session-form');
+      const reviewFocus = focused?.getAttribute('data-review-input');
+      const mainScroll = root.querySelector('.rp-main-scroll')?.scrollTop || 0;
+      const previousProject = root.dataset.project;
+      const sidebarScroll = root.querySelector('.rp-sidebar .rp-scroll')?.scrollTop || 0;
+      const oldConv = root.querySelector('#rp-conv');
+      const scrollTop = oldConv?.scrollTop || 0;
+      const atBottom = !oldConv || oldConv.scrollHeight - oldConv.clientHeight - scrollTop < 40;
       root.innerHTML = render(computeVals());
+      root.dataset.project = D.project.id || '';
+      if (previousProject === (D.project.id || '')) { const main = root.querySelector('.rp-main-scroll'); if(main)main.scrollTop=mainScroll; }
+      if (reviewUI.isOpen()) { const input = reviewFocus ? root.querySelector(`[data-review-input="${reviewFocus}"]`) : null; if(input) {input.focus({preventScroll:true}); if(selection[0]!=null && input.setSelectionRange && input.tagName !== 'SELECT')input.setSelectionRange(...selection);} else root.querySelector('#rp-record-review-form button')?.focus({preventScroll:true}); }
+      if (state.decisionPending) root.querySelectorAll('[data-act="confirm-categories"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-act="action"], [data-cat-field], [data-cat-categories], [data-act="cat-mode"]').forEach(el=>el.disabled=true);
+      if (D.readOnlyExample) {
+        root.querySelectorAll('[data-act="action"], [data-act="open-setup"], [data-act="edit-criteria"], [data-act="generate-preview"], [data-act="retry-submit"], [data-act="confirm-categories"], [data-act="cat-mode"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-draft-field], [data-source-limit], [data-criteria], [data-cat-field], [data-cat-categories], #rp-chat-form input, #rp-chat-form button').forEach(el=>el.disabled=true);
+      }
+      const sidebar = root.querySelector('.rp-sidebar .rp-scroll');
+      if (sidebar) sidebar.scrollTop = sidebarScroll;
+      if (focusKey && ['history-search', 'research-topic-input', 'review-search'].includes(focusKey)) {
+        const input = root.querySelector(`[data-ui="${focusKey}"]`);
+        input?.focus({preventScroll: true});
+        if (input && selection[0] != null) input.setSelectionRange(...selection);
+      }
+      if (state.sessionDialog && !state.sessionBusy) {
+        const input = root.querySelector('#rp-session-form input');
+        if (input) { input.focus(); if (!dialogAlreadyOpen) input.select(); else if (selection[0] != null) input.setSelectionRange(...selection); }
+        else root.querySelector('[data-act="session-cancel"]')?.focus();
+      }
       const conv = document.getElementById('rp-conv');
-      if (conv) conv.scrollTop = conv.scrollHeight;
+      if (conv) conv.scrollTop = previousProject !== (D.project.id || '') || atBottom ? conv.scrollHeight : scrollTop;
       wireHover(root);
       if (state.chatInputFocus) {
         state.chatInputFocus = false;
@@ -2104,6 +2381,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 
     async function submitChatForm(form) {
       const input = form.querySelector('input[name="message"]');
+      if (state.chatPending || state.navigationPending || D.readOnlyExample) return;
       const pending = handleChatSubmit(input ? input.value : '');
       state.quickStartOpen = false;
       form.reset();
@@ -2119,11 +2397,18 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       if (shouldCloseQuickStart) state.quickStartOpen = false;
       const t = e.target.closest('[data-act]');
       if (!t) {
+        if (state.sessionMenu && !e.target.closest('.rp-history-row')) { state.sessionMenu = ''; paint(); return; }
         if (shouldPaintUnboundClick({ insideForm, insideChatInputArea, shouldCloseQuickStart })) paint();
         return;
       }
       const act = t.getAttribute('data-act');
-      if (act === 'step') {
+      if (act.startsWith('review-')) { reviewUI.click(act,t); return; }
+      if (D.readOnlyExample && !['step','tab','open-preview','preview-nav','schema-json','close-schema-json','new-project','project','session-menu','session-rename','session-delete','session-cancel','open-memory','close-dialog','reuse-select','reuse-preview','open-help','toggle-sidebar'].includes(act)) return;
+      if (!act.startsWith('session-')) state.sessionMenu = '';
+
+      if (act === 'toggle-sidebar') { state.sidebarOpen = !state.sidebarOpen; }
+      else if (act === 'open-help') { state.dialog = 'help'; state.sidebarOpen = false; }
+      else if (act === 'step') {
         if (t.getAttribute('data-disabled') === 'true') return;
         state.step = t.getAttribute('data-step');
       }
@@ -2167,11 +2452,17 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         state.schemaJsonReturnFocus = true;
       }
       else if (act === 'new-project') {
+        startNavigation('');
+        state.chatDrafts[''] = '';
+        state.historySearch = '';
+        sessionUrl('');
         setData(newProjectDataWithCurrentHistory(), true);
         state.dialog = '';
         state.chatInputFocus = true;
       }
       else if (act === 'history-quick-start') {
+        startNavigation('');
+        sessionUrl('');
         const topic = t.getAttribute('data-topic') || '';
         setData(newProjectDataWithCurrentHistory(), true);
         state.dialog = '';
@@ -2200,40 +2491,41 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
         selectProject(projectId).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
         return;
       }
+      else if (act === 'session-menu') { state.sessionMenu = state.sessionMenu === t.dataset.project ? '' : t.dataset.project; }
+      else if (act === 'session-rename' || act === 'session-delete') {
+        const item = D.history.flatMap(group => group.items).find(item => item.id === t.dataset.project);
+        if (!item || item.protected) return;
+        state.sessionDialog = {id: item.id, title: item.title, kind: act === 'session-delete' ? 'delete' : 'rename'};
+        state.sessionMenu = ''; state.sessionError = '';
+      }
+      else if (act === 'session-cancel') { state.sessionDialog = null; state.sessionError = ''; }
       else if (act === 'open-setup') state.dialog = 'setup';
       else if (act === 'open-memory') {
         state.dialog = 'memory';
         state.memoryPending = true;
         state.memoryError = '';
         paint();
-        loadMemorySetting().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
+        loadReuseOptions().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
           state.memoryPending = false;
           paint();
         });
         return;
       }
-      else if (act === 'toggle-memory') {
+      else if (act === 'preview-reuse' || act === 'apply-reuse') {
         if (state.memoryPending) return;
+        const selection = act === 'preview-reuse' ? state.reuseOptions[Number(t.getAttribute('data-index'))] : state.reusePreview;
+        if (!selection) return;
         state.memoryPending = true;
         state.memoryError = '';
         paint();
-        updateMemorySetting(!state.memoryEnabled).catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
-          state.memoryPending = false;
-          paint();
-        });
+        const payload = {source_project_id: selection.source_project_id, kind: selection.kind,
+          source_revision: selection.source_revision, target_revision: selection.target_revision};
+        reuseConfiguration(act === 'preview-reuse' ? 'preview' : 'apply', payload)
+          .catch(err => { state.memoryError = err.message || String(err); })
+          .finally(() => { state.memoryPending = false; paint(); });
         return;
       }
-      else if (act === 'clear-memory') {
-        if (state.memoryPending || !window.confirm('Clear memory?')) return;
-        state.memoryPending = true;
-        state.memoryError = '';
-        paint();
-        clearMemory().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
-          state.memoryPending = false;
-          paint();
-        });
-        return;
-      }
+      else if (act === 'reuse-back') { state.reusePreview = null; state.memoryError = ''; }
       else if (act === 'close-dialog') {
         state.dialog = '';
         state.actionError = '';
@@ -2242,20 +2534,20 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       else if (act === 'add-keyword') state.dialog = 'keyword';
       else if (act === 'remove-keyword') {
         const keyword = t.getAttribute('data-keyword');
-        state.setupDraft.keywords = state.setupDraft.keywords.filter((kw) => kw !== keyword);
+        removeQueryClause(keyword);
       }
       else if (act === 'cat-mode') updateCategorizationMode(t.getAttribute('data-mode'));
       else if (act === 'confirm-categories') {
-        state.catDraft.confirmed = true;
+        saveWorkflowDecision('confirm'); return;
       }
       else if (act === 'edit-categories') {
-        state.catDraft.confirmed = false;
+        saveWorkflowDecision('reopen'); return;
       }
       else if (act === 'skip-categorization') {
-        state.catDraft.skipped = true;
+        saveWorkflowDecision('skip'); return;
       }
       else if (act === 'finalize-project') {
-        state.catDraft.finalized = true;
+        saveWorkflowDecision('finalize'); return;
       }
       else if (act === 'retry-toggle') {
         if (state.actionPending) return;
@@ -2321,27 +2613,42 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       }
       else if (act === 'edit-criteria') {
         if (state.actionPending || state.chatPending) return;
-        state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision, inclusion: D.screeningCriteria.inclusion.join('\n'), exclusion: D.screeningCriteria.exclusion.join('\n')};
+        state.actionPending = 'edit-criteria';
+        state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
+        paint();
+        postAction('edit-criteria', {revision: D.screeningCriteria.revision}).catch(() => {});
+        return;
       }
       paint();
     });
 
     root.addEventListener('focusin', (e) => {
       if (!e.target.matches || !e.target.matches('[data-ui="research-topic-input"]')) return;
-      if (state.quickStartOpen) return;
+      if (state.quickStartOpen || !D.isNewProject) return;
       state.quickStartOpen = true;
-      state.chatInputFocus = true;
-      setTimeout(paint, 0);
+      const area = e.target.closest('[data-ui="assistant-chat-input-area"]');
+      if (area && !area.querySelector('[data-ui="chat-quick-start"]')) {
+        area.insertAdjacentHTML('afterbegin', chatQuickStartPopover());
+      }
     });
 
+    root.addEventListener('compositionend', (e) => {
+      if (reviewUI.input(e.target,e)) return;
+      if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; paint(); }
+    });
     root.addEventListener('input', (e) => {
+      if (e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT' && reviewUI.input(e.target,e)) return;
+      if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; if (!e.isComposing) paint(); return; }
       if (e.target.matches('[data-criteria]')) {
         state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision,
           ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, root.querySelector(`[data-criteria="${key}"]`)?.value || '']))};
         return;
       }
       if (e.target.matches && e.target.matches('[data-ui="research-topic-input"]')) {
-        if (!state.quickStartOpen) {
+        state.chatDrafts[D.project.id || ''] = e.target.value;
+        writeWorkspaceSnapshot();
+        if (!state.quickStartOpen && D.isNewProject) {
           state.quickStartOpen = true;
           writeWorkspaceSnapshot();
         }
@@ -2367,6 +2674,7 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     });
 
     root.addEventListener('change', (e) => {
+      if (reviewUI.input(e.target,e)) return;
       const sourceLimit = e.target.getAttribute('data-source-limit');
       if (sourceLimit) {
         updateSourceLimit(sourceLimit, e.target.value);
@@ -2387,6 +2695,14 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     });
 
     root.addEventListener('keydown', (e) => {
+      if (reviewUI.keydown(e)) return;
+      if (e.key === 'Escape') { if (state.dialog === 'help') state.dialog = ''; state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return; }
+      if (e.key === 'Tab' && state.sessionDialog) {
+        const items = [...root.querySelectorAll('#rp-session-form input, #rp-session-form button:not(:disabled)')];
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && e.target === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && e.target === last) { e.preventDefault(); first?.focus(); }
+      }
       if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
       const form = e.target.closest ? e.target.closest('#rp-chat-form') : null;
       if (!form) return;
@@ -2395,6 +2711,12 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
     });
 
     root.addEventListener('submit', (e) => {
+      if (e.target.id === 'rp-record-review-form') { e.preventDefault(); reviewUI.submit(e.target); return; }
+      if (e.target.id === 'rp-session-form') {
+        e.preventDefault();
+        saveSessionChange(String(new FormData(e.target).get('title') || ''));
+        return;
+      }
       if (e.target.id === 'rp-chat-form') {
         e.preventDefault();
         submitChatForm(e.target).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
@@ -2403,7 +2725,9 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       if (e.target.id === 'rp-keyword-dialog-form') {
         e.preventDefault();
         const keyword = String(new FormData(e.target).get('keyword') || '').trim();
-        if (keyword && !state.setupDraft.keywords.includes(keyword)) state.setupDraft.keywords.push(esc(keyword));
+        if (keyword.replaceAll('"', '').trim() && !state.setupDraft.keywords.includes(esc(keyword))) {
+          editQueryClauses([...state.setupDraft.keywords, esc('"' + keyword.replaceAll('"', '') + '"')]);
+        }
         state.dialog = '';
         paint();
         return;
@@ -2420,6 +2744,11 @@ ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
       });
     });
 
+    window.addEventListener('popstate', () => {
+      const match = window.location.pathname.match(/^\/projects\/([^/]+)$/);
+      if (match && match[1] !== 'new') selectProject(decodeURIComponent(match[1]), false);
+      else { startNavigation(''); setData(newProjectDataWithCurrentHistory(), true); paint(); }
+    });
     paintWorkspace = paint;
     paint();
     if (restoredProjectStateId) {

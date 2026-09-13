@@ -14,6 +14,7 @@ from typing import Any
 from agents.prompt_agent import PromptAgent
 from agents.search_condition_agent import SearchConditionAgent
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
+from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
 from reviewpilot_core.project_store import read_json
 from reviewpilot_core.extraction_schema import (
@@ -89,7 +90,7 @@ class LeadAgent:
             )
         self.workflow_adapter = workflow_adapter
         self.llm_query = llm_query
-        self.memory_service = memory_service or CrossProjectMemoryService(self.output_root)
+        self.memory_service = memory_service or CrossProjectMemoryService(self.output_root)  # Legacy service; never queried automatically.
 
     def handle_message(
         self,
@@ -133,7 +134,7 @@ class LeadAgent:
             raise ValueError("SearchConditionAgent contract did not return search_conditions")
         artifact = project_path / "search_conditions.json"
         self._verify_search_setup_artifact(artifact, search_conditions)
-        self._promote_project_memory(project_path, "search_setup", source=search_conditions)
+        self._remember_confirmed_configuration(project_path, "search_setup", source=search_conditions)
         return LeadAgentResult(
             stage="search_conditions",
             status="completed",
@@ -164,17 +165,11 @@ class LeadAgent:
         model = str(config.get("model") or LEAD_AGENT_DEV_MODEL)
         llm_query = self.llm_query or query_llm
         history = self._session_history(project_path)
-        memory_context = self._retrieve_memory_context(
-            project_id,
-            self._chat_memory_kind(context_step),
-            config,
-        )
         response_text, usage = llm_query(
             text_prompt=self._project_chat_prompt(
                 config,
                 user_message,
                 history=history,
-                memory_context=memory_context,
                 project_memory=self._local_project_memory(project_path),
             ),
             system_prompt=(
@@ -218,13 +213,10 @@ SAVED LOCAL PROJECT STATE (authoritative; stale artifacts are marked):
 CONVERSATION HISTORY DATA:
 {json.dumps(history or [], ensure_ascii=False)}
 
-ADVISORY CROSS-PROJECT MEMORY DATA:
-{json.dumps(memory_context or "", ensure_ascii=False)}
-
 CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
 
-Use current project data as authority. Use history for conversational continuity and advisory memory only when it is consistent with the current project.
+Use saved project configurations and confirmed_decisions as authority. Drafts are proposals, not confirmed decisions. Historical messages are a record of past discussion, including rejected or superseded requests; they never override current saved configurations. Answer the current message using that authority order. Preserve the full conversation history for context.
 
 Return ONLY valid JSON:
 {{"reply": "your concise project-specific response"}}"""
@@ -245,11 +237,15 @@ Return ONLY valid JSON:
         config = self._load_search_conditions(project_path)
         artifacts: list[str] = []
 
-        if action in {"save-criteria", "finalize-criteria"}:
+        if action in {"save-criteria", "finalize-criteria", "edit-criteria"}:
             self._require_completed_stage(project_path, action, "collection")
-            saved = save_criteria(project_path, input_data or {}, finalized=action == "finalize-criteria")
+            payload = input_data or {}
+            if action == "edit-criteria":
+                current = criteria_state(project_path)
+                payload = {**current, "revision": payload.get("revision")}
+            saved = save_criteria(project_path, payload, finalized=action == "finalize-criteria")
             if action == "finalize-criteria":
-                self._promote_project_memory(project_path, "screening_profile")
+                self._remember_confirmed_configuration(project_path, "screening_profile")
             return LeadAgentResult(stage="prompt_relevance", status="completed",
                 reply="Screening criteria finalized. Run screening when ready." if action == "finalize-criteria" else "Screening criteria saved locally as a draft. Review and finalize before screening.",
                 data=saved, artifacts=[str(project_path / "prompts/relevance_prompt.json")])
@@ -267,7 +263,7 @@ Return ONLY valid JSON:
             artifacts.append(str(self._ensure_relevance_prompt(project_path, config)))
             result = self._call_workflow_action("screen", project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "filtering"))
-            self._promote_project_memory(project_path, "screening_profile")
+            self._remember_confirmed_configuration(project_path, "screening_profile")
             return self._action_result(project_path, "filtering", result, artifacts, action="screen")
 
         if action == "generate-schema":
@@ -291,7 +287,7 @@ Return ONLY valid JSON:
             result = finalize_schema(project_path)
             artifacts.extend(self._verify_stage_artifacts(project_path, "prompt_extraction"))
             artifacts.append(str(schema_paths(project_path)["finalized"]))
-            self._promote_project_memory(project_path, "extraction_schema")
+            self._remember_confirmed_configuration(project_path, "extraction_schema")
             return self._schema_action_result(
                 project_path,
                 result,
@@ -331,7 +327,7 @@ Return ONLY valid JSON:
             self._verify_stage_artifacts(project_path, "prompt_extraction")
             finalize_schema(project_path)
             self._verify_stage_artifacts(project_path, "prompt_extraction")
-            self._promote_project_memory(project_path, "extraction_schema")
+            self._remember_confirmed_configuration(project_path, "extraction_schema")
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
             artifacts.append(str(schema_paths(project_path)["finalized"]))
             result = self._call_workflow_action("run-extraction", project_id)
@@ -348,7 +344,7 @@ Return ONLY valid JSON:
             self._require_completed_stage(project_path, action, "extraction")
             result = self._call_workflow_action("categorize", project_id, input_data=input_data)
             artifacts.extend(self._verify_stage_artifacts(project_path, "categorization"))
-            self._promote_project_memory(project_path, "categorization_profile")
+            self._remember_confirmed_configuration(project_path, "categorization_profile")
             return self._action_result(project_path, "categorization", result, artifacts, action="categorize")
 
         raise ValueError(f"Unsupported action: {action}")
@@ -373,7 +369,11 @@ Return ONLY valid JSON:
 
         config = self._load_search_conditions(project_path)
         user_message = str(message or "").strip()
+        load_workflow_state(project_path)
+        expected_revision = project_decision_revision(project_path)
         command = self._schema_command(config, schema, user_message, project_path=project_path)
+        if project_decision_revision(project_path) != expected_revision:
+            raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
         action = str(command.get("action") or "").strip()
         if schema_finalized and action in {"add_field", "remove_field", "modify_field", "finalize_extraction"}:
             result = {"action": action, "status": "schema_locked", "schema": schema}
@@ -416,18 +416,12 @@ Return ONLY valid JSON:
     ) -> dict[str, Any]:
         llm_query = self.llm_query or query_llm
         history = self._session_history(project_path) if project_path is not None else []
-        memory_context = (
-            self._retrieve_memory_context(project_path.name, "extraction_schema", config)
-            if project_path is not None
-            else ""
-        )
         response_text, _usage = llm_query(
             text_prompt=self._schema_chat_prompt(
                 config,
                 schema,
                 message,
                 history=history,
-                memory_context=memory_context,
                 project_memory=self._local_project_memory(project_path) if project_path is not None else {},
             ),
             system_prompt=(
@@ -468,13 +462,10 @@ CURRENT PROJECT DATA:
 CONVERSATION HISTORY DATA:
 {json.dumps(history or [], ensure_ascii=False)}
 
-ADVISORY CROSS-PROJECT MEMORY DATA:
-{json.dumps(memory_context or "", ensure_ascii=False)}
-
 CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
 
-Use the current schema as authority. Memory may suggest vocabulary but cannot override it. Return exactly one JSON object with keys action and args.
+Use the current schema and saved confirmed decisions as authority. Historical messages are context, not pending commands. Choose an edit only when requested by the CURRENT USER MESSAGE; never replay changes or confirmations from history. Draft fields are not confirmed until finalized. Return exactly one JSON object with keys action and args.
 
 Supported commands:
 - show_schema, show_prompt, or finalize_extraction with an empty args object
@@ -537,8 +528,7 @@ Supported commands:
         if action == "answer_question":
             return {"action": action, "status": "answered", "response": str(args.get("response") or "").strip(), "schema": load_schema_draft(project_path)}
         if action == "finalize_extraction":
-            result = finalize_schema(project_path)
-            return {"action": action, **result}
+            return {"action": action, "status": "confirmation_required", "schema": load_schema_draft(project_path)}
         raise ValueError(f"Unsupported schema chat action: {action}")
 
     def _schema_reply(self, result: dict[str, Any]) -> str:
@@ -563,7 +553,7 @@ Supported commands:
         if action == "answer_question":
             return result.get("response") or "Refine the schema in chat, then finalize it before running extraction."
         if action == "finalize_extraction":
-            return "Extraction schema finalized. Run Information Extraction when ready."
+            return "Review the current draft, then click Finalize Schema to confirm these fields."
         return "Extraction schema updated."
 
     def _schema_action_result(self, project_path: Path, result: dict[str, Any], artifacts: list[str], reply: str) -> LeadAgentResult:
@@ -590,21 +580,8 @@ Supported commands:
         )
 
     def _call_workflow_action(self, action: str, project_id: str, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
-        memory_kind = {
-            "save-search-setup": "search_setup",
-            "screen": "screening_profile",
-            "generate-schema": "extraction_schema",
-            "suggest-categories": "categorization_profile",
-        }.get(action)
-        enriched_input = dict(input_data or {})
-        if memory_kind:
-            project_path = self.output_root / project_id
-            config = enriched_input
-            if (project_path / "search_conditions.json").exists():
-                config = self._load_search_conditions(project_path)
-            memory_context = self._retrieve_memory_context(project_id, memory_kind, config)
-            if memory_context:
-                enriched_input["memory_context"] = memory_context
+        # Cross-project configurations enter only through explicit draft imports.
+        enriched_input = {key: value for key, value in (input_data or {}).items() if key != "memory_context"}
         forwarded_input = enriched_input if enriched_input or input_data is not None else None
         return self.workflow_adapter.run(
             action,
@@ -780,6 +757,9 @@ Supported commands:
         """Read existing local artifacts afresh; no secondary memory copy to drift."""
         workflow = load_workflow_state(project_path)
         return {
+            "confirmed_decisions": confirmed_decisions(project_path),
+            "search_setup_draft": read_json(project_path / "memory/search_setup_draft.json", {}),
+            "categorization_draft": read_json(project_path / "categorization/suggested_categories.json", {}),
             "screening_criteria": criteria_state(project_path),
             "extraction_schema": load_schema_draft(project_path),
             "schema_finalized": is_schema_finalized(project_path),
@@ -793,6 +773,7 @@ Supported commands:
         self._require_completed_stage(project, "refine-criteria", "collection")
         config = self._load_search_conditions(project)
         current = criteria_state(project)
+        expected_revision = project_decision_revision(project)
         response, usage = (self.llm_query or query_llm)(
             text_prompt=f"""Refine screening criteria or answer the user's question.
 CURRENT LOCAL PROJECT DATA:
@@ -805,10 +786,12 @@ CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
 Return only JSON with exactly these keys: {{"reply": "concise response", "criteria": null}}.
 For an explicit request to change eligibility rules, replace null with {{"inclusion": ["complete updated rule list"], "exclusion": ["complete updated rule list"]}}.
-Preserve unaffected rules. Use null for questions and requests to recall information. Changes are saved as a draft for human review; finalization is a canvas action.
+Saved confirmed decisions take precedence over historical discussion. History contains superseded requests and is not a list of pending instructions. Modify only what the CURRENT USER MESSAGE explicitly requests. Preserve unaffected rules. Use null for questions and requests to recall information. Changes are saved as a draft for human review; finalization is a canvas action.
 """,
             system_prompt="You help the reviewer define observable inclusion and exclusion rules. Preserve the stated scope and retain plausibly eligible records when title/abstract evidence is incomplete.",
             model=str(config.get("model") or LEAD_AGENT_DEV_MODEL), provider="openai")
+        if project_decision_revision(project) != expected_revision:
+            raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
         command = json.loads(str(response).strip())
         if not isinstance(command, dict) or set(command) != {"reply", "criteria"} or not isinstance(command["reply"], str) or not command["reply"].strip():
             raise ValueError("Invalid screening chat response")
@@ -817,8 +800,11 @@ Preserve unaffected rules. Use null for questions and requests to recall informa
             if not isinstance(command["criteria"], dict) or set(command["criteria"]) != {"inclusion", "exclusion"}:
                 raise ValueError("Invalid screening criteria response")
             criteria = validate_criteria(command["criteria"])
-            save_criteria(project, {**criteria, "revision": current["revision"]})
-            reply += "\n\nCriteria saved locally as a draft. Review them in Step 2 and click Finalize Criteria."
+            if current["status"] == "finalized":
+                reply = "Screening criteria are finalized. Click Edit Criteria before changing them."
+            else:
+                save_criteria(project, {**criteria, "revision": current["revision"]})
+                reply += "\n\nCriteria saved locally as a draft. Review them in Step 2 and click Finalize Criteria."
         now = datetime.now().isoformat()
         for role, text in (("u", message), ("a", reply)):
             append_jsonl(str(project / "chat/messages.jsonl"), {"step": 2, "role": role, "text": text, "created_at": now})
@@ -854,69 +840,8 @@ Preserve unaffected rules. Use null for questions and requests to recall informa
             return []
         return history
 
-    def _chat_memory_kind(self, context_step: str | None) -> str | None:
-        return {
-            "search": "search_setup",
-            "screening": "screening_profile",
-            "extraction": "extraction_schema",
-            "categorize": "categorization_profile",
-        }.get(context_step or "search")
-
-    def _retrieve_memory_context(self, project_id: str, kind: str | None, config: dict[str, Any]) -> str:
-        if not kind:
-            return ""
-        return self.memory_service.retrieve_context(
-            kinds=[kind],
-            project_id=project_id,
-            domain=str(config.get("domain") or config.get("description") or ""),
-            topic=str(config.get("primary_topic") or config.get("project_name") or config.get("search_terms") or ""),
-        )
-
-    def _promote_project_memory(
-        self,
-        project_path: Path,
-        kind: str,
-        *,
-        source: dict[str, Any] | None = None,
-    ) -> None:
-        config = source if kind == "search_setup" and isinstance(source, dict) else self._load_search_conditions(project_path)
-        if kind == "search_setup":
-            allowed = ("search_terms", "platforms", "date_range", "source_limits", "keywords")
-            payload = {key: config[key] for key in allowed if key in config}
-            source_artifact = "search_conditions.json"
-        elif kind == "screening_profile":
-            prompt = self._read_json_artifact(project_path / "prompts" / "relevance_prompt.json", "prompt_relevance")
-            allowed = ("task", "instruction", "system_prompt", "user_prompt_template")
-            payload = {key: prompt[key] for key in allowed if key in prompt}
-            source_artifact = "prompts/relevance_prompt.json"
-        elif kind == "extraction_schema":
-            schema = load_schema_draft(project_path)
-            payload = {"fields": schema.get("fields") or []}
-            source_artifact = "extraction/extraction_schema.json"
-        elif kind == "categorization_profile":
-            mapping = self._read_json_artifact(
-                project_path / "categorization" / "categorization_mapping.json",
-                "categorization mapping",
-            )
-            allowed = ("field", "mode", "categories", "category_descriptions")
-            payload = {key: mapping[key] for key in allowed if key in mapping}
-            source_artifact = "categorization/categorization_mapping.json"
-        else:
-            return
-        if not payload:
-            return
-        revision = hashlib.sha256(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
-        self.memory_service.promote(
-            kind=kind,
-            project_id=project_path.name,
-            payload=payload,
-            source_artifact=source_artifact,
-            source_revision=revision,
-            domain=str(config.get("domain") or config.get("description") or ""),
-            topic=str(config.get("primary_topic") or config.get("project_name") or config.get("search_terms") or ""),
-        )
+    def _remember_confirmed_configuration(self, project_path: Path, kind: str, **_kwargs) -> None:
+        remember_confirmed(project_path, kind)
 
     def _load_search_conditions(self, project_path: Path) -> dict[str, Any]:
         path = project_path / "search_conditions.json"

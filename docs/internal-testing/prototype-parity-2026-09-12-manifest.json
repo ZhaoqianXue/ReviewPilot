@@ -1,0 +1,33 @@
+{
+  "date": "2026-09-12",
+  "head": "2fe48ee",
+  "baseline": "HEAD plus uncommitted workspace; hashes are authoritative for files below",
+  "sha256": {
+    "reviewpilot-ui.html": "55d31ba5da3baab02e599a4495cecb6a7ac134a114793731aa1ea9e9d09f86fe",
+    "design/reviewpilot-ui.source.html": "52451664f14d9c5017e2bf4c07d7752af30a470b837226345ed279cb467f825b",
+    "design/DESIGN_SPEC.md": "542f05e319c8727bc5e9a946db4c05a8539e5de9e9f21c5b31bbcaf12934f9ff",
+    "design/LEAD_AGENT_UI_UX_BOUNDARY.md": "f497358907379522fdc05da1a051c34157ad8514d7785931bac48737fc2babd4",
+    "frontend/app.js": "934d62b1ed5fe29eca5d62ff1038ffd1a3bd0b5309665159f8a57d982e62202d",
+    "frontend/review.js": "1f2ca6717ac9e79f457ce5f43fa5a4f240fe338bb4948e0959a4790836ef7981",
+    "web_app.py": "6a5f1d98b9715feb02653ff7de14ed8b93d9c624e0d8568f267e8779cf47b7a0",
+    "agents/filtering_agent.py": "494450cce186ea5705ef7a55acb5b68a31d271c7858a7c51aa36178b50b2bd43",
+    "agents/extraction_agent.py": "f724aa69d799b9e1881c2dd45764c93c7b5706765eff4b0fca91ca266a654a06",
+    "agents/collection_agent.py": "2c856a92dd523fbaa08677cfe5eefe24453bcebc57489c52ff9f9e4027775407",
+    "reviewpilot_core/state_projection.py": "5a7ce786da492119a137a293a37748f6c78ec6aa5251bcddac580077526db710",
+    "reviewpilot_core/record_review.py": "3f9ed0c1b4bf73941d5d430d2ab6b0b50066b6251277e5af837fb266befd2798",
+    "reviewpilot_core/sub_agent_contracts.py": "572155b508c48fb775ae6ae62a9069e0e95b5441e975f207dbec642b5b74ee57",
+    "ui_state.py": "1e0ed791aa4f1358ac049480fc471e1fb977360d7f6e8f95981f1d5bc77c3afa"
+  },
+  "positive_tests": {
+    "count": 124,
+    "result": "passed",
+    "command": ".venv/bin/python -m unittest tests.test_record_review tests.test_review_frontend tests.test_frontend_contract tests.test_frontend_behavior tests.test_extraction_preview tests.test_screening_criteria tests.test_session_history tests.test_configuration_reuse"
+  },
+  "browser_reproductions": {
+    "G01": "Add auditmarker; chip appears; Search Setup query unchanged; Save setup; chip disappears.",
+    "G04": "Readonly example with two precomputed rows; Next paper enabled at 1/2; click does not navigate.",
+    "G05": "Failed extraction with finalized schema shows Regenerate, no direct Run/Retry extraction action.",
+    "G06": "Skip categorization → Finalize Project → Project Complete; reload returns to category setup and removes completion."
+  },
+  "production_mutations": false
+}

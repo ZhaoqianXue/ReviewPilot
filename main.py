@@ -165,7 +165,8 @@ class AcademicSearcher:
                         max_results=max_results,
                         email=self.email,
                         api_key=self.api_keys.get("pubmed"),
-                        output_file=output_file
+                        output_file=output_file,
+                        **({"date_range": kwargs["date_range"]} if kwargs.get("date_range") else {})
                     )
 
                 elif platform == "wos":
@@ -194,7 +195,8 @@ class AcademicSearcher:
                         max_results=max_results,
                         email=self.email,
                         api_key=self.api_keys.get("openalex"),
-                        output_file=output_file
+                        output_file=output_file,
+                        **({"date_range": kwargs["date_range"]} if kwargs.get("date_range") else {})
                     )
 
                 elif platform == "google_scholar":
@@ -213,7 +215,8 @@ class AcademicSearcher:
                         arxiv_query,
                         max_results=max_results,
                         categories=categories,
-                        output_file=output_file
+                        output_file=output_file,
+                        **({"date_range": kwargs["date_range"]} if kwargs.get("date_range") else {})
                     )
 
                 elif platform == "dblp":

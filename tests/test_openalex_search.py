@@ -44,13 +44,14 @@ class OpenAlexSearchTests(unittest.TestCase):
 
         self.assertIn("Anonymous search is temporarily rate-limited", str(ctx.exception))
 
-    def test_boolean_query_uses_one_broad_search_request_before_any_expansion(self):
+    def test_boolean_query_preserves_native_logic_in_one_request(self):
         query = '("large language model" OR LLM OR "generative AI") AND (biomedical OR clinical)'
         param_sets = OpenAlexSearcher(email="researcher@example.com")._build_query_param_sets(query)
 
+        self.assertEqual(len(param_sets), 1)
         self.assertEqual(
             param_sets[0],
-            {"search": "large language model LLM generative AI biomedical clinical"},
+            {"search": '((("large language model" OR LLM) OR "generative AI") AND (biomedical OR clinical))'},
         )
 
     def test_rate_limited_boolean_query_does_not_fan_out_more_requests(self):

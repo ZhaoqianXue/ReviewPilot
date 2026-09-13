@@ -1,0 +1,20 @@
+{
+  "downloaded_at": "2026-09-12T19:18:55.169903",
+  "success": 1,
+  "failed": 0,
+  "skipped": 0,
+  "attempted": 1,
+  "pdf_count": 2,
+  "downloaded": [
+    {
+      "title": "UrbanGPT: Spatio-Temporal Large Language Models",
+      "path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/output/review-project/pdfs/urbangpt_spatio-temporal_large_language_models_open_access_rescue_browser.pdf"
+    }
+  ],
+  "failed_papers": [],
+  "subscribed_papers": [],
+  "unavailable_papers": [],
+  "web_search_fallback_candidates": [],
+  "output_dir": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/output/review-project/pdfs",
+  "download_engine": "FastCascadePDFDownloader"
+}

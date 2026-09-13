@@ -27,7 +27,7 @@ class PubMedSearcher:
         self.api_key = api_key
 
     def search(self, query: str, max_results: int = 100, search_scope: str = "title_abstract",
-               output_file: Optional[str] = None) -> List[Dict]:
+               output_file: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
         """
         Search PubMed and return article metadata.
 
@@ -40,6 +40,9 @@ class PubMedSearcher:
         Returns:
             List of article dictionaries
         """
+        from reviewpilot_core.publication_dates import resolve_range
+        self._date_range = resolve_range(date_range) if date_range is not None else None
+
         # Load existing articles if output file exists (for resume)
         existing_ids = set()
         existing_articles = []
@@ -83,35 +86,9 @@ class PubMedSearcher:
         Converts: ('LLM' OR 'GPT') AND ('judge')
         To: (LLM[Title/Abstract] OR GPT[Title/Abstract]) AND (judge[Title/Abstract])
         """
+        from reviewpilot_core.query_syntax import parse, render, phrase
         import re
-
-        # Split by AND to preserve structure
-        and_parts = re.split(r'\bAND\b', query, flags=re.IGNORECASE)
-
-        formatted_parts = []
-        for part in and_parts:
-            part = part.strip()
-            # Remove outer parentheses for processing
-            inner = part.strip('()')
-
-            # Split by OR
-            or_terms = re.split(r'\bOR\b', inner, flags=re.IGNORECASE)
-
-            formatted_terms = []
-            for term in or_terms:
-                term = term.strip().strip("'\"")
-                if term:
-                    # Add field restriction
-                    if ' ' in term:
-                        # Multi-word term needs quotes
-                        formatted_terms.append(f'"{term}"[Title/Abstract]')
-                    else:
-                        formatted_terms.append(f'{term}[Title/Abstract]')
-
-            if formatted_terms:
-                formatted_parts.append(f"({' OR '.join(formatted_terms)})")
-
-        return " AND ".join(formatted_parts)
+        return render(parse(query), lambda value: value if re.search(r'\[[^\[\]]+\]$', value) else phrase(value) + '[Title/Abstract]')
 
     def _search_pmids(self, query: str, max_results: int) -> List[str]:
         """Search for PMIDs matching the query."""
@@ -122,6 +99,9 @@ class PubMedSearcher:
             "retmode": "json",
             "email": self.email,
         }
+        bounds = getattr(self, '_date_range', None)
+        if bounds:
+            params.update(datetype='pdat', mindate=(bounds['start'] or '0001-01-01').replace('-', '/'), maxdate=bounds['end'].replace('-', '/'))
         if self.api_key:
             params["api_key"] = self.api_key
 
@@ -245,6 +225,17 @@ class PubMedSearcher:
                     year_elem = article_elem.find(".//Journal/JournalIssue/PubDate/MedlineDate")
                 year = year_elem.text[:4] if year_elem is not None and year_elem.text else ""
 
+                publication_date = year
+                month = article_elem.findtext('.//Journal/JournalIssue/PubDate/Month') or ''
+                day = article_elem.findtext('.//Journal/JournalIssue/PubDate/Day') or ''
+                import calendar
+                months = {v.lower(): i for i, v in enumerate(calendar.month_abbr) if v}
+                month_number = int(month) if month.isdigit() else months.get(month[:3].lower())
+                if year and month_number:
+                    publication_date += f'-{month_number:02d}'
+                    if day.isdigit():
+                        publication_date += f'-{int(day):02d}'
+
                 # DOI
                 doi = ""
                 for id_elem in article.findall(".//ArticleId"):
@@ -260,6 +251,7 @@ class PubMedSearcher:
                     "authors": authors,
                     "journal": journal,
                     "year": year,
+                    "publication_date": publication_date,
                     "doi": doi,
                     "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                 })
@@ -271,7 +263,7 @@ class PubMedSearcher:
 
 
 def search(query: str, max_results: int = 100, email: str = "your@email.com",
-           api_key: Optional[str] = None, output_file: Optional[str] = None) -> List[Dict]:
+           api_key: Optional[str] = None, output_file: Optional[str] = None, date_range: Optional[Dict] = None) -> List[Dict]:
     """
     Convenience function to search PubMed.
 
@@ -286,7 +278,7 @@ def search(query: str, max_results: int = 100, email: str = "your@email.com",
         List of article dictionaries
     """
     searcher = PubMedSearcher(email=email, api_key=api_key)
-    return searcher.search(query, max_results, output_file=output_file)
+    return searcher.search(query, max_results, output_file=output_file, date_range=date_range)
 
 
 if __name__ == "__main__":

@@ -371,7 +371,7 @@ class LeadAgentMemoryIntegrationTests(unittest.TestCase):
         self.assertIn("Understood", prompt)
         self.assertEqual(prompt.count("Should we retain it?"), 1)
 
-    def test_cross_project_context_is_passed_through_existing_input_contract(self):
+    def test_legacy_cross_project_context_is_not_automatically_injected(self):
         self.memory.promote(
             kind="extraction_schema",
             project_id="source-project",
@@ -396,10 +396,9 @@ class LeadAgentMemoryIntegrationTests(unittest.TestCase):
         agent._call_workflow_action("generate-schema", "target-project", input_data={"current": "value"})
         sent = adapter.calls[-1][3]
         self.assertEqual(sent["current"], "value")
-        self.assertIn("study_design", sent["memory_context"])
-        self.assertIn("Advisory memory", sent["memory_context"])
+        self.assertNotIn("memory_context", sent)
 
-    def test_verified_search_setup_is_promoted_without_public_result_fields(self):
+    def test_verified_search_setup_is_snapshotted_locally_without_cross_project_promotion(self):
         source_path = self.output_root / "source-project"
         adapter = _RecordingWorkflowAdapter(write_search_setup=True)
         agent = LeadAgent(self.output_root, workflow_adapter=adapter, memory_service=self.memory)
@@ -412,8 +411,9 @@ class LeadAgentMemoryIntegrationTests(unittest.TestCase):
             domain="medicine",
             topic="cancer screening",
         )
-        self.assertIn("cancer AND screening", context)
-        self.assertNotIn(str(source_path), context)
+        self.assertEqual(context, "")
+        snapshot = json.loads((source_path / "memory/confirmed_decisions.json").read_text())
+        self.assertEqual(snapshot["search_setup"]["configuration"]["search_terms"], "cancer AND screening")
 
     def test_failed_search_setup_verification_does_not_promote(self):
         adapter = _RecordingWorkflowAdapter(write_search_setup=False)
@@ -458,7 +458,7 @@ class MemoryWebContractTests(unittest.TestCase):
     def test_settings_api_returns_only_enabled_boolean(self):
         response = self.client.get("/memory/settings")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"cross_project_memory_enabled": True})
+        self.assertEqual(response.json(), {"cross_project_memory_enabled": False})
 
         response = self.client.put(
             "/memory/settings",
@@ -500,20 +500,17 @@ class MemoryWebContractTests(unittest.TestCase):
         other.mkdir()
         (self.output_root / ".agent_memory").symlink_to(other, target_is_directory=True)
         response = self.client.get("/memory/settings")
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json(), {"detail": "Memory is unavailable"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"cross_project_memory_enabled": False})
         self.assertNotIn(str(other), response.text)
 
     def test_frontend_exposes_only_minimal_memory_copy(self):
         source = (Path(__file__).parents[1] / "frontend" / "app.js").read_text(encoding="utf-8")
         self.assertIn('data-act="open-memory"', source)
-        self.assertIn('>Memory<', source)
-        self.assertIn('Clear memory', source)
-        self.assertIn('Reuse validated memory from previous projects.', source)
-        self.assertNotIn('Session Memory', source)
-        self.assertNotIn('Cross-project memory', source)
-        self.assertNotIn('memory item', source.lower())
-        self.assertNotIn('source project', source.lower())
+        self.assertIn('Reuse project configuration', source)
+        self.assertIn('Import as draft', source)
+        self.assertNotIn('data-act="toggle-memory"', source)
+        self.assertNotIn('Reuse validated memory from previous projects.', source)
 
     def test_production_lead_imports_only_the_accepted_memory_runtime(self):
         source = (Path(__file__).parents[1] / "agents" / "lead_agent.py").read_text(encoding="utf-8")

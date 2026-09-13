@@ -1,0 +1,80 @@
+{
+  "created_at": "2026-09-13T02:13:36.728+00:00",
+  "stages": {
+    "collection": {
+      "attempt": 1,
+      "counts": {
+        "collected": 2,
+        "failed": 0,
+        "succeeded": 1
+      },
+      "error": null,
+      "last_valid": {
+        "attempt": 1,
+        "counts": {
+          "collected": 2,
+          "failed": 0,
+          "succeeded": 1
+        },
+        "status": "completed",
+        "updated_at": "2026-09-13T02:13:36.729+00:00"
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-09-13T02:13:36.729+00:00"
+    },
+    "screening": {
+      "attempt": 1,
+      "counts": {},
+      "error": null,
+      "last_valid": {
+        "attempt": 1,
+        "counts": {},
+        "status": "completed",
+        "updated_at": "2026-09-13T02:13:36.731+00:00"
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-09-13T02:13:36.731+00:00"
+    },
+    "retrieval": {
+      "attempt": 3,
+      "counts": {
+        "failed": 0,
+        "succeeded": 2
+      },
+      "error": null,
+      "last_valid": {
+        "attempt": 3,
+        "counts": {
+          "failed": 0,
+          "succeeded": 2
+        },
+        "status": "completed",
+        "updated_at": "2026-09-13T02:17:10.759+00:00"
+      },
+      "stale": false,
+      "status": "completed",
+      "updated_at": "2026-09-13T02:17:10.759+00:00"
+    },
+    "extraction": {
+      "attempt": 0,
+      "counts": {},
+      "error": null,
+      "last_valid": null,
+      "stale": false,
+      "status": "ready",
+      "updated_at": "2026-09-13T02:13:36.732+00:00"
+    },
+    "categorization": {
+      "attempt": 0,
+      "counts": {},
+      "error": null,
+      "last_valid": null,
+      "stale": false,
+      "status": "not_started",
+      "updated_at": "2026-09-13T02:13:36.728+00:00"
+    }
+  },
+  "version": 1
+}

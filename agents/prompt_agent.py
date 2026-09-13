@@ -498,7 +498,8 @@ Generate 8-12 fields when the request is broad. Preserve user-requested concepts
             fields.append({key: item[key].strip() if isinstance(item[key], str) else item[key] for key in ("name", "type", "description", "required", "example")})
         if len({field["name"] for field in fields}) != len(fields):
             raise ValueError("PromptAgent extraction schema field names must be unique")
-        return {"fields": fields}
+        from reviewpilot_core.extraction_schema import validate_schema
+        return validate_schema({"fields": fields})
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
         stripped = text.strip()

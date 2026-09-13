@@ -328,6 +328,12 @@ class SearchConditionAgent(BaseAgent):
         )
 
     def _llm_search_setup_prompt(self, config: Dict[str, Any], description: str) -> str:
+        settings_instruction = ""
+        if config.get("interpret_chat_settings"):
+            defaults = {key: config.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
+            settings_instruction = f"""
+This is an initial chat setup. Also return a top-level "search_settings" object containing only explicitly requested operational settings: project_name (string), platforms (array of source keys), max_results (positive integer per source), date_start and date_end (ISO dates). Omit unspecified settings. Supported source keys: pubmed, arxiv, openalex. Preserve these defaults for unspecified settings: {json.dumps(defaults, ensure_ascii=False)}.
+"""
         return f"""Generate Search Setup for ReviewPilot from this user chat request.
 
 USER RESEARCH REQUEST DATA:
@@ -353,6 +359,8 @@ Return ONLY valid JSON with this exact top-level shape:
 
 Rules:
 - Return exactly the JSON object described above.
+- Separate research eligibility from operational instructions. Database names, result limits, date controls, session names, and workflow-testing instructions belong to settings, not concept_blocks or query_terms.
+- The reply describes the generated research concepts. Source, date, and result-limit settings are reviewed in the Search Setup canvas before collection.
 - Return 1 to 8 concept blocks.
 - Make every concept block one atomic user-facing concept at the specificity stated by the user. Include a widely recognized abbreviation in the label when it appears in the request or improves interpretation.
 - Keep alternatives within one conceptual dimension as separate concepts with the same eligibility_group. A record satisfies that group by matching any concept in it.
@@ -364,7 +372,8 @@ Rules:
 - Use the minimum sufficient set of supported equivalents; the term limit is a cap rather than a target.
 - Populate query_terms only with spelling variants, inflections, sufficiently specific abbreviations, historical names, and exact synonyms of that block's label. Broader categories, narrower instances, products, methods, applications, enabling architectures, and associated concepts remain separate scope decisions and enter retrieval only when explicitly included by the user.
 - Express query terms as plain source-neutral text without Boolean operators, field tags, wildcard syntax, or quotation marks.
-- Use only the keys shown in the schema."""
+- Use only the keys shown in the schema.
+{settings_instruction}"""
 
     def _parse_llm_search_setup(self, response_text: str) -> Dict[str, Any]:
         try:
@@ -390,12 +399,17 @@ Rules:
         missing = sorted(required - set(llm_payload))
         if missing:
             raise ValueError(f"SearchConditionAgent LLM response missing required fields: {', '.join(missing)}")
-        unexpected = sorted(set(llm_payload) - required)
+        allowed = required | ({"search_settings"} if config.get("interpret_chat_settings") else set())
+        unexpected = sorted(set(llm_payload) - allowed)
         if unexpected:
             raise ValueError(f"SearchConditionAgent LLM response has unexpected fields: {', '.join(unexpected)}")
 
         reply = self._validate_required_text(llm_payload["reply"], "reply")
         research_description = self._validate_required_text(llm_payload["research_description"], "research_description")
+
+        if config.get("interpret_chat_settings"):
+            config = self._apply_chat_settings(config, llm_payload.get("search_settings", {}))
+            project_name = config["project_name"]
 
         concept_blocks = self._validate_concept_blocks(llm_payload["concept_blocks"])
         keywords = [block["label"] for block in concept_blocks if block["required_for_eligibility"]]
@@ -443,6 +457,37 @@ Rules:
             "model": model,
             "generated_by": "llm",
         }
+
+    @staticmethod
+    def _apply_chat_settings(config: Dict[str, Any], settings: Any) -> Dict[str, Any]:
+        allowed = {"project_name", "platforms", "max_results", "date_start", "date_end"}
+        if not isinstance(settings, dict) or set(settings) - allowed:
+            raise ValueError("Invalid chat search settings")
+        result = dict(config)
+        if "project_name" in settings:
+            name = settings["project_name"]
+            if not isinstance(name, str) or not name.strip() or len(name) > 120:
+                raise ValueError("Invalid chat project name")
+            result["project_name"] = name.strip()
+        platforms = settings.get("platforms", result.get("platforms"))
+        if not isinstance(platforms, list) or not platforms or any(not isinstance(p, str) or p not in {"pubmed", "arxiv", "openalex"} for p in platforms):
+            raise ValueError("Invalid chat search sources")
+        result["platforms"] = list(dict.fromkeys(platforms))
+        limit = settings.get("max_results")
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise ValueError("Invalid chat result limit")
+        old_limits = result.get("source_limits") or {}
+        result["source_limits"] = {p: limit if limit is not None else old_limits.get(p, result.get("max_results", DEFAULT_MAX_RESULTS_PER_PLATFORM)) for p in result["platforms"]}
+        from reviewpilot_core.publication_dates import resolve_range
+        bounds = dict(result.get("date_range") or {})
+        for key in ("start", "end"):
+            if "date_" + key in settings:
+                value = settings["date_" + key]
+                if not isinstance(value, str):
+                    raise ValueError("Invalid chat date range")
+                bounds[key] = value
+        result["date_range"] = resolve_range(bounds)
+        return result
 
     @classmethod
     def _validate_concept_blocks(cls, value: Any) -> List[Dict[str, Any]]:

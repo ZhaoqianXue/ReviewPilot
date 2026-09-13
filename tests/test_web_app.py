@@ -768,6 +768,11 @@ class WebAppTests(unittest.TestCase):
             try:
                 client = TestClient(web_app.create_app())
                 with patch.object(web_app, "LeadAgent", FakeLeadAgent):
+                    blocked = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
+                    self.assertEqual(blocked.status_code, 409)
+                    self.assertEqual(calls, [])
+                    release.set()
+                    web_app.task_runner.wait(task_id, timeout=2)
                     response = client.post("/projects/demo/chat", json={"message": "What next?", "step": "extraction"})
             finally:
                 release.set()
@@ -780,7 +785,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.json()["reply"], "LLM project reply.")
         self.assertEqual(calls, [(output_root, "demo", "What next?", "extraction")])
         self.assertEqual(response.json()["lead_agent"]["stage"], "search_conditions")
-        self.assertEqual(response.json()["state"]["activeTask"]["task_id"], task_id)
+        self.assertIsNone(response.json()["state"]["activeTask"])
         self.assertEqual(response.json()["state"]["messages"][-1]["text"], "LLM project reply.")
 
     def test_run_action_rejects_unknown_action(self):

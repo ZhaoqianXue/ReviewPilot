@@ -4,6 +4,7 @@ Handles paper deduplication and LLM-based relevance checking.
 Outputs filtered papers in JSONL format with a log file.
 """
 
+from reviewpilot_core.screening_evidence import evidence_prompt, parse_screening_response
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
@@ -71,7 +72,9 @@ class FilteringAgent(BaseAgent):
 
         collected_folder = Path(input_data.get("collected_folder", self.project_path / "collected"))
         relevance_prompt = input_data.get("relevance_prompt", {})
-        date_range = input_data.get("date_range", {})
+        if relevance_prompt.get("criteria_finalized"):
+            relevance_prompt = evidence_prompt(relevance_prompt)
+        date_range = input_data.get("date_range") or {}
         auto_approve = input_data.get("auto_approve", False)
 
         # Create output directory
@@ -83,8 +86,12 @@ class FilteringAgent(BaseAgent):
         initial_count = len(papers)
         self.log(f"Loaded {initial_count} papers from collection")
 
-        # Step 2: Year filtering
-        if date_range.get("start_date") or date_range.get("end_date"):
+        self.removed_records = []
+        for index, paper in enumerate(papers):
+            paper['collection_record_id'] = f'record-{index + 1}'
+
+        # Step 2: Publication date filtering
+        if date_range is not None:
             print(f"  Filtering by date range...")
             papers = self._filter_by_date(papers, date_range)
             print(f"    {initial_count} -> {len(papers)} papers (after date filter)")
@@ -128,6 +135,7 @@ class FilteringAgent(BaseAgent):
         write_jsonl(str(output_file), papers)
         write_jsonl(str(included_file), papers)
         write_jsonl(str(excluded_file), irrelevant)
+        write_jsonl(str(output_dir / 'removed_records.jsonl'), self.removed_records)
         self.log(f"Saved {len(papers)} filtered papers to {output_file}")
 
         # Save statistics
@@ -216,51 +224,41 @@ class FilteringAgent(BaseAgent):
 
         return papers
 
+    def _record_removal(self, paper, kind, reason, representative=None):
+        if not hasattr(self, 'removed_records'):
+            self.removed_records = []
+        identity = lambda row: {k: row.get(k) for k in ('collection_record_id', 'id', 'doi', 'source', 'title')}
+        self.removed_records.append({**paper, 'removal': {'kind': kind, 'reason': reason,
+            'representative': identity(representative) if representative else None,
+            'duplicate_group': representative.get('collection_record_id') if representative else None}})
+
     def _filter_by_date(self, papers: List[Dict], date_range: Dict) -> List[Dict]:
         """Filter papers by publication date."""
-        start_date = date_range.get("start_date")
-        end_date = date_range.get("end_date")
-
-        if not start_date and not end_date:
-            return papers
-
+        from reviewpilot_core.publication_dates import assess
         filtered = []
         for paper in papers:
-            year = paper.get("year")
-            if year is None:
-                continue
-
-            try:
-                year = int(str(year)[:4])  # Extract year from various formats
-            except (ValueError, TypeError):
-                continue
-
-            if start_date:
-                start_year = int(start_date[:4])
-                if year < start_year:
-                    continue
-
-            if end_date:
-                end_year = int(end_date[:4])
-                if year > end_year:
-                    continue
-
-            filtered.append(paper)
-
+            assessment = assess(paper, date_range)
+            paper['date_assessment'] = assessment
+            if not assessment['excluded']:
+                filtered.append(paper)
+            else:
+                self._record_removal(paper, 'date', assessment['reason'])
         return filtered
 
     def _deduplicate_exact(self, papers: List[Dict]) -> List[Dict]:
         """Remove exact title duplicates."""
-        seen_titles = set()
+        seen_titles = {}
         unique_papers = []
 
         for paper in papers:
             title = paper.get("title", "")
             normalized = self._normalize_title(title)
 
-            if normalized not in seen_titles:
-                seen_titles.add(normalized)
+            if not normalized or normalized not in seen_titles:
+                seen_titles[normalized] = paper
                 unique_papers.append(paper)
+            else:
+                self._record_removal(paper, 'exact_duplicate', 'Identical normalized title.', seen_titles[normalized])
 
         return unique_papers
 
@@ -307,6 +305,7 @@ class FilteringAgent(BaseAgent):
                     continue
                 if similarity_matrix[i, j] >= threshold:
                     to_remove.add(j)
+                    self._record_removal(papers[j], 'similar_duplicate', f'Title/author similarity {similarity_matrix[i, j]:.3f} >= {threshold}.', papers[i])
 
         # Filter papers
         unique_papers = [p for i, p in enumerate(papers) if i not in to_remove]
@@ -332,7 +331,7 @@ class FilteringAgent(BaseAgent):
 
             title = paper.get("title", "")
             raw_abstract = str(paper.get("abstract") or "")
-            abstract = raw_abstract[:1000]
+            abstract = raw_abstract if prompt_config.get("review_evidence") else raw_abstract[:1000]
             if len(raw_abstract) > len(abstract):
                 abstract += "\n[Abstract truncated by ReviewPilot after 1000 characters]"
 
@@ -357,10 +356,14 @@ class FilteringAgent(BaseAgent):
                     provider="openai"
                 )
 
-                decision = response.strip().casefold()
-                if decision not in {"true", "false"}:
-                    raise ValueError("Relevance model response must be exactly True or False")
-                is_relevant = decision == "true"
+                if prompt_config.get("review_evidence"):
+                    is_relevant, rationale = parse_screening_response(response, paper, prompt_config)
+                    paper["screening_evidence"] = rationale
+                else:
+                    decision = response.strip().casefold()
+                    if decision not in {"true", "false"}:
+                        raise ValueError("Relevance model response must be exactly True or False")
+                    is_relevant = decision == "true"
 
                 # Add relevance info to paper
                 paper["is_relevant"] = is_relevant

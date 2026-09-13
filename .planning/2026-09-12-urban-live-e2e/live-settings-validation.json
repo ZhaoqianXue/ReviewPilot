@@ -1,0 +1,59 @@
+{
+  "project_name": "Urban Settings Validation",
+  "research_description": "Review applications of large language models in urban planning or urban governance, limited to arXiv records from 2023-01-01 to 2026-09-12, with a maximum of 5 papers. Session name: Urban Settings Validation.",
+  "platforms": [
+    "arxiv"
+  ],
+  "source_limits": {
+    "arxiv": 5
+  },
+  "date_range": {
+    "start": "2023-01-01",
+    "end": "2026-09-12"
+  },
+  "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs OR \"foundation model\" OR \"foundation models\" OR \"generative pre-trained transformer\" OR \"generative pretrained transformer\") AND (\"urban planning\" OR \"city planning\" OR \"town planning\" OR \"municipal planning\" OR \"metropolitan planning\" OR \"urban governance\" OR \"city governance\" OR \"municipal governance\" OR \"metropolitan governance\" OR \"local governance\")",
+  "concept_blocks": [
+    {
+      "label": "large language models (LLMs)",
+      "role": "phenomenon",
+      "eligibility_group": "llm_phenomenon",
+      "required_for_eligibility": true,
+      "query_terms": [
+        "large language model",
+        "large language models",
+        "LLM",
+        "LLMs",
+        "foundation model",
+        "foundation models",
+        "generative pre-trained transformer",
+        "generative pretrained transformer"
+      ]
+    },
+    {
+      "label": "urban planning",
+      "role": "context",
+      "eligibility_group": "urban_domain",
+      "required_for_eligibility": true,
+      "query_terms": [
+        "urban planning",
+        "city planning",
+        "town planning",
+        "municipal planning",
+        "metropolitan planning"
+      ]
+    },
+    {
+      "label": "urban governance",
+      "role": "context",
+      "eligibility_group": "urban_domain",
+      "required_for_eligibility": true,
+      "query_terms": [
+        "urban governance",
+        "city governance",
+        "municipal governance",
+        "metropolitan governance",
+        "local governance"
+      ]
+    }
+  ]
+}

@@ -9,6 +9,43 @@ from pathlib import Path
 from typing import Any
 
 from .atomic_files import atomic_write_json
+from .project_decisions import remember_confirmed, revision
+
+# These keys carry paper identity, execution status or evidence provenance.
+RESERVED_FIELDS = frozenset('paper_id id source title authors year doi url pdf_file pdf_path row_number '
+    'extracted_at extraction_model extraction_cost_usd extracted_data field_evidence extraction_source '
+    'extraction_status source_urls error_message human_fields collection_record_id confidence '
+    'pdf_failure_class retrieval_status web_search_fallback_pending'.split())
+
+
+def validate_schema(schema):
+    from .field_values import kind, validate_value
+    fields = schema.get('fields') if isinstance(schema, dict) else None
+    if not isinstance(fields, list) or not fields or any(not isinstance(f, dict) for f in fields):
+        raise ValueError('Extraction schema must contain a nonempty list of field objects.')
+    names = [f.get('name') for f in fields]
+    if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+        raise ValueError('Extraction schema field names must be nonempty and unique.')
+    if set(names) & RESERVED_FIELDS:
+        raise ValueError('Choose a field name distinct from reserved paper metadata: ' + ', '.join(sorted(set(names) & RESERVED_FIELDS)))
+    def check(field):
+        if kind(field) not in {'string','integer','number','array','text_array','object','boolean'}:
+            raise ValueError('Unsupported extraction field type: ' + str(field.get('type')))
+        for key in ('enum', 'options'):
+            if key in field:
+                options = field[key]
+                if not isinstance(options, list) or not options:
+                    raise ValueError('Field enum/options must be a nonempty list.')
+                for value in options:
+                    validate_value({k:v for k,v in field.items() if k not in {'enum','options'}},
+                                   [value] if kind(field) in {'array','text_array'} else value)
+        if 'items' in field:
+            if not isinstance(field['items'], dict):
+                raise ValueError('Field items must be a schema object.')
+            check(field['items'])
+    for field in fields:
+        check(field)
+    return schema
 
 
 def schema_paths(project_path: Path | str) -> dict[str, Path]:
@@ -37,9 +74,12 @@ def load_schema_draft(project_path: Path | str) -> dict[str, Any]:
 
 def save_schema_draft(project_path: Path | str, schema: dict[str, Any]) -> dict[str, Any]:
     paths = schema_paths(project_path)
-    normalized = normalize_schema(schema)
+    if not isinstance(schema, dict) or not isinstance(schema.get('fields'), list):
+        raise ValueError('Extraction schema must contain a list of field objects.')
+    normalized = validate_schema({'fields': [normalize_field(field) for field in schema['fields']]})
     if not normalized["fields"]:
         raise ValueError("extraction schema must include at least one field")
+    remember_confirmed(Path(project_path), 'extraction_schema')
     paths["extraction_dir"].mkdir(parents=True, exist_ok=True)
     _write_json(paths["draft"], normalized)
     _write_json(paths["current"], normalized)
@@ -51,6 +91,16 @@ def save_schema_draft(project_path: Path | str, schema: dict[str, Any]) -> dict[
 def is_schema_finalized(project_path: Path | str) -> bool:
     paths = schema_paths(project_path)
     if paths["finalized"].exists():
+        marker = _read_json(paths["finalized"])
+        current = _read_json(paths["current"])
+        if not isinstance(marker, dict) or not isinstance(current, dict) or not current.get("fields"):
+            return False
+        current = normalize_schema(current)
+        if marker.get("schema_revision") and marker["schema_revision"] != revision(current):
+            return False
+        draft = _read_json(paths["draft"])
+        if paths["draft"].exists() and (not isinstance(draft, dict) or normalize_schema(draft) != current):
+            return False
         return True
     if paths["draft"].exists():
         return False
@@ -114,6 +164,7 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
     schema = load_schema_draft(project)
     if not schema["fields"]:
         raise ValueError("cannot finalize extraction schema without fields")
+    validate_schema(schema)
     config = _read_json(paths["search_conditions"]) or {}
     system_prompt, extraction_prompt, user_prompt_template = build_extraction_prompts(config, schema)
     paths["extraction_dir"].mkdir(parents=True, exist_ok=True)
@@ -141,8 +192,11 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
             "generated_at": datetime.now().isoformat(),
         },
     )
-    marker = {"finalized_at": datetime.now().isoformat(), "field_count": len(schema["fields"])}
+    from .setup_revision import setup_revision
+    marker = {"finalized_at": datetime.now().isoformat(), "field_count": len(schema["fields"]), "schema_revision": revision(schema),
+              "setup_revision": setup_revision(_read_json(project / "search_conditions.json"))}
     _write_json(paths["finalized"], marker)
+    remember_confirmed(project, 'extraction_schema')
     return {"status": "schema_finalized", "field_count": len(schema["fields"]), "schema": schema}
 
 
@@ -159,7 +213,7 @@ def build_extraction_prompts(config: dict[str, Any], schema: dict[str, Any]) -> 
 FINALIZED EXTRACTION SCHEMA:
 {json.dumps(schema, ensure_ascii=False)}
 
-Populate every declared schema field from the supplied paper evidence. Preserve reported units, denominators, time points, comparison groups, and uncertainty. Use an empty string when the supplied evidence does not support a field. Return exactly one JSON object containing every declared field name and no additional fields."""
+Populate every declared schema field from the supplied paper evidence. Preserve reported units, denominators, time points, comparison groups, and uncertainty. Use an empty string or null when the supplied evidence does not support a field, even for required fields. Match declared JSON types: Number/float are finite JSON numbers, integer is an integer, Text/Long text/Select are strings, Text (list) is an array of strings, list/array is an array, boolean/bool is a boolean, object/dict is an object. Respect enum/options and items constraints; never invent evidence to satisfy a type. Return exactly one JSON object containing every declared field name and the _field_evidence object for supporting excerpts; no other fields."""
     user_prompt_template = f"{extraction_prompt}\n\nPAPER EVIDENCE DATA:\n{{paper_text}}\n\nJSON response:"
     return system_prompt, extraction_prompt, user_prompt_template
 
@@ -176,10 +230,13 @@ def normalize_schema(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def normalize_field(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError('Extraction schema fields must be JSON objects.')
     name = _field_name(raw.get("name") or raw.get("field_name") or "")
     if not name:
         raise ValueError("extraction schema field name is required")
     return {
+        **{k: raw[k] for k in ("enum", "options", "items") if k in raw},
         "name": name,
         "type": str(raw.get("type") or raw.get("new_type") or "Text").strip() or "Text",
         "description": str(raw.get("description") or raw.get("new_description") or raw.get("example") or "").strip(),

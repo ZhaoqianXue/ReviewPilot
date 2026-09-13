@@ -1,0 +1,129 @@
+{
+  "project": {
+    "id": "review-project",
+    "title": "Urban Planning Governance Live E2E 20260912",
+    "status": "Complete",
+    "model": "gpt-5.4-mini",
+    "date": "Sep 12, 2026"
+  },
+  "read_only_example": false,
+  "rows": {
+    "removed-records": 0,
+    "excluded-papers": 4,
+    "included-papers": 1,
+    "extraction-results": 1,
+    "categorized-results": 1
+  },
+  "exports": [
+    {
+      "key": "workflow-decisions",
+      "filename": "workflow_decisions.json",
+      "http_status": 200,
+      "bytes": 1466,
+      "sha256": "8231beece90cd47a50bdf33d2e8617039761bfa3069afb3a2676357203157c92",
+      "source_matches": true
+    },
+    {
+      "key": "removed-records",
+      "filename": "removed_records.jsonl",
+      "http_status": 200,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_matches": true
+    },
+    {
+      "key": "review-changes",
+      "filename": "changes.json",
+      "http_status": 200,
+      "bytes": 30152,
+      "sha256": "f436d311ba27d60c3afa3b815d9ae25336d677c9c6800a18f064b0f1b7f9c915",
+      "source_matches": true
+    },
+    {
+      "key": "excluded-papers",
+      "filename": "excluded_papers.jsonl",
+      "http_status": 200,
+      "bytes": 13677,
+      "sha256": "bb3774dda006cf6cd196c07a221b161df10f4ece02887e281da03e455491482e",
+      "source_matches": true
+    },
+    {
+      "key": "search-setup",
+      "filename": "search_conditions.json",
+      "http_status": 200,
+      "bytes": 2051,
+      "sha256": "5741d55c9bc39be12f33d0dafb39a51b7b7c227aac345eebad66675c6ecb524f",
+      "source_matches": true
+    },
+    {
+      "key": "relevance-prompt",
+      "filename": "relevance_prompt.json",
+      "http_status": 200,
+      "bytes": 3166,
+      "sha256": "60eaf5734a665005bbcd48570671ea26ce1193f58dba3fd7fb439d4a152278f2",
+      "source_matches": true
+    },
+    {
+      "key": "included-papers",
+      "filename": "included_papers.jsonl",
+      "http_status": 200,
+      "bytes": 3218,
+      "sha256": "f0d9a6b93e1e9c3fb1bebab81e794f6aee6bfe98f3e122cc54581f1e1208816b",
+      "source_matches": true
+    },
+    {
+      "key": "download-report",
+      "filename": "download_report.json",
+      "http_status": 200,
+      "bytes": 653,
+      "sha256": "97fbdfbd15b087079b4ab97d810754b6762c511484d735c1f4e2e3fedd7f96e2",
+      "source_matches": true
+    },
+    {
+      "key": "extraction-results",
+      "filename": "extraction_results.jsonl",
+      "http_status": 200,
+      "bytes": 8337,
+      "sha256": "803af586163f01696c4effe5022e0532f6204212fa4001bc70e2a16e2805c72d",
+      "source_matches": true
+    },
+    {
+      "key": "categorization-mapping",
+      "filename": "categorization_mapping.json",
+      "http_status": 200,
+      "bytes": 911,
+      "sha256": "d5b778402bf2e6bebd956464b5fc725a142e83e6d11a571aea8b4a5be7f56910",
+      "source_matches": true
+    },
+    {
+      "key": "categorized-results",
+      "filename": "categorized_results.jsonl",
+      "http_status": 200,
+      "bytes": 8475,
+      "sha256": "9b00738ebd5265ddd82414148cca767d64ab8dd4ce69d299f91ac213530a5e28",
+      "source_matches": true
+    }
+  ],
+  "baseline_files": 2870,
+  "changed_existing_files": [
+    "output/pdf/ReviewPilot-NAACL2027.pdf"
+  ],
+  "new_files_outside_test_projects": [],
+  "screening": {
+    "identified": 5,
+    "afterDedup": 5,
+    "included": 1
+  },
+  "retrieval": {
+    "retrieved": 1,
+    "total": 1,
+    "openAccess": 0,
+    "viaInstitution": 0,
+    "unknownAccess": 1,
+    "unavailable": 0
+  },
+  "categorization": {
+    "papers": 1,
+    "groups": 1
+  }
+}

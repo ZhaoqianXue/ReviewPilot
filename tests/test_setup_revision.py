@@ -89,10 +89,12 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertFalse(result["confirmationRequired"])
             self.assertEqual(result["setupRevision"], setup_revision(config))
 
-    def test_legacy_implicit_defaults_are_a_visual_noop_when_saved(self):
+    def test_legacy_unbounded_end_becomes_an_explicit_material_boundary_when_saved(self):
         legacy = {"project_name": "Demo", "description": "Question", "search_terms": "Question", "platforms": ["pubmed"]}
         submitted = web_app._setup_config({"project_name": "Demo", "description": "Question", "platforms": ["pubmed"]})
-        self.assertEqual(setup_revision(legacy), setup_revision(submitted))
+        self.assertNotEqual(setup_revision(legacy), setup_revision(submitted))
+        from datetime import date
+        self.assertEqual(submitted['date_range']['end'], date.today().isoformat())
 
     def test_stale_confirmation_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ Extracts information from downloaded PDFs using LLM prompts.
 Outputs results in JSONL format with real-time writing.
 """
 
+from reviewpilot_core.evidence_support import FIELD_EVIDENCE_INSTRUCTION, verify_field_evidence
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -271,10 +272,15 @@ class ExtractionAgent(BaseAgent):
             user_template = extraction_prompt.get("user_prompt_template")
             if not isinstance(system_prompt, str) or not isinstance(user_template, str):
                 raise ValueError("Extraction requires a finalized prompt")
+            if (extraction_prompt.get("schema") or {}).get("fields"):
+                system_prompt += "\n" + FIELD_EVIDENCE_INSTRUCTION
             extracted, cost = self._extract_with_llm(text, system_prompt, user_template, active_llm_query)
             extracted_data = self._parse_extracted_data(extracted)
+            supplied_evidence = extracted_data.pop("_field_evidence", {})
+            field_evidence = verify_field_evidence(supplied_evidence, (extraction_prompt.get("schema") or {}).get("fields", []), self._sanitize_text_for_utf8(text)[:400000])
             extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, set())
             return {
+                **extracted_data,
                 "paper_id": paper.get("id", "unknown"),
                 "source": paper.get("source", "unknown"),
                 "title": paper.get("title", pdf_file.stem),
@@ -284,9 +290,9 @@ class ExtractionAgent(BaseAgent):
                 "extraction_model": self.model,
                 "extraction_cost_usd": cost,
                 "extracted_data": extracted_data,
+                "field_evidence": field_evidence,
                 "extraction_source": "pdf",
                 "extraction_status": "success",
-                **extracted_data,
             }
         except Exception as exc:
             self.log(f"Error processing {pdf_file.name}: {exc}", "error")
@@ -295,6 +301,8 @@ class ExtractionAgent(BaseAgent):
     def _pdf_for_paper(self, row_number: int, paper: Dict[str, Any], pdf_folder: Path, pdf_files: List[Path]) -> Path | None:
         if paper.get("pdf_path") and Path(str(paper["pdf_path"])).exists():
             return Path(str(paper["pdf_path"]))
+        if paper.get("pdf_identity_required"):
+            return None
         row_prefix = f"row{row_number}_"
         for pdf_file in pdf_files:
             if pdf_file.name.startswith(row_prefix):
@@ -319,6 +327,7 @@ class ExtractionAgent(BaseAgent):
             response, usage = self._query_web_search_extraction(paper, extraction_prompt)
 
         extracted_data = self._parse_extracted_data(response)
+        extracted_data.pop("_field_evidence", None)  # Web snippets are not independently verified PDF evidence.
         extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, {"source_urls", "sources", "confidence"})
         source_urls = self._normalize_source_urls(extracted_data.get("source_urls") or extracted_data.get("sources") or [])
         if not source_urls:
@@ -329,6 +338,7 @@ class ExtractionAgent(BaseAgent):
         extracted_data["confidence"] = str(extracted_data.get("confidence") or "low")
         cost = self._usage_cost(usage)
         return {
+            **extracted_data,
             "paper_id": paper.get("id", "unknown"),
             "source": paper.get("source", "unknown"),
             "title": paper.get("title", f"Paper {row_number}"),
@@ -343,7 +353,6 @@ class ExtractionAgent(BaseAgent):
             "pdf_failure_class": paper.get("pdf_failure_class", ""),
             "retrieval_status": paper.get("retrieval_status", ""),
             "web_search_fallback_pending": False,
-            **extracted_data,
         }, cost
 
     def _metadata_source_urls(self, paper: Dict[str, Any]) -> list[str]:
@@ -537,6 +546,7 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
         extraction_prompt: Dict[str, Any],
         auxiliary_fields: set[str],
     ) -> Dict[str, Any]:
+        json.dumps(data, allow_nan=False)
         schema = extraction_prompt.get("schema") if isinstance(extraction_prompt.get("schema"), dict) else {}
         expected = [
             field["name"].strip()
@@ -545,6 +555,8 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
         ]
         if not expected:
             return data
+        from reviewpilot_core.extraction_schema import validate_schema
+        validate_schema(schema)
         missing = set(expected) - set(data)
         unexpected = set(data) - set(expected) - auxiliary_fields
         if missing or unexpected:
@@ -554,6 +566,9 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             if unexpected:
                 details.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
             raise ValueError("Extraction model response violates schema: " + "; ".join(details))
+        from reviewpilot_core.field_values import validate_value
+        for field in schema.get('fields') or []:
+            validate_value(field, data[field['name']])
         return data
 
     def _get_row_number(self, filename: str) -> Optional[int]:
@@ -579,10 +594,10 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
         try:
             reader = pypdf.PdfReader(str(pdf_path))
             text = ""
-            for page in reader.pages:
+            for page_number, page in enumerate(reader.pages, 1):
                 page_text = page.extract_text()
                 if page_text:
-                    text += page_text + "\n"
+                    text += f"[PDF page {page_number}]\n" + page_text + "\n"
             return text.strip()
         except Exception as e:
             self.log(f"Error reading PDF {pdf_path.name}: {e}", "warning")

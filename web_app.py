@@ -14,6 +14,8 @@ from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent
@@ -39,11 +41,16 @@ _prefer_local_package_imports()
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.agent_memory import CrossProjectMemoryService, MemoryStoreError
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
-from reviewpilot_core.atomic_files import atomic_write_json
+from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
 from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
-from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects
+from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects, _history
 from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
+from reviewpilot_core.project_store import read_json, read_jsonl
+from reviewpilot_core import record_review
+from reviewpilot_core.demo_projects import is_example, require_mutable, copy_example
+from reviewpilot_core.evidence_support import local_pdf
+from reviewpilot_core.configuration_reuse import configuration_options, preview_configuration, apply_configuration, ReuseConflict
 from reviewpilot_core.screening_criteria import require_finalized_criteria, validate_criteria, criteria_state
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
@@ -70,10 +77,22 @@ class SetupRevisionConflict(ValueError):
 def build_project_state(output_root: Path | str, project_id: str) -> dict:
     active_task = task_runner.active_for_project(project_id)
     project_path = Path(output_root) / project_id
+    record_review.recover(project_path)
     retry_is_active = active_task is not None and active_task["action"] == "retry-failed-downloads"
     if (project_path / ".retrieval_retry_pending.json").exists() and not retry_is_active:
         reconcile_retry_transaction(project_path)
     state = build_rp_data(Path(output_root), project_id, active_action=active_task["action"] if active_task else None)
+    from reviewpilot_core import workflow_decisions
+    decisions = workflow_decisions.projection(project_path)
+    state['categorizationWorkflow']['decisions'] = decisions
+    if decisions['selection']:
+        choice = decisions['selection']
+        state['categorizationWorkflow'].update(selectedField=choice['field'], mode=choice['mode'], suggestedCategories=choice['categories'])
+    if decisions['finalized']:
+        state['project']['status'] = 'Complete'
+    state["reviewWorkbench"] = record_review.projection(project_path)
+    state["readOnlyExample"] = is_example(Path(output_root), project_id)
+    state["exampleOrigin"] = read_json(project_path / "example_origin.json", None)
     state["activeTask"] = active_task
     return state
 
@@ -100,6 +119,7 @@ def _render_html_with_state(state: dict, new_project_state: dict) -> str:
     app_js_version = (FRONTEND_DIR / "app.js").stat().st_mtime_ns
 
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace('<script src="review.js"></script>', f'<script src="/static/review.js?v={(FRONTEND_DIR / "review.js").stat().st_mtime_ns}"></script>')
     html = html.replace(
         '  <script src="data.js"></script>\n  <script src="app.js"></script>',
         f'  <script>window.RP_DATA = {state_json}; window.RP_NEW_PROJECT_DATA = {new_state_json};</script>\n  <script src="/static/app.js?v={app_js_version}"></script>',
@@ -116,7 +136,7 @@ async def favicon(request):
 
 
 async def workspace_page(request):
-    return HTMLResponse(render_workspace_html(OUTPUT_ROOT))
+    return HTMLResponse(render_new_project_html(OUTPUT_ROOT))
 
 
 async def new_project_page(request):
@@ -135,6 +155,101 @@ async def project_state(request):
     if not known_project(OUTPUT_ROOT, project_id):
         raise HTTPException(status_code=404)
     return JSONResponse(build_project_state(OUTPUT_ROOT, project_id))
+
+
+async def session_history(request):
+    return JSONResponse({"history": _history(Path(OUTPUT_ROOT), "")})
+
+
+async def manage_session(request):
+    project_id = request.path_params["project_id"]
+    root = Path(OUTPUT_ROOT)
+    if not known_project(root, project_id) or (root / project_id).is_symlink():
+        raise HTTPException(404)
+    if any(item["id"] == project_id for item in _history(root, "")[0]["items"]):
+        raise HTTPException(403, "Example conversations cannot be renamed or deleted.")
+    payload = {}
+    if request.method == "PATCH":
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(400, "Invalid JSON.")
+        title = payload.get("title") if isinstance(payload, dict) else None
+        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 120:
+            raise HTTPException(400, "Use a conversation name between 1 and 120 characters.")
+    def mutate():
+        path = root / project_id
+        if not path.is_dir():
+            raise HTTPException(404)
+        if request.method == "PATCH":
+            atomic_write_json(path / "session.json", {"title": title.strip()})
+        else:
+            trash = root / ".trash"
+            trash.mkdir(exist_ok=True)
+            if trash.is_symlink():
+                raise HTTPException(409, "Invalid trash directory.")
+            path.rename(trash / f"{project_id}-{secrets.token_hex(8)}")
+    try:
+        task_runner.run_if_idle(project_id, mutate)
+    except TaskConflictError as exc:
+        raise HTTPException(409, "This conversation has a running task. Try again when it finishes.") from exc
+    return JSONResponse({"history": _history(root, "")})
+
+
+class ProtectExamples(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        match = re.match(r"^/projects/([^/]+)(/.*)?$", request.url.path)
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and match:
+            project_id, suffix = match.group(1), match.group(2) or ""
+            if is_example(Path(OUTPUT_ROOT), project_id) and suffix != "/copy-example":
+                return JSONResponse({"detail": "This example is read-only. Create your own copy to edit or run it."}, status_code=403)
+        return await call_next(request)
+
+
+async def copy_example_api(request):
+    project_id = request.path_params["project_id"]
+    try:
+        result = task_runner.run_if_idle(project_id, lambda: copy_example(Path(OUTPUT_ROOT), project_id))
+        return JSONResponse(result, status_code=201)
+    except TaskConflictError:
+        return JSONResponse({"detail": "Wait for the example's current task to finish before copying."}, status_code=409)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+async def review_records_api(request):
+    project_id = request.path_params["project_id"]
+    if not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(404)
+    project = Path(OUTPUT_ROOT) / project_id
+    record_review.recover(project)
+    try:
+        operation = request.path_params.get("operation")
+        if request.method == "GET":
+            if operation == "field":
+                return JSONResponse(record_review.field_detail(project, request.query_params.get("key"), request.query_params.get("field")))
+            if operation == "pdf":
+                record_key = request.query_params.get("key")
+                row = record_review.unique_record(read_jsonl(project / "extraction/extraction_results.jsonl"), record_key)
+                papers = [r for r in read_jsonl(project / "filtered/included_papers.jsonl") if record_review.key(r) == record_key]
+                paper = record_review.unique_record(papers, record_key) if papers else {}
+                path = local_pdf(project, row, paper)
+                if path is None:
+                    raise HTTPException(404)
+                return FileResponse(path, media_type="application/pdf")
+            return JSONResponse(record_review.projection(project))
+        require_mutable(Path(OUTPUT_ROOT), project_id)
+        payload = await _optional_json(request) or {}
+        if operation not in {"screening", "field", "decisions"}:
+            raise ValueError("Unknown review operation")
+        from reviewpilot_core import workflow_decisions
+        save = workflow_decisions.save if operation == 'decisions' else record_review.save_screening if operation == "screening" else record_review.save_field
+        task_runner.run_if_idle(project_id, lambda: save(project, payload))
+        return JSONResponse({"state": build_project_state(OUTPUT_ROOT, project_id)})
+    except (TaskConflictError, record_review.ReviewConflict) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except (ValueError, TypeError) as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
 
 
 async def extraction_preview(request):
@@ -176,8 +291,12 @@ async def _optional_json(request) -> dict | None:
     if not body:
         return None
     try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as exc:
+        def invalid_constant(value):
+            raise ValueError('JSON numbers must be finite.')
+        payload = json.loads(body, parse_constant=invalid_constant)
+        # Exponent overflow (for example 1e999) also produces infinity in Python.
+        json.dumps(payload, allow_nan=False)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("Action payload must be valid JSON") from exc
     if payload is None:
         return None
@@ -191,7 +310,7 @@ async def project_chat(request):
     if not known_project(OUTPUT_ROOT, project_id):
         raise HTTPException(status_code=404)
     try:
-        payload = await request.json()
+        payload = await _optional_json(request) or {}
         message = str(payload.get("message") or "").strip()
         if not message:
             raise ValueError("message is required")
@@ -200,7 +319,9 @@ async def project_chat(request):
             context_step = None
         def respond():
             return LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
-        result = task_runner.run_if_idle(project_id, respond) if context_step == "screening" else respond()
+        # Any chat can save messages or edit a draft schema. Keep deletion,
+        # configuration changes and workflow tasks from racing that publication.
+        result = task_runner.run_if_idle(project_id, respond)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except ValueError as exc:
@@ -213,7 +334,7 @@ async def update_project_setup_api(request):
     if not known_project(OUTPUT_ROOT, project_id):
         raise HTTPException(status_code=404)
     try:
-        payload = await request.json()
+        payload = await _optional_json(request) or {}
         project = update_project_setup(OUTPUT_ROOT, project_id, payload)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
@@ -237,26 +358,35 @@ async def projects(request):
 
 
 async def memory_settings(request):
-    service = CrossProjectMemoryService(OUTPUT_ROOT)
+    # Retire the legacy automatic-injection setting, including previously enabled stores.
+    if request.method == "PUT":
+        try:
+            payload = await _optional_json(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not isinstance(payload, dict) or set(payload) != {"cross_project_memory_enabled"} or payload["cross_project_memory_enabled"] is not False:
+            raise HTTPException(status_code=400, detail="Automatic memory is disabled. Use Reuse project configuration.")
+    return JSONResponse({"cross_project_memory_enabled": False})
+
+
+async def project_configuration_reuse(request):
+    project_id = request.path_params["project_id"]
     try:
         if request.method == "GET":
-            enabled = service.get_enabled()
-        else:
-            try:
-                payload = await request.json()
-            except (json.JSONDecodeError, UnicodeError) as exc:
-                raise ValueError("Memory setting must be valid JSON") from exc
-            if not isinstance(payload, dict) or set(payload) != {"cross_project_memory_enabled"}:
-                raise ValueError("Memory setting must contain only cross_project_memory_enabled")
-            enabled = payload["cross_project_memory_enabled"]
-            if type(enabled) is not bool:
-                raise ValueError("cross_project_memory_enabled must be a boolean")
-            service.set_enabled(enabled)
-    except ValueError as exc:
+            return JSONResponse({"configurations": configuration_options(Path(OUTPUT_ROOT), project_id, busy=task_runner.active_for_project)})
+        payload = await _optional_json(request) or {}
+        source_id = payload.get("source_project_id")
+        if request.path_params.get("operation") not in {"preview", "apply"}:
+            raise ValueError("Unsupported configuration reuse operation")
+        operation = apply_configuration if request.path_params.get("operation") == "apply" else preview_configuration
+        result = task_runner.run_if_idle(source_id, lambda: task_runner.run_if_idle(project_id, lambda: operation(Path(OUTPUT_ROOT), project_id, payload)))
+        return JSONResponse(result)
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except ReuseConflict as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except MemoryStoreError:
-        return JSONResponse({"detail": "Memory is unavailable"}, status_code=503)
-    return JSONResponse({"cross_project_memory_enabled": enabled})
 
 
 async def clear_memory(request):
@@ -277,6 +407,11 @@ async def project_export(request):
     artifact_path = export_artifact_path(Path(OUTPUT_ROOT) / project_id, export_key)
     if artifact_path is None:
         raise HTTPException(status_code=404)
+    if export_key == 'workflow-decisions':
+        from reviewpilot_core import workflow_decisions
+        return JSONResponse({'current': workflow_decisions.projection(Path(OUTPUT_ROOT) / project_id),
+                             'saved': read_json(artifact_path, {})},
+                            headers={'Content-Disposition': 'attachment; filename="workflow_decisions.json"'})
     return FileResponse(
         artifact_path,
         media_type=media_type,
@@ -287,7 +422,7 @@ async def project_export(request):
 
 async def create_project_api(request):
     try:
-        payload = await request.json()
+        payload = await _optional_json(request) or {}
         project = create_project(OUTPUT_ROOT, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -296,17 +431,25 @@ async def create_project_api(request):
 
 def create_app() -> Starlette:
     return Starlette(
+        middleware=[Middleware(ProtectExamples)],
         routes=[
             Route("/", home, methods=["GET"]),
             Route("/favicon.ico", favicon, methods=["GET"]),
             Route("/workspace", workspace_page, methods=["GET"]),
             Route("/projects", projects, methods=["GET"]),
+            Route("/sessions", session_history, methods=["GET"]),
+            Route("/projects/{project_id}", manage_session, methods=["PATCH", "DELETE"]),
             Route("/projects", create_project_api, methods=["POST"]),
+            Route("/projects/{project_id}/configuration-reuse", project_configuration_reuse, methods=["GET"]),
+            Route("/projects/{project_id}/configuration-reuse/{operation}", project_configuration_reuse, methods=["POST"]),
             Route("/memory/settings", memory_settings, methods=["GET", "PUT"]),
             Route("/memory", clear_memory, methods=["DELETE"]),
             Route("/projects/new", new_project_page, methods=["GET"]),
             Route("/projects/{project_id}", project_page, methods=["GET"]),
             Route("/projects/{project_id}/state", project_state, methods=["GET"]),
+            Route("/projects/{project_id}/copy-example", copy_example_api, methods=["POST"]),
+            Route("/projects/{project_id}/review", review_records_api, methods=["GET"]),
+            Route("/projects/{project_id}/review/{operation}", review_records_api, methods=["GET", "PATCH"]),
             Route("/projects/{project_id}/extraction-preview/{paper_index:int}", extraction_preview, methods=["GET"]),
             Route("/projects/{project_id}/exports/{export_key}", project_export, methods=["GET"]),
             Route("/projects/{project_id}/chat", project_chat, methods=["POST"]),
@@ -331,11 +474,16 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
     search_conditions = {**normalize_setup(config), **search_conditions}
     search_conditions["setup_revision"] = setup_revision(search_conditions)
     atomic_write_json(Path(output_root) / project_id / "search_conditions.json", search_conditions)
+    initial_messages = [{"step": 1, "role": "u", "text": config["description"], "source": "initial_setup"}]
+    if search_conditions.get("lead_agent_reply"):
+        initial_messages.append({"step": 1, "role": "a", "text": search_conditions["lead_agent_reply"], "source": "initial_setup"})
+    atomic_write_jsonl(Path(output_root) / project_id / "chat/messages.jsonl", initial_messages)
     initialize_workflow_state(Path(output_root) / project_id)
     return {"id": project_id, "title": search_conditions["project_name"], "path": search_conditions["project_path"]}
 
 
 def update_project_setup(output_root: Path | str, project_id: str, payload: dict) -> dict:
+    require_mutable(Path(output_root), project_id)
     if not known_project(output_root, project_id):
         raise ValueError("project not found")
     active = task_runner.active_for_project(project_id)
@@ -344,6 +492,11 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
     config = _setup_config(payload)
     confirmation = payload.get("confirmation") if isinstance(payload.get("confirmation"), dict) else {}
     project_path = Path(output_root) / project_id
+    imported = read_json(project_path / "memory/search_setup_draft.json", {})
+    if imported and not config.get("derive_search_terms") and all(config.get(key) == imported.get(key) for key in ("search_terms", "description", "primary_topic", "domain")):
+        for key in ("search_queries", "concept_blocks", "keywords", "primary_synonyms", "domain_synonyms"):
+            if key in imported:
+                config[key] = imported[key]
 
     def transact():
         reconcile_setup_transaction(project_path)
@@ -358,6 +511,7 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
         if impacts and expected is None:
             return {"id": project_id, "confirmationRequired": True, "expectedRevision": current_revision, "proposedRevision": next_revision, "affectedStages": impacts}
         if not changed:
+            (project_path / "memory/search_setup_draft.json").unlink(missing_ok=True)
             return {"id": project_id, "title": current.get("project_name") or project_id, "confirmationRequired": False, "setupRevision": current_revision}
         ledger_before = load_workflow_state(project_path)
         pending = begin_setup_transaction(project_path, current, config, impacts)
@@ -385,6 +539,7 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
             raise
         else:
             finish_setup_transaction(project_path)
+            (project_path / "memory/search_setup_draft.json").unlink(missing_ok=True)
             return {"id": project_id, "title": persisted["project_name"], "path": persisted["project_path"], "confirmationRequired": False, "setupRevision": persisted["setup_revision"], "affectedStages": impacts}
         finally:
             abandon_setup_transaction(project_path)
@@ -400,6 +555,8 @@ def _run_lead_agent_search_setup(output_root: Path | str, project_id: str, confi
 
 
 def _setup_config(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError('Search setup must be a JSON object.')
     title = _payload_text(payload, "project_name", "title")
     description = _payload_text(payload, "description", "research_question")
     if not title:
@@ -413,6 +570,11 @@ def _setup_config(payload: dict) -> dict:
     source_limits = _normalize_source_limits(payload.get("source_limits"), platforms, default=max_results)
     max_results = max(source_limits.values()) if source_limits else max_results
     derive_search_terms = bool(payload.get("derive_search_terms"))
+    if not derive_search_terms and _payload_text(payload, 'search_terms'):
+        from reviewpilot_core.query_syntax import parse
+        parse(search_terms)
+    from reviewpilot_core.publication_dates import resolve_range
+    bounds = resolve_range({"start": _payload_text(payload, "date_start", "start"), "end": _payload_text(payload, "date_end", "end")})
     return {
         "project_name": title,
         "description": description,
@@ -423,12 +585,10 @@ def _setup_config(payload: dict) -> dict:
         "platforms": platforms,
         "max_results": max_results,
         "source_limits": source_limits,
-        "date_range": {
-            "start": _payload_text(payload, "date_start", "start"),
-            "end": _payload_text(payload, "date_end", "end"),
-        },
+        "date_range": bounds,
         "model": _payload_text(payload, "model") or LEAD_AGENT_DEV_MODEL,
         "derive_search_terms": derive_search_terms,
+        "interpret_chat_settings": payload.get("interpret_chat_settings") is True,
     }
 
 
@@ -488,7 +648,11 @@ def _positive_int(value, default: int) -> int:
 
 
 def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
-    supported_actions = {"save-criteria", "finalize-criteria", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
+    require_mutable(Path(output_root), project_id)
+    record_review.recover(Path(output_root) / project_id)
+    if action == "review-sample":
+        return task_runner.submit(project_id, action, lambda: record_review.run_sample(Path(output_root) / project_id, input_data or {}, llm_query=llm_query))
+    supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -496,8 +660,9 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         return _submit_retry_action(output_root, project_id, input_data, llm_query)
 
     project_path = Path(output_root) / project_id
-    if action in {"save-criteria", "finalize-criteria"}:
-        validate_criteria(input_data or {})
+    if action in {"save-criteria", "finalize-criteria", "edit-criteria"}:
+        if action != "edit-criteria":
+            validate_criteria(input_data or {})
         if (input_data or {}).get("revision") != criteria_state(project_path)["revision"]:
             raise ValueError("Screening criteria changed. Refresh before saving.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
@@ -521,8 +686,14 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
 
     def prepare_action():
         reconcile_setup_transaction(project_path)
+        if action == "collect" and (project_path / "memory/search_setup_draft.json").exists():
+            raise ValueError("Review and save the imported search setup before running collection.")
         if action == "screen":
             require_finalized_criteria(project_path)
+        if action in {'categorize', 'suggest-categories'} and (input_data or {}).get('decision_revision'):
+            from reviewpilot_core import workflow_decisions
+            if input_data['decision_revision'] != workflow_decisions.revision(project_path):
+                raise ValueError('Project decisions changed. Refresh before applying categorization.')
         replacements = stale_replacement_stages(project_path, action_stage)
         current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
         if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):

@@ -1,0 +1,80 @@
+{
+  "scope": "deterministic local probes, no network/model calls; false means a confirmed gap, not an ordinary passing regression suite",
+  "results": [
+    {
+      "id": "G02-date-precision",
+      "expected": "Exclude early; flag unknown for review",
+      "observed": [
+        "early",
+        "within"
+      ],
+      "passed": false
+    },
+    {
+      "id": "G02-open-end",
+      "expected": "Blank end must enforce current day",
+      "observed": [
+        "future"
+      ],
+      "passed": false
+    },
+    {
+      "id": "G07-full-results",
+      "expected": "All 65 rows or explicit pagination metadata",
+      "observed": {
+        "rows": 50,
+        "keys": [
+          "columns",
+          "rows"
+        ]
+      },
+      "passed": false
+    },
+    {
+      "id": "G08-access-provenance",
+      "expected": "Unknown provenance must not be asserted as open access",
+      "observed": {
+        "retrieved": 2,
+        "total": 2,
+        "openAccess": 2,
+        "viaInstitution": 0,
+        "unavailable": 0
+      },
+      "passed": false
+    },
+    {
+      "id": "G09-schema-types",
+      "expected": "Reject nonnumeric value for integer field",
+      "observed": {
+        "participants": "not a number"
+      },
+      "passed": false
+    },
+    {
+      "id": "G03-all-removals",
+      "expected": "Every removed record has a inspectable reason and identity",
+      "observed": {
+        "removed_counts": {
+          "by_date": 1,
+          "by_exact_dedup": 1,
+          "by_similarity": 0,
+          "by_relevance": 1
+        },
+        "excluded_ids": [
+          "animal"
+        ]
+      },
+      "passed": false
+    },
+    {
+      "id": "G01-keyword-save",
+      "expected": "Changed keyword must be transmitted or update effective query",
+      "observed": {
+        "query": "clinical AND AI",
+        "keyword_field": null,
+        "concept_field": null
+      },
+      "passed": false
+    }
+  ]
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 from .atomic_files import atomic_write_json
 from .project_store import read_json
 from .workflow_state import load_workflow_state, mark_stages_stale
+from .project_decisions import remember_confirmed
 
 
 def criteria_state(project: Path) -> dict:
@@ -55,6 +56,7 @@ def save_criteria(project: Path, payload: dict, *, finalized: bool = False) -> d
     if payload.get("revision") != state["revision"]:
         raise ValueError("Screening criteria changed. Refresh before saving.")
     eligibility = validate_criteria(payload)
+    remember_confirmed(project, 'screening_profile')
     prompt_path = project / "prompts/relevance_prompt.json"
     prompt = read_json(prompt_path, {})
     changed = eligibility != prompt.get("eligibility")
@@ -78,6 +80,8 @@ def save_criteria(project: Path, payload: dict, *, finalized: bool = False) -> d
         )
     prompt["criteria_finalized"] = finalized
     atomic_write_json(prompt_path, prompt)
+    if finalized:
+        remember_confirmed(project, 'screening_profile')
     return criteria_state(project)
 
 

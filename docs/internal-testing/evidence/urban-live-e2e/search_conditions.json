@@ -1,0 +1,43 @@
+{
+  "project_name": "Urban Planning Governance Live E2E 20260912",
+  "description": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations.",
+  "primary_topic": "Large language models",
+  "domain": "Urban planning and urban governance",
+  "search_terms": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")",
+  "search_queries": [
+    {
+      "name": "main",
+      "query": "(\"large language model\" OR \"large language models\" OR LLM OR LLMs) AND (\"urban planning\" OR \"city planning\" OR \"urban governance\" OR \"city governance\")"
+    }
+  ],
+  "platforms": [
+    "openalex"
+  ],
+  "max_results": 5,
+  "source_limits": {
+    "openalex": 5
+  },
+  "date_range": {
+    "start": "2023-01-01",
+    "end": "2026-09-12"
+  },
+  "model": "gpt-5.4-mini",
+  "derive_search_terms": false,
+  "project_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/output/review-project",
+  "research_description": "Applications of large language models in urban planning and urban governance, including planning decision support, land use and spatial planning, public participation, urban policy, and public service governance. Urban planning and urban governance are alternative eligible settings. Include implemented applications and empirical evaluations.",
+  "extracted_concepts": {
+    "primary_topics": [
+      "LLM",
+      "language model"
+    ],
+    "domains": [],
+    "methods": [
+      "evaluation"
+    ],
+    "keywords": []
+  },
+  "max_results_per_platform": 5,
+  "extraction_fields": "datasets used, methods, key findings, evaluation metrics",
+  "arxiv_query": null,
+  "setup_revision": "0b2ee8414f642f627d899eda032ef38ae322c39f1a8c7c4e6b1f910e12f12f17"
+}

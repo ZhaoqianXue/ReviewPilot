@@ -1,0 +1,25 @@
+{
+  "attempted": 2,
+  "downloaded": [
+    {
+      "id": "W4401863317",
+      "path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.planning/2026-09-12-urban-live-e2e/retry-fixture/urban-recovery/pdfs/original.pdf",
+      "title": "UrbanGPT: Spatio-Temporal Large Language Models"
+    },
+    {
+      "id": "W4407325419",
+      "path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.planning/2026-09-12-urban-live-e2e/retry-fixture/urban-recovery/pdfs/retry-3e7b7de8c3b11cf690c2d535391d9862543b3f55879d250a47184250814cf8f7-0c9c93f2fb5ea58dd033348901aabdbb3d1defcfe8b3db27c8d567aed290e50b.pdf",
+      "pdf_downloaded": true,
+      "pdf_path": "/Users/zhaoqianxue/Desktop/UA/ReviewPilot/.planning/2026-09-12-urban-live-e2e/retry-fixture/urban-recovery/pdfs/retry-3e7b7de8c3b11cf690c2d535391d9862543b3f55879d250a47184250814cf8f7-0c9c93f2fb5ea58dd033348901aabdbb3d1defcfe8b3db27c8d567aed290e50b.pdf",
+      "retrieval_status": "downloaded",
+      "title": "Integrating large language model and digital twins in the context of industry 5.0: Framework, challenges and opportunities"
+    }
+  ],
+  "failed": 0,
+  "failed_papers": [],
+  "pdf_count": 2,
+  "subscribed_papers": [],
+  "success": 2,
+  "unavailable_papers": [],
+  "web_search_fallback_candidates": []
+}

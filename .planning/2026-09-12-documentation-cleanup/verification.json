@@ -1,0 +1,89 @@
+{
+  "translated": [
+    "writing/NAACL2027/notes/2026-09-12-implementation-sync/revision-notes.md",
+    "docs/internal-testing/prototype-parity-2026-09-12.md",
+    "docs/internal-testing/prototype-parity-2026-09-12-fixes.md",
+    "writing/NAACL2027/notes/2026-09-12-content-migration/migration-map.md",
+    "writing/NAACL2027/notes/2026-09-12-section-structure-reference.md"
+  ],
+  "deleted_obsolete_logs": [
+    "task_plan.md",
+    "findings.md",
+    "progress.md"
+  ],
+  "scanned_text_document_count": 328,
+  "remaining_han_documents": [],
+  "protected_file_count": 194,
+  "protected_files_changed": [
+    "writing/NAACL2027/README.md",
+    "writing/NAACL2027/ReviewPilotSubmission-Overleaf.zip",
+    "writing/NAACL2027/ReviewPilotSubmission/main.tex",
+    "writing/NAACL2027/ReviewPilotSubmission/README.md",
+    "writing/NAACL2027/notes/2026-09-12-section-structure-reference.md",
+    "writing/NAACL2027/notes/2026-09-12-content-migration/migration-map.md",
+    "writing/NAACL2027/notes/2026-09-12-implementation-sync/section-counts.json",
+    "writing/NAACL2027/notes/2026-09-12-implementation-sync/manuscript.diff"
+  ],
+  "other_changes_observed_during_cleanup": [
+    "writing/NAACL2027/README.md",
+    "writing/NAACL2027/ReviewPilotSubmission-Overleaf.zip",
+    "writing/NAACL2027/ReviewPilotSubmission/main.tex",
+    "writing/NAACL2027/ReviewPilotSubmission/README.md",
+    "writing/NAACL2027/notes/2026-09-12-implementation-sync/section-counts.json",
+    "writing/NAACL2027/notes/2026-09-12-implementation-sync/manuscript.diff"
+  ],
+  "broken_links_in_updated_documents": [],
+  "writing_pdf_text_checks": [
+    {
+      "file": "writing/CHI2027/AnonymousSubmission/sampleteaser.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/Copyright/video-distribution.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/Copyright/copyrightform.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/Copyright/photo-release.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/CameraReady/Formatting-Instructions-LaTeX-2026.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/CameraReady/figure1.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    },
+    {
+      "file": "writing/CameraReady/figure2.pdf",
+      "text_extraction_ok": true,
+      "han_characters": 0
+    }
+  ],
+  "scope_exclusions": [
+    ".cache",
+    ".git",
+    ".pytest_cache",
+    ".venv",
+    ".venv-native",
+    ".worktrees",
+    "__pycache__",
+    "node_modules",
+    "output",
+    "site-packages",
+    "tmp",
+    "toolenv",
+    "venv"
+  ],
+  "note": "Dependencies, caches, worktree mirrors, runtime project data and downloaded source papers are not project-authored documentation. PDF checks inspect extractable text, not image-only content."
+}

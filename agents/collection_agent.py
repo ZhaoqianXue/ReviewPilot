@@ -60,7 +60,8 @@ class CollectionAgent(BaseAgent):
         max_results = input_data.get("max_results_per_platform", 0)
         arxiv_categories = input_data.get("arxiv_categories")
         cs_venues = input_data.get("cs_venues")
-        date_range = input_data.get("date_range", {})
+        from reviewpilot_core.publication_dates import resolve_range
+        date_range = resolve_range(input_data.get("date_range", {}))
         source_limits = input_data.get("source_limits") if isinstance(input_data.get("source_limits"), dict) else {}
 
         # Check for arXiv-specific query
@@ -90,7 +91,7 @@ class CollectionAgent(BaseAgent):
                         arxiv_query=arxiv_query if platform == "arxiv" else None,
                         arxiv_categories=arxiv_categories,
                         cs_venues=cs_venues,
-                        use_proxy=False
+                        use_proxy=False, date_range=date_range
                     )
                     platform_errors.update(getattr(searcher, "last_errors", {}) or {})
                     results.update(platform_results)
@@ -102,7 +103,7 @@ class CollectionAgent(BaseAgent):
                     arxiv_query=arxiv_query if "arxiv" in platforms else None,
                     arxiv_categories=arxiv_categories,
                     cs_venues=cs_venues,
-                    use_proxy=False
+                    use_proxy=False, date_range=date_range
                 )
                 platform_errors.update(getattr(searcher, "last_errors", {}) or {})
         except Exception as e:
@@ -134,6 +135,7 @@ class CollectionAgent(BaseAgent):
             "platforms": platforms,
             "max_results_per_platform": max_results,
             "date_range": date_range,
+            "coverage": {"bounded_by_source_limits": True, "date_filter": {source: "source_native" if source in {"pubmed", "arxiv", "openalex"} else "local_only" for source in platforms}, "note": "Source metadata determines native date coverage; incomplete dates in returned records are conservatively reviewed."},
             "results": platform_stats,
             "platform_stats": platform_stats,
             "platform_errors": platform_errors,
