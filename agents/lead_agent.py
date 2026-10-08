@@ -784,8 +784,14 @@ Supported commands:
         project = self.output_root / project_id
         current = self._load_search_conditions(project)
         expected_revision = project_decision_revision(project)
-        result = self._call_workflow_action("refine-search-setup", project_id, input_data={
-            "current": current, "message": message, "history": self._session_history(project)})
+        try:
+            result = self._call_workflow_action("refine-search-setup", project_id, input_data={
+                "current": current, "message": message, "history": self._session_history(project)})
+        except ValueError as exc:
+            # Concept validation reasons are written for users; parser failures are not.
+            reason = "" if str(exc).startswith("SearchConditionAgent") else f" {exc}"
+            raise ValueError("ReviewPilot could not turn that request into a valid search strategy."
+                             f"{reason} Try rephrasing the request, or edit the concepts on the canvas.") from exc
         if project_decision_revision(project) != expected_revision:
             raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
         reply = str(result.get("reply") or "").strip()

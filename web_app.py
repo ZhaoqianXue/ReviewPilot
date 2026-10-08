@@ -432,9 +432,15 @@ async def create_project_api(request):
     return JSONResponse(project, status_code=201, headers={"Location": "/workspace"})
 
 
+async def http_error(_request, exc: HTTPException) -> JSONResponse:
+    # The workspace reads `detail` from error bodies; plain text would hide the reason.
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+
+
 def create_app() -> Starlette:
     return Starlette(
         middleware=[Middleware(ProtectExamples)],
+        exception_handlers={HTTPException: http_error},
         routes=[
             Route("/", home, methods=["GET"]),
             Route("/favicon.ico", favicon, methods=["GET"]),

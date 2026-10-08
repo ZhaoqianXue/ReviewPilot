@@ -161,6 +161,26 @@ confirmSetupImpact({ confirmationRequired: false, setupRevision: 'r1' }, {}, () 
         result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_setup_impact_confirmation_names_stages_in_plain_language(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { confirmSetupImpact, confirmOverwriteImpact, stageListLabel } = require('./frontend/app.js');
+assert.equal(stageListLabel(['collection', 'screening', 'retrieval', 'extraction', 'categorization']),
+  'paper collection, screening, full-text retrieval, information extraction, categorization');
+const messages = [];
+const confirmFn = (message) => { messages.push(message); return false; };
+const preview = { confirmationRequired: true, expectedRevision: 'r1', affectedStages: ['collection', 'retrieval'] };
+Promise.all([
+  confirmSetupImpact(preview, {}, confirmFn, async () => {}),
+  confirmOverwriteImpact(preview, {}, confirmFn, async () => {}),
+]).then(() => {
+  assert.equal(messages[0], 'Changing this setup makes these results stale: paper collection, full-text retrieval. Continue?');
+  assert.match(messages[1], /stale results for: paper collection, full-text retrieval\./);
+});
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_stale_overwrite_confirmation_retries_with_exact_revision_and_stages(self):
         script = r"""
 const assert = require('node:assert/strict');

@@ -424,6 +424,35 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("keyword-card", source)
         self.assertNotIn("queryClauses", source)
 
+    def test_concept_dialog_fields_are_labelled_and_terms_grow(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        dialog = source[source.index("function conceptDialog(v)") : source.index("function memoryDialog")]
+
+        for field in ("label", "terms", "role"):
+            self.assertIn(f'<label for="rp-concept-{field}"', dialog)
+            self.assertIn(f'id="rp-concept-{field}" name="{field}"', dialog)
+        self.assertIn('rows="${termRows}"', dialog)
+        self.assertIn("Math.min(12, Math.max(5, termsText.split", dialog)
+        self.assertIn("e.target.id === 'rp-concept-terms'", source)
+        setup = source[source.index("function setupDialog(v)") : source.index("function conceptDialog(v)")]
+        self.assertIn('<label for="rp-setup-description"', setup)
+        self.assertIn('<label for="rp-setup-${name}"', setup)
+        paint = source[source.index("    function paint() {") : source.index("wireHover(root);", source.index("    function paint() {"))]
+        self.assertIn("if (conceptForm && (!conceptDialogWasOpen || state.conceptError))", paint)
+        self.assertIn("if (setupForm && !setupDialogWasOpen)", paint)
+
+    def test_saving_search_setup_shows_status_until_next_edit(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        editor = source[source.index("function conceptEditor(v)") : source.index("function conceptChip")]
+        save = source[source.index("async function updateProjectSetup(form)") : source.index("async function saveDraftSetup")]
+
+        self.assertIn('data-ui="setup-saved-status" role="status"', editor)
+        self.assertIn("Search setup saved", editor)
+        self.assertIn("state.setupSavedProjectId = projectId;", save)
+        for helper in ("function removeConcept", "function updateSetupDraftField", "function updateSourceLimit", "function toggleSource"):
+            body = source[source.index(helper) : source.index("\n  }\n", source.index(helper))]
+            self.assertIn("state.setupSavedProjectId = '';", body, helper)
+
     def test_search_setup_sources_are_checkbox_controls_not_counts(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
@@ -747,7 +776,7 @@ class FrontendContractTests(unittest.TestCase):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn("function workspaceResponsiveStyle()", source)
-        self.assertIn("@media (max-width: 760px)", source)
+        self.assertIn("@media (max-width: 1023px)", source)
         self.assertIn('class="rp-shell"', source)
         self.assertIn('class="rp-sidebar ${state.sidebarOpen', source)
         self.assertIn('class="rp-main"', source)

@@ -1437,6 +1437,24 @@ class SearchSetupChatTests(unittest.TestCase):
             chat = read_jsonl(project / "chat/messages.jsonl")
         return result, applied, draft, chat
 
+    def test_rejected_revision_explains_the_reason_and_saves_nothing(self):
+        crowded = [{**self.BLOCKS[0], "query_terms": [f"term {n}" for n in range(13)]}, self.BLOCKS[1]]
+        reply = json.dumps({"reply": "Added terms.", "concept_blocks": crowded, "search_settings": {}})
+        applied = []
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            project.mkdir()
+            (project / "search_conditions.json").write_text(json.dumps({
+                "project_name": "Demo", "description": "LLMs for mental health", "platforms": ["pubmed"],
+                "source_limits": {"pubmed": 10}, "date_range": {"start": "", "end": "2026-10-07"}, "concept_blocks": self.BLOCKS}))
+            with self.assertRaises(ValueError) as caught:
+                LeadAgent(Path(tmp), llm_query=lambda **_kwargs: (reply, {})).handle_message(
+                    project_id="demo", message="Add more terms", context_step="search", apply_setup=applied.append)
+            self.assertFalse((project / "memory/search_setup_draft.json").exists())
+        self.assertEqual(applied, [])
+        self.assertIn("could not turn that request into a valid search strategy", str(caught.exception))
+        self.assertIn("needs 1 to 12 query terms", str(caught.exception))
+
     def test_change_without_affected_results_is_saved(self):
         result, applied, draft, chat = self.chat({"confirmationRequired": False})
         self.assertEqual([block["label"] for block in applied[0]["concept_blocks"]][-1], "Chatbots")
