@@ -148,6 +148,16 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         return state
 
 
+def restore_downstream_freshness(project_path: Path | str, stage_name: str, previous: dict[str, Any]) -> dict[str, Any]:
+    """Undo downstream staleness after a rerun of ``stage_name`` that left its outputs unchanged."""
+    with _project_lock(project_path):
+        state = load_workflow_state(project_path)
+        for name in STAGE_NAMES[STAGE_NAMES.index(stage_name) + 1:]:
+            state["stages"][name]["stale"] = previous["stages"][name]["stale"]
+        _write(project_path, state)
+        return state
+
+
 def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str, dict[str, int]]:
     """Classify terminal outcomes from structured agent contracts only."""
     if not isinstance(result, dict):

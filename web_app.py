@@ -39,6 +39,7 @@ def _prefer_local_package_imports() -> None:
 
 _prefer_local_package_imports()
 
+from agents.collection_agent import retryable_sources
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.agent_memory import CrossProjectMemoryService, MemoryStoreError
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
@@ -47,13 +48,14 @@ from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects, _history
 from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
+from reviewpilot_core.sub_agent_contracts import CollectionAgentContract
 from reviewpilot_core.project_store import read_json, read_jsonl
 from reviewpilot_core import record_review
 from reviewpilot_core.demo_projects import is_example, require_mutable, copy_example
 from reviewpilot_core.evidence_support import local_pdf
 from reviewpilot_core.configuration_reuse import configuration_options, preview_configuration, apply_configuration, ReuseConflict
 from reviewpilot_core.screening_criteria import require_finalized_criteria, validate_criteria, criteria_state
-from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, save_workflow_state, start_action
+from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, restore_downstream_freshness, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
 from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
 from reviewpilot_core.retrieval_retry_transaction import abandon_retry_transaction, abort_retry_transaction, apply_retry_transaction, begin_retry_transaction, publish_retry_transaction_pdfs, reconcile_retry_transaction, record_retry_transaction_target, retry_target_is_committed, run_retry_transaction_staging
@@ -644,6 +646,7 @@ def _normalize_platforms(value) -> list[str]:
 
 
 def _normalize_source_limits(value, platforms: list[str], default: int) -> dict[str, int]:
+    """Per-source result limits. A missing limit takes the default; a supplied one must be a positive whole number."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -651,7 +654,31 @@ def _normalize_source_limits(value, platforms: list[str], default: int) -> dict[
             value = {}
     if not isinstance(value, dict):
         value = {}
-    return {platform: _positive_int(value.get(platform), default=default) for platform in platforms}
+    limits = {}
+    for platform in platforms:
+        raw = value.get(platform)
+        if raw is None:
+            limits[platform] = default
+            continue
+        parsed = _strict_positive_int(raw)
+        if parsed is None:
+            label = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}.get(platform, platform)
+            raise ValueError(f"Max results for {label} must be a whole number of at least 1.")
+        limits[platform] = parsed
+    return limits
+
+
+def _strict_positive_int(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        value = int(value) if value.is_integer() else None
+    elif isinstance(value, str):
+        text = value.strip()
+        value = int(text) if text.isascii() and text.isdigit() else None
+    if not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def _positive_int(value, default: int) -> int:
@@ -675,6 +702,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         return _submit_retry_action(output_root, project_id, input_data, llm_query)
 
     project_path = Path(output_root) / project_id
+    retry_sources = _retry_sources(input_data) if action == "collect" else None
     if action in {"save-criteria", "finalize-criteria", "edit-criteria"}:
         if action != "edit-criteria":
             validate_criteria(input_data or {})
@@ -698,11 +726,15 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     if confirmation:
         input_data = {key: value for key, value in input_data.items() if key != "overwrite_confirmation"}
     previous_state: list[dict] = []
+    retried_stats: list = []
 
     def prepare_action():
         reconcile_setup_transaction(project_path)
         if action == "collect" and (project_path / "memory/search_setup_draft.json").exists():
             raise ValueError("Review and save the imported search setup before running collection.")
+        if retry_sources is not None:
+            _require_retryable_sources(project_path, retry_sources)
+            retried_stats.append((read_json(project_path / "collected" / "summary.json", {}) or {}).get("platform_stats"))
         if action == "screen":
             require_finalized_criteria(project_path)
         if action in {'categorize', 'suggest-categories'} and (input_data or {}).get('decision_revision'):
@@ -731,7 +763,12 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             fail_action(project_path, action, exc)
             raise
         try:
-            complete_action(project_path, action, result.get("data") if isinstance(result.get("data"), dict) else result)
+            data = result.get("data") if isinstance(result.get("data"), dict) else result
+            complete_action(project_path, action, data)
+            # A source retry that fetched nothing new leaves the records exactly as they
+            # were, so screening and later stages built on them stay valid.
+            if retried_stats and previous_state and data.get("platform_stats") == retried_stats[0]:
+                restore_downstream_freshness(project_path, "collection", previous_state[0])
         except Exception as exc:
             fail_action(project_path, action, exc)
             raise
@@ -744,6 +781,25 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         prepare=prepare_action,
         rollback=rollback_action,
     )
+
+
+def _retry_sources(input_data: dict | None) -> list[str] | None:
+    if not isinstance(input_data, dict) or "retry_sources" not in input_data:
+        return None
+    value = input_data["retry_sources"]
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) and item for item in value):
+        raise ValueError("retry_sources must be a non-empty list of source names.")
+    return list(dict.fromkeys(value))
+
+
+def _require_retryable_sources(project_path: Path, sources: list[str]) -> None:
+    """Only failed sources of a collection that still matches the saved setup can be re-run alone."""
+    collection = load_workflow_state(project_path)["stages"]["collection"]
+    config = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
+    summary = read_json(project_path / "collected" / "summary.json", {})
+    allowed = retryable_sources(summary, CollectionAgentContract()._collection_input(config))
+    if collection["stale"] or collection["status"] not in {"partial", "failed"} or not set(sources) <= set(allowed):
+        raise ValueError("Only failed sources of the current collection can be retried. Run the full collection again.")
 
 
 def _retry_target_ledger(before_ledger: dict, success: int, failed: int) -> dict:

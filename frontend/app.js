@@ -94,6 +94,12 @@ async function confirmOverwriteImpact(preview, payload, confirmFn, retry) {
   return retry({ ...(payload || {}), overwrite_confirmation: { expected_revision: preview.expectedRevision, affected_stages: preview.affectedStages } });
 }
 
+function sourceLimitProblem(label, value) {
+  // Same rule as web_app._normalize_source_limits: a whole number of at least 1.
+  const text = String(value ?? '').trim();
+  return /^[0-9]+$/.test(text) && Number(text) >= 1 ? '' : `Max results for ${label} must be a whole number of at least 1.`;
+}
+
 function normalizeRetrievalRecovery(value) {
   const items = Array.isArray(value?.items)
     ? value.items.filter((item) => item && typeof item.retryId === 'string' && item.retryId).map((item) => ({
@@ -213,9 +219,9 @@ function workflowOutcomeBanner(notice) {
     return `<div data-ui="workflow-outcome-error" style="border:1px solid;border-radius:9px;padding:10px 11px;margin-bottom:14px;line-height:1.45;border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;"><strong>Workflow action failed.</strong> ${escapeText(notice.error || 'The action stopped unexpectedly.')} Recovery is required before retrying this stage.</div>`;
   }
   const failedItems = (notice.failedItems || []).map(escapeText).join(', ');
-  const recovery = notice.status === 'failed'
+  const recovery = notice.recovery ? escapeText(notice.recovery) : (notice.status === 'failed'
     ? 'This stage is blocked. Failed items remain retryable in the recovery step.'
-    : (notice.retryable ? 'Failed items remain retryable in the recovery step.' : 'Review the failed items before continuing.');
+    : (notice.retryable ? 'Failed items remain retryable in the recovery step.' : 'Review the failed items before continuing.'));
   const next = notice.nextAction ? ` Next action: ${escapeText(notice.nextAction)}.` : '';
   const kind = notice.status === 'partial' ? 'warning' : 'error';
   const colors = kind === 'warning' ? 'border-color:#f1d39b;background:#fff8e8;color:#7a4b00;' : 'border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;';
@@ -259,7 +265,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
+  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
 }
 
 /* ReviewPilot workspace UI.
@@ -326,6 +332,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     reuseTarget: '',
     memoryPending: false,
     memoryError: '',
+    openQueries: {},
   };
   let chatSubmission = 0;
   let actionTicker = null;
@@ -401,6 +408,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
     const ui = snapshot.ui || {};
     state.chatDrafts = ui.chatDrafts || {};
+    state.openQueries = ui.openQueries && typeof ui.openQueries === 'object' ? ui.openQueries : {};
     const sameProject = !!D.project.id && snapshotProjectId === D.project.id;
     const sameSetupRevision = sameProject
       && !!D.setupRevision
@@ -465,6 +473,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
           activeProjectId: state.activeProjectId,
           setupDraft: state.setupDraft,
           catDraft: state.catDraft,
+          openQueries: state.openQueries,
         },
       }));
     } catch (_err) {
@@ -522,6 +531,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       platforms: data.platforms || [],
       platformIssues: data.platformIssues || [],
       executedQueries: data.executedQueries || {},
+      collectionRetry: { sources: Array.isArray(data.collectionRetry?.sources) ? data.collectionRetry.sources : [] },
       keywords: data.keywords || [],
       groups: data.groups || [],
       retrieved: data.retrieved || [],
@@ -725,8 +735,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function sourceLimitValue(sourceLimits, source, fallbackMaxResults) {
-    if (sourceLimits && Object.prototype.hasOwnProperty.call(sourceLimits, source)) {
-      return String(sourceLimits[source] || fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);
+    // An edited limit is shown as typed (even when invalid) so validation errors match the field.
+    if (sourceLimits && Object.prototype.hasOwnProperty.call(sourceLimits, source) && sourceLimits[source] != null) {
+      return String(sourceLimits[source]);
     }
     return String(fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);
   }
@@ -753,6 +764,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function setupPayloadFromDraft(overrides = {}) {
     const sourceLimits = selectedSourceLimits();
+    const limitProblem = sourceLimitsProblem(sourceLimits, state.setupDraft.platforms);
+    if (limitProblem) throw new Error(limitProblem);
     const derive = !!state.setupDraft.derive_search_terms || !state.setupDraft.concept_blocks.length;
     return {
       project_name: unescapePayloadValue(state.setupDraft.project_name || D.project.title || 'Untitled review'),
@@ -767,6 +780,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       derive_search_terms: derive,
       ...overrides,
     };
+  }
+
+  function sourceLimitsProblem(sourceLimits, sources) {
+    for (const source of sources || []) {
+      const problem = sourceLimitProblem(platformLabel(source), (sourceLimits || {})[source]);
+      if (problem) return problem;
+    }
+    return '';
   }
 
   function platformKey(label) {
@@ -1070,7 +1091,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       && activeTaskMonitor.generation === generation && !D.activeTask
     );
     try {
-      if (action === 'collect') await saveDraftSetup(projectId);
+      if (action === 'collect' && !payload?.retry_sources) await saveDraftSetup(projectId);
       const options = payload
         ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
         : { method: 'POST' };
@@ -1332,8 +1353,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       v: p[1],
       pct: Math.round(((Number(p[1]) || 0) / MAX) * 100),
       issue: platformIssueByLabel.get(String(p[0]).toLowerCase()) || null,
+      key: platformKey(p[0]),
       query: (D.executedQueries || {})[platformKey(p[0])]?.query || '',
+      queryOpen: !!state.openQueries[`${D.project.id || ''}:${platformKey(p[0])}`],
     }));
+    const retrySources = (D.collectionRetry?.sources || []).filter((source) => typeof source === 'string' && source);
+    const screeningStage = D.stageState?.screening || {};
+    const collectionRetry = {
+      sources: retrySources,
+      label: retrySources.map(platformLabel).join(', '),
+      staleNotice: !!screeningStage.last_valid || (screeningStage.attempt || 0) > 0,
+    };
     const draftSources = ['pubmed', 'arxiv', 'openalex'].map((key) => ({
       key,
       label: platformLabel(key),
@@ -1408,6 +1438,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       schemaWorkbench: D.schemaWorkbench,
       platforms,
       platformIssues: D.platformIssues,
+      collectionRetry,
       draftSources,
       keywords: D.keywords,
       searchReuseDraft: D.searchReuseDraft,
@@ -1557,7 +1588,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const issue = p.issue;
     return `<div style="padding:5px 0;">
       <div style="display:flex;align-items:center;gap:12px;"><span style="width:130px;flex:0 0 130px;font-size:12.5px;color:#1a1a1a;">${p.k}</span><span style="flex:1;height:5px;background:#eef0ee;border-radius:999px;overflow:hidden;"><span style="display:block;height:100%;width:${p.pct}%;background:${issue ? '#b45309' : '#1a365d'};"></span></span><span style="width:32px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6b746c;">${p.v}</span></div>
-      ${p.query ? `<details data-ui="executed-query" style="margin:5px 0 0 130px;font-size:11px;color:#68798c;"><summary style="cursor:pointer;">Query sent</summary><code style="display:block;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#3a4252;overflow-wrap:anywhere;white-space:pre-wrap;">${p.query}</code></details>` : ''}
+      ${p.query ? `<details data-ui="executed-query" data-source="${esc(p.key)}" ${p.queryOpen ? 'open' : ''} style="margin:5px 0 0 130px;font-size:11px;color:#68798c;"><summary style="cursor:pointer;">Query sent</summary><code style="display:block;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#3a4252;overflow-wrap:anywhere;white-space:pre-wrap;">${p.query}</code></details>` : ''}
       ${issue ? `<div data-ui="source-warning" style="margin:7px 0 0 130px;border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:7px 9px;font-size:11.5px;line-height:1.35;"><strong>Platform issue</strong>: ${issue.message}</div>` : ''}
     </div>`;
   };
@@ -1577,9 +1608,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function sourceChecklist(sources, sourceLimits, fallbackMaxResults) {
+    const limitsProblem = sourceLimitsProblem(sourceLimits, sources.filter((source) => source.selected).map((source) => source.key));
     return `<div data-ui="source-checklist" style="display:flex;flex-direction:column;gap:8px;">
       ${sources.map((source) => {
-        const value = esc(sourceLimitValue(sourceLimits, source.key, fallbackMaxResults));
+        const raw = sourceLimitValue(sourceLimits, source.key, fallbackMaxResults);
+        const value = esc(raw);
+        const invalid = source.selected && !!sourceLimitProblem(source.label, raw);
         return `<div data-ui="source-row" style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;justify-content:space-between;">
           <button type="button" data-act="toggle-source" data-source="${source.key}" role="checkbox" aria-checked="${source.selected ? 'true' : 'false'}" style="flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;border:1px solid ${source.selected ? '#1a365d' : '#c8d8e8'};background:${source.selected ? '#eef4fb' : '#fffefc'};color:#1a365d;border-radius:999px;padding:7px 11px;font:inherit;font-size:12.5px;cursor:pointer;">
             <span data-ui="source-check-circle" style="width:14px;height:14px;border-radius:999px;border:1px solid #1a365d;background:${source.selected ? '#eaf0f7' : '#fffefc'};display:inline-flex;align-items:center;justify-content:center;color:#1a365d;box-sizing:border-box;">${source.selected ? '<i class="ph ph-check" style="font-size:9px;"></i>' : ''}</span>
@@ -1587,11 +1621,25 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
           </button>
           <label style="margin-left:auto;display:flex;align-items:center;gap:8px;justify-content:flex-end;color:${source.selected ? '#6b746c' : '#b4bbb2'};font-size:11px;letter-spacing:-0.01em;">
             <span style="white-space:nowrap;">Max results/platform</span>
-            <input data-source-limit="${source.key}" type="number" min="1" inputmode="numeric" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${source.selected ? '#c8d8e8' : '#e0e4df'};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
+            <input data-source-limit="${source.key}" type="number" min="1" step="1" inputmode="numeric" aria-label="Max results for ${source.label}" aria-invalid="${invalid ? 'true' : 'false'}" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${invalid ? '#c0392b' : (source.selected ? '#c8d8e8' : '#e0e4df')};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
           </label>
         </div>`;
       }).join('')}
+      <div data-ui="source-limit-error" role="alert" ${limitsProblem ? '' : 'hidden'} style="font-size:11.5px;color:#8a1f1f;line-height:1.4;">${esc(limitsProblem)}</div>
     </div>`;
+  }
+
+  function markSourceLimitField(input, source) {
+    // Updates the field in place so typing never loses focus to a repaint.
+    const problem = sourceLimitProblem(platformLabel(source), input.value);
+    input.setAttribute('aria-invalid', problem ? 'true' : 'false');
+    input.style.borderColor = problem ? '#c0392b' : '#c8d8e8';
+    const message = input.closest('[data-ui="source-checklist"]')?.querySelector('[data-ui="source-limit-error"]');
+    if (message) {
+      const remaining = sourceLimitsProblem(selectedSourceLimits(), state.setupDraft.platforms);
+      message.textContent = remaining;
+      message.hidden = !remaining;
+    }
   }
 
   function dateRangeCard(setupDraft) {
@@ -1803,6 +1851,7 @@ ${reviewUI.dialog()}
         <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:7px;">Research question</div>
         <div style="font-size:15px;color:#1a1a1a;line-height:1.45;letter-spacing:-0.01em;">${v.researchQuestion || 'Review project'}</div>
       </div>
+      ${v.platformIssues.length && !D.stageState.collection?.stale ? recordsBySourceCard(v, 'margin-bottom:16px;') : ''}
       ${conceptEditor(v)}
       <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch;">
         <div data-ui="sources-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;">
@@ -1901,7 +1950,8 @@ ${reviewUI.dialog()}
 
   function screeningCanvas(v) {
     const screeningStatus = D.stageState.screening?.status;
-    const screeningPending = Boolean(screeningStatus) && !['completed', 'partial'].includes(screeningStatus);
+    // Stale screening results describe an older collection, so show them as pending.
+    const screeningPending = (Boolean(screeningStatus) && !['completed', 'partial'].includes(screeningStatus)) || !!D.stageState.screening?.stale;
     const screenedCount = (value) => (screeningPending && !value ? '—' : value);
     return `${v.isNewProject ? gate('Paper Screening starts after collection', 'Create the Search Setup first, then run collection before screening records.', 'ph-funnel') : ''}
       ${!v.isNewProject ? screeningCriteriaPanel(v) : ''}
@@ -1910,7 +1960,21 @@ ${reviewUI.dialog()}
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${screenedCount(v.screeningMetrics.afterDedup)}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
         <div style="flex:1;padding:18px;text-align:center;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a365d;">${screenedCount(v.screeningMetrics.included)}</div><div style="font-size:11px;color:#1a365d;margin-top:4px;">included</div></div>
       </div>
-      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}</div>${!v.isNewProject ? reviewUI.screening() : ''}`;
+      ${recordsBySourceCard(v)}${!v.isNewProject ? reviewUI.screening() : ''}`;
+  }
+
+  function recordsBySourceCard(v, extraStyle = '') {
+    return `<div data-ui="records-by-source" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;${extraStyle}"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}${collectionRetryControl(v)}</div>`;
+  }
+
+  function collectionRetryControl(v) {
+    const retry = v.collectionRetry;
+    if (!retry.sources.length || D.readOnlyExample) return '';
+    const busy = v.workflowRunning || v.chatPending ? 'disabled' : '';
+    return `<div data-ui="collection-retry" style="margin-top:12px;padding-top:12px;border-top:1px solid #eef0ee;display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;">
+      <button type="button" data-act="retry-sources" ${busy} style="${buttonStyle}"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>Retry ${esc(retry.label)}</button>
+      <span style="font-size:11px;color:#68798c;line-height:1.4;">${retry.sources.length < v.platforms.length ? `Runs the same query on ${retry.sources.length === 1 ? 'this source' : 'these sources'} only; other sources keep their records.` : 'Runs the same query on every source again.'}${retry.staleNotice ? ' If new records arrive, screening and later steps will need to be rerun.' : ''}</span>
+    </div>`;
   }
 
   function screeningCriteriaPanel(v) {
@@ -2463,7 +2527,7 @@ ${reviewUI.dialog()}
       if (reviewUI.isOpen()) { const input = reviewFocus ? root.querySelector(`[data-review-input="${reviewFocus}"]`) : null; if(input) {input.focus({preventScroll:true}); if(selection[0]!=null && input.setSelectionRange && input.tagName !== 'SELECT')input.setSelectionRange(...selection);} else root.querySelector('#rp-record-review-form button')?.focus({preventScroll:true}); }
       if (state.decisionPending) root.querySelectorAll('[data-act="confirm-categories"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-act="action"], [data-cat-field], [data-cat-categories], [data-act="cat-mode"]').forEach(el=>el.disabled=true);
       if (D.readOnlyExample) {
-        root.querySelectorAll('[data-act="action"], [data-act="open-setup"], [data-act="edit-criteria"], [data-act="generate-preview"], [data-act="retry-submit"], [data-act="confirm-categories"], [data-act="cat-mode"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-draft-field], [data-source-limit], [data-criteria], [data-cat-field], [data-cat-categories], #rp-chat-form input, #rp-chat-form button').forEach(el=>el.disabled=true);
+        root.querySelectorAll('[data-act="action"], [data-act="retry-sources"], [data-act="open-setup"], [data-act="edit-criteria"], [data-act="generate-preview"], [data-act="retry-submit"], [data-act="confirm-categories"], [data-act="cat-mode"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-draft-field], [data-source-limit], [data-criteria], [data-cat-field], [data-cat-categories], #rp-chat-form input, #rp-chat-form button').forEach(el=>el.disabled=true);
       }
       const sidebar = root.querySelector('.rp-sidebar .rp-scroll');
       if (sidebar) sidebar.scrollTop = sidebarScroll;
@@ -2746,6 +2810,18 @@ ${reviewUI.dialog()}
         postAction(actionName, payload).catch(() => {});
         return;
       }
+      else if (act === 'retry-sources') {
+        if (state.actionPending || state.chatPending) return;
+        const sources = [...(D.collectionRetry?.sources || [])];
+        if (!sources.length) return;
+        state.actionPending = 'collect';
+        state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
+        state.actionError = '';
+        paint();
+        postAction('collect', { retry_sources: sources }).catch(() => {});
+        return;
+      }
       else if (act === 'edit-criteria') {
         if (state.actionPending || state.chatPending) return;
         state.actionPending = 'edit-criteria';
@@ -2772,6 +2848,16 @@ ${reviewUI.dialog()}
       if (reviewUI.input(e.target,e)) return;
       if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; paint(); }
     });
+    // <details> toggle events do not bubble; capture them so an open "Query sent"
+    // disclosure stays open across repaints, polling refreshes and page reloads.
+    root.addEventListener('toggle', (e) => {
+      const details = e.target;
+      if (!details.matches || !details.matches('details[data-ui="executed-query"]')) return;
+      const key = `${D.project.id || ''}:${details.getAttribute('data-source') || ''}`;
+      if (details.open) state.openQueries[key] = true;
+      else delete state.openQueries[key];
+      writeWorkspaceSnapshot();
+    }, true);
     root.addEventListener('input', (e) => {
       if (e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT' && reviewUI.input(e.target,e)) return;
       if (e.target.id === 'rp-concept-terms') { e.target.rows = Math.min(12, Math.max(5, e.target.value.split('\n').length + 1)); return; }
@@ -2793,6 +2879,7 @@ ${reviewUI.dialog()}
       const sourceLimit = e.target.getAttribute('data-source-limit');
       if (sourceLimit) {
         updateSourceLimit(sourceLimit, e.target.value);
+        markSourceLimitField(e.target, sourceLimit);
         writeWorkspaceSnapshot();
         return;
       }

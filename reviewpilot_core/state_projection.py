@@ -210,6 +210,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
         "retrieved": [],
         "platformIssues": [],
         "executedQueries": {},
+        "collectionRetry": {"sources": []},
         "screeningMetrics": {"identified": 0, "afterDedup": 0, "included": 0},
         "retrievalSummary": {"retrieved": 0, "total": 0, "openAccess": 0, "viaInstitution": 0, "unavailable": 0},
         "retrievalRecovery": disabled_retry_projection(),
@@ -320,6 +321,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "platforms": platform_stats,
         "platformIssues": _platform_issues(collected_summary.get("platform_errors") or {}),
         "executedQueries": collected_summary.get("executed_queries") or {},
+        "collectionRetry": _collection_retry(path, workflow_state),
         "keywords": _keywords(config),
         "groups": _groups(categorization),
         "retrieved": _retrieved(included, download_report),
@@ -483,6 +485,21 @@ def _platform_label(key: str) -> str:
         return "Unknown source"
     labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
     return labels.get(key, str(key).replace("_", " ").title())
+
+
+def _collection_retry(path: Path, workflow_state: dict) -> dict[str, list[str]]:
+    """Failed sources that can be re-run alone (the saved setup still matches that collection)."""
+    from agents.collection_agent import retryable_sources
+    from .sub_agent_contracts import CollectionAgentContract
+
+    collection = workflow_state["stages"]["collection"]
+    if collection["stale"] or collection["status"] not in {"partial", "failed"}:
+        return {"sources": []}
+    try:
+        config = CollectionAgentContract()._collection_input(read_consistent_setup(path))
+        return {"sources": retryable_sources(read_json(path / "collected" / "summary.json", {}), config)}
+    except (OSError, TypeError, ValueError):
+        return {"sources": []}
 
 
 def _platform_issues(platform_errors: dict) -> list[dict[str, str]]:
@@ -1276,7 +1293,9 @@ def _workflow_outcome_messages(notices: dict[str, dict[str, Any]]) -> list[dict]
             continue
         outcome = "partially completed" if notice["status"] == "partial" else "failed"
         text = f"{labels[stage_name]} {outcome}: {notice['succeeded']} completed, {notice['failed']} failed."
-        if notice.get("nextAction"):
+        if notice.get("recovery"):
+            text += (f" Next action: {notice['nextAction']}." if notice.get("nextAction") else "") + f" {notice['recovery']}"
+        elif notice.get("nextAction"):
             text += f" Next action: {notice['nextAction']}. Failed items remain retryable in the recovery step."
         else:
             text += " This stage is blocked until its failed items are recovered."
@@ -1422,6 +1441,9 @@ def _workflow_notices(path: Path, workflow_state: dict, collected_summary: dict,
             "retryable": int(stage["counts"].get("failed", 0)) > 0,
             "nextAction": next_actions.get(stage_name, "") if stage["status"] == "partial" else "",
         }
+        if stage_name == "collection":
+            from agents.collection_agent import collection_recovery
+            notices[stage_name]["recovery"] = collection_recovery(stage["status"])
     return notices
 
 

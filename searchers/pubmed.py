@@ -11,9 +11,15 @@ import json
 import os
 from typing import List, Dict, Optional
 
+from searchers.http_retry import get_with_retry
+
 
 class PubMedSearcher:
     BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    # E-utilities is usually stable; HTTP 429 appears when more than 3 requests/s
+    # are sent without an API key. Three attempts with 2 s and 5 s waits.
+    RETRY_DELAYS = (2, 5)
+    REQUEST_TIMEOUT = (10, 60)
 
     def __init__(self, email: str, api_key: Optional[str] = None):
         """
@@ -110,28 +116,14 @@ class PubMedSearcher:
         if self.api_key:
             params["api_key"] = self.api_key
 
-        # Retry logic for server errors
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = requests.get(f"{self.BASE_URL}/esearch.fcgi", params=params, timeout=60)
-                response.raise_for_status()
-                data = response.json()
-                return data.get("esearchresult", {}).get("idlist", [])
-            except requests.exceptions.HTTPError as e:
-                if response.status_code >= 500 and attempt < max_retries - 1:
-                    print(f"  PubMed server error (attempt {attempt + 1}/{max_retries}), retrying in 5s...")
-                    time.sleep(5)
-                    continue
-                raise
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
-                    print(f"  PubMed timeout (attempt {attempt + 1}/{max_retries}), retrying...")
-                    time.sleep(3)
-                    continue
-                raise
-
-        return []
+        response = get_with_retry(f"{self.BASE_URL}/esearch.fcgi", params=params, label="PubMed",
+                                  delays=self.RETRY_DELAYS, timeout=self.REQUEST_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+        result = data.get("esearchresult", {})
+        if result.get("ERROR") or data.get("error"):
+            raise RuntimeError(f"PubMed rejected the query: {result.get('ERROR') or data.get('error')}")
+        return result.get("idlist", [])
 
     def _fetch_details(self, pmids: List[str], output_file: Optional[str] = None) -> List[Dict]:
         """Fetch article details for given PMIDs with real-time saving."""
@@ -151,38 +143,21 @@ class PubMedSearcher:
             if self.api_key:
                 params["api_key"] = self.api_key
 
-            try:
-                response = requests.get(f"{self.BASE_URL}/efetch.fcgi", params=params, timeout=60)
-                response.raise_for_status()
+            # A batch that cannot be fetched fails the source (0 rows plus an error)
+            # rather than silently returning fewer records than PubMed matched.
+            response = get_with_retry(f"{self.BASE_URL}/efetch.fcgi", params=params, label="PubMed",
+                                      delays=self.RETRY_DELAYS, timeout=self.REQUEST_TIMEOUT)
+            response.raise_for_status()
+            articles = self._parse_xml(response.text)
 
-                articles = self._parse_xml(response.text)
+            # Save each article in real-time
+            if output_file:
+                with open(output_file, 'a', encoding='utf-8') as f:
+                    for article in articles:
+                        f.write(json.dumps(article, ensure_ascii=False) + '\n')
 
-                # Save each article in real-time
-                if output_file:
-                    with open(output_file, 'a', encoding='utf-8') as f:
-                        for article in articles:
-                            f.write(json.dumps(article, ensure_ascii=False) + '\n')
-
-                all_articles.extend(articles)
-                print(f"  Progress: {len(all_articles)}/{len(pmids)} articles (batch {i//batch_size + 1})")
-
-            except requests.exceptions.Timeout:
-                print(f"  Timeout fetching batch {i//batch_size + 1}, retrying...")
-                time.sleep(5)
-                try:
-                    response = requests.get(f"{self.BASE_URL}/efetch.fcgi", params=params, timeout=120)
-                    response.raise_for_status()
-                    articles = self._parse_xml(response.text)
-                    if output_file:
-                        with open(output_file, 'a', encoding='utf-8') as f:
-                            for article in articles:
-                                f.write(json.dumps(article, ensure_ascii=False) + '\n')
-                    all_articles.extend(articles)
-                except Exception as e:
-                    print(f"  Retry failed: {e}")
-
-            except Exception as e:
-                print(f"  Error fetching batch {i//batch_size + 1}: {e}")
+            all_articles.extend(articles)
+            print(f"  Progress: {len(all_articles)}/{len(pmids)} articles (batch {i//batch_size + 1})")
 
             # Rate limiting
             time.sleep(0.34 if self.api_key else 1)

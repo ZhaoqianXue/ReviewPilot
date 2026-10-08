@@ -518,7 +518,7 @@ class FrontendContractTests(unittest.TestCase):
 
         self.assertIn("function setupPayloadFromDraft(overrides = {})", source)
         self.assertIn("async function saveDraftSetup(projectId)", source)
-        self.assertIn("if (action === 'collect') await saveDraftSetup(projectId);", source)
+        self.assertIn("if (action === 'collect' && !payload?.retry_sources) await saveDraftSetup(projectId);", source)
         self.assertIn("source_limits: sourceLimits", source)
         self.assertIn("date_start: unescapePayloadValue(state.setupDraft.date_start)", source)
         self.assertIn("date_end: unescapePayloadValue(state.setupDraft.date_end)", source)
@@ -526,7 +526,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("...(derive ? {} : { concept_blocks: state.setupDraft.concept_blocks })", source)
         self.assertNotIn("state.setupDraft.search_terms", source)
         self.assertLess(
-            source.index("if (action === 'collect') await saveDraftSetup(projectId);"),
+            source.index("if (action === 'collect' && !payload?.retry_sources) await saveDraftSetup(projectId);"),
             source.index("const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`"),
         )
 
@@ -544,7 +544,7 @@ class FrontendContractTests(unittest.TestCase):
 
         self.assertIn("const DEFAULT_MAX_RESULTS_PER_PLATFORM = '10';", source)
         self.assertIn("const fallbackMaxResults = String(setup.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
-        self.assertIn("return String(sourceLimits[source] || fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
+        self.assertIn("return String(fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
         self.assertIn("function maxResultsFromSourceLimits(sourceLimits, fallbackMaxResults = DEFAULT_MAX_RESULTS_PER_PLATFORM)", source)
         self.assertIn("[source]: state.setupDraft.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM", source)
         self.assertNotIn("dialogInput('Max/source'", source)  # limits are edited per source on the canvas

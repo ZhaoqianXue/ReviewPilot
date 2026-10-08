@@ -12,9 +12,20 @@ import json
 import os
 from typing import List, Dict, Optional
 
+from searchers.http_retry import get_with_retry
+
+ARXIV_EPOCH = "1991-01-01"
+
 
 class ArxivSearcher:
     BASE_URL = "https://export.arxiv.org/api/query"
+    # arXiv's export API is the least stable source (HTTP 429/500/503 and slow
+    # responses under load). Each page gets three attempts with 5 s and 20 s
+    # waits (longer if the server sends Retry-After, capped at 60 s). Worst case
+    # per page: 3 x (10 s connect + 30 s read) + 25 s of waiting, about 2.5 min;
+    # the Collection Agent may retry the whole source once more at the end.
+    RETRY_DELAYS = (5, 20)
+    REQUEST_TIMEOUT = (10, 30)
 
     def __init__(self):
         """Initialize arXiv searcher."""
@@ -50,7 +61,6 @@ class ArxivSearcher:
         start = 0
         max_per_request = 100
         seen_ids = set()
-        network_failures = 0
         self._last_status_code = None
 
         # If output file exists, load existing IDs to avoid duplicates
@@ -74,7 +84,9 @@ class ArxivSearcher:
 
         bounds = getattr(self, '_date_range', None)
         if bounds:
-            start_date = (bounds['start'] or '0001-01-01').replace('-', '')
+            # arXiv answers HTTP 500 to years before 1000 (e.g. 00010101), so an open
+            # start uses 1991-01-01: arXiv holds nothing submitted before August 1991.
+            start_date = (bounds['start'] or ARXIV_EPOCH).replace('-', '')
             end_date = bounds['end'].replace('-', '')
             search_query = f"({search_query}) AND submittedDate:[{start_date}0000 TO {end_date}2359]"
 
@@ -90,79 +102,44 @@ class ArxivSearcher:
                 "sortOrder": "descending"
             }
 
-            try:
-                response = requests.get(self.BASE_URL, params=params, timeout=30)
-                self._last_status_code = response.status_code
+            # 429, 5xx, timeouts and dropped connections are retried with backoff
+            # (see searchers/http_retry.py); anything else fails the source at once.
+            response = get_with_retry(self.BASE_URL, params=params, label="arXiv", delays=self.RETRY_DELAYS,
+                                      timeout=self.REQUEST_TIMEOUT)
+            self._last_status_code = response.status_code
+            if response.status_code >= 400:
+                detail = self._api_error(response.text)
+                raise RuntimeError(f"arXiv rejected the query (HTTP {response.status_code})" + (f": {detail}" if detail else "."))
+            detail = self._api_error(response.text)
+            if detail:
+                raise RuntimeError(f"arXiv rejected the query: {detail}")
 
-                # Handle rate limiting (429) with retry
-                if response.status_code == 429:
-                    print(f"  Rate limited, waiting 5s before retry...")
-                    time.sleep(5)
-                    response = requests.get(self.BASE_URL, params=params, timeout=30)
-                    self._last_status_code = response.status_code
-                    if response.status_code == 429:
-                        print(f"  Still rate limited, waiting 10s...")
-                        time.sleep(10)
-                        response = requests.get(self.BASE_URL, params=params, timeout=30)
-                        self._last_status_code = response.status_code
+            new_articles = self._parse_response(response.text)
 
-                # arXiv returns transient 5xx errors under load; retry before failing the source
-                for delay in (3, 8):
-                    if response.status_code < 500:
-                        break
-                    print(f"  arXiv HTTP {response.status_code}, retrying in {delay}s...")
-                    time.sleep(delay)
-                    response = requests.get(self.BASE_URL, params=params, timeout=30)
-                    self._last_status_code = response.status_code
+            if not new_articles:
+                break
 
-                response.raise_for_status()
-                network_failures = 0
+            # Filter duplicates and save incrementally
+            new_unique = []
+            for article in new_articles:
+                if article.get('id') not in seen_ids:
+                    seen_ids.add(article.get('id'))
+                    new_unique.append(article)
 
-                new_articles = self._parse_response(response.text)
+                    # Save immediately if output file is provided
+                    if output_file:
+                        with open(output_file, 'a', encoding='utf-8') as f:
+                            f.write(json.dumps(article, ensure_ascii=False) + '\n')
 
-                if not new_articles:
-                    break
+            articles.extend(new_unique)
+            start += len(new_articles)
 
-                # Filter duplicates and save incrementally
-                new_unique = []
-                for article in new_articles:
-                    if article.get('id') not in seen_ids:
-                        seen_ids.add(article.get('id'))
-                        new_unique.append(article)
+            if new_unique:
+                print(f"  Progress: {len(articles)} articles (saved {len(new_unique)} new)")
 
-                        # Save immediately if output file is provided
-                        if output_file:
-                            with open(output_file, 'a', encoding='utf-8') as f:
-                                f.write(json.dumps(article, ensure_ascii=False) + '\n')
-
-                articles.extend(new_unique)
-                start += len(new_articles)
-
-                if new_unique:
-                    print(f"  Progress: {len(articles)} articles (saved {len(new_unique)} new)")
-
-                # Rate limiting (arXiv recommends longer delays for bulk queries)
+            # arXiv asks clients to wait 3 seconds between consecutive requests.
+            if len(articles) < max_results:
                 time.sleep(3)
-
-            except requests.exceptions.Timeout as exc:
-                network_failures += 1
-                if network_failures >= 3:
-                    raise RuntimeError("arXiv search timed out after 3 attempts. Retry collection later.") from exc
-                print(f"  Timeout at {len(articles)} articles, retrying in 10s...")
-                time.sleep(10)
-                continue
-            except requests.exceptions.HTTPError as e:
-                response = getattr(e, "response", None)
-                if response is not None:
-                    self._last_status_code = response.status_code
-                raise RuntimeError(f"arXiv search failed (HTTP {self._last_status_code}). Retry collection later.") from e
-            except requests.exceptions.ConnectionError as e:
-                network_failures += 1
-                if network_failures >= 3:
-                    raise RuntimeError("arXiv search connection failed after 3 attempts. Retry collection later.") from e
-                print(f"  Connection error at {len(articles)} articles, retrying in 10s...")
-                time.sleep(10)
-                continue
 
         return articles[:max_results]
 
@@ -176,6 +153,19 @@ class ArxivSearcher:
             quoted = phrase(value)
             return f'(ti:{quoted} OR abs:{quoted})'
         return render(parse(query), term, negative='ANDNOT')
+
+    @staticmethod
+    def _api_error(xml_text: str) -> str:
+        """arXiv reports errors as a feed whose single entry id points at /api/errors."""
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return ""
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        for entry in root.findall("atom:entry", ns):
+            if "/api/errors" in (entry.findtext("atom:id", "", ns) or ""):
+                return (entry.findtext("atom:summary", "", ns) or "").strip() or "unspecified API error"
+        return ""
 
     def _parse_response(self, xml_text: str) -> List[Dict]:
         """Parse arXiv Atom feed response."""

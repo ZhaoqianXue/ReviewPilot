@@ -218,7 +218,10 @@ class CollectionAgentContract:
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
         config = read_json(project_path / "search_conditions.json", {}) or {}
+        retry_sources = (input_data or {}).get("retry_sources")
         input_data = self._collection_input(config)
+        if retry_sources is not None:
+            input_data["retry_sources"] = list(retry_sources)
 
         if os.getenv("REVIEWPILOT_OFFLINE_ACTIONS") == "1":
             return self._write_offline_collection(project_path, input_data)
@@ -230,7 +233,7 @@ class CollectionAgentContract:
         source_limits = config.get("source_limits") or {}
         max_results = config.get("max_results_per_platform") or config.get("max_results")
         if not max_results and isinstance(source_limits, dict) and source_limits:
-            max_results = max(int(value) for value in source_limits.values() if str(value).isdigit())
+            max_results = max((int(value) for value in source_limits.values() if str(value).isdigit()), default=0)
         return {
             **config,
             "max_results_per_platform": int(max_results or 0),

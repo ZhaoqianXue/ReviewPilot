@@ -12,6 +12,8 @@ import itertools
 import re
 from typing import List, Dict, Optional
 
+from searchers.http_retry import get_with_retry
+
 try:
     import config
 except ImportError:
@@ -24,6 +26,10 @@ class OpenAlexSearchError(RuntimeError):
 
 class OpenAlexSearcher:
     BASE_URL = "https://api.openalex.org/works"
+    # OpenAlex rate-limits anonymous search under load (HTTP 429/503). Three
+    # attempts with 2 s and 5 s waits; Retry-After is honoured up to 60 s.
+    RETRY_DELAYS = (2, 5)
+    REQUEST_TIMEOUT = (10, 60)
 
     def __init__(self, email: Optional[str] = None, api_key: Optional[str] = None):
         """
@@ -73,7 +79,6 @@ class OpenAlexSearcher:
             return existing_articles[:max_results]
 
         query_param_sets = self._build_query_param_sets(query)
-        network_failures = 0
 
         if self._date_range:
             for params in query_param_sets:
@@ -98,83 +103,59 @@ class OpenAlexSearcher:
                 if self.api_key:
                     params["api_key"] = self.api_key
 
+                # 429, 5xx, timeouts and dropped connections are retried with backoff
+                # (see searchers/http_retry.py). Any other HTTP error fails the source,
+                # even mid-pagination, so a truncated result is never reported as complete.
+                response = get_with_retry(
+                    self.BASE_URL,
+                    params=params,
+                    label="OpenAlex",
+                    delays=self.RETRY_DELAYS,
+                    timeout=self.REQUEST_TIMEOUT,
+                    headers={"User-Agent": f"ReviewPilot/0.1 (mailto:{self.email})" if self.email else "ReviewPilot/0.1"},
+                )
                 try:
-                    response = requests.get(
-                        self.BASE_URL,
-                        params=params,
-                        timeout=60,
-                        headers={"User-Agent": f"ReviewPilot/0.1 (mailto:{self.email})" if self.email else "ReviewPilot/0.1"},
-                    )
                     response.raise_for_status()
-                    data = response.json()
-
-                    results = data.get("results", [])
-                    if not results:
-                        break
-
-                    new_count = 0
-                    for result in results:
-                        article = self._parse_result(result)
-                        if article:
-                            article_id = article.get('id')
-                            if article_id and article_id not in seen_ids:
-                                seen_ids.add(article_id)
-                                articles.append(article)
-                                new_count += 1
-
-                                # Save immediately if output file is provided
-                                if output_file:
-                                    with open(output_file, 'a', encoding='utf-8') as f:
-                                        f.write(json.dumps(article, ensure_ascii=False) + '\n')
-
-                    if new_count > 0:
-                        print(f"  Progress: {len(articles)} articles (saved {new_count} new)")
-
-                    # Get next cursor
-                    meta = data.get("meta", {})
-                    cursor = meta.get("next_cursor")
-                    if not cursor:
-                        break
-
-                    time.sleep(0.1)  # Rate limiting
-
-                except requests.exceptions.Timeout:
-                    network_failures += 1
-                    if network_failures >= 3:
-                        raise OpenAlexSearchError("OpenAlex search timed out after 3 attempts. Retry collection later.")
-                    print(f"  Timeout at {len(articles)} articles, retrying in 5s...")
-                    time.sleep(5)
-                    continue
                 except requests.exceptions.HTTPError as e:
                     self.last_error = self._http_error_message(e)
                     print(f"  OpenAlex API error: {self.last_error}")
-                    if not articles and self._is_platform_unavailable_error(self.last_error):
-                        raise OpenAlexSearchError(self.last_error)
+                    raise OpenAlexSearchError(self.last_error) from e
+                data = response.json()
+
+                results = data.get("results", [])
+                if not results:
                     break
-                except requests.exceptions.ConnectionError:
-                    network_failures += 1
-                    self.last_error = f"Connection error at {len(articles)} articles"
-                    if network_failures >= 3:
-                        raise OpenAlexSearchError("Could not reach OpenAlex after 3 attempts. Retry collection later.")
-                    print(f"  {self.last_error}, retrying in 5s...")
-                    time.sleep(5)
-                    continue
+
+                new_count = 0
+                for result in results:
+                    article = self._parse_result(result)
+                    if article:
+                        article_id = article.get('id')
+                        if article_id and article_id not in seen_ids:
+                            seen_ids.add(article_id)
+                            articles.append(article)
+                            new_count += 1
+
+                            # Save immediately if output file is provided
+                            if output_file:
+                                with open(output_file, 'a', encoding='utf-8') as f:
+                                    f.write(json.dumps(article, ensure_ascii=False) + '\n')
+
+                if new_count > 0:
+                    print(f"  Progress: {len(articles)} articles (saved {new_count} new)")
+
+                # Get next cursor
+                meta = data.get("meta", {})
+                cursor = meta.get("next_cursor")
+                if not cursor:
+                    break
+
+                time.sleep(0.1)  # Rate limiting
 
             if len(articles) >= max_results:
                 break
 
-        if not articles and self.last_error:
-            raise OpenAlexSearchError(self.last_error)
         return articles[:max_results]
-
-    def _is_platform_unavailable_error(self, message: str) -> bool:
-        normalized = str(message or "").lower()
-        return (
-            "rate-limit" in normalized
-            or "rate limited" in normalized
-            or "temporarily unavailable" in normalized
-            or "please use a free api key" in normalized
-        )
 
     def _http_error_message(self, exc: requests.exceptions.HTTPError) -> str:
         response = getattr(exc, "response", None)
@@ -235,7 +216,7 @@ class OpenAlexSearcher:
                 "authors": authors,
                 "journal": journal,
                 "year": year,
-                    "publication_date": result.get("publication_date", ""),
+                "publication_date": result.get("publication_date", ""),
                 "doi": doi,
                 "url": result.get("id", ""),
                 "citations": result.get("cited_by_count", 0),

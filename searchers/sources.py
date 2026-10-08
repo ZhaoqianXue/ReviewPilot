@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from searchers.arxiv_search import ArxivSearcher
+from searchers.http_retry import TransientSourceError
 from searchers.openalex import OpenAlexSearcher
 from searchers.pubmed import PubMedSearcher
 
@@ -30,6 +31,19 @@ class SourceResult:
     executed_query: str
 
 
+class SourceSearchError(RuntimeError):
+    """A source search failed; carries the query the adapter attempted to send.
+
+    ``transient`` is True for failures a later attempt may fix (rate limits,
+    server errors, timeouts) and False for ones it cannot (a rejected query).
+    """
+
+    def __init__(self, message: str, executed_query: str = "", transient: bool = False):
+        super().__init__(message)
+        self.executed_query = executed_query
+        self.transient = transient
+
+
 def _setting(name: str) -> Optional[str]:
     value = getattr(config, name, None) if config else None
     return value or os.getenv(name) or None
@@ -39,32 +53,29 @@ def _email() -> str:
     return _setting("EMAIL") or os.getenv("RESEARCHER_EMAIL") or "researcher@example.com"
 
 
-def _pubmed(query: str, max_results: int, date_range: Optional[Dict], output_file: Optional[str]) -> SourceResult:
-    searcher = PubMedSearcher(email=_email(), api_key=_setting("PUBMED_API_KEY"))
-    records = searcher.search(query, max_results=max_results, output_file=output_file, date_range=date_range)
-    return SourceResult(records, searcher.last_query)
-
-
-def _arxiv(query: str, max_results: int, date_range: Optional[Dict], output_file: Optional[str]) -> SourceResult:
-    searcher = ArxivSearcher()
-    records = searcher.search(query, max_results=max_results, output_file=output_file, date_range=date_range)
-    return SourceResult(records, searcher.last_query)
-
-
-def _openalex(query: str, max_results: int, date_range: Optional[Dict], output_file: Optional[str]) -> SourceResult:
-    searcher = OpenAlexSearcher(email=_email(), api_key=_setting("OPENALEX_API_KEY"))
-    records = searcher.search(query, max_results=max_results, output_file=output_file, date_range=date_range)
-    return SourceResult(records, searcher.last_query)
-
-
-_SEARCHES: Dict[str, Callable[..., SourceResult]] = {"pubmed": _pubmed, "arxiv": _arxiv, "openalex": _openalex}
+_SEARCHERS: Dict[str, Callable[[], Any]] = {
+    "pubmed": lambda: PubMedSearcher(email=_email(), api_key=_setting("PUBMED_API_KEY")),
+    "arxiv": ArxivSearcher,
+    "openalex": lambda: OpenAlexSearcher(email=_email(), api_key=_setting("OPENALEX_API_KEY")),
+}
 
 
 def search_source(source: str, query: str, *, max_results: int, date_range: Optional[Dict] = None,
                   output_file: Optional[str] = None) -> SourceResult:
-    """Search one supported source; raises on failure so the caller can record the error."""
-    if source not in _SEARCHES:
+    """Search one supported source.
+
+    Raises ``SourceSearchError`` on failure, carrying the query the adapter had
+    built (adapters set ``last_query`` before sending), so a failed search still
+    reports exactly what was attempted.
+    """
+    if source not in _SEARCHERS:
         raise ValueError(f"Unsupported search source: {source}")
     if max_results <= 0:
         raise ValueError("Each source needs a positive result limit.")
-    return _SEARCHES[source](query, max_results, date_range, output_file)
+    searcher = _SEARCHERS[source]()
+    try:
+        records = searcher.search(query, max_results=max_results, output_file=output_file, date_range=date_range)
+    except Exception as exc:
+        raise SourceSearchError(str(exc) or exc.__class__.__name__, getattr(searcher, "last_query", "") or "",
+                                transient=isinstance(exc, TransientSourceError)) from exc
+    return SourceResult(records, searcher.last_query)

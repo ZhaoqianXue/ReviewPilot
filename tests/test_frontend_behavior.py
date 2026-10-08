@@ -197,6 +197,18 @@ confirmOverwriteImpact(preview, null, () => false, async () => { retries += 1; }
 """
         result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
+    def test_source_limits_accept_only_positive_whole_numbers_like_the_server(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { sourceLimitProblem } = require('./frontend/app.js');
+for (const ok of ['1', '10', ' 25 ', 7, '007']) assert.equal(sourceLimitProblem('arXiv', ok), '', String(ok));
+for (const bad of ['', '0', 0, '-3', '2.5', '1e3', 'abc', null, undefined]) {
+  assert.equal(sourceLimitProblem('arXiv', bad), 'Max results for arXiv must be a whole number of at least 1.', String(bad));
+}
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dialog_maximum_updates_only_selected_source_limits_when_changed(self):
         script = r"""
 const assert = require('node:assert/strict');

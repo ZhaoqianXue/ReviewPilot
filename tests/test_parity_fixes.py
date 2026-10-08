@@ -189,7 +189,7 @@ const blocks=[
  {label:"Crohn's disease",role:'condition',eligibility_group:'condition',required_for_eligibility:true,query_terms:["Crohn's disease"]},
  {label:'Ulcerative colitis',role:'condition',eligibility_group:'condition',required_for_eligibility:true,query_terms:['ulcerative colitis']},
  {label:'Costs',role:'analytical_dimension',eligibility_group:'analysis',required_for_eligibility:false,query_terms:[]}];
-const ctx={state:{setupDraft:{project_name:'Test',description:'Clinical',platforms:['pubmed'],max_results:5,concept_blocks:JSON.parse(JSON.stringify(blocks))},actionError:'',conceptEdit:null,conceptError:''},D:{project:{title:'Test'}},esc:v=>v,unescapePayloadValue:v=>v||'',selectedSourceLimits:()=>({pubmed:5}),maxResultsFromSourceLimits:()=>5,FormData:class{constructor(f){this.f=f}get(k){return this.f[k]}}};vm.createContext(ctx);
+const ctx={state:{setupDraft:{project_name:'Test',description:'Clinical',platforms:['pubmed'],max_results:5,concept_blocks:JSON.parse(JSON.stringify(blocks))},actionError:'',conceptEdit:null,conceptError:''},D:{project:{title:'Test'}},esc:v=>v,unescapePayloadValue:v=>v||'',selectedSourceLimits:()=>({pubmed:5}),maxResultsFromSourceLimits:()=>5,sourceLimitProblem:()=>'',platformLabel:k=>k,FormData:class{constructor(f){this.f=f}get(k){return this.f[k]}}};vm.createContext(ctx);
 vm.runInContext(src.slice(src.indexOf('  // Concept blocks are the search strategy'),src.indexOf('  function setupDraftFromData(')),ctx);
 vm.runInContext(src.slice(src.indexOf('  function setupPayloadFromDraft('),src.indexOf('  function platformKey(')),ctx);
 const query=ctx.buildBooleanQuery(ctx.state.setupDraft.concept_blocks);

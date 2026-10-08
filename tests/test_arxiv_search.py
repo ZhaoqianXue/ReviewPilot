@@ -51,6 +51,13 @@ class ArxivSearcherTests(unittest.TestCase):
         self.assertEqual([call.kwargs["params"]["start"] for call in get.call_args_list], [0, 1])
         self.assertIn("submittedDate:[202301010000 TO 202609122359]", get.call_args.kwargs["params"]["search_query"])
 
+    def test_open_start_date_uses_arxivs_first_year_not_year_one(self):
+        searcher = ArxivSearcher()
+        with patch("searchers.arxiv_search.requests.get", return_value=Mock(status_code=200, text="feed")) as get, \
+             patch.object(searcher, "_parse_response", return_value=[]):
+            searcher.search("urban", max_results=1, date_range={"start": "", "end": "2026-10-08"})
+        self.assertIn("submittedDate:[199101010000 TO 202610082359]", get.call_args.kwargs["params"]["search_query"])
+
     def test_boolean_query_is_one_native_title_abstract_request_and_is_recorded(self):
         searcher = ArxivSearcher()
         response = Mock(status_code=200, text="feed")
@@ -62,6 +69,22 @@ class ArxivSearcherTests(unittest.TestCase):
         self.assertEqual(sent, '(((ti:"machine learning" OR abs:"machine learning") OR (ti:AI OR abs:AI)) AND (ti:"virtual reality" OR abs:"virtual reality"))')
         self.assertEqual(searcher.last_query, sent)
         self.assertEqual(get.call_count, 2)
+
+    def test_api_error_feed_fails_the_source_with_arxivs_explanation(self):
+        feed = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><id>https://arxiv.org/api/errors#bad</id>'
+                '<title>Error</title><summary>start must be non-negative</summary></entry></feed>')
+        for status in (200, 400):
+            with self.subTest(status=status), patch("searchers.arxiv_search.requests.get", return_value=Mock(status_code=status, text=feed)):
+                with self.assertRaisesRegex(RuntimeError, "start must be non-negative"):
+                    ArxivSearcher().search("urban", max_results=5)
+
+    def test_no_courtesy_wait_after_the_last_page(self):
+        searcher = ArxivSearcher()
+        with patch("searchers.arxiv_search.requests.get", return_value=Mock(status_code=200, text="feed")), \
+             patch.object(searcher, "_parse_response", return_value=[{"id": "a"}]), \
+             patch("searchers.arxiv_search.time.sleep") as sleep:
+            searcher.search("urban", max_results=1)
+        sleep.assert_not_called()
 
 
 if __name__ == "__main__":

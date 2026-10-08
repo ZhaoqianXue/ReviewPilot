@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from agents.prompt_agent import PromptAgent
 from agents.search_condition_agent import SearchConditionAgent
+from agents.collection_agent import collection_recovery
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
 from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
@@ -258,7 +259,8 @@ Return ONLY valid JSON:
         if action == "collect":
             self._verify_stage_artifacts(project_path, "search_conditions")
             artifacts.append(str(self._ensure_relevance_prompt(project_path, config)))
-            result = self._call_workflow_action("collect", project_id)
+            retry_sources = (input_data or {}).get("retry_sources")
+            result = self._call_workflow_action("collect", project_id, input_data={"retry_sources": retry_sources} if retry_sources is not None else None)
             artifacts.extend(self._verify_stage_artifacts(project_path, "collection"))
             return self._action_result(project_path, "collection", result, artifacts, action="collect")
 
@@ -745,7 +747,9 @@ Supported commands:
         }.get(stage)
         if next_action and outcome in {"completed", "partial"}:
             reply += f" Next action: {next_action}."
-        if outcome == "partial":
+        if stage == "collection" and outcome in {"partial", "failed"}:
+            reply += f" {collection_recovery(outcome)}"
+        elif outcome == "partial":
             reply += " Failed items remain retryable in the recovery step."
         elif outcome == "failed":
             reply += " This stage is blocked until its failed items are recovered."
