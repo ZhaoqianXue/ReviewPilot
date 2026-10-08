@@ -1459,7 +1459,7 @@ class SearchSetupChatTests(unittest.TestCase):
         result, applied, draft, chat = self.chat({"confirmationRequired": False})
         self.assertEqual([block["label"] for block in applied[0]["concept_blocks"]][-1], "Chatbots")
         self.assertIsNone(draft)
-        self.assertIn("Search setup saved.", result.reply)
+        self.assertIn('Search setup saved: added required concept "Chatbots".', result.reply)
         self.assertEqual([row["step"] for row in chat], [1, 1])
 
     def test_change_that_would_stale_results_becomes_a_draft(self):
@@ -1468,3 +1468,20 @@ class SearchSetupChatTests(unittest.TestCase):
         self.assertIn("(chatbot)", draft["search_terms"])
         self.assertIn("paper collection, screening", result.reply)
         self.assertIn("saved as a draft", result.reply)
+        self.assertIn('Proposed, not applied yet: added required concept "Chatbots".', result.reply)
+
+    def test_reply_claiming_a_change_that_was_not_made_says_nothing_changed(self):
+        reply = json.dumps({"reply": "Set arXiv to 5 results and added voice assistants.", "concept_blocks": None,
+                            "search_settings": {"platforms": ["pubmed", "scopus"]}})
+        applied = []
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            project.mkdir()
+            (project / "search_conditions.json").write_text(json.dumps({
+                "project_name": "Demo", "description": "LLMs for mental health", "platforms": ["pubmed"],
+                "source_limits": {"pubmed": 10}, "date_range": {"start": "", "end": "2026-10-07"}, "concept_blocks": self.BLOCKS}))
+            result = LeadAgent(Path(tmp), llm_query=lambda **_kwargs: (reply, {})).handle_message(
+                project_id="demo", message="Add Scopus, arXiv 5, voice assistants", context_step="search", apply_setup=applied.append)
+        self.assertEqual(applied, [])
+        self.assertIn("Scopus is not available in ReviewPilot", result.reply)
+        self.assertTrue(result.reply.endswith("The search setup was not changed."))

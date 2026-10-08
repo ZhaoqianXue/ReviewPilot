@@ -314,7 +314,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     setupSavedProjectId: '',
     chatInputFocus: false,
     chatPending: false,
+    chatFailure: null,
     quickStartOpen: false,
+    quickStartDismissed: false,
+    returnFocus: '',
+    setupSaving: false,
+    setupDrafts: {},
     actionPending: D.activeTask?.action || '',
     actionStartedAt: D.activeTask ? (Number.isNaN(initialActionStartedAt) ? Date.now() : initialActionStartedAt) : 0,
     actionOriginStep: '',
@@ -408,6 +413,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
     const ui = snapshot.ui || {};
     state.chatDrafts = ui.chatDrafts || {};
+    state.setupDrafts = ui.setupDrafts && typeof ui.setupDrafts === 'object' ? ui.setupDrafts : {};
     state.openQueries = ui.openQueries && typeof ui.openQueries === 'object' ? ui.openQueries : {};
     const sameProject = !!D.project.id && snapshotProjectId === D.project.id;
     const sameSetupRevision = sameProject
@@ -467,6 +473,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         data: snapshotData(D),
         ui: {
           chatDrafts: state.chatDrafts,
+          setupDrafts: state.setupDrafts,
           step: state.step,
           tab: state.tab,
           previewIndex: state.previewIndex,
@@ -855,9 +862,35 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.schemaJsonReturnFocus = false;
     state.actionError = '';
     state.setupDraft = setupDraftFromData(D);
+    // Unsaved Search Setup edits left in another conversation come back when it reopens unchanged.
+    const stashed = !sameProject && D.project.id ? state.setupDrafts[D.project.id] : null;
+    if (stashed) {
+      delete state.setupDrafts[D.project.id];
+      if (stashed.revision === D.setupRevision && !D.searchReuseDraft) state.setupDraft = { ...state.setupDraft, ...stashed.draft };
+    }
+    if (!sameProject) state.chatFailure = null;
     state.catDraft = categorizationDraftFromData(D);
     state.chatInputFocus = false;
     state.quickStartOpen = false;
+  }
+
+  function setupDraftComparable(draft) {
+    const platforms = [...(draft.platforms || [])].sort();
+    const limits = normalizeSourceLimits(draft.source_limits, platforms, draft.max_results);
+    return JSON.stringify([rawConceptBlocks(draft.concept_blocks), platforms, limits,
+      unescapePayloadValue(draft.date_start || ''), unescapePayloadValue(draft.date_end || '')]);
+  }
+
+  function setupDraftDirty() {
+    if (D.isNewProject || !D.project.id) return false;
+    return setupDraftComparable(state.setupDraft) !== setupDraftComparable(setupDraftFromData(D));
+  }
+
+  function stashSetupDraft() {
+    const projectId = D.project.id;
+    if (!projectId) return;
+    if (setupDraftDirty()) state.setupDrafts[projectId] = { revision: D.setupRevision, draft: JSON.parse(JSON.stringify(state.setupDraft)) };
+    else delete state.setupDrafts[projectId];
   }
 
   function mergeConversationMessages(preservedMessages, incomingMessages) {
@@ -914,6 +947,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function startNavigation(projectId) {
+    stashSetupDraft();
     reviewUI.reset();
     state.sidebarOpen = false;
     chatSubmission += 1;
@@ -926,6 +960,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.dialog = '';
     state.schemaJsonOpen = false;
     state.quickStartOpen = false;
+    state.quickStartDismissed = false;
     activeTaskMonitor = { key: '', generation: activeTaskMonitor.generation + 1 };
     return projectNavigation.begin(projectId);
   }
@@ -1247,6 +1282,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.setupSavedProjectId = projectId;
   }
 
+  async function discardSetupDraft() {
+    const projectId = state.activeProjectId || D.project.id;
+    if (!projectId) return;
+    const ownership = projectNavigation.capture(projectId);
+    const res = await fetch(`/projects/${encodeURIComponent(projectId)}/setup/draft`, { method: 'DELETE' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || `Could not discard the draft (${res.status}).`);
+    if (!projectNavigation.owns(ownership)) return;
+    setData(body, false, { preserveView: true });
+    state.returnFocus = '[data-act="save-setup"]';
+    showTransitionNotice(projectId, 'Draft discarded. The saved search setup is unchanged.');
+  }
+
   async function saveDraftSetup(projectId) {
     const send = async (payload) => fetch(`/projects/${encodeURIComponent(projectId)}/setup`, {
       method: 'PUT',
@@ -1294,9 +1342,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   async function handleChatSubmit(text) {
     const message = String(text || '').trim();
-    if (!message || state.chatPending || state.navigationPending || D.readOnlyExample) return;
+    if (!message || state.chatPending || state.navigationPending || D.readOnlyExample || state.actionPending) return;
     const submission = ++chatSubmission;
-    state.chatDrafts[D.project.id || ''] = '';
+    const conversationId = D.project.id || '';
+    const messagesBefore = D.messages;
+    state.chatDrafts[conversationId] = '';
+    state.chatFailure = null;
     appendMessage('u', message);
     state.preservedChatMessages = D.messages.slice();
     state.chatPending = true;
@@ -1307,13 +1358,24 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       }
       await sendProjectChat(message);
     } catch (err) {
-      if (submission === chatSubmission) throw err;
+      if (submission === chatSubmission) {
+        // Nothing was saved, so the message is shown as not sent and put back in the box to retry.
+        D.messages = messagesBefore;
+        state.chatDrafts[conversationId] = message;
+        state.chatFailure = { projectId: conversationId, text: message, error: requestErrorMessage(err) };
+      }
     } finally {
       if (submission === chatSubmission) {
         state.chatPending = false;
         state.preservedChatMessages = [];
       }
     }
+  }
+
+  function requestErrorMessage(err) {
+    // fetch rejects with this TypeError only when the request never reached the server.
+    if (err && err.name === 'TypeError' && /failed to fetch|load failed|networkerror/i.test(err.message || '')) return 'ReviewPilot could not reach its server. Check that it is running, then try again.';
+    return err && err.message ? err.message : String(err);
   }
 
   function projectNameFromTopic(topic) {
@@ -1395,7 +1457,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     );
     const canvasActionElapsedLabel = canvasActionPending ? workflowElapsedLabel : '';
     const activity = workflowRunning && step === workflowRunningStepKey
-      ? [{ t: 'now', tag: 'running', msg: `${workflowActionLabel(state.actionPending)} in progress${workflowElapsedLabel ? ` · ${workflowElapsedLabel}` : ''}` }, ...(D.activityByStep[step] || [])]
+      ? [{ t: 'now', tag: 'running', msg: `${workflowActionLabel(state.actionPending)} in progress${workflowElapsedLabel ? ` · <span data-elapsed>${workflowElapsedLabel}</span>` : ''}` }, ...(D.activityByStep[step] || [])]
       : (D.activityByStep[step] || []);
     const activityMessages = activityMessagesForVisibleSteps(steps, progressIndex, step, activity);
     const chatMessages = conversationMessagesWithActivity(
@@ -1450,7 +1512,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       schemaJsonOpen: state.schemaJsonOpen,
       previewIndex: state.previewIndex,
       chat: chatMessages,
+      chatFailure: state.chatFailure && state.chatFailure.projectId === (D.project.id || '') ? state.chatFailure : null,
       chatPending: state.chatPending,
+      setupDirty: setupDraftDirty(),
+      chatBusyLabel: state.actionPending && !D.isNewProject ? workflowActionLabel(state.actionPending) : '',
+      setupLocked: !!state.actionPending || state.chatPending || state.setupSaving || D.readOnlyExample,
       quickStartOpen: state.quickStartOpen,
       assistantContext: D.ctxLabels[step] || '',
       isFieldsTab: state.tab === 'fields',
@@ -1607,25 +1673,25 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       history: D.history.map(group => ({...group, items: group.items.filter(item => !item.isNewProject).map(item => ({...item, active: false}))}))});
   }
 
-  function sourceChecklist(sources, sourceLimits, fallbackMaxResults) {
+  function sourceChecklist(sources, sourceLimits, fallbackMaxResults, locked = false) {
     const limitsProblem = sourceLimitsProblem(sourceLimits, sources.filter((source) => source.selected).map((source) => source.key));
-    return `<div data-ui="source-checklist" style="display:flex;flex-direction:column;gap:8px;">
+    return `<div data-ui="source-checklist" role="group" aria-labelledby="rp-sources-label" style="display:flex;flex-direction:column;gap:8px;">
       ${sources.map((source) => {
         const raw = sourceLimitValue(sourceLimits, source.key, fallbackMaxResults);
         const value = esc(raw);
         const invalid = source.selected && !!sourceLimitProblem(source.label, raw);
         return `<div data-ui="source-row" style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;justify-content:space-between;">
-          <button type="button" data-act="toggle-source" data-source="${source.key}" role="checkbox" aria-checked="${source.selected ? 'true' : 'false'}" style="flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;border:1px solid ${source.selected ? '#1a365d' : '#c8d8e8'};background:${source.selected ? '#eef4fb' : '#fffefc'};color:#1a365d;border-radius:999px;padding:7px 11px;font:inherit;font-size:12.5px;cursor:pointer;">
+          <button type="button" data-act="toggle-source" data-source="${source.key}" role="checkbox" aria-checked="${source.selected ? 'true' : 'false'}" ${locked ? 'disabled' : ''} style="flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;border:1px solid ${source.selected ? '#1a365d' : '#c8d8e8'};background:${source.selected ? '#eef4fb' : '#fffefc'};color:#1a365d;border-radius:999px;padding:7px 11px;font:inherit;font-size:12.5px;cursor:pointer;">
             <span data-ui="source-check-circle" style="width:14px;height:14px;border-radius:999px;border:1px solid #1a365d;background:${source.selected ? '#eaf0f7' : '#fffefc'};display:inline-flex;align-items:center;justify-content:center;color:#1a365d;box-sizing:border-box;">${source.selected ? '<i class="ph ph-check" style="font-size:9px;"></i>' : ''}</span>
             <span>${source.label}</span>
           </button>
           <label style="margin-left:auto;display:flex;align-items:center;gap:8px;justify-content:flex-end;color:${source.selected ? '#6b746c' : '#b4bbb2'};font-size:11px;letter-spacing:-0.01em;">
             <span style="white-space:nowrap;">Max results/platform</span>
-            <input data-source-limit="${source.key}" type="number" min="1" step="1" inputmode="numeric" aria-label="Max results for ${source.label}" aria-invalid="${invalid ? 'true' : 'false'}" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${invalid ? '#c0392b' : (source.selected ? '#c8d8e8' : '#e0e4df')};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
+            <input data-source-limit="${source.key}" type="number" min="1" step="1" inputmode="numeric" aria-label="Max results for ${source.label}" aria-invalid="${invalid ? 'true' : 'false'}" ${invalid ? 'aria-describedby="rp-source-limit-error"' : ''} value="${value}" ${source.selected && !locked ? '' : 'disabled'} style="width:58px;border:1px solid ${invalid ? '#c0392b' : (source.selected ? '#c8d8e8' : '#e0e4df')};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
           </label>
         </div>`;
       }).join('')}
-      <div data-ui="source-limit-error" role="alert" ${limitsProblem ? '' : 'hidden'} style="font-size:11.5px;color:#8a1f1f;line-height:1.4;">${esc(limitsProblem)}</div>
+      <div id="rp-source-limit-error" data-ui="source-limit-error" role="alert" ${limitsProblem ? '' : 'hidden'} style="font-size:11.5px;color:#8a1f1f;line-height:1.4;">${esc(limitsProblem)}</div>
     </div>`;
   }
 
@@ -1633,6 +1699,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     // Updates the field in place so typing never loses focus to a repaint.
     const problem = sourceLimitProblem(platformLabel(source), input.value);
     input.setAttribute('aria-invalid', problem ? 'true' : 'false');
+    if (problem) input.setAttribute('aria-describedby', 'rp-source-limit-error');
+    else input.removeAttribute('aria-describedby');
     input.style.borderColor = problem ? '#c0392b' : '#c8d8e8';
     const message = input.closest('[data-ui="source-checklist"]')?.querySelector('[data-ui="source-limit-error"]');
     if (message) {
@@ -1642,20 +1710,21 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     }
   }
 
-  function dateRangeCard(setupDraft) {
-    const start = esc(setupDraft.date_start || '');
-    const end = esc(setupDraft.date_end || '');
+  function dateRangeCard(setupDraft, locked = false) {
+    // Date fields are stored escaped (see updateSetupDraftField); decode before escaping for display.
+    const start = esc(unescapePayloadValue(setupDraft.date_start || ''));
+    const end = esc(unescapePayloadValue(setupDraft.date_end || ''));
     return `<div data-ui="date-range-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:11px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
           <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">Date range</div>
-          <span data-ui="date-range-summary" style="display:inline-flex;align-items:center;max-width:180px;border:1px solid #c8d8e8;background:#eef4fb;color:#1a365d;border-radius:999px;padding:5px 9px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${start} to ${end || 'present'}</span>
+          <span data-ui="date-range-summary" style="display:inline-flex;align-items:center;max-width:180px;border:1px solid #c8d8e8;background:#eef4fb;color:#1a365d;border-radius:999px;padding:5px 9px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${start || 'Earliest'} to ${end || 'present'}</span>
         </div>
         <div data-ui="date-range-inputs" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
           <label data-ui="date-range-field" style="display:block;min-height:58px;box-sizing:border-box;border:1px solid #eef0ee;border-radius:10px;background:#fbfcfa;padding:9px 10px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">From
-            <input data-draft-field="date_start" value="${start}" placeholder="Earliest available" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
+            <input data-draft-field="date_start" value="${start}" placeholder="YYYY-MM-DD · blank: earliest" ${locked ? 'disabled' : ''} style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
           </label>
           <label data-ui="date-range-field" style="display:block;min-height:58px;box-sizing:border-box;border:1px solid #eef0ee;border-radius:10px;background:#fbfcfa;padding:9px 10px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">To
-            <input data-draft-field="date_end" value="${end}" placeholder="blank=now" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
+            <input data-draft-field="date_end" value="${end}" placeholder="YYYY-MM-DD · blank: today" ${locked ? 'disabled' : ''} style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
           </label>
         </div>
         <div data-ui="date-range-note" style="margin-top:auto;border-top:1px solid #eef0ee;padding-top:8px;font-size:11px;color:#6b746c;line-height:1.35;letter-spacing:-0.01em;">Blank end date is fixed to today when saved. Incomplete dates are retained for review. Source limits bound coverage; increase limits if the range removes many records.</div>
@@ -1667,6 +1736,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 .rp-step-enter { animation:rp-step-arrive .38s ease-out both; }
 .rp-mobile-nav { display:none; }
 @media (prefers-reduced-motion: reduce) { .rp-motion, .rp-step-enter { animation:none !important; } }
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .rp-sidebar { width:196px !important; flex-basis:196px !important; }
+  .rp-assistant { width:340px !important; flex-basis:340px !important; }
+}
 @media (max-width: 1023px) {
   body { overflow:auto !important; }
   #app { height:auto !important; min-height:100vh !important; }
@@ -1703,7 +1776,7 @@ ${reviewUI.dialog()}
 .rp-history-row:hover .rp-history-menu, .rp-history-row:focus-within .rp-history-menu, .rp-history-menu[aria-expanded="true"] {opacity:1;}
 @media (hover:none) {.rp-history-menu {opacity:1;}}
 </style>
-<div ${state.sessionDialog || reviewUI.isOpen() || state.dialog === 'help' ? 'inert' : ''} class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
+<div ${state.sessionDialog || reviewUI.isOpen() || ['help', 'setup', 'concept', 'memory'].includes(state.dialog) || state.schemaJsonOpen ? 'inert' : ''} class="rp-shell" style="width:100vw;height:100vh;background:#fffefc;color:#1a1a1a;font-family:'Hanken Grotesk',system-ui,sans-serif;font-weight:400;letter-spacing:-0.01em;display:flex;overflow:hidden;border:none;border-radius:0;">
   <div class="rp-mobile-nav"><strong>ReviewPilot</strong><button type="button" data-act="toggle-sidebar" aria-controls="rp-conversations" aria-expanded="${!!state.sidebarOpen}" style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;">${state.sidebarOpen ? 'Close conversations' : 'Conversations'}</button></div>
   <aside id="rp-conversations" class="rp-sidebar ${state.sidebarOpen ? 'rp-sidebar-open' : ''}" style="width:220px;flex:0 0 220px;background:#f8f9fb;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
     <div style="display:flex;align-items:center;gap:8px;padding:13px 10px 8px 12px;">
@@ -1805,7 +1878,7 @@ ${reviewUI.dialog()}
   }
 
   function stepItem(s) {
-    const actionAttrs = s.canView ? `data-act="step" data-step="${s.key}"` : `data-step="${s.key}" data-disabled="true" aria-disabled="true" title="${s.label} is not available yet"`;
+    const actionAttrs = s.canView ? `data-act="step" data-step="${s.key}" role="button" tabindex="0"` : `data-step="${s.key}" data-disabled="true" role="button" aria-disabled="true" title="${s.label} is not available yet"`;
     const stepStyle = `position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;cursor:${s.canView ? 'pointer' : 'default'};padding:0 6px 12px;transition:opacity .12s ease;opacity:${s.canView ? '1' : '.48'};`;
     const hoverAttr = s.canView ? 'data-hover="opacity:0.74;"' : '';
     return `<div ${actionAttrs} ${s.active ? 'aria-current="step"' : ''} ${s.isRunning ? 'aria-busy="true"' : ''} style="${stepStyle}" ${hoverAttr}>
@@ -1828,7 +1901,7 @@ ${reviewUI.dialog()}
       </div>
       <div style="text-align:center;margin-top:2px;">
         <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;hyphens:auto;overflow-wrap:break-word;text-wrap:balance;" lang="en">${s.label.replace("Categorization", "Categori&shy;zation")}</div>
-        ${s.isRunning ? `<div style="font-size:10px;color:#1a365d;margin-top:2px;">Running${s.runningElapsedLabel ? ` · ${s.runningElapsedLabel}` : ''}</div>` : ''}
+        ${s.isRunning ? `<div style="font-size:10px;color:#1a365d;margin-top:2px;">Running${s.runningElapsedLabel ? ` · <span data-elapsed aria-hidden="true">${s.runningElapsedLabel}</span>` : ''}</div>` : ''}
         ${!s.isRunning && s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
         ${!s.isRunning && s.isPartial ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Partial · review failures</div>' : ''}
         ${!s.isRunning && s.isFailed ? '<div style="font-size:10px;color:#b42318;margin-top:2px;">Failed · recovery required</div>' : ''}
@@ -1847,18 +1920,21 @@ ${reviewUI.dialog()}
         ${starterTopicButtons()}
       </div>`;
     }
+    // An imported or chat-proposed draft can carry a different research question; show the one that saving would apply.
+    const draftQuestion = v.searchReuseDraft && v.setupDraft.description && esc(v.setupDraft.description) !== v.researchQuestion ? esc(v.setupDraft.description) : '';
     return `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
-        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:7px;">Research question</div>
-        <div style="font-size:15px;color:#1a1a1a;line-height:1.45;letter-spacing:-0.01em;">${v.researchQuestion || 'Review project'}</div>
+        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:7px;">Research question${draftQuestion ? ' · <span style="color:#b45309;">proposed in the draft</span>' : ''}</div>
+        <div style="font-size:15px;color:#1a1a1a;line-height:1.45;letter-spacing:-0.01em;">${draftQuestion || v.researchQuestion || 'Review project'}</div>
+        ${draftQuestion ? `<div data-ui="draft-question-note" style="font-size:11.5px;color:#6b746c;margin-top:6px;line-height:1.4;">Currently saved: ${v.researchQuestion}</div>` : ''}
       </div>
       ${v.platformIssues.length && !D.stageState.collection?.stale ? recordsBySourceCard(v, 'margin-bottom:16px;') : ''}
       ${conceptEditor(v)}
       <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch;">
         <div data-ui="sources-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;">
-          <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Sources</div>
-          ${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results)}
+          <div id="rp-sources-label" style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Sources</div>
+          ${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results, v.setupLocked)}
         </div>
-        ${dateRangeCard(v.setupDraft)}
+        ${dateRangeCard(v.setupDraft, v.setupLocked)}
       </div>`;
   }
 
@@ -1866,34 +1942,35 @@ ${reviewUI.dialog()}
     const blocks = v.setupDraft.concept_blocks || [];
     const groups = requiredConceptGroups(blocks);
     const described = blocks.map((block, index) => ({ block, index })).filter((item) => !item.block.required_for_eligibility);
-    const unsaved = JSON.stringify(blocks) !== JSON.stringify(v.savedConceptBlocks);
+    const unsaved = v.setupDirty;
+    const lock = v.setupLocked ? 'disabled' : '';
     const label = 'font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;';
     const joiner = (text) => `<span aria-hidden="true" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9aa39b;">${text}</span>`;
     const rows = groups.map((group, groupIndex) => `${groupIndex ? `<div style="margin:6px 0 6px 2px;">${joiner('AND')}</div>` : ''}
       <div data-ui="concept-group" role="group" aria-label="Required concept group ${groupIndex + 1}" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
-        ${group.items.map((item, k) => `${k ? joiner('OR') : ''}${conceptChip(item.block, item.index)}`).join('')}
-        <button type="button" data-act="add-concept" data-group="${esc(group.group)}" aria-label="Add an alternative to ${esc(group.items.map((item) => item.block.label).join(' or '))}" title="Add an alternative to this group" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer;">+ or</button>
+        ${group.items.map((item, k) => `${k ? joiner('OR') : ''}${conceptChip(item.block, item.index, false, lock)}`).join('')}
+        <button type="button" data-act="add-concept" data-group="${esc(group.group)}" ${lock} aria-label="Add an alternative to ${esc(group.items.map((item) => item.block.label).join(' or '))}" title="Add an alternative to this group" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer;">+ or</button>
       </div>`).join('');
     return `<div data-ui="concept-editor" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;"><div style="${label}">Search concepts</div>${unsaved ? '<span data-ui="concepts-unsaved" style="font-size:11px;color:#b45309;">Unsaved changes</span>' : `<span data-ui="setup-saved-status" role="status" aria-live="polite" style="font-size:11px;color:#245c37;display:inline-flex;align-items:center;gap:4px;">${v.setupSaved && !v.searchReuseDraft ? '<i class="ph ph-check" aria-hidden="true"></i>Search setup saved' : ''}</span>`}</div>
-        ${v.searchReuseDraft ? '<div data-ui="search-draft-notice" role="status" style="border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;margin-bottom:10px;">Proposed search changes are shown below. Save the search setup to apply them.</div>' : ''}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;"><div style="${label}">Search concepts</div>${unsaved ? `<span data-ui="concepts-unsaved" style="font-size:11px;color:#b45309;display:inline-flex;align-items:center;gap:8px;">Unsaved changes<button type="button" data-act="discard-setup-edits" ${lock} style="border:none;background:none;color:#1a365d;text-decoration:underline;font:inherit;font-size:11px;padding:0;cursor:pointer;">Discard</button></span>` : `<span data-ui="setup-saved-status" role="status" aria-live="polite" style="font-size:11px;color:#245c37;display:inline-flex;align-items:center;gap:4px;">${v.setupSaved && !v.searchReuseDraft ? '<i class="ph ph-check" aria-hidden="true"></i>Search setup saved' : ''}</span>`}</div>
+        ${v.searchReuseDraft ? `<div data-ui="search-draft-notice" role="status" style="border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;margin-bottom:10px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;"><span style="flex:1 1 220px;">Proposed search changes are shown below. Save the search setup to apply them, or discard the draft to keep the saved setup.</span><button type="button" data-act="discard-setup-draft" ${lock} style="${buttonStyle}padding:5px 9px;font-size:11.5px;">Discard draft</button></div>` : ''}
         ${rows || '<span style="font-size:12.5px;color:#9aa39b;">No concepts yet. Regenerate them from the research question.</span>'}
-        <button type="button" data-act="add-concept" style="margin-top:10px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add required concept</button>
-        ${described.length ? `<div style="margin-top:12px;"><div style="${label}margin-bottom:6px;">Described, not searched</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${described.map((item) => conceptChip(item.block, item.index, true)).join('')}</div></div>` : ''}
+        <button type="button" data-act="add-concept" ${lock} style="margin-top:10px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add required concept</button>
+        ${described.length ? `<div style="margin-top:12px;"><div style="${label}margin-bottom:6px;">Described, not searched</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${described.map((item) => conceptChip(item.block, item.index, true, lock)).join('')}</div></div>` : ''}
         <p style="font-size:11px;color:#68798c;line-height:1.45;">Concepts in one row are alternatives (OR); every row must match (AND). Terms are matched in titles and abstracts.</p>
         <div data-ui="effective-query" style="font:12px 'IBM Plex Mono',monospace;color:#3a4252;overflow-wrap:anywhere;background:#f8fbff;border-radius:8px;padding:8px 10px;">${esc(buildBooleanQuery(blocks))}</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
-          <button type="button" data-act="save-setup" style="${buttonStyle}">Save search setup</button>
-          <button type="button" data-act="open-setup" style="${buttonStyle}">Edit research question</button>
+          <button type="button" data-act="save-setup" ${lock} style="${buttonStyle}">${state.setupSaving ? 'Saving…' : 'Save search setup'}</button>
+          <button type="button" data-act="open-setup" ${lock} style="${buttonStyle}">Edit research question</button>
         </div>
       </div>`;
   }
 
-  function conceptChip(block, index, muted = false) {
+  function conceptChip(block, index, muted = false, lock = '') {
     const terms = block.query_terms.length;
     return `<span data-ui="concept-chip" style="display:inline-flex;align-items:center;max-width:280px;border:1px solid ${muted ? '#e0e4df' : '#cfe0f5'};background:${muted ? '#f7f8f6' : '#eaf0f7'};color:#1a365d;border-radius:6px;min-height:26px;box-sizing:border-box;">
-      <button type="button" data-act="edit-concept" data-index="${index}" title="${esc(block.query_terms.join(' · '))}" aria-label="Edit concept ${esc(block.label)}" style="border:none;background:transparent;color:inherit;font:inherit;font-size:11.5px;padding:4px 4px 4px 9px;cursor:pointer;display:inline-flex;align-items:baseline;gap:6px;min-width:0;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(block.label)}</span><span style="font-size:10px;color:#68798c;flex:0 0 auto;">${terms} term${terms === 1 ? '' : 's'}</span></button>
-      <button type="button" data-act="remove-concept" data-index="${index}" aria-label="Remove concept ${esc(block.label)}" style="border:none;background:transparent;color:#1a365d;padding:0 7px 0 3px;cursor:pointer;opacity:.7;display:inline-flex;align-items:center;"><i class="ph ph-x" style="font-size:10px;"></i></button>
+      <button type="button" data-act="edit-concept" data-index="${index}" ${lock} title="${esc(block.query_terms.join(' · '))}" aria-label="Edit concept ${esc(block.label)}" style="border:none;background:transparent;color:inherit;font:inherit;font-size:11.5px;padding:4px 4px 4px 9px;cursor:pointer;display:inline-flex;align-items:baseline;gap:6px;min-width:0;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(block.label)}</span><span style="font-size:10px;color:#68798c;flex:0 0 auto;">${terms} term${terms === 1 ? '' : 's'}</span></button>
+      <button type="button" data-act="remove-concept" data-index="${index}" ${lock} aria-label="Remove concept ${esc(block.label)}" style="border:none;background:transparent;color:#1a365d;padding:0 7px 0 3px;cursor:pointer;opacity:.7;display:inline-flex;align-items:center;"><i class="ph ph-x" style="font-size:10px;"></i></button>
     </span>`;
   }
 
@@ -1918,7 +1995,7 @@ ${reviewUI.dialog()}
   function canvasActionButton(v) {
     if (!v.showCanvasAction) return '';
     const pendingLabel = v.canvasActionLabel.replace(/^Run\s+/i, '');
-    const label = v.canvasActionPending ? `Running ${pendingLabel.toLowerCase()}...${v.canvasActionElapsedLabel ? ` ${v.canvasActionElapsedLabel}` : ''}` : v.canvasActionLabel;
+    const label = v.canvasActionPending ? `Running ${pendingLabel.toLowerCase()}...${v.canvasActionElapsedLabel ? ` <span data-elapsed aria-hidden="true">${v.canvasActionElapsedLabel}</span>` : ''}` : v.canvasActionLabel;
     const actionDisabled = !!state.actionPending;
     const disabled = actionDisabled ? 'disabled' : '';
     const icon = v.canvasActionPending
@@ -1933,7 +2010,7 @@ ${reviewUI.dialog()}
     if (!v.workflowRunning) return '';
     return `<section data-ui="workflow-running-banner" role="status" aria-live="polite" style="position:relative;overflow:hidden;border:1px solid #b9cde3;background:#f5f9fe;border-radius:12px;padding:13px 15px;margin-bottom:14px;display:flex;align-items:center;gap:12px;box-shadow:0 6px 18px rgba(26,54,93,.06);">
       <span class="rp-motion" aria-hidden="true" style="width:20px;height:20px;flex:0 0 20px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
-      <div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a365d;font-weight:500;">ReviewPilot is working on ${v.workflowRunningActionLabel}</div><div style="font-size:11.5px;color:#6b746c;margin-top:3px;line-height:1.4;">${v.workflowRunningStepLabel}${v.workflowElapsedLabel ? ` · ${v.workflowElapsedLabel} elapsed` : ''} · This workspace will update automatically when the task finishes.</div></div>
+      <div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a365d;font-weight:500;">ReviewPilot is working on ${v.workflowRunningActionLabel}</div><div style="font-size:11.5px;color:#6b746c;margin-top:3px;line-height:1.4;">${v.workflowRunningStepLabel}${v.workflowElapsedLabel ? `<span aria-hidden="true"> · <span data-elapsed>${v.workflowElapsedLabel}</span> elapsed</span>` : ''} · This workspace will update automatically when the task finishes.</div></div>
       <div aria-hidden="true" style="position:absolute;left:0;right:0;bottom:0;height:3px;background:#e6eef8;overflow:hidden;"><span class="rp-motion" style="display:block;width:38%;height:100%;background:linear-gradient(90deg,transparent,#6f96bf,transparent);animation:rp-progress-sweep 1.35s ease-in-out infinite;"></span></div>
     </section>`;
   }
@@ -1945,7 +2022,7 @@ ${reviewUI.dialog()}
 
   function actionErrorBanner(v) {
     if (!v.actionError) return '';
-    return `<div data-ui="canvas-action-error" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:14px;line-height:1.45;">${esc(v.actionError)}</div>`;
+    return `<div data-ui="canvas-action-error" role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:14px;line-height:1.45;">${esc(v.actionError)}</div>`;
   }
 
   function screeningCanvas(v) {
@@ -2277,6 +2354,13 @@ ${reviewUI.dialog()}
     return `<div data-ui="prototype-welcome-message" style="display:flex;flex-direction:column;gap:9px;"><div>Welcome to <strong>ReviewPilot</strong>!</div><div>ReviewPilot helps you turn a research topic into a literature review:</div><ol data-ui="prototype-welcome-steps" style="list-style:none;margin:0;padding:0;">${steps}</ol><div><strong>Choose a starter topic on the canvas, or describe your own topic in the chat.</strong></div></div>`;
   }
 
+  function failedChatMessage(failure) {
+    return `<div data-ui="chat-failed" style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
+      <div style="background:#fff5f5;color:#5b1d1d;border:1px solid #f4b4b4;border-radius:13px 13px 3px 13px;padding:10px 12px;font-size:12.5px;line-height:1.5;letter-spacing:-0.01em;max-width:230px;overflow-wrap:anywhere;">${esc(failure.text)}</div>
+      <div role="alert" style="font-size:11.5px;color:#8a1f1f;line-height:1.4;max-width:300px;text-align:right;"><strong>Not sent.</strong> ${esc(/[.!?]$/.test(failure.error.trim()) ? failure.error.trim() : `${failure.error.trim()}.`)} Your message is back in the box below so you can send it again.</div>
+    </div>`;
+  }
+
   function thinkingBubble() {
     const dots = [0, 1, 2]
       .map((i) => `<span style="width:5px;height:5px;border-radius:999px;background:#1a365d;display:inline-block;animation:rp-thinking-bounce 1.05s ${i * 0.14}s infinite;"></span>`)
@@ -2315,29 +2399,30 @@ ${reviewUI.dialog()}
 
   function assistantPanel(v) {
     return `<aside ${state.navigationPending ? 'inert' : ''} class="rp-assistant" style="width:407px;flex:0 0 407px;border-left:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
-      <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div><button data-act="open-setup" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button></div>
+      <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div><button type="button" data-act="open-setup" aria-label="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" title="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button></div>
       <div class="rp-scroll" id="rp-conv" style="flex:1;min-height:0;overflow-y:auto;padding:16px 15px;display:flex;flex-direction:column;gap:13px;">
         ${v.chat.map(chatMessage).join('')}
+        ${v.chatFailure ? failedChatMessage(v.chatFailure) : ''}
         ${extractionDecisionCard(v)}
         ${v.chatPending ? thinkingBubble() : ''}
       </div>
-      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...'}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:#1a365d;color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
+      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.chatBusyLabel ? `Chat resumes when ${esc(v.chatBusyLabel.toLowerCase())} finishes` : (v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...')}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" aria-label="Send message" ${v.chatBusyLabel ? 'disabled' : ''} style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:${v.chatBusyLabel ? '#9aa8b8' : '#1a365d'};color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
     </aside>`;
   }
 
   function setupDialog(v) {
     const d = v.setupDraft;
     return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:50;">
-      <form id="rp-setup-dialog-form" style="width:560px;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;"><div style="display:flex;align-items:center;gap:9px;min-width:0;">${logo(24)}<span style="font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;">Search Setup</span></div><button type="button" data-act="close-dialog" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
-        ${v.actionError ? `<div style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${v.actionError}</div>` : ''}
+      <form id="rp-setup-dialog-form" role="dialog" aria-modal="true" aria-labelledby="rp-setup-dialog-title" style="width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;"><div style="display:flex;align-items:center;gap:9px;min-width:0;">${logo(24)}<h2 id="rp-setup-dialog-title" style="margin:0;font-weight:400;font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;">${v.isNewProject ? 'New review' : 'Edit research question'}</h2></div><button type="button" data-act="close-dialog" aria-label="Close" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
+        ${v.actionError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${esc(v.actionError)}</div>` : ''}
         ${dialogInput('Project name', 'project_name', d.project_name, 'AI surgery review', 'required')}
         <label for="rp-setup-description" style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Research question</label>
-        <textarea id="rp-setup-description" name="description" required rows="3" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;margin-bottom:10px;color:#1a1a1a;resize:vertical;" placeholder="Review evidence for AI tools in surgical decision support">${d.description}</textarea>
+        <textarea id="rp-setup-description" name="description" required rows="3" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;margin-bottom:10px;color:#1a1a1a;resize:vertical;" placeholder="Review evidence for AI tools in surgical decision support">${esc(d.description)}</textarea>
         ${dialogInput('Model', 'model', d.model, 'Model name')}
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms ? 'checked' : ''}> Regenerate search concepts from this research question (replaces the current concepts)</label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms || v.isNewProject ? 'checked' : ''} ${v.isNewProject ? 'disabled' : ''}> Regenerate search concepts from this research question (replaces the current concepts)</label>
         <div style="font-size:11px;color:#6b746c;margin-top:10px;">Concepts, sources, limits, and dates are edited on the canvas.</div>
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="ph ph-check-circle" style="font-size:15px;"></i>${v.isNewProject ? 'Create project' : 'Save setup'}</button></div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" ${state.setupSaving ? 'disabled' : ''} style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="ph ph-check-circle" style="font-size:15px;"></i>${state.setupSaving ? (v.isNewProject ? 'Creating…' : 'Saving…') : (v.isNewProject ? 'Create project' : 'Save setup')}</button></div>
       </form>
     </div>`;
   }
@@ -2374,7 +2459,7 @@ ${reviewUI.dialog()}
     const preview = v.reusePreview;
     return `<div style="position:fixed;inset:0;background:rgba(26,54,93,.12);display:flex;align-items:center;justify-content:center;z-index:90;">
       <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(640px,calc(100vw - 32px));max-height:85vh;overflow:auto;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;padding:20px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 id="rp-memory-title" style="font-family:Newsreader,Georgia,serif;font-weight:400;margin:0;">Reuse project configuration</h2><button type="button" data-act="close-dialog" aria-label="Close configuration reuse" style="${reuseButtonStyle}">Close</button></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 id="rp-memory-title" tabindex="-1" style="font-family:Newsreader,Georgia,serif;font-weight:400;margin:0;">Reuse project configuration</h2><button type="button" data-act="close-dialog" aria-label="Close configuration reuse" style="${reuseButtonStyle}">Close</button></div>
         <p style="font-size:13px;color:#6b746c;line-height:1.5;">Confirmed decisions and full conversation history are saved locally. Other projects are used only when you select a configuration below and import it as a draft.</p>
         ${v.memoryError ? `<p role="alert" style="color:#8a1f1f;">${esc(v.memoryError)}</p>` : ''}
         ${v.isNewProject ? '<p>Open or create a project to import a configuration.</p>' : ''}
@@ -2390,7 +2475,7 @@ ${reviewUI.dialog()}
   }
 
   function helpDialog() {
-    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px;"><section role="dialog" aria-modal="true" aria-labelledby="rp-help-title" style="max-width:540px;max-height:85vh;overflow:auto;background:#fffefc;border-radius:12px;padding:22px;font:14px/1.65 system-ui;color:#25364a;"><h2 id="rp-help-title" style="margin-top:0;">Using ReviewPilot</h2><ol><li><strong>Search:</strong> set your question, sources, query and date range. Save setup before collecting papers.</li><li><strong>Screen:</strong> review and confirm inclusion/exclusion criteria, then screen. You can inspect and correct individual decisions.</li><li><strong>Retrieve:</strong> download available full texts and retry failed downloads.</li><li><strong>Extract:</strong> review the schema, finalize it and run extraction. Inspect source evidence before accepting field values.</li><li><strong>Categorize:</strong> confirm and apply your categories, or explicitly skip categorization; then finalize and export.</li></ol><p>Project decisions are saved locally. Settings lets you explicitly reuse another project's configuration. The three examples are read-only; create a copy to edit them.</p><p>If an action fails, read the error, refresh the project state and use the stage's retry control. Changes to earlier stages can require rerunning later stages.</p><button type="button" data-act="close-dialog" style="padding:9px 14px;border:1px solid #c8d8e8;border-radius:8px;background:#eef4fb;font:inherit;">Close help</button></section></div>`;
+    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px;"><section role="dialog" aria-modal="true" aria-labelledby="rp-help-title" style="max-width:540px;max-height:85vh;overflow:auto;background:#fffefc;border-radius:12px;padding:22px;font:14px/1.65 system-ui;color:#25364a;"><h2 id="rp-help-title" tabindex="-1" style="margin-top:0;">Using ReviewPilot</h2><ol><li><strong>Search:</strong> set your question, sources, query and date range. Save setup before collecting papers.</li><li><strong>Screen:</strong> review and confirm inclusion/exclusion criteria, then screen. You can inspect and correct individual decisions.</li><li><strong>Retrieve:</strong> download available full texts and retry failed downloads.</li><li><strong>Extract:</strong> review the schema, finalize it and run extraction. Inspect source evidence before accepting field values.</li><li><strong>Categorize:</strong> confirm and apply your categories, or explicitly skip categorization; then finalize and export.</li></ol><p>Project decisions are saved locally. Settings lets you explicitly reuse another project's configuration. The three examples are read-only; create a copy to edit them.</p><p>If an action fails, read the error, refresh the project state and use the stage's retry control. Changes to earlier stages can require rerunning later stages.</p><button type="button" data-act="close-dialog" style="padding:9px 14px;border:1px solid #c8d8e8;border-radius:8px;background:#eef4fb;font:inherit;">Close help</button></section></div>`;
   }
 
   function configurationPreview(configuration, alreadyEscaped = false) {
@@ -2497,6 +2582,16 @@ ${reviewUI.dialog()}
     });
   }
 
+  function focusSelectorFor(element) {
+    // A selector that finds the same control again after a repaint, or '' for anything else.
+    if (element && element.id && element.closest && element.closest('#app')) return `#${CSS.escape(element.id)}`;
+    if (!element || !element.getAttribute || !element.getAttribute('data-act')) return '';
+    return ['data-act', 'data-step', 'data-source', 'data-index', 'data-group', 'data-project', 'data-action', 'data-topic', 'data-tab', 'data-mode']
+      .filter((name) => element.hasAttribute(name))
+      .map((name) => `[${name}="${CSS.escape(element.getAttribute(name))}"]`)
+      .join('');
+  }
+
   function focusResearchTopicInput(root) {
     const input = root.querySelector('[data-ui="research-topic-input"]');
     if (!input) return;
@@ -2515,6 +2610,9 @@ ${reviewUI.dialog()}
       const conceptDialogWasOpen = !!root.querySelector('#rp-concept-dialog-form');
       const setupDialogWasOpen = !!root.querySelector('#rp-setup-dialog-form');
       const reviewFocus = focused?.getAttribute('data-review-input');
+      const actFocus = focusSelectorFor(focused);
+      const memoryDialogWasOpen = !!root.querySelector('#rp-memory-title');
+      const helpDialogWasOpen = !!root.querySelector('#rp-help-title');
       const mainScroll = root.querySelector('.rp-main-scroll')?.scrollTop || 0;
       const previousProject = root.dataset.project;
       const sidebarScroll = root.querySelector('.rp-sidebar .rp-scroll')?.scrollTop || 0;
@@ -2527,7 +2625,7 @@ ${reviewUI.dialog()}
       if (reviewUI.isOpen()) { const input = reviewFocus ? root.querySelector(`[data-review-input="${reviewFocus}"]`) : null; if(input) {input.focus({preventScroll:true}); if(selection[0]!=null && input.setSelectionRange && input.tagName !== 'SELECT')input.setSelectionRange(...selection);} else root.querySelector('#rp-record-review-form button')?.focus({preventScroll:true}); }
       if (state.decisionPending) root.querySelectorAll('[data-act="confirm-categories"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-act="action"], [data-cat-field], [data-cat-categories], [data-act="cat-mode"]').forEach(el=>el.disabled=true);
       if (D.readOnlyExample) {
-        root.querySelectorAll('[data-act="action"], [data-act="retry-sources"], [data-act="open-setup"], [data-act="edit-criteria"], [data-act="generate-preview"], [data-act="retry-submit"], [data-act="confirm-categories"], [data-act="cat-mode"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-draft-field], [data-source-limit], [data-criteria], [data-cat-field], [data-cat-categories], #rp-chat-form input, #rp-chat-form button').forEach(el=>el.disabled=true);
+        root.querySelectorAll('[data-act="retry-toggle"], [data-act="retry-select-all"], [data-act="retry-clear"], [data-act="action"], [data-act="retry-sources"], [data-act="open-setup"], [data-act="edit-criteria"], [data-act="generate-preview"], [data-act="retry-submit"], [data-act="confirm-categories"], [data-act="cat-mode"], [data-act="edit-categories"], [data-act="skip-categorization"], [data-act="finalize-project"], [data-draft-field], [data-source-limit], [data-criteria], [data-cat-field], [data-cat-categories], #rp-chat-form input, #rp-chat-form button').forEach(el=>el.disabled=true);
       }
       const sidebar = root.querySelector('.rp-sidebar .rp-scroll');
       if (sidebar) sidebar.scrollTop = sidebarScroll;
@@ -2565,18 +2663,40 @@ ${reviewUI.dialog()}
         const jsonTrigger = root.querySelector('[data-act="schema-json"]');
         if (jsonTrigger) jsonTrigger.focus({ preventScroll: true });
       }
+      const memoryHeading = root.querySelector('#rp-memory-title');
+      if (memoryHeading && !memoryDialogWasOpen) memoryHeading.focus({ preventScroll: true });
+      const helpHeading = root.querySelector('#rp-help-title');
+      if (helpHeading && !helpDialogWasOpen) helpHeading.focus({ preventScroll: true });
+      // Every repaint rebuilds the DOM; keep keyboard focus where it was, or return it to a closed dialog's trigger.
+      const dialogOpen = !!root.querySelector('[role="dialog"], [data-ui="review-dialog"]') || !!state.sessionDialog;
+      if (state.returnFocus && !dialogOpen) {
+        const trigger = root.querySelector(state.returnFocus);
+        state.returnFocus = '';
+        if (trigger && !trigger.disabled) trigger.focus({ preventScroll: true });
+      } else if (actFocus && (!document.activeElement || document.activeElement === document.body)) {
+        const again = root.querySelector(actFocus);
+        if (again && !again.disabled) again.focus({ preventScroll: true });
+      }
       writeWorkspaceSnapshot();
       if (state.actionPending && !actionTicker) {
-        actionTicker = setInterval(paint, 1000);
+        // Only the elapsed-time labels change while a task runs; repainting everything would steal focus every second.
+        actionTicker = setInterval(updateElapsedLabels, 1000);
       } else if (!state.actionPending && actionTicker) {
         clearInterval(actionTicker);
         actionTicker = null;
       }
     }
 
+    function updateElapsedLabels() {
+      if (!state.actionPending) return;
+      const label = formatElapsed(Date.now() - state.actionStartedAt);
+      root.querySelectorAll('[data-elapsed]').forEach((el) => { el.textContent = label; });
+    }
+
     async function submitChatForm(form) {
       const input = form.querySelector('input[name="message"]');
-      if (state.chatPending || state.navigationPending || D.readOnlyExample) return;
+      if (state.chatPending || state.navigationPending || D.readOnlyExample || state.actionPending) return;
+      if (!String(input ? input.value : '').trim()) return;
       const pending = handleChatSubmit(input ? input.value : '');
       state.quickStartOpen = false;
       form.reset();
@@ -2602,7 +2722,7 @@ ${reviewUI.dialog()}
       if (!act.startsWith('session-')) state.sessionMenu = '';
 
       if (act === 'toggle-sidebar') { state.sidebarOpen = !state.sidebarOpen; }
-      else if (act === 'open-help') { state.dialog = 'help'; state.sidebarOpen = false; }
+      else if (act === 'open-help') { state.dialog = 'help'; state.sidebarOpen = false; state.returnFocus = focusSelectorFor(t); }
       else if (act === 'step') {
         if (t.getAttribute('data-disabled') === 'true') return;
         state.step = t.getAttribute('data-step');
@@ -2691,12 +2811,14 @@ ${reviewUI.dialog()}
         const item = D.history.flatMap(group => group.items).find(item => item.id === t.dataset.project);
         if (!item || item.protected) return;
         state.sessionDialog = {id: item.id, title: item.title, kind: act === 'session-delete' ? 'delete' : 'rename'};
+        state.returnFocus = `[data-act="session-menu"][data-project="${CSS.escape(item.id)}"]`;
         state.sessionMenu = ''; state.sessionError = '';
       }
       else if (act === 'session-cancel') { state.sessionDialog = null; state.sessionError = ''; }
-      else if (act === 'open-setup') state.dialog = 'setup';
+      else if (act === 'open-setup') { state.dialog = 'setup'; state.returnFocus = focusSelectorFor(t); }
       else if (act === 'open-memory') {
         state.dialog = 'memory';
+        state.returnFocus = focusSelectorFor(t);
         state.memoryPending = true;
         state.memoryError = '';
         paint();
@@ -2726,13 +2848,28 @@ ${reviewUI.dialog()}
         state.actionError = '';
       }
       else if (act === 'toggle-source') toggleSource(t.getAttribute('data-source'));
-      else if (act === 'add-concept') { state.conceptEdit = { group: t.getAttribute('data-group') || '' }; state.conceptError = ''; state.dialog = 'concept'; }
-      else if (act === 'edit-concept') { state.conceptEdit = { index: Number(t.getAttribute('data-index')) }; state.conceptError = ''; state.dialog = 'concept'; }
-      else if (act === 'remove-concept') { state.actionError = ''; removeConcept(Number(t.getAttribute('data-index'))); }
+      else if (act === 'add-concept') { state.conceptEdit = { group: t.getAttribute('data-group') || '' }; state.conceptError = ''; state.dialog = 'concept'; state.returnFocus = focusSelectorFor(t); }
+      else if (act === 'edit-concept') { state.conceptEdit = { index: Number(t.getAttribute('data-index')) }; state.conceptError = ''; state.dialog = 'concept'; state.returnFocus = focusSelectorFor(t); }
+      else if (act === 'remove-concept') { state.actionError = ''; removeConcept(Number(t.getAttribute('data-index'))); state.returnFocus = '[data-act="add-concept"]:not([data-group])'; }
       else if (act === 'save-setup') {
-        if (state.actionPending || state.chatPending) return;
+        if (state.actionPending || state.chatPending || state.setupSaving) return;
         state.actionError = '';
-        updateProjectSetup(null).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        state.setupSaving = true;
+        paint();
+        updateProjectSetup(null)
+          .catch((err) => { state.actionError = requestErrorMessage(err); })
+          .finally(() => { state.setupSaving = false; paint(); });
+        return;
+      }
+      else if (act === 'discard-setup-edits') {
+        state.setupDraft = setupDraftFromData(D);
+        state.actionError = '';
+        state.returnFocus = '[data-act="save-setup"]';
+      }
+      else if (act === 'discard-setup-draft') {
+        if (state.actionPending || state.chatPending || state.setupSaving) return;
+        state.actionError = '';
+        discardSetupDraft().then(paint).catch((err) => { state.actionError = requestErrorMessage(err); paint(); });
         return;
       }
       else if (act === 'cat-mode') updateCategorizationMode(t.getAttribute('data-mode'));
@@ -2836,7 +2973,7 @@ ${reviewUI.dialog()}
 
     root.addEventListener('focusin', (e) => {
       if (!e.target.matches || !e.target.matches('[data-ui="research-topic-input"]')) return;
-      if (state.quickStartOpen || !D.isNewProject) return;
+      if (state.quickStartOpen || !D.isNewProject || state.quickStartDismissed) return;
       state.quickStartOpen = true;
       const area = e.target.closest('[data-ui="assistant-chat-input-area"]');
       if (area && !area.querySelector('[data-ui="chat-quick-start"]')) {
@@ -2870,7 +3007,7 @@ ${reviewUI.dialog()}
       if (e.target.matches && e.target.matches('[data-ui="research-topic-input"]')) {
         state.chatDrafts[D.project.id || ''] = e.target.value;
         writeWorkspaceSnapshot();
-        if (!state.quickStartOpen && D.isNewProject) {
+        if (!state.quickStartOpen && D.isNewProject && !state.quickStartDismissed) {
           state.quickStartOpen = true;
           writeWorkspaceSnapshot();
         }
@@ -2919,7 +3056,17 @@ ${reviewUI.dialog()}
 
     root.addEventListener('keydown', (e) => {
       if (reviewUI.keydown(e)) return;
-      if (e.key === 'Escape') { if (['help', 'concept', 'setup'].includes(state.dialog)) state.dialog = ''; state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return; }
+      if (e.key === 'Escape') {
+        if (state.quickStartOpen) { state.quickStartOpen = false; state.quickStartDismissed = true; paint(); return; }
+        if (['help', 'concept', 'setup', 'memory'].includes(state.dialog) && !(state.dialog === 'setup' && state.setupSaving)) { state.dialog = ''; state.reusePreview = null; }
+        if (state.schemaJsonOpen) { state.schemaJsonOpen = false; state.schemaJsonReturnFocus = true; }
+        state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return;
+      }
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-act][role="button"]:not(button)')) {
+        e.preventDefault();
+        e.target.click();
+        return;
+      }
       if (e.key === 'Tab' && state.sessionDialog) {
         const items = [...root.querySelectorAll('#rp-session-form input, #rp-session-form button:not(:disabled)')];
         const first = items[0], last = items[items.length - 1];
@@ -2957,14 +3104,15 @@ ${reviewUI.dialog()}
       }
       if (e.target.id !== 'rp-setup-dialog-form') return;
       e.preventDefault();
+      if (state.setupSaving) return;
       updateDraftFromForm(e.target);
-      const submit = e.target.querySelector('button[type="submit"]');
-      if (submit) submit.disabled = true;
+      state.setupSaving = true;
+      state.actionError = '';
+      paint();
       const save = D.isNewProject ? createProject : updateProjectSetup;
-      save(e.target).then(paint).catch((err) => {
-        state.actionError = err.message || String(err);
-        paint();
-      });
+      save(null)
+        .catch((err) => { state.actionError = requestErrorMessage(err); })
+        .finally(() => { state.setupSaving = false; paint(); });
     });
 
     window.addEventListener('popstate', () => {
@@ -2973,6 +3121,11 @@ ${reviewUI.dialog()}
       else { startNavigation(''); setData(newProjectDataWithCurrentHistory(), true); paint(); }
     });
     paintWorkspace = paint;
+    if (D.isNewProject && /^\/projects\/[^/]+$/.test(window.location.pathname) && window.location.pathname !== '/projects/new') {
+      // The server answers a link to a missing conversation with the new-review workspace.
+      state.actionError = 'This conversation is no longer available. It may have been deleted or renamed on disk.';
+      sessionUrl('', true);
+    }
     paint();
     if (restoredProjectStateId) {
       const projectId = restoredProjectStateId;

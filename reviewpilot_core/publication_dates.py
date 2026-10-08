@@ -13,9 +13,20 @@ def resolve_range(value):
         start += '-01-01'
     if re.fullmatch(r'\d{4}', end):
         end += '-12-31'
+    # A month on its own covers the whole month.
+    if re.fullmatch(r'\d{4}-\d{2}', start) and 1 <= int(start[5:]) <= 12:
+        start += '-01'
+    if re.fullmatch(r'\d{4}-\d{2}', end) and 1 <= int(end[5:]) <= 12:
+        end += f'-{calendar.monthrange(int(end[:4]), int(end[5:]))[1]:02d}'
     for text in (start, end):
-        if text and (not re.fullmatch(r'\d{4}-\d{2}-\d{2}', text) or not date.fromisoformat(text)):
+        if not text:
+            continue
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', text):
             raise ValueError('Dates must use YYYY-MM-DD.')
+        try:
+            date.fromisoformat(text)
+        except ValueError:
+            raise ValueError(f'{text} is not a calendar date. Dates must use YYYY-MM-DD.') from None
     if start and start > end:
         raise ValueError('Start date must not be after end date.')
     return {'start': start, 'end': end}

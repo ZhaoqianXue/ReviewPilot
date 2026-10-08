@@ -20,7 +20,7 @@ const context = vm.createContext({
   reviewUI: {reset(){}},
   chatSubmission: 0, activeTaskMonitor:{key:'old-task',generation:0},
   projectNavigation:createProjectNavigationOwnership('initial'),
-  paintWorkspace(){}, monitorActiveTask(){},
+  paintWorkspace(){}, monitorActiveTask(){}, stashSetupDraft(){},
   fetchProjectState(id){return new Promise((resolve,reject)=>requests.push({id,resolve,reject}));},
   window:{location:{pathname:'/projects/initial'},history:{pushState(_a,_b,url){this.lastUrl=url;}}},
   setData(data){context.D=data;context.projectNavigation.adoptProject(data.project.id);},

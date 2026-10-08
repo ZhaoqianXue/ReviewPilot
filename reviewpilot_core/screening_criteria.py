@@ -20,12 +20,14 @@ def criteria_state(project: Path) -> dict:
         inclusion = saved.get("inclusion", [])
         exclusion = saved.get("exclusion", [])
     else:
-        scope = prompt.get("criteria") or {}
-        inclusion = []
-        for key, fallback in (("topic", "primary_topic"), ("context", "domain")):
-            label = (scope.get(key) or {}).get("label") or config.get(fallback)
-            if label:
-                inclusion.append(f"Study addresses the review {key}: {label}.")
+        # The unsaved draft follows the current search setup, so it never lags behind a setup change.
+        inclusion = concept_rules(config.get("concept_blocks"))
+        if not inclusion:
+            scope = prompt.get("criteria") or {}
+            for key, fallback in (("topic", "primary_topic"), ("context", "domain")):
+                label = (scope.get(key) or {}).get("label") or config.get(fallback)
+                if label:
+                    inclusion.append(f"Study addresses the review {key}: {label}.")
         if not inclusion:
             inclusion = [str(config.get("description") or config.get("search_terms") or "Fits the stated review scope.")]
         exclusion = ["Explicit evidence shows incompatibility with the stated review scope."]
@@ -35,8 +37,26 @@ def criteria_state(project: Path) -> dict:
         "exclusion": exclusion,
         "status": "finalized" if prompt.get("criteria_finalized") is True else "draft",
         "revision": revision,
-        "prompt": str(prompt.get("user_prompt_template") or ""),
+        # Until the criteria are saved, the stored template predates them and is not what screening will use.
+        "prompt": str(prompt.get("user_prompt_template") or "") if isinstance(saved, dict) else "",
     }
+
+
+def concept_rules(blocks) -> list[str]:
+    """One inclusion rule per concept row: alternatives in a row are joined with "or".
+
+    Required rows and the concepts kept for screening both describe the review scope;
+    analytical dimensions only organise the included evidence, so they are left out.
+    """
+    rows: dict[str, list[str]] = {}
+    for block in blocks if isinstance(blocks, list) else []:
+        if not isinstance(block, dict) or block.get("role") == "analytical_dimension" or not str(block.get("label") or "").strip():
+            continue
+        group = str(block.get("eligibility_group") or block["label"])
+        key = f"{'required' if block.get('required_for_eligibility', True) else 'screening'}:{group}"
+        rows.setdefault(key, []).append(str(block["label"]).strip())
+    ordered = sorted(rows.items(), key=lambda item: not item[0].startswith("required:"))
+    return [f"Study addresses {' or '.join(labels)}." for _key, labels in ordered]
 
 
 def validate_criteria(payload: dict) -> dict:

@@ -57,6 +57,7 @@ def get_with_retry(url: str, *, params: Dict[str, Any], label: str, delays: Sequ
             problem, cause, wait = f"returned HTTP {response.status_code}", None, _retry_after(response)
         if attempt == attempts - 1:
             detail = _json_message(response) if cause is None else ""
+            detail = detail.rstrip(". ")
             raise TransientSourceError(f"{label} {problem} after {attempts} attempts"
                                        + (f" ({detail})" if detail else "") + ". Retry the failed source later.") from cause
         delay = max(delays[attempt], wait or 0)
@@ -84,4 +85,17 @@ def _json_message(response: requests.Response) -> str:
     except Exception:  # noqa: BLE001 - a non-JSON body simply has no message
         return ""
     message = payload.get("message") or payload.get("error") if isinstance(payload, dict) else ""
-    return str(message).strip()[:200] if isinstance(message, str) else ""
+    return shorten_message(message) if isinstance(message, str) else ""
+
+
+def shorten_message(message: str, limit: int = 300) -> str:
+    """Bound an API's message for display without cutting a word in half."""
+    text = " ".join(str(message).split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    sentence = max(cut.rfind(". "), cut.rfind("; "))
+    if sentence >= limit // 2:
+        return cut[:sentence + 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(" ,;:(") + "…"

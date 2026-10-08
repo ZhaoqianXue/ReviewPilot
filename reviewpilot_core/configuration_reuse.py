@@ -38,6 +38,14 @@ def safe_project(root: Path, project_id: str) -> Path:
     return project
 
 
+def project_title(project: Path) -> str:
+    """The name the sidebar shows: a renamed conversation's title, else the setup's project name."""
+    from .demo_projects import is_example
+    title = str(read_json(project / 'session.json', {}).get('title')
+                or read_json(project / 'search_conditions.json', {}).get('project_name') or project.name)
+    return f'{title} (example)' if is_example(project.parent, project.name) else title
+
+
 def configuration_options(root: Path, target_id: str, *, busy=None) -> list[dict]:
     safe_project(root, target_id)
     result = []
@@ -49,7 +57,7 @@ def configuration_options(root: Path, target_id: str, *, busy=None) -> list[dict
             decisions = confirmed_decisions(project)
         except (ValueError, OSError, TypeError, AttributeError):
             continue
-        title = str(read_json(project / 'search_conditions.json', {}).get('project_name') or path.name)
+        title = project_title(project)
         for kind, decision in decisions.items():
             if not decision['stale']:
                 result.append({'source_project_id': path.name, 'source_title': title,
@@ -67,7 +75,7 @@ def preview_configuration(root: Path, target_id: str, selection: dict) -> dict:
         raise ValueError('This source has no current confirmed configuration of that type')
     # Initialize a legacy target ledger before binding the preview revision.
     load_workflow_state(target)
-    return {'source_project_id': source_id, 'source_title': str(read_json(source / 'search_conditions.json', {}).get('project_name') or source_id),
+    return {'source_project_id': source_id, 'source_title': project_title(source),
             'kind': kind, 'label': LABELS[kind], 'configuration': decision['configuration'],
             'source_revision': project_decision_revision(source), 'target_revision': project_decision_revision(target),
             'step': STEPS[kind]}

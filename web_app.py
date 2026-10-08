@@ -149,7 +149,8 @@ async def new_project_page(request):
 async def project_page(request):
     project_id = request.path_params["project_id"]
     if not known_project(OUTPUT_ROOT, project_id):
-        raise HTTPException(status_code=404)
+        # A stale bookmark or a deleted conversation opens the workspace, which explains what happened.
+        return HTMLResponse(render_new_project_html(OUTPUT_ROOT), status_code=404)
     return HTMLResponse(render_workspace_html(OUTPUT_ROOT, project_id))
 
 
@@ -331,6 +332,8 @@ async def project_chat(request):
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # provider and network failures would otherwise surface as a bare 500
+        return JSONResponse({"detail": _model_failure(exc)}, status_code=502)
     return JSONResponse({"reply": result.reply, "lead_agent": result.to_dict(), "state": build_project_state(OUTPUT_ROOT, project_id)})
 
 
@@ -347,7 +350,24 @@ async def update_project_setup_api(request):
         return JSONResponse({"detail": str(exc)}, status_code=409)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # provider and network failures would otherwise surface as a bare 500
+        return JSONResponse({"detail": _model_failure(exc)}, status_code=502)
     return JSONResponse(project)
+
+
+async def discard_setup_draft_api(request):
+    """Drop an imported or chat-proposed search draft; the saved setup stays as it is."""
+    project_id = request.path_params["project_id"]
+    if not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(status_code=404)
+    try:
+        require_mutable(Path(OUTPUT_ROOT), project_id)
+        task_runner.run_if_idle(project_id, lambda: (Path(OUTPUT_ROOT) / project_id / "memory/search_setup_draft.json").unlink(missing_ok=True))
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(build_project_state(OUTPUT_ROOT, project_id))
 
 
 async def task_status(request):
@@ -431,6 +451,8 @@ async def create_project_api(request):
         project = create_project(OUTPUT_ROOT, payload)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception as exc:  # provider and network failures would otherwise surface as a bare 500
+        return JSONResponse({"detail": _model_failure(exc)}, status_code=502)
     return JSONResponse(project, status_code=201, headers={"Location": "/workspace"})
 
 
@@ -465,6 +487,7 @@ def create_app() -> Starlette:
             Route("/projects/{project_id}/exports/{export_key}", project_export, methods=["GET"]),
             Route("/projects/{project_id}/chat", project_chat, methods=["POST"]),
             Route("/projects/{project_id}/setup", update_project_setup_api, methods=["PUT"]),
+            Route("/projects/{project_id}/setup/draft", discard_setup_draft_api, methods=["DELETE"]),
             Route("/projects/{project_id}/actions/{action}", project_action, methods=["POST"]),
             Route("/tasks/{task_id}", task_status, methods=["GET"]),
             Mount("/static", app=StaticFiles(directory=str(FRONTEND_DIR)), name="static"),
@@ -562,8 +585,20 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
 
 
 def _run_lead_agent_search_setup(output_root: Path | str, project_id: str, config: dict) -> dict:
-    result = LeadAgent(Path(output_root)).save_search_setup(project_id, config)
+    try:
+        result = LeadAgent(Path(output_root)).save_search_setup(project_id, config)
+    except ValueError as exc:
+        # The agent's contract messages name internals; the user needs to know what to do next.
+        if str(exc).startswith("SearchConditionAgent"):
+            raise ValueError("ReviewPilot could not turn the research question into a usable search strategy. "
+                             "Try again, or rephrase the question.") from exc
+        raise
     return result.search_conditions
+
+
+def _model_failure(exc: Exception) -> str:
+    return (f"ReviewPilot could not get an answer from the language model ({exc.__class__.__name__}). "
+            "Nothing was changed. Try again in a moment.")
 
 
 def _setup_config(payload: dict) -> dict:

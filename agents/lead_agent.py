@@ -40,6 +40,7 @@ from utils.llm import query_llm
 
 
 MEMORY_LOGGER = logging.getLogger("reviewpilot.agent_memory")
+UNREADABLE_REPLY = "The assistant's reply could not be read, so nothing was changed. Send the message again."
 
 
 @dataclass(frozen=True)
@@ -231,9 +232,9 @@ Return ONLY valid JSON:
         try:
             payload = json.loads(str(response_text or "").strip())
         except json.JSONDecodeError as exc:
-            raise ValueError("Lead Agent LLM did not return valid chat JSON") from exc
+            raise ValueError(UNREADABLE_REPLY) from exc
         if not isinstance(payload, dict) or set(payload) != {"reply"} or not isinstance(payload["reply"], str) or not payload["reply"].strip():
-            raise ValueError("Lead Agent LLM response missing reply")
+            raise ValueError(UNREADABLE_REPLY)
         return str(payload["reply"]).strip()
 
     def _handle_action(self, project_id: str, action: str, input_data: dict[str, Any] | None = None) -> LeadAgentResult:
@@ -799,6 +800,8 @@ Supported commands:
         if project_decision_revision(project) != expected_revision:
             raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
         reply = str(result.get("reply") or "").strip()
+        # The model's reply can overstate what it changed; this summary comes from the actual difference.
+        summary = "; ".join(result.get("changes") or [])
         if result.get("changed"):
             saved = apply_setup(result["config"]) if apply_setup else {"confirmationRequired": True}
             if saved.get("confirmationRequired"):
@@ -807,9 +810,12 @@ Supported commands:
                 labels = {"collection": "paper collection", "screening": "screening", "retrieval": "full-text retrieval",
                           "extraction": "information extraction", "categorization": "categorization"}
                 stages = ", ".join(labels.get(stage, stage) for stage in saved.get("affectedStages") or []) or "existing results"
+                reply += (f"\n\nProposed, not applied yet: {summary}." if summary else "")
                 reply += f"\n\nThis change would make {stages} out of date, so it is saved as a draft. Review it in Search Setup and save to apply."
             else:
-                reply += "\n\nSearch setup saved."
+                reply += f"\n\nSearch setup saved: {summary}." if summary else "\n\nSearch setup saved."
+        else:
+            reply += "\n\nThe search setup was not changed."
         now = datetime.now().isoformat()
         for role, text in (("u", message), ("a", reply)):
             append_jsonl(str(project / "chat/messages.jsonl"), {"step": 1, "role": role, "text": text, "created_at": now})
@@ -839,9 +845,12 @@ Saved confirmed decisions take precedence over historical discussion. History co
             model=str(config.get("model") or LEAD_AGENT_DEV_MODEL), provider="openai")
         if project_decision_revision(project) != expected_revision:
             raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
-        command = json.loads(str(response).strip())
+        try:
+            command = json.loads(str(response).strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError(UNREADABLE_REPLY) from exc
         if not isinstance(command, dict) or set(command) != {"reply", "criteria"} or not isinstance(command["reply"], str) or not command["reply"].strip():
-            raise ValueError("Invalid screening chat response")
+            raise ValueError(UNREADABLE_REPLY)
         reply = command["reply"].strip()
         if command["criteria"] is not None:
             if not isinstance(command["criteria"], dict) or set(command["criteria"]) != {"inclusion", "exclusion"}:

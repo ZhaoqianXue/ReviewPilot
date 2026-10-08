@@ -211,7 +211,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("Use canvas clicks for sources and keywords", source)
         self.assertNotIn("Project details", source)
         self.assertNotIn("function setupCanvasControls", source)
-        self.assertIn(">Research question</div>", source)
+        self.assertIn(">Research question${draftQuestion", source)
         self.assertIn(">Search concepts</div>", source)
         self.assertIn(">Sources</div>", source)
 
@@ -456,7 +456,7 @@ class FrontendContractTests(unittest.TestCase):
     def test_search_setup_sources_are_checkbox_controls_not_counts(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("function sourceChecklist(sources, sourceLimits, fallbackMaxResults)", source)
+        self.assertIn("function sourceChecklist(sources, sourceLimits, fallbackMaxResults, locked = false)", source)
         self.assertIn('data-ui="source-checklist"', source)
         self.assertIn('data-ui="source-row"', source)
         self.assertIn('data-ui="source-row" style="display:flex;flex-wrap:wrap', source)
@@ -469,15 +469,15 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('data-source-limit="${source.key}"', source)
         self.assertNotIn('data-draft-field="max_results" type="number"', source)
         self.assertIn("Max results/platform", source)
-        self.assertIn("${source.selected ? '' : 'disabled'}", source)
-        self.assertIn("${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results)}", source)
+        self.assertIn("${source.selected && !locked ? '' : 'disabled'}", source)
+        self.assertIn("${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results, v.setupLocked)}", source)
         self.assertNotIn("width:14px;height:14px;border-radius:4px", source)
         self.assertNotIn("${v.platforms.map(sourceRow).join('')}\n      </div>`;\n  }\n\n  function keywordGrid", source)
 
     def test_search_setup_date_range_is_a_standalone_canvas_block(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("function dateRangeCard(setupDraft)", source)
+        self.assertIn("function dateRangeCard(setupDraft, locked = false)", source)
         self.assertIn('data-ui="date-range-card"', source)
         self.assertIn(">Date range</div>", source)
         self.assertIn('data-ui="date-range-summary"', source)
@@ -487,7 +487,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('data-ui="date-range-note"', source)
         self.assertIn('data-draft-field="date_start"', source)
         self.assertIn('data-draft-field="date_end"', source)
-        self.assertIn("${dateRangeCard(v.setupDraft)}", source)
+        self.assertIn("${dateRangeCard(v.setupDraft, v.setupLocked)}", source)
 
     def test_search_setup_sources_and_date_range_are_side_by_side(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -499,7 +499,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("align-items:stretch", search_canvas)
         self.assertIn('data-ui="sources-card"', search_canvas)
         self.assertIn("height:100%;box-sizing:border-box", search_canvas)
-        self.assertLess(search_canvas.index('data-ui="sources-card"'), search_canvas.index("${dateRangeCard(v.setupDraft)}"))
+        self.assertLess(search_canvas.index('data-ui="sources-card"'), search_canvas.index("${dateRangeCard(v.setupDraft, v.setupLocked)}"))
 
     def test_search_setup_canvas_inputs_update_the_setup_draft(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -718,7 +718,7 @@ class FrontendContractTests(unittest.TestCase):
 
         self.assertIn("function workflowProgressIndex(steps)", source)
         self.assertIn("canView: i <= progressIndex", source)
-        self.assertIn('data-disabled="true" aria-disabled="true"', source)
+        self.assertIn('data-disabled="true" role="button" aria-disabled="true"', source)
         self.assertIn('const actionAttrs = s.canView ? `data-act="step"', source)
         self.assertIn("if (t.getAttribute('data-disabled') === 'true') return;", source)
 
@@ -819,7 +819,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("function formatElapsed(ms)", source)
         self.assertIn("let actionTicker = null;", source)
         self.assertIn("state.actionStartedAt = Date.now();", source)
-        self.assertIn("setInterval(paint, 1000)", source)
+        self.assertIn("setInterval(updateElapsedLabels, 1000)", source)
         self.assertIn("clearInterval(actionTicker)", source)
         self.assertIn("v.canvasActionElapsedLabel", source)
 

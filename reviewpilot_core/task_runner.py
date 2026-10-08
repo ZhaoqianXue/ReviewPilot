@@ -8,12 +8,27 @@ from threading import Lock
 from uuid import uuid4
 
 
+ACTION_LABELS = {
+    "collect": "Paper collection", "screen": "Paper screening", "edit-criteria": "Opening the criteria draft",
+    "save-criteria": "Saving the criteria", "finalize-criteria": "Finalizing the criteria",
+    "download-pdfs": "Full-text retrieval", "retry-failed-downloads": "Failed-download recovery",
+    "generate-schema": "Schema generation", "regenerate-schema": "Schema generation",
+    "finalize-schema": "Finalizing the schema", "edit-schema": "Reopening the schema",
+    "run-extraction": "Information extraction", "finalize-and-run-extraction": "Information extraction",
+    "preview-extraction": "An extraction preview", "suggest-categories": "Category generation",
+    "categorize": "Categorization", "review-sample": "A live sample run",
+}
+
+
 class TaskConflictError(RuntimeError):
     def __init__(self, task: dict):
         self.task = dict(task)
-        super().__init__(
-            f"Project '{task['project_id']}' already has running action '{task['action']}'"
-        )
+        if task.get("action") == "update-setup":
+            message = "Another change to this project is still being saved, such as a chat reply or a setup update. Try again when it finishes."
+        else:
+            label = ACTION_LABELS.get(task.get("action"), "Another task")
+            message = f"{label} is already running in this project. Try again when it finishes."
+        super().__init__(message)
 
 
 class TaskRunner:

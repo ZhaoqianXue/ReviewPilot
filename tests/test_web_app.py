@@ -837,7 +837,7 @@ class WebAppTests(unittest.TestCase):
                     response = TestClient(web_app.create_app()).post("/projects/demo/actions/screen")
 
                 self.assertEqual(response.status_code, 409)
-                self.assertIn("already has running action", response.json()["detail"])
+                self.assertIn("is already running in this project", response.json()["detail"])
                 self.assertEqual(response.json()["active_task"]["action"], "collect")
                 self.assertEqual(response.json()["active_task"]["task_id"], first_id)
                 self.assertEqual(calls, [])

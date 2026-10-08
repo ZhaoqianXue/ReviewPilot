@@ -12,7 +12,7 @@ import itertools
 import re
 from typing import List, Dict, Optional
 
-from searchers.http_retry import get_with_retry
+from searchers.http_retry import get_with_retry, shorten_message
 
 try:
     import config
@@ -164,11 +164,11 @@ class OpenAlexSearcher:
                 payload = response.json()
                 message = payload.get("message") or payload.get("error")
                 if message:
-                    return str(message)
+                    return shorten_message(str(message))
             except ValueError:
                 text = getattr(response, "text", "")
                 if text:
-                    return text[:300]
+                    return shorten_message(text)
         return str(exc)
 
     def _build_query_param_sets(self, query: str) -> List[Dict[str, str]]:

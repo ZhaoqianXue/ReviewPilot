@@ -125,7 +125,7 @@ class TaskRunnerTests(unittest.TestCase):
                     runner.submit("demo", action, lambda: rejected_calls.append("ran"))
                 self.assertEqual(raised.exception.task["task_id"], first_id)
                 self.assertEqual(raised.exception.task["action"], "first")
-                self.assertIn("already has running action", str(raised.exception))
+                self.assertIn("is already running in this project", str(raised.exception))
                 raised.exception.task["status"] = "tampered"
             active_task = runner.active_for_project("demo")
             self.assertEqual(active_task["status"], "running")

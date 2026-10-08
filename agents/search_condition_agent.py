@@ -52,7 +52,7 @@ _FORMAT_RULES = f"""Output constraints:
 - Write query terms as plain text without Boolean operators, field tags, wildcards, or quotation marks.
 - Concepts sharing one eligibility_group share one role and one required_for_eligibility value."""
 
-_SETTINGS_CONTRACT = """"search_settings" holds only operational settings the CURRENT message explicitly requests: project_name (string), platforms (array drawn from pubmed, arxiv, openalex), max_results (positive integer per source), date_start and date_end (ISO dates). Return {} when none are requested."""
+_SETTINGS_CONTRACT = """"search_settings" holds only operational settings the CURRENT message explicitly requests: project_name (string), platforms (the complete list of databases to search once this message is applied, keeping saved ones the message does not remove, in lowercase, such as pubmed, arxiv, openalex, or scopus; the app keeps the ones it can search and tells the user about the rest), max_results (an object from each source the message sets a limit for to a positive integer, such as {"arxiv": 5}), date_start and date_end (ISO dates). Return {} when none are requested."""
 
 
 class SearchConditionAgent(BaseAgent):
@@ -98,17 +98,23 @@ class SearchConditionAgent(BaseAgent):
         interpret_settings = config.get("interpret_chat_settings") is True
         prompt = self._derive_prompt(config, description, interpret_settings)
         payload, usage = self._query_json(prompt, model, lambda data: self._check_derive_payload(data, interpret_settings))
+        reply = payload["reply"].strip()
         if interpret_settings:
-            settings = payload.get("search_settings", {})
+            settings, unavailable = self.split_unavailable_sources(payload.get("search_settings", {}))
             config = self.apply_chat_settings(config, settings)
             if "project_name" not in settings:
                 # A chat-created project is named from the request unless the user named it.
                 config["project_name"] = payload["title"].strip()
+            # The chat request mixes the question with settings; the research question keeps only the scope.
+            description = payload["research_description"].strip()
+            reply = self._with_source_notice(reply, unavailable)
         blocks = validate_concept_blocks(payload["concept_blocks"])
         conditions = self._assemble(config, project_path, description, blocks)
+        if interpret_settings:
+            reply += "\n\n" + self.settings_summary(conditions)
         conditions.update(
             research_description=payload["research_description"].strip(),
-            lead_agent_reply=payload["reply"].strip(),
+            lead_agent_reply=reply,
             llm_usage=usage or {},
             model=model,
             generated_by="llm",
@@ -157,15 +163,54 @@ class SearchConditionAgent(BaseAgent):
         model = str(current.get("model") or SEARCH_CONDITION_MODEL)
         prompt = self._refine_prompt(current, blocks, message, input_data.get("history") or [])
         payload, _usage = self._query_json(prompt, model, self._check_refine_payload)
+        settings, unavailable = self.split_unavailable_sources(payload["search_settings"])
         baseline = self.apply_chat_settings({**current, "concept_blocks": blocks}, {})
-        updated = self.apply_chat_settings(baseline, payload["search_settings"])
+        updated = self.apply_chat_settings(baseline, settings)
         if payload["concept_blocks"] is not None:
             updated["concept_blocks"] = validate_concept_blocks(payload["concept_blocks"])
-        changed = any(updated.get(key) != baseline.get(key)
-                      for key in ("project_name", "platforms", "source_limits", "date_range", "concept_blocks"))
+        if set(updated["platforms"]) == set(baseline["platforms"]):
+            updated["platforms"] = baseline["platforms"]  # a reordered list is not a change
+        changes = self.describe_changes(baseline, updated)
         setup = {key: updated.get(key) for key in ("project_name", "description", "concept_blocks", "platforms", "source_limits", "date_range", "model")}
         setup.update(derive_search_terms=False, max_results=max((updated.get("source_limits") or {"_": DEFAULT_MAX_RESULTS_PER_PLATFORM}).values()))
-        return {"reply": payload["reply"].strip(), "changed": changed, "config": setup}
+        return {"reply": self._with_source_notice(payload["reply"].strip(), unavailable), "changed": bool(changes),
+                "changes": changes, "config": setup}
+
+    @staticmethod
+    def describe_changes(before: Dict[str, Any], after: Dict[str, Any]) -> List[str]:
+        """Plain statements of what differs between two setups, so a chat reply never overstates a change."""
+        labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
+        changes: List[str] = []
+        if after.get("project_name") != before.get("project_name"):
+            changes.append(f'renamed the project to "{after.get("project_name")}"')
+        old_blocks = {block["label"].lower(): block for block in before.get("concept_blocks") or []}
+        new_blocks = {block["label"].lower(): block for block in after.get("concept_blocks") or []}
+        for key, block in new_blocks.items():
+            kind = "required concept" if block["required_for_eligibility"] else "concept described, not searched"
+            if key not in old_blocks:
+                changes.append(f'added {kind} "{block["label"]}"')
+            elif block != old_blocks[key]:
+                old = old_blocks[key]
+                before_count = len(changes)
+                if block["required_for_eligibility"] != old["required_for_eligibility"]:
+                    changes.append(f'"{block["label"]}" is now {"required" if block["required_for_eligibility"] else "described, not searched"}')
+                if block["query_terms"] != old["query_terms"]:
+                    changes.append(f'updated the search terms of "{block["label"]}"')
+                if block["eligibility_group"] != old["eligibility_group"]:
+                    changes.append(f'moved "{block["label"]}" to another concept row')
+                if len(changes) == before_count:
+                    changes.append(f'updated concept "{block["label"]}"')
+        changes.extend(f'removed concept "{block["label"]}"' for key, block in old_blocks.items() if key not in new_blocks)
+        old_sources, new_sources = before.get("platforms") or [], after.get("platforms") or []
+        changes.extend(f"added source {labels.get(p, p)}" for p in new_sources if p not in old_sources)
+        changes.extend(f"removed source {labels.get(p, p)}" for p in old_sources if p not in new_sources)
+        old_limits, new_limits = before.get("source_limits") or {}, after.get("source_limits") or {}
+        changes.extend(f"set {labels.get(p, p)} to {new_limits[p]} results"
+                       for p in new_sources if p in new_limits and new_limits[p] != old_limits.get(p))
+        if (after.get("date_range") or {}) != (before.get("date_range") or {}):
+            dates = after.get("date_range") or {}
+            changes.append(f'set the date range to {dates.get("start") or "earliest"} – {dates.get("end") or "today"}')
+        return changes
 
     # --------------------------------------------------------------- prompts
     @staticmethod
@@ -176,7 +221,8 @@ class SearchConditionAgent(BaseAgent):
     def _derive_prompt(self, config: Dict[str, Any], description: str, interpret_settings: bool) -> str:
         settings = ""
         if interpret_settings:
-            defaults = {key: config.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
+            # The project name is left out: echoing a placeholder name would hide the proposed title.
+            defaults = {key: config.get(key) for key in ("platforms", "source_limits", "date_range")}
             settings = (f'\nAlso return a top-level "search_settings" object. {_SETTINGS_CONTRACT} '
                         f"Current defaults, for reference only: {json.dumps(defaults, ensure_ascii=False)}\n")
         return f"""Design the concept strategy for this research request.
@@ -189,9 +235,9 @@ OPTIONAL APPROVED VOCABULARY DATA:
 
 Return ONLY a JSON object with this shape:
 {{
-  "reply": "brief message naming the required concepts and the concepts kept for screening, without counting them",
+  "reply": "brief message naming the required concepts and the concepts kept for screening, without counting them{'; the app lists the applied sources, limits, and dates after it' if interpret_settings else ''}",
   "title": "concise project title of 3 to 8 words in the user's language",
-  "research_description": "the user's research question in clear prose",
+  "research_description": "the user's research question in clear prose{', with source, limit, and date instructions left out' if interpret_settings else ''}",
   "concept_blocks": [{_CONCEPT_SCHEMA}]{', "search_settings": {}' if interpret_settings else ''}
 }}
 
@@ -315,10 +361,17 @@ The reply describes only changes carried by concept_blocks or search_settings.
                 raise ValueError("Invalid chat project name")
             result["project_name"] = name.strip()
         platforms = settings.get("platforms", result.get("platforms") or list(SUPPORTED_SOURCES))
-        if not isinstance(platforms, list) or not platforms or any(not isinstance(p, str) or p not in SUPPORTED_SOURCES for p in platforms):
+        if not isinstance(platforms, list) or not platforms or any(not isinstance(p, str) for p in platforms):
+            raise ValueError("Invalid chat search sources")
+        platforms = [p.strip().lower() for p in platforms]
+        if any(p not in SUPPORTED_SOURCES for p in platforms):
             raise ValueError("Invalid chat search sources")
         result["platforms"] = list(dict.fromkeys(platforms))
         limit = settings.get("max_results")
+        if isinstance(limit, dict) and "platforms" not in settings:
+            # A limit for an unselected source ("limit arXiv to 5") asks for that source too.
+            limit = {str(p).strip().lower(): value for p, value in limit.items()}
+            result["platforms"] += [p for p in limit if p in SUPPORTED_SOURCES and p not in result["platforms"]]
         limits = limit if isinstance(limit, dict) else {p: limit for p in result["platforms"]} if limit is not None else {}
         if any(type(value) is not int or value <= 0 for value in limits.values()):
             raise ValueError("Invalid chat result limit")
@@ -334,6 +387,57 @@ The reply describes only changes carried by concept_blocks or search_settings.
                 bounds[key] = value
         result["date_range"] = resolve_range(bounds)
         return result
+
+    @staticmethod
+    def split_unavailable_sources(settings: Any) -> tuple[Any, List[str]]:
+        """Drop requested sources ReviewPilot cannot search; return the settings and the dropped names.
+
+        A request naming only unavailable sources keeps the current sources.
+        """
+        if not isinstance(settings, dict) or not isinstance(settings.get("platforms"), list):
+            return settings, []
+        requested = [p for p in settings["platforms"] if isinstance(p, str) and p.strip()]
+        if len(requested) != len(settings["platforms"]):
+            return settings, []  # malformed; apply_chat_settings reports it
+        supported = [p for p in requested if p.strip().lower() in SUPPORTED_SOURCES]
+        unavailable = [p.strip() for p in requested if p.strip().lower() not in SUPPORTED_SOURCES]
+        settings = dict(settings)
+        if supported:
+            settings["platforms"] = supported
+        else:
+            settings.pop("platforms")
+        return settings, unavailable
+
+    @staticmethod
+    def _with_source_notice(reply: str, unavailable: List[str]) -> str:
+        if not unavailable:
+            return reply
+        known = {"scopus": "Scopus", "web of science": "Web of Science", "embase": "Embase", "ieee xplore": "IEEE Xplore",
+                 "google scholar": "Google Scholar", "acm digital library": "ACM Digital Library", "cinahl": "CINAHL",
+                 "psycinfo": "PsycINFO", "cochrane library": "Cochrane Library", "semantic scholar": "Semantic Scholar"}
+        labels = list(dict.fromkeys(known.get(name.lower(), name if name != name.lower() else name.title()) for name in unavailable))
+        names = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+        verb = "is" if len(labels) == 1 else "are"
+        return (f"{reply}\n\n{names} {verb} not available in ReviewPilot, so the search uses "
+                "the sources listed in Search Setup (PubMed, arXiv, and OpenAlex are available).")
+
+    @staticmethod
+    def settings_summary(conditions: Dict[str, Any]) -> str:
+        """One plain sentence stating the sources, limits, and dates a chat request produced."""
+        labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
+        platforms = [p for p in conditions.get("platforms") or [] if p in labels]
+        limits = conditions.get("source_limits") or {}
+        names = [labels[p] for p in platforms]
+        sources = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        values = {limits.get(p) for p in platforms}
+        if len(values) == 1:
+            limit = f"up to {values.pop()} records {'each' if len(platforms) > 1 else ''}".strip()
+        else:
+            limit = "up to " + ", ".join(f"{limits.get(p)} from {labels[p]}" for p in platforms) + " records"
+        date_range = conditions.get("date_range") or {}
+        start, end = date_range.get("start") or "", date_range.get("end") or ""
+        dates = f"published {start} to {end}" if start else f"published up to {end}" if end else "any publication date"
+        return f"Search settings: {sources}; {limit}; {dates}."
 
     @staticmethod
     def _platforms(value: Any) -> List[str]:
