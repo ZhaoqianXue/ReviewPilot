@@ -51,9 +51,32 @@ class OrdinaryChatPersistenceTests(unittest.TestCase):
         self.assertEqual(result['source_limits'], {'arxiv': 5})
         self.assertEqual(result['date_range'], {'start': '2023-01-01', 'end': '2026-09-12'})
         self.assertEqual(defaults['source_limits']['arxiv'], 10)
-        for invalid in [{'max_results': True}, {'max_results': 0}, {'platforms': ['invented']}, {'date_start': '2026-02-30'}, {'extra': 1}]:
+        for invalid in [{'max_results': True}, {'max_results': 0}, {'max_results': {'pubmed': 0}}, {'platforms': ['invented']}, {'date_start': '2026-02-30'}, {'extra': 1}]:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 SearchConditionAgent._apply_chat_settings(defaults, invalid)
+
+    def test_chat_settings_accept_defaults_echoed_in_config_shape(self):
+        defaults = {'project_name': 'Default', 'platforms': ['pubmed', 'arxiv', 'openalex'], 'max_results': 10, 'source_limits': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_range': {'start': '', 'end': '2026-10-07'}}
+        echoes = [
+            {'platforms': ['pubmed', 'arxiv', 'openalex'], 'max_results': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_end': '2026-10-07'},
+            {'platforms': ['pubmed', 'arxiv', 'openalex'], 'source_limits': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_range': {'start': '', 'end': '2026-10-07'}},
+        ]
+        for settings in echoes:
+            with self.subTest(settings=settings):
+                result = SearchConditionAgent._apply_chat_settings(defaults, settings)
+                self.assertEqual(result['source_limits'], {'pubmed': 10, 'arxiv': 10, 'openalex': 10})
+                self.assertEqual(result['date_range']['end'], '2026-10-07')
+        result = SearchConditionAgent._apply_chat_settings(defaults, {'platforms': ['pubmed', 'arxiv'], 'max_results': {'pubmed': 25}})
+        self.assertEqual(result['source_limits'], {'pubmed': 25, 'arxiv': 10})
+
+    def test_failed_project_creation_returns_json_detail_and_leaves_no_directory(self):
+        from starlette.testclient import TestClient
+        with tempfile.TemporaryDirectory() as tmp, patch.object(web_app, 'OUTPUT_ROOT', Path(tmp)), \
+                patch.object(web_app, '_run_lead_agent_search_setup', side_effect=ValueError('Invalid chat result limit')):
+            response = TestClient(web_app.create_app()).post('/projects', json={'project_name': 'Broken', 'description': 'LLMs in clinical care'})
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json(), {'detail': 'Invalid chat result limit'})
+            self.assertEqual(list(Path(tmp).iterdir()), [])
 
     def test_initial_exchange_survives_setup_change_and_new_state_projection(self):
         with tempfile.TemporaryDirectory() as tmp:

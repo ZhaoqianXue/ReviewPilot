@@ -1496,12 +1496,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return `<div data-ui="source-checklist" style="display:flex;flex-direction:column;gap:8px;">
       ${sources.map((source) => {
         const value = esc(sourceLimitValue(sourceLimits, source.key, fallbackMaxResults));
-        return `<div data-ui="source-row" style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;">
-          <button type="button" data-act="toggle-source" data-source="${source.key}" role="checkbox" aria-checked="${source.selected ? 'true' : 'false'}" style="justify-self:start;display:inline-flex;align-items:center;gap:7px;border:1px solid ${source.selected ? '#1a365d' : '#c8d8e8'};background:${source.selected ? '#eef4fb' : '#fffefc'};color:#1a365d;border-radius:999px;padding:7px 11px;font:inherit;font-size:12.5px;cursor:pointer;">
+        return `<div data-ui="source-row" style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;justify-content:space-between;">
+          <button type="button" data-act="toggle-source" data-source="${source.key}" role="checkbox" aria-checked="${source.selected ? 'true' : 'false'}" style="flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;border:1px solid ${source.selected ? '#1a365d' : '#c8d8e8'};background:${source.selected ? '#eef4fb' : '#fffefc'};color:#1a365d;border-radius:999px;padding:7px 11px;font:inherit;font-size:12.5px;cursor:pointer;">
             <span data-ui="source-check-circle" style="width:14px;height:14px;border-radius:999px;border:1px solid #1a365d;background:${source.selected ? '#eaf0f7' : '#fffefc'};display:inline-flex;align-items:center;justify-content:center;color:#1a365d;box-sizing:border-box;">${source.selected ? '<i class="ph ph-check" style="font-size:9px;"></i>' : ''}</span>
             <span>${source.label}</span>
           </button>
-          <label style="display:flex;align-items:center;gap:8px;justify-content:flex-end;color:${source.selected ? '#6b746c' : '#b4bbb2'};font-size:11px;letter-spacing:-0.01em;">
+          <label style="margin-left:auto;display:flex;align-items:center;gap:8px;justify-content:flex-end;color:${source.selected ? '#6b746c' : '#b4bbb2'};font-size:11px;letter-spacing:-0.01em;">
             <span style="white-space:nowrap;">Max results/platform</span>
             <input data-source-limit="${source.key}" type="number" min="0" inputmode="numeric" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${source.selected ? '#c8d8e8' : '#e0e4df'};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
           </label>
@@ -1674,7 +1674,7 @@ ${reviewUI.dialog()}
 
   function stepItem(s) {
     const actionAttrs = s.canView ? `data-act="step" data-step="${s.key}"` : `data-step="${s.key}" data-disabled="true" aria-disabled="true" title="${s.label} is not available yet"`;
-    const stepStyle = `position:relative;flex:1;display:flex;flex-direction:column;cursor:${s.canView ? 'pointer' : 'default'};padding:0 6px 12px;transition:opacity .12s ease;opacity:${s.canView ? '1' : '.48'};`;
+    const stepStyle = `position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;cursor:${s.canView ? 'pointer' : 'default'};padding:0 6px 12px;transition:opacity .12s ease;opacity:${s.canView ? '1' : '.48'};`;
     const hoverAttr = s.canView ? 'data-hover="opacity:0.74;"' : '';
     return `<div ${actionAttrs} ${s.active ? 'aria-current="step"' : ''} ${s.isRunning ? 'aria-busy="true"' : ''} style="${stepStyle}" ${hoverAttr}>
       <div style="display:flex;align-items:center;height:40px;">
@@ -1695,7 +1695,7 @@ ${reviewUI.dialog()}
         ${s.rightGray ? '<span style="flex:1;height:2px;background:#e3e8ef;"></span>' : ''}
       </div>
       <div style="text-align:center;margin-top:2px;">
-        <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;white-space:nowrap;">${s.label}</div>
+        <div style="font-size:12px;font-weight:${s.active ? '500' : '400'};letter-spacing:-0.02em;color:${s.active ? '#1a365d' : '#3a4252'};line-height:1.2;hyphens:auto;overflow-wrap:break-word;text-wrap:balance;" lang="en">${s.label.replace("Categorization", "Categori&shy;zation")}</div>
         ${s.isRunning ? `<div style="font-size:10px;color:#1a365d;margin-top:2px;">Running${s.runningElapsedLabel ? ` · ${s.runningElapsedLabel}` : ''}</div>` : ''}
         ${!s.isRunning && s.isStale ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Needs rerun</div>' : ''}
         ${!s.isRunning && s.isPartial ? '<div style="font-size:10px;color:#b45309;margin-top:2px;">Partial · review failures</div>' : ''}
@@ -1726,7 +1726,7 @@ ${reviewUI.dialog()}
         <div data-ui="effective-query" style="font:12px monospace;overflow-wrap:anywhere;">${esc(unescapePayloadValue(v.setupDraft.search_terms))}</div>
         <button data-act="open-setup" style="${buttonStyle};margin-top:10px;">Review and save search setup</button>
       </div>
-      <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:stretch;">
+      <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch;">
         <div data-ui="sources-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;">
           <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Sources</div>
           ${sourceChecklist(v.draftSources, v.setupDraft.source_limits, v.setupDraft.max_results)}
@@ -1798,12 +1798,15 @@ ${reviewUI.dialog()}
   }
 
   function screeningCanvas(v) {
+    const screeningStatus = D.stageState.screening?.status;
+    const screeningPending = Boolean(screeningStatus) && !['completed', 'partial'].includes(screeningStatus);
+    const screenedCount = (value) => (screeningPending && !value ? '—' : value);
     return `${v.isNewProject ? gate('Paper Screening starts after collection', 'Create the Search Setup first, then run collection before screening records.', 'ph-funnel') : ''}
       ${!v.isNewProject ? screeningCriteriaPanel(v) : ''}
       <div style="display:flex;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:16px;">
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.identified}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">identified</div></div>
-        <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.afterDedup}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
-        <div style="flex:1;padding:18px;text-align:center;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a365d;">${v.screeningMetrics.included}</div><div style="font-size:11px;color:#1a365d;margin-top:4px;">included</div></div>
+        <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${screenedCount(v.screeningMetrics.afterDedup)}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
+        <div style="flex:1;padding:18px;text-align:center;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a365d;">${screenedCount(v.screeningMetrics.included)}</div><div style="font-size:11px;color:#1a365d;margin-top:4px;">included</div></div>
       </div>
       <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Records by source</div>${v.platforms.map(sourceRow).join('')}</div>${!v.isNewProject ? reviewUI.screening() : ''}`;
   }

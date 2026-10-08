@@ -432,7 +432,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("function sourceChecklist(sources, sourceLimits, fallbackMaxResults)", source)
         self.assertIn('data-ui="source-checklist"', source)
         self.assertIn('data-ui="source-row"', source)
-        self.assertIn("grid-template-columns:minmax(0,1fr) auto", source)
+        self.assertIn('data-ui="source-row" style="display:flex;flex-wrap:wrap', source)
         self.assertIn('role="checkbox"', source)
         self.assertIn('aria-checked="${source.selected ? \'true\' : \'false\'}"', source)
         self.assertIn('data-act="toggle-source"', source)
@@ -467,7 +467,8 @@ class FrontendContractTests(unittest.TestCase):
         search_canvas = source[source.index("function searchCanvas(v)") : source.index("function keywordGrid")]
 
         self.assertIn('data-ui="search-setup-controls"', search_canvas)
-        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", search_canvas)
+        # Side by side when the canvas has room; stacked instead of clipped when it does not.
+        self.assertIn("grid-template-columns:repeat(auto-fit,minmax(260px,1fr))", search_canvas)
         self.assertIn("align-items:stretch", search_canvas)
         self.assertIn('data-ui="sources-card"', search_canvas)
         self.assertIn("height:100%;box-sizing:border-box", search_canvas)
@@ -798,6 +799,21 @@ class FrontendContractTests(unittest.TestCase):
         for path in ["README.md", "QUICKSTART.md", "frontend/README.md"]:
             source = (ROOT / path).read_text(encoding="utf-8")
             self.assertIn("uvicorn web_app:app --host 127.0.0.1 --port 5602 --reload", source)
+
+
+class NarrowCanvasLayoutContractTests(unittest.TestCase):
+    def test_stepper_and_source_rows_shrink_instead_of_overlapping_chat(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        step_item = source[source.index("function stepItem(s)") : source.index("function stepItem(s)") + 4000]
+        self.assertIn("flex:1 1 0;min-width:0", step_item)
+        self.assertNotIn("white-space:nowrap;\">${s.label}", step_item)
+        self.assertIn('data-ui="source-row" style="display:flex;flex-wrap:wrap', source)
+
+    def test_unscreened_metrics_show_a_dash_not_zero(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        canvas = source[source.index("function screeningCanvas(v)") : source.index("function screeningCriteriaPanel")]
+        self.assertIn("screenedCount(v.screeningMetrics.afterDedup)", canvas)
+        self.assertIn("screenedCount(v.screeningMetrics.included)", canvas)
 
 
 if __name__ == "__main__":

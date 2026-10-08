@@ -44,6 +44,25 @@ class ArxivSearcherTests(unittest.TestCase):
                 ArxivSearcher().search('LLM AND urban', max_results=5)
         self.assertEqual(get.call_count, 3)
 
+    def test_transient_server_error_is_retried(self):
+        failed = Mock(status_code=500)
+        ok = Mock(status_code=200, text="feed")
+        searcher = ArxivSearcher()
+        with patch("searchers.arxiv_search.requests.get", side_effect=[failed, ok]) as get, \
+             patch.object(searcher, "_parse_response", side_effect=[[{"id": "a"}]]), \
+             patch("searchers.arxiv_search.time.sleep"):
+            rows = searcher._search_simple("urban", 1)
+        self.assertEqual(rows, [{"id": "a"}])
+        self.assertEqual(get.call_count, 2)
+
+    def test_persistent_server_error_fails_after_bounded_retries(self):
+        response = Mock(status_code=500)
+        response.raise_for_status.side_effect = requests.HTTPError(response=response)
+        with patch("searchers.arxiv_search.requests.get", return_value=response) as get, patch("searchers.arxiv_search.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 500"):
+                ArxivSearcher().search('urban', max_results=5)
+        self.assertEqual(get.call_count, 3)
+
     def test_network_timeout_retries_are_bounded(self):
         with patch("searchers.arxiv_search.requests.get", side_effect=requests.Timeout) as get, patch("searchers.arxiv_search.time.sleep"):
             with self.assertRaisesRegex(RuntimeError, "3 attempts"):

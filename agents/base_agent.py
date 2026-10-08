@@ -41,7 +41,10 @@ class BaseAgent(ABC):
 
     def _setup_logger(self) -> logging.Logger:
         """Set up logging for this agent."""
-        logger = logging.getLogger(f"agent.{self.agent_name}")
+        # Loggers are process-global, so scope by project: a name shared across
+        # projects would keep writing into whichever project configured it first.
+        project_key = str(self.project_path.resolve()).replace(".", "_")
+        logger = logging.getLogger(f"agent.{self.agent_name}.{project_key}")
 
         # Only add handler if not already configured
         if not logger.handlers:
@@ -54,7 +57,8 @@ class BaseAgent(ABC):
             # File handler for detailed logs
             file_handler = logging.FileHandler(
                 log_dir / "pipeline.log",
-                encoding='utf-8'
+                encoding='utf-8',
+                delay=True,
             )
             file_handler.setLevel(logging.DEBUG)
             file_formatter = logging.Formatter(

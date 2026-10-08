@@ -332,7 +332,7 @@ class SearchConditionAgent(BaseAgent):
         if config.get("interpret_chat_settings"):
             defaults = {key: config.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
             settings_instruction = f"""
-This is an initial chat setup. Also return a top-level "search_settings" object containing only explicitly requested operational settings: project_name (string), platforms (array of source keys), max_results (positive integer per source), date_start and date_end (ISO dates). Omit unspecified settings. Supported source keys: pubmed, arxiv, openalex. Preserve these defaults for unspecified settings: {json.dumps(defaults, ensure_ascii=False)}.
+This is an initial chat setup. Also return a top-level "search_settings" object containing only explicitly requested operational settings: project_name (string), platforms (array of source keys), max_results (positive integer per source), date_start and date_end (ISO dates). Omit unspecified settings; if none are requested, return "search_settings": {{}}. Supported source keys: pubmed, arxiv, openalex. Preserve these defaults for unspecified settings: {json.dumps(defaults, ensure_ascii=False)}.
 """
         return f"""Generate Search Setup for ReviewPilot from this user chat request.
 
@@ -461,7 +461,19 @@ Rules:
     @staticmethod
     def _apply_chat_settings(config: Dict[str, Any], settings: Any) -> Dict[str, Any]:
         allowed = {"project_name", "platforms", "max_results", "date_start", "date_end"}
-        if not isinstance(settings, dict) or set(settings) - allowed:
+        if not isinstance(settings, dict):
+            raise ValueError("Invalid chat search settings")
+        settings = dict(settings)
+        # Models often echo the defaults in their config shape (source_limits,
+        # date_range, per-source max_results); map those onto the settings schema.
+        if "source_limits" in settings and "max_results" not in settings:
+            settings["max_results"] = settings.pop("source_limits")
+        if isinstance(settings.get("date_range"), dict):
+            date_range = settings.pop("date_range")
+            for key in ("start", "end"):
+                if key in date_range:
+                    settings.setdefault("date_" + key, date_range[key])
+        if set(settings) - allowed:
             raise ValueError("Invalid chat search settings")
         result = dict(config)
         if "project_name" in settings:
@@ -474,10 +486,11 @@ Rules:
             raise ValueError("Invalid chat search sources")
         result["platforms"] = list(dict.fromkeys(platforms))
         limit = settings.get("max_results")
-        if limit is not None and (type(limit) is not int or limit <= 0):
+        limits = limit if isinstance(limit, dict) else {p: limit for p in result["platforms"]} if limit is not None else {}
+        if any(type(value) is not int or value <= 0 for value in limits.values()):
             raise ValueError("Invalid chat result limit")
         old_limits = result.get("source_limits") or {}
-        result["source_limits"] = {p: limit if limit is not None else old_limits.get(p, result.get("max_results", DEFAULT_MAX_RESULTS_PER_PLATFORM)) for p in result["platforms"]}
+        result["source_limits"] = {p: limits.get(p) or old_limits.get(p, result.get("max_results", DEFAULT_MAX_RESULTS_PER_PLATFORM)) for p in result["platforms"]}
         from reviewpilot_core.publication_dates import resolve_range
         bounds = dict(result.get("date_range") or {})
         for key in ("start", "end"):

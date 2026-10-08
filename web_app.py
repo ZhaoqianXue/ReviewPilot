@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import shutil
 import sys
 import tempfile
 from html import unescape
@@ -425,7 +426,7 @@ async def create_project_api(request):
         payload = await _optional_json(request) or {}
         project = create_project(OUTPUT_ROOT, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"detail": str(exc)}, status_code=400)
     return JSONResponse(project, status_code=201, headers={"Location": "/workspace"})
 
 
@@ -470,7 +471,12 @@ def known_project(output_root: Path | str, project_id: str) -> bool:
 def create_project(output_root: Path | str, payload: dict) -> dict:
     config = _setup_config(payload)
     project_id = _unique_project_id(Path(output_root), _slugify(config["project_name"]))
-    search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+    try:
+        search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+    except Exception:
+        # The id was unused before this call, so anything under it is this attempt's debris.
+        shutil.rmtree(Path(output_root) / project_id, ignore_errors=True)
+        raise
     search_conditions = {**normalize_setup(config), **search_conditions}
     search_conditions["setup_revision"] = setup_revision(search_conditions)
     atomic_write_json(Path(output_root) / project_id / "search_conditions.json", search_conditions)

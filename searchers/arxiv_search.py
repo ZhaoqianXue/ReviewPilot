@@ -136,6 +136,15 @@ class ArxivSearcher:
                         response = requests.get(self.BASE_URL, params=params, timeout=30)
                         self._last_status_code = response.status_code
 
+                # arXiv returns transient 5xx errors under load; retry before failing the source
+                for delay in (3, 8):
+                    if response.status_code < 500:
+                        break
+                    print(f"  arXiv HTTP {response.status_code}, retrying in {delay}s...")
+                    time.sleep(delay)
+                    response = requests.get(self.BASE_URL, params=params, timeout=30)
+                    self._last_status_code = response.status_code
+
                 response.raise_for_status()
                 network_failures = 0
 

@@ -171,7 +171,7 @@ class ParityFixTests(unittest.TestCase):
         from searchers.openalex import OpenAlexSearcher
         from searchers.arxiv_search import ArxivSearcher
         bounds={'start':'2025-09-01','end':'2025-09-30'}
-        response=Mock();response.json.return_value={'esearchresult':{'idlist':[]},'results':[]};response.text='<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
+        response=Mock(status_code=200);response.json.return_value={'esearchresult':{'idlist':[]},'results':[]};response.text='<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
         with patch('requests.get',return_value=response) as get,contextlib.redirect_stdout(io.StringIO()):
             PubMedSearcher(email="fixture@example.org").search('clinical',max_results=5,date_range=bounds)
             self.assertEqual(get.call_args.kwargs['params']['mindate'],'2025/09/01')
