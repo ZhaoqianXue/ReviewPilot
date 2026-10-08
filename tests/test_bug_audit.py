@@ -107,6 +107,7 @@ class BugAuditTests(unittest.TestCase):
             'project_name':'study', 'description':'Clinical AI', 'search_terms':'AI AND (medicine',
             'derive_search_terms':False})
         self.assertEqual(response.status_code, 400, response.text)
+        self.assertTrue(response.json()['detail'])
         self.assertEqual(review.revision(self.project), before)
 
     def test_chat_reserves_session_until_reply_is_saved(self):

@@ -74,14 +74,23 @@ function applySubmittedMaxToSourceLimits(setupDraft, previousMaxResults, submitt
   return draft;
 }
 
+const STAGE_LABELS = {
+  collection: 'paper collection', screening: 'screening', retrieval: 'full-text retrieval',
+  extraction: 'information extraction', categorization: 'categorization',
+};
+
+function stageListLabel(stages) {
+  return (stages || []).map((stage) => STAGE_LABELS[stage] || String(stage)).join(', ');
+}
+
 async function confirmSetupImpact(preview, payload, confirmFn, send) {
   if (!preview?.confirmationRequired) return preview;
-  if (!confirmFn(`Changing this setup makes these results stale: ${preview.affectedStages.join(', ')}. Continue?`)) return { cancelled: true };
+  if (!confirmFn(`Changing this setup makes these results stale: ${stageListLabel(preview.affectedStages)}. Continue?`)) return { cancelled: true };
   return send({ ...payload, confirmation: { expected_revision: preview.expectedRevision } });
 }
 
 async function confirmOverwriteImpact(preview, payload, confirmFn, retry) {
-  if (!confirmFn(`This rerun replaces stale results for: ${preview.affectedStages.join(', ')}. Continue?`)) return { cancelled: true };
+  if (!confirmFn(`This rerun replaces stale results for: ${stageListLabel(preview.affectedStages)}. Continue?`)) return { cancelled: true };
   return retry({ ...(payload || {}), overwrite_confirmation: { expected_revision: preview.expectedRevision, affected_stages: preview.affectedStages } });
 }
 
@@ -250,7 +259,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
+  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
 }
 
 /* ReviewPilot workspace UI.
@@ -296,6 +305,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     setupDraft: setupDraftFromData(D),
     conceptEdit: null,
     conceptError: '',
+    setupSavedProjectId: '',
     chatInputFocus: false,
     chatPending: false,
     quickStartOpen: false,
@@ -598,6 +608,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     ['condition', 'Condition'], ['context', 'Setting or context'], ['outcome', 'Outcome'], ['study_design', 'Study design'], ['other', 'Other'],
   ];
 
+  const MAX_CONCEPTS = 12;
+  const MAX_TERMS_PER_CONCEPT = 12;
+
   function rawConceptBlocks(blocks) {
     return (Array.isArray(blocks) ? blocks : []).map((block) => ({
       label: unescapePayloadValue(block.label),
@@ -635,7 +648,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function conceptDraftError(label, terms, index) {
     if (!label) return 'Give the concept a name.';
+    if (/["*]|\[[^\]]*\]|\b(AND|OR|NOT)\b/.test(label)) return 'Write the concept name as plain text, without quotes, wildcards, field tags, or AND/OR/NOT.';
+    if (index < 0 && state.setupDraft.concept_blocks.length >= MAX_CONCEPTS) return `A search can have at most ${MAX_CONCEPTS} concepts.`;
     if (!terms.length) return 'Add at least one search term, one per line.';
+    if (terms.length > MAX_TERMS_PER_CONCEPT) return `Use at most ${MAX_TERMS_PER_CONCEPT} search terms per concept. Put further synonyms in an alternative concept (+ or).`;
+    if (terms.some((term) => term.length > 200)) return 'Keep each search term under 200 characters.';
     if (terms.some((term) => /["*]|\[[^\]]*\]|\b(AND|OR|NOT)\b/.test(term) || /(^|[^\p{L}\p{N}])'|'($|[^\p{L}\p{N}])/u.test(term))) {
       return 'Write search terms as plain words or phrases, without quotes, wildcards, field tags, or AND/OR/NOT.';
     }
@@ -669,6 +686,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     state.setupDraft.derive_search_terms = false;
     state.conceptEdit = null;
     state.conceptError = '';
+    state.setupSavedProjectId = '';
     return true;
   }
 
@@ -680,6 +698,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     }
     state.setupDraft.concept_blocks = blocks;
     state.setupDraft.derive_search_terms = false;
+    state.setupSavedProjectId = '';
   }
 
   function setupDraftFromData(data) {
@@ -1204,6 +1223,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     await saveDraftSetup(projectId);
     setData(await fetchProjectState(projectId));
     state.dialog = '';
+    state.setupSavedProjectId = projectId;
   }
 
   async function saveDraftSetup(projectId) {
@@ -1447,6 +1467,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       showConceptDialog: state.dialog === 'concept',
       conceptEdit: state.conceptEdit,
       conceptError: state.conceptError,
+      setupSaved: !!D.project.id && state.setupSavedProjectId === D.project.id,
       showMemoryDialog: state.dialog === 'memory',
       reuseOptions: state.reuseOptions,
       reusePreview: state.reusePreview,
@@ -1598,7 +1619,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 .rp-step-enter { animation:rp-step-arrive .38s ease-out both; }
 .rp-mobile-nav { display:none; }
 @media (prefers-reduced-motion: reduce) { .rp-motion, .rp-step-enter { animation:none !important; } }
-@media (max-width: 760px) {
+@media (max-width: 1023px) {
   body { overflow:auto !important; }
   #app { height:auto !important; min-height:100vh !important; }
   .rp-shell { flex-direction:column !important; height:auto !important; min-height:100vh !important; overflow:visible !important; }
@@ -1802,10 +1823,10 @@ ${reviewUI.dialog()}
     const rows = groups.map((group, groupIndex) => `${groupIndex ? `<div style="margin:6px 0 6px 2px;">${joiner('AND')}</div>` : ''}
       <div data-ui="concept-group" role="group" aria-label="Required concept group ${groupIndex + 1}" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
         ${group.items.map((item, k) => `${k ? joiner('OR') : ''}${conceptChip(item.block, item.index)}`).join('')}
-        <button type="button" data-act="add-concept" data-group="${esc(group.group)}" title="Add an alternative to this group" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer;">+ or</button>
+        <button type="button" data-act="add-concept" data-group="${esc(group.group)}" aria-label="Add an alternative to ${esc(group.items.map((item) => item.block.label).join(' or '))}" title="Add an alternative to this group" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer;">+ or</button>
       </div>`).join('');
     return `<div data-ui="concept-editor" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;"><div style="${label}">Search concepts</div>${unsaved ? '<span data-ui="concepts-unsaved" style="font-size:11px;color:#b45309;">Unsaved changes</span>' : ''}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;"><div style="${label}">Search concepts</div>${unsaved ? '<span data-ui="concepts-unsaved" style="font-size:11px;color:#b45309;">Unsaved changes</span>' : `<span data-ui="setup-saved-status" role="status" aria-live="polite" style="font-size:11px;color:#245c37;display:inline-flex;align-items:center;gap:4px;">${v.setupSaved && !v.searchReuseDraft ? '<i class="ph ph-check" aria-hidden="true"></i>Search setup saved' : ''}</span>`}</div>
         ${v.searchReuseDraft ? '<div data-ui="search-draft-notice" role="status" style="border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;margin-bottom:10px;">Proposed search changes are shown below. Save the search setup to apply them.</div>' : ''}
         ${rows || '<span style="font-size:12.5px;color:#9aa39b;">No concepts yet. Regenerate them from the research question.</span>'}
         <button type="button" data-act="add-concept" style="margin-top:10px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add required concept</button>
@@ -2247,8 +2268,8 @@ ${reviewUI.dialog()}
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;"><div style="display:flex;align-items:center;gap:9px;min-width:0;">${logo(24)}<span style="font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;">Search Setup</span></div><button type="button" data-act="close-dialog" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
         ${v.actionError ? `<div style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:12px;">${v.actionError}</div>` : ''}
         ${dialogInput('Project name', 'project_name', d.project_name, 'AI surgery review', 'required')}
-        <label style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Research question</label>
-        <textarea name="description" required rows="3" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;margin-bottom:10px;color:#1a1a1a;resize:vertical;" placeholder="Review evidence for AI tools in surgical decision support">${d.description}</textarea>
+        <label for="rp-setup-description" style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Research question</label>
+        <textarea id="rp-setup-description" name="description" required rows="3" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;margin-bottom:10px;color:#1a1a1a;resize:vertical;" placeholder="Review evidence for AI tools in surgical decision support">${d.description}</textarea>
         ${dialogInput('Model', 'model', d.model, 'Model name')}
         <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms ? 'checked' : ''}> Regenerate search concepts from this research question (replaces the current concepts)</label>
         <div style="font-size:11px;color:#6b746c;margin-top:10px;">Concepts, sources, limits, and dates are edited on the canvas.</div>
@@ -2258,7 +2279,7 @@ ${reviewUI.dialog()}
   }
 
   function dialogInput(label, name, value, placeholder, extra = '') {
-    return `<div><label style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">${label}</label><input name="${name}" value="${esc(value)}" ${extra} style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;" placeholder="${placeholder}"></div>`;
+    return `<div><label for="rp-setup-${name}" style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">${label}</label><input id="rp-setup-${name}" name="${name}" value="${esc(value)}" ${extra} style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;" placeholder="${placeholder}"></div>`;
   }
 
   function conceptDialog(v) {
@@ -2267,16 +2288,18 @@ ${reviewUI.dialog()}
     const newGroup = !block && !edit.group;
     const groupLabel = edit.group ? v.setupDraft.concept_blocks.filter((item) => item.eligibility_group === edit.group).map((item) => item.label).join(' or ') : '';
     const title = block ? 'Edit concept' : newGroup ? 'Add required concept' : 'Add alternative';
+    const termsText = block && edit.terms === undefined ? block.query_terms.join('\n') : (edit.terms || '');
+    const termRows = Math.min(12, Math.max(5, termsText.split('\n').length + 1));
     const field = 'width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;';
     return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;padding:16px;"><form id="rp-concept-dialog-form" role="dialog" aria-modal="true" aria-labelledby="rp-concept-title" style="width:min(420px,100%);background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;box-sizing:border-box;">
       <div id="rp-concept-title" style="font-family:Newsreader,Georgia,serif;font-size:19px;color:#1a1a1a;">${title}</div>
       ${groupLabel ? `<div style="font-size:12px;color:#6b746c;margin-top:4px;">A record may match this instead of ${esc(groupLabel)}.</div>` : ''}
       ${v.conceptError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:10px;">${esc(v.conceptError)}</div>` : ''}
-      <label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept name</label>
-      <input name="label" required maxlength="120" value="${esc(block ? block.label : (edit.label || ''))}" style="${field}" placeholder="Telemedicine">
-      <label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Search terms (one per line; synonyms, spellings, abbreviations)</label>
-      <textarea name="terms" required rows="5" style="${field}resize:vertical;" placeholder="telemedicine&#10;telehealth">${esc(block ? block.query_terms.join('\n') : (edit.terms || ''))}</textarea>
-      ${newGroup ? `<label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept type</label><select name="role" style="${field}">${CONCEPT_ROLES.map(([key, name]) => `<option value="${key}">${name}</option>`).join('')}</select>` : ''}
+      <label for="rp-concept-label" style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept name</label>
+      <input id="rp-concept-label" name="label" required maxlength="120" value="${esc(block && edit.label === undefined ? block.label : (edit.label || ''))}" style="${field}" placeholder="Telemedicine">
+      <label for="rp-concept-terms" style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Search terms (one per line; synonyms, spellings, abbreviations)</label>
+      <textarea id="rp-concept-terms" name="terms" required rows="${termRows}" style="${field}resize:vertical;" placeholder="telemedicine&#10;telehealth">${esc(termsText)}</textarea>
+      ${newGroup ? `<label for="rp-concept-role" style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept type</label><select id="rp-concept-role" name="role" style="${field}">${CONCEPT_ROLES.map(([key, name]) => `<option value="${key}"${key === edit.role ? ' selected' : ''}>${name}</option>`).join('')}</select>` : ''}
       <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:9px 14px;font:inherit;font-size:13px;cursor:pointer;">${block ? 'Update concept' : 'Add concept'}</button></div>
     </form></div>`;
   }
@@ -2327,6 +2350,7 @@ ${reviewUI.dialog()}
   function updateSetupDraftField(field, value) {
     if (!['date_start', 'date_end'].includes(field)) return;
     state.setupDraft[field] = esc(value);
+    state.setupSavedProjectId = '';
   }
 
   function updateSourceLimit(source, value) {
@@ -2335,10 +2359,12 @@ ${reviewUI.dialog()}
       [source]: esc(value),
     };
     state.setupDraft.max_results = maxResultsFromSourceLimits(selectedSourceLimits(), state.setupDraft.max_results);
+    state.setupSavedProjectId = '';
   }
 
   function toggleSource(source) {
     const current = state.setupDraft.platforms;
+    state.setupSavedProjectId = '';
     state.setupDraft.platforms = current.includes(source)
       ? current.filter((item) => item !== source)
       : [...current, source];
@@ -2422,6 +2448,8 @@ ${reviewUI.dialog()}
       const dialogInput = root.querySelector('#rp-session-form input');
       if (dialogInput && state.sessionDialog?.kind === 'rename') state.sessionDialog.title = esc(dialogInput.value);
       const dialogAlreadyOpen = !!root.querySelector('#rp-session-form');
+      const conceptDialogWasOpen = !!root.querySelector('#rp-concept-dialog-form');
+      const setupDialogWasOpen = !!root.querySelector('#rp-setup-dialog-form');
       const reviewFocus = focused?.getAttribute('data-review-input');
       const mainScroll = root.querySelector('.rp-main-scroll')?.scrollTop || 0;
       const previousProject = root.dataset.project;
@@ -2449,6 +2477,13 @@ ${reviewUI.dialog()}
         if (input) { input.focus(); if (!dialogAlreadyOpen) input.select(); else if (selection[0] != null) input.setSelectionRange(...selection); }
         else root.querySelector('[data-act="session-cancel"]')?.focus();
       }
+      const conceptForm = root.querySelector('#rp-concept-dialog-form');
+      if (conceptForm && (!conceptDialogWasOpen || state.conceptError)) {
+        const field = state.conceptError && !/name/i.test(state.conceptError) ? 'terms' : 'label';
+        conceptForm.querySelector(`[name="${field}"]`)?.focus({ preventScroll: true });
+      }
+      const setupForm = root.querySelector('#rp-setup-dialog-form');
+      if (setupForm && !setupDialogWasOpen) setupForm.querySelector(D.isNewProject ? '[name="project_name"]' : '[name="description"]')?.focus({ preventScroll: true });
       const conv = document.getElementById('rp-conv');
       if (conv) conv.scrollTop = previousProject !== (D.project.id || '') || atBottom ? conv.scrollHeight : scrollTop;
       wireHover(root);
@@ -2739,6 +2774,7 @@ ${reviewUI.dialog()}
     });
     root.addEventListener('input', (e) => {
       if (e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT' && reviewUI.input(e.target,e)) return;
+      if (e.target.id === 'rp-concept-terms') { e.target.rows = Math.min(12, Math.max(5, e.target.value.split('\n').length + 1)); return; }
       if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; if (!e.isComposing) paint(); return; }
       if (e.target.matches('[data-criteria]')) {
         state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision,
@@ -2796,7 +2832,7 @@ ${reviewUI.dialog()}
 
     root.addEventListener('keydown', (e) => {
       if (reviewUI.keydown(e)) return;
-      if (e.key === 'Escape') { if (state.dialog === 'help') state.dialog = ''; state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return; }
+      if (e.key === 'Escape') { if (['help', 'concept', 'setup'].includes(state.dialog)) state.dialog = ''; state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return; }
       if (e.key === 'Tab' && state.sessionDialog) {
         const items = [...root.querySelectorAll('#rp-session-form input, #rp-session-form button:not(:disabled)')];
         const first = items[0], last = items[items.length - 1];
@@ -2825,7 +2861,10 @@ ${reviewUI.dialog()}
       if (e.target.id === 'rp-concept-dialog-form') {
         e.preventDefault();
         if (saveConceptFromForm(e.target)) state.dialog = '';
-        else state.conceptEdit = { ...state.conceptEdit, label: String(new FormData(e.target).get('label') || ''), terms: String(new FormData(e.target).get('terms') || '') };
+        else {
+          const data = new FormData(e.target);
+          state.conceptEdit = { ...state.conceptEdit, label: String(data.get('label') || ''), terms: String(data.get('terms') || ''), role: String(data.get('role') || '') };
+        }
         paint();
         return;
       }

@@ -197,6 +197,13 @@ ctx.state.conceptEdit={group:''};assert.equal(ctx.saveConceptFromForm({label:'Ch
 ctx.state.conceptEdit={group:'condition'};assert.equal(ctx.saveConceptFromForm({label:'IBD',terms:'inflammatory bowel disease'}),true);
 ctx.state.conceptEdit={index:0};assert.equal(ctx.saveConceptFromForm({label:'LLMs',terms:'"large language model"'}),false);
 assert.match(ctx.state.conceptError,/without quotes/);
+ctx.state.conceptEdit={index:0};assert.equal(ctx.saveConceptFromForm({label:'LLMs',terms:Array.from({length:13},(_,n)=>`term ${n}`).join('\n')}),false);
+assert.match(ctx.state.conceptError,/at most 12 search terms/);
+ctx.state.conceptEdit={index:0};assert.equal(ctx.saveConceptFromForm({label:'LLMs AND chatbots',terms:'chatbot'}),false);
+assert.match(ctx.state.conceptError,/concept name as plain text/);
+ctx.state.setupSavedProjectId='p1';ctx.state.conceptEdit={group:'condition'};assert.equal(ctx.saveConceptFromForm({label:'Colitis',terms:'colitis'}),true);
+assert.equal(ctx.state.setupSavedProjectId,'');ctx.state.setupDraft.concept_blocks.pop();
+ctx.state.setupSavedProjectId='p1';ctx.removeConcept(99);assert.equal(ctx.state.setupSavedProjectId,'');
 const payload=ctx.setupPayloadFromDraft();
 assert.equal(payload.derive_search_terms,false);assert.equal(payload.concept_blocks.length,6);
 assert.equal(payload.concept_blocks[4].eligibility_group,'chatbots');assert.equal(payload.concept_blocks[5].eligibility_group,'condition');
