@@ -48,7 +48,7 @@ _CONCEPT_SCHEMA = """{
 
 _FORMAT_RULES = f"""Output constraints:
 - Return 1 to {MAX_BLOCKS} concept blocks with only the keys {", ".join(BLOCK_KEYS)}.
-- A required concept has 1 to {MAX_TERMS_PER_BLOCK} unique query terms; a concept that is not required has 0 to {MAX_TERMS_PER_BLOCK}.
+- A required concept has 1 to {MAX_TERMS_PER_BLOCK} unique query terms; a concept that is not required has 0 to {MAX_TERMS_PER_BLOCK}. Equivalents beyond {MAX_TERMS_PER_BLOCK} go into an additional concept in the same eligibility_group.
 - Write query terms as plain text without Boolean operators, field tags, wildcards, or quotation marks.
 - Concepts sharing one eligibility_group share one role and one required_for_eligibility value."""
 
@@ -189,7 +189,7 @@ OPTIONAL APPROVED VOCABULARY DATA:
 
 Return ONLY a JSON object with this shape:
 {{
-  "reply": "brief message to the user describing the concepts",
+  "reply": "brief message naming the required concepts and the concepts kept for screening, without counting them",
   "title": "concise project title of 3 to 8 words in the user's language",
   "research_description": "the user's research question in clear prose",
   "concept_blocks": [{_CONCEPT_SCHEMA}]{', "search_settings": {}' if interpret_settings else ''}
@@ -219,7 +219,7 @@ CURRENT USER MESSAGE DATA:
 
 Return ONLY a JSON object with this shape:
 {{
-  "reply": "brief message stating exactly what changed, or answering the question",
+  "reply": "brief message naming exactly what changed, or answering the question, without counting concepts",
   "concept_blocks": null or the complete updated list of [{_CONCEPT_SCHEMA}],
   "search_settings": {{}}
 }}
