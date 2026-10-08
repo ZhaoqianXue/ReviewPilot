@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agents.lead_agent import LeadAgent
 from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
-from reviewpilot_core.project_store import read_jsonl
+from reviewpilot_core.project_store import read_json, read_jsonl
 from reviewpilot_core.state_projection import build_rp_data
 from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
 
@@ -1412,3 +1412,41 @@ class LeadAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SearchSetupChatTests(unittest.TestCase):
+    BLOCKS = [
+        {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
+        {"label": "Mental health", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["mental health"]},
+    ]
+
+    def chat(self, apply_result):
+        added = self.BLOCKS + [{"label": "Chatbots", "role": "intervention_or_exposure", "eligibility_group": "system", "required_for_eligibility": True, "query_terms": ["chatbot"]}]
+        reply = json.dumps({"reply": "Added Chatbots as a required concept.", "concept_blocks": added, "search_settings": {}})
+        applied = []
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "demo"
+            project.mkdir()
+            (project / "search_conditions.json").write_text(json.dumps({
+                "project_name": "Demo", "description": "LLMs for mental health", "platforms": ["pubmed"],
+                "source_limits": {"pubmed": 10}, "date_range": {"start": "", "end": "2026-10-07"}, "concept_blocks": self.BLOCKS}))
+            result = LeadAgent(Path(tmp), llm_query=lambda **_kwargs: (reply, {})).handle_message(
+                project_id="demo", message="Only chatbots", context_step="search",
+                apply_setup=lambda setup: (applied.append(setup), apply_result)[1])
+            draft = read_json(project / "memory/search_setup_draft.json", None)
+            chat = read_jsonl(project / "chat/messages.jsonl")
+        return result, applied, draft, chat
+
+    def test_change_without_affected_results_is_saved(self):
+        result, applied, draft, chat = self.chat({"confirmationRequired": False})
+        self.assertEqual([block["label"] for block in applied[0]["concept_blocks"]][-1], "Chatbots")
+        self.assertIsNone(draft)
+        self.assertIn("Search setup saved.", result.reply)
+        self.assertEqual([row["step"] for row in chat], [1, 1])
+
+    def test_change_that_would_stale_results_becomes_a_draft(self):
+        result, _applied, draft, _chat = self.chat({"confirmationRequired": True, "affectedStages": ["collection", "screening"]})
+        self.assertEqual(draft["keywords"], ["Large language models (LLMs)", "Mental health", "Chatbots"])
+        self.assertIn("(chatbot)", draft["search_terms"])
+        self.assertIn("paper collection, screening", result.reply)
+        self.assertIn("saved as a draft", result.reply)

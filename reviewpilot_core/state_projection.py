@@ -179,6 +179,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
             "primary_topic": "",
             "domain": "",
             "search_terms": "",
+            "concept_blocks": [],
             "platforms": ["pubmed", "arxiv", "openalex"],
             "max_results": DEFAULT_MAX_RESULTS_PER_PLATFORM,
             "source_limits": {
@@ -203,11 +204,12 @@ def build_new_project_data(output_root: Path | str) -> dict:
         ],
         "optionalCapabilities": [],
         "fields": [],
-        "platforms": [["PubMed", 0], ["arXiv", 0], ["Openalex", 0]],
+        "platforms": [["PubMed", 0], ["arXiv", 0], ["OpenAlex", 0]],
         "keywords": [],
         "groups": [],
         "retrieved": [],
         "platformIssues": [],
+        "executedQueries": {},
         "screeningMetrics": {"identified": 0, "afterDedup": 0, "included": 0},
         "retrievalSummary": {"retrieved": 0, "total": 0, "openAccess": 0, "viaInstitution": 0, "unavailable": 0},
         "retrievalRecovery": disabled_retry_projection(),
@@ -317,6 +319,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "schemaWorkbench": schema_workbench_state(has_schema=bool(fields), schema_finalized=schema_finalized),
         "platforms": platform_stats,
         "platformIssues": _platform_issues(collected_summary.get("platform_errors") or {}),
+        "executedQueries": collected_summary.get("executed_queries") or {},
         "keywords": _keywords(config),
         "groups": _groups(categorization),
         "retrieved": _retrieved(included, download_report),
@@ -478,7 +481,7 @@ def _platform_stats(path: Path, config: dict, collected_summary: dict, *, allow_
 def _platform_label(key: str) -> str:
     if contains_absolute_path(str(key)):
         return "Unknown source"
-    labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "Openalex"}
+    labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
     return labels.get(key, str(key).replace("_", " ").title())
 
 
@@ -596,6 +599,7 @@ def _setup(config: dict) -> dict:
         "primary_topic": str(config.get("primary_topic") or ""),
         "domain": str(config.get("domain") or ""),
         "search_terms": str(config.get("search_terms") or _query_text(config) or ""),
+        "concept_blocks": _concept_blocks(config),
         "platforms": platforms,
         "max_results": max_results,
         "source_limits": _source_limits(config, platforms, max_results),
@@ -604,6 +608,18 @@ def _setup(config: dict) -> dict:
         "model": str(config.get("model") or LEAD_AGENT_DEV_MODEL),
         "derive_search_terms": bool(config.get("derive_search_terms")),
     }
+
+
+def _concept_blocks(config: dict) -> list[dict]:
+    """The editable strategy; projects saved before concept blocks get them from their query."""
+    from reviewpilot_core.search_concepts import blocks_from_query, validate_concept_blocks
+    try:
+        if config.get("concept_blocks"):
+            return validate_concept_blocks(config["concept_blocks"])
+        query = str(config.get("search_terms") or _query_text(config) or "")
+        return blocks_from_query(query) if query else []
+    except ValueError:
+        return []
 
 
 def _source_limits(config: dict, platforms: list[str], default: int) -> dict[str, int]:

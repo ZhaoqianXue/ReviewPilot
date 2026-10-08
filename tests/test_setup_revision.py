@@ -19,7 +19,7 @@ class SetupRevisionTests(unittest.TestCase):
     def _project(self, root: Path):
         project = root / "demo"
         project.mkdir()
-        config = web_app._setup_config({"project_name": "Demo", "description": "Question", "platforms": ["pubmed"], "max_results": 10})
+        config = web_app._setup_config({"project_name": "Demo", "description": "Question", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10})
         (project / "search_conditions.json").write_text(json.dumps(config), encoding="utf-8")
         initialize_workflow_state(project)
         complete_action(project, "collect", {"total_papers": 2, "platform_stats": {"pubmed": 2}, "platform_errors": {}})
@@ -46,9 +46,10 @@ class SetupRevisionTests(unittest.TestCase):
         self.assertFalse(materially_changes_dependencies(base, {**base, "project_name": "Renamed"}))
 
     def test_each_material_setup_input_returns_impact_preview_without_writing(self):
+        # primary_topic and domain are derived from the concepts, so they are not inputs here.
         changes = {
-            "description": {"description": "Other"}, "topic": {"primary_topic": "Robotics"},
-            "domain": {"domain": "surgery"}, "query": {"search_terms": "robotics"},
+            "description": {"description": "Other"}, "query": {"search_terms": "robotics"},
+            "concepts": {"concept_blocks": [{"label": "Robotics", "role": "phenomenon", "eligibility_group": "robotics", "required_for_eligibility": True, "query_terms": ["robotics"]}]},
             "platforms": {"platforms": ["arxiv"], "source_limits": {"arxiv": 10}},
             "limits": {"source_limits": {"pubmed": 20}, "max_results": 20},
             "dates": {"date_start": "2021", "date_end": "2025"},
@@ -57,7 +58,7 @@ class SetupRevisionTests(unittest.TestCase):
         for label, change in changes.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); project, current = self._project(root)
-                payload = {"project_name": "Demo", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "source_limits": {"pubmed": 10}, "max_results": 10, **change}
+                payload = {"project_name": "Demo", "description": "Question", "search_terms": "Demo", "platforms": ["pubmed"], "source_limits": {"pubmed": 10}, "max_results": 10, **change}
                 preview = web_app.update_project_setup(root, "demo", payload)
                 self.assertTrue(preview["confirmationRequired"])
                 self.assertEqual(json.loads((project / "search_conditions.json").read_text()), current)
@@ -69,7 +70,7 @@ class SetupRevisionTests(unittest.TestCase):
             artifact = project / "collected" / "summary.json"
             artifact.parent.mkdir()
             artifact.write_text('{"total_papers":2,"platform_stats":{"pubmed":2}}', encoding="utf-8")
-            proposed = {"project_name": "Demo", "description": "Changed", "platforms": ["pubmed"], "max_results": 10}
+            proposed = {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10}
             preview = web_app.update_project_setup(root, "demo", proposed)
             self.assertTrue(preview["confirmationRequired"])
             self.assertEqual(preview["expectedRevision"], setup_revision(old))
@@ -108,8 +109,8 @@ class SetupRevisionTests(unittest.TestCase):
             root = Path(tmp); project, old = self._project(root)
             artifact = project / "collected" / "summary.json"; artifact.parent.mkdir(); artifact.write_text('{"total_papers":2,"platform_stats":{"pubmed":2}}')
             prompt = project / "prompts" / "relevance_prompt.json"; prompt.parent.mkdir(); prompt.write_text('{}')
-            preview = web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "platforms": ["pubmed"], "max_results": 10})
-            web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": preview["expectedRevision"]}})
+            preview = web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10})
+            web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": preview["expectedRevision"]}})
             self.assertTrue(artifact.exists())
             self.assertIsNone(export_artifact_path(project, "relevance-prompt"))
             projected = build_rp_data(root, "demo")
@@ -263,7 +264,7 @@ class SetupRevisionTests(unittest.TestCase):
             before = json.loads((project / "search_conditions.json").read_text())
             with patch.object(web_app, "_run_lead_agent_search_setup", side_effect=RuntimeError("write failed")):
                 with self.assertRaisesRegex(RuntimeError, "write failed"):
-                    web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10})
+                    web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10})
             self.assertEqual(json.loads((project / "search_conditions.json").read_text()), before)
             self.assertFalse((project / ".setup_update_pending.json").exists())
 
@@ -311,7 +312,7 @@ class SetupRevisionTests(unittest.TestCase):
             root = Path(tmp); project, _current = self._project(root)
             with patch.object(web_app, "_run_lead_agent_search_setup", side_effect=RuntimeError("agent failed")), patch.object(web_app, "atomic_write_json", side_effect=OSError("rollback failed")):
                 with self.assertRaisesRegex(OSError, "rollback failed"):
-                    web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10})
+                    web_app.update_project_setup(root, "demo", {"project_name": "Renamed", "description": "Question", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10})
             marker = project / ".setup_update_pending.json"
             self.assertTrue(marker.exists())
             build_rp_data(root, "demo")
@@ -332,7 +333,7 @@ class SetupRevisionTests(unittest.TestCase):
                 raise RuntimeError("post-write failure")
             with patch.object(web_app, "mark_stages_stale", side_effect=fail_after_ledger_write), patch.object(web_app, "mark_setup_transaction_aborting", side_effect=OSError("abort marker failed")), patch.object(web_app, "atomic_write_json", side_effect=fail_rollback):
                 with self.assertRaisesRegex(OSError, "rollback failed"):
-                    web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
+                    web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
             marker = project / ".setup_update_pending.json"
             self.assertNotIn(project.resolve(), setup_revision_module._ACTIVE_TRANSACTIONS)
             self.assertEqual(json.loads(marker.read_text())["phase"], "abort")

@@ -150,7 +150,7 @@ class WebAppTests(unittest.TestCase):
     def test_create_project_initializes_workflow_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
-            project = create_project(output_root, {"project_name": "Ledger", "description": "Review ledgers"})
+            project = create_project(output_root, {"project_name": "Ledger", "description": "Review ledgers", "search_terms": "LLM"})
             ledger = json.loads((output_root / project["id"] / "workflow_state.json").read_text(encoding="utf-8"))
 
         self.assertEqual(ledger["stages"]["collection"]["status"], "ready")
@@ -407,7 +407,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(config["project_name"], "My Review!")
         self.assertEqual(config["description"], "Review AI in surgery")
         self.assertEqual(config["platforms"], ["pubmed", "openalex"])
-        self.assertEqual(config["search_queries"], [{"name": "main", "query": "AI AND surgery"}])
+        self.assertEqual(config["search_queries"], [{"name": "main", "query": "(AI) AND (surgery)"}])
         self.assertEqual(config["date_range"], {"start": "2020-01-01", "end": "2026-12-31"})
         self.assertEqual(config["max_results"], 25)
         self.assertEqual(config["source_limits"], {"pubmed": 25, "openalex": 25})
@@ -431,8 +431,8 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(config["project_name"], "LLM & Medicine")
         self.assertEqual(config["description"], "Review LLMs for medicine & care")
-        self.assertEqual(config["search_terms"], '("large language model" OR LLM) AND medicine')
-        self.assertEqual(config["search_queries"], [{"name": "main", "query": '("large language model" OR LLM) AND medicine'}])
+        self.assertEqual(config["search_terms"], '("large language model" OR LLM) AND (medicine)')
+        self.assertEqual(config["search_queries"], [{"name": "main", "query": '("large language model" OR LLM) AND (medicine)'}])
 
     def test_create_project_defaults_to_development_lead_agent_model(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,6 +443,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Model Default Review",
                     "description": "Review LLM in biomedicine",
+                    "search_terms": "LLM",
                     "platforms": "pubmed",
                 },
             )
@@ -460,6 +461,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Default Limit Review",
                     "description": "Review LLMs in care delivery",
+                    "search_terms": "LLM",
                     "platforms": "pubmed, openalex, arxiv",
                 },
             )
@@ -478,6 +480,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Default Source Order Review",
                     "description": "Review LLMs in clinical care",
+                    "search_terms": "LLM",
                 },
             )
 
@@ -495,6 +498,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Explicit Source Order Review",
                     "description": "Review LLMs in clinical care",
+                    "search_terms": "LLM",
                     "platforms": ["openalex", "pubmed", "arxiv"],
                 },
             )
@@ -558,6 +562,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Per Source Review",
                     "description": "Review AI in surgery",
+                    "search_terms": "LLM",
                     "platforms": "pubmed, openalex, arxiv",
                     "max_results": "50",
                     "source_limits": {"pubmed": "10", "openalex": "25", "arxiv": "75"},
@@ -580,6 +585,7 @@ class WebAppTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": "LLM generated this Search Setup.",
+                            "title": "Test review",
                             "research_description": "Survey LLM systems in biomedicine",
                             "concept_blocks": [
                                 {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
@@ -631,7 +637,7 @@ class WebAppTests(unittest.TestCase):
                 {
                     "project_name": "Demo",
                     "description": "A real review",
-                    "search_terms": "",
+                    "search_terms": "LLM",
                     "platforms": ["openalex"],
                 },
             )
@@ -670,7 +676,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(config["project_name"], "Updated")
         self.assertEqual(config["description"], "New question")
         self.assertEqual(config["platforms"], ["pubmed", "arxiv"])
-        self.assertEqual(config["search_queries"], [{"name": "main", "query": "AI AND medicine"}])
+        self.assertEqual(config["search_queries"], [{"name": "main", "query": "(AI) AND (medicine)"}])
         self.assertEqual(config["max_results"], 20)
         self.assertEqual(config["source_limits"], {"pubmed": 20, "arxiv": 20})
 
@@ -746,7 +752,7 @@ class WebAppTests(unittest.TestCase):
                 def __init__(self, output_root):
                     self.output_root = output_root
 
-                def handle_message(self, project_id, message=None, action=None, context_step=None):
+                def handle_message(self, project_id, message=None, action=None, context_step=None, apply_setup=None):
                     calls.append((self.output_root, project_id, message, context_step))
                     chat_dir = Path(self.output_root) / project_id / "chat"
                     chat_dir.mkdir(parents=True, exist_ok=True)
@@ -1198,11 +1204,12 @@ class WebAppTests(unittest.TestCase):
 
                 def fake_llm(*args, **kwargs):
                     prompt = kwargs.get("text_prompt", "")
-                    if "Generate Search Setup" in prompt:
+                    if "Design the concept strategy" in prompt:
                         return (
                             json.dumps(
                                 {
                                     "reply": "Search setup ready.",
+                                    "title": "Test review",
                                     "research_description": "Survey LLMs in biomedicine",
                                     "concept_blocks": [
                                         {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
@@ -1272,9 +1279,13 @@ class WebAppTests(unittest.TestCase):
 
                 import sys
 
-                sys.modules["main"] = __import__("types").SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
+                from searchers.sources import SourceResult
+
+                def fake_search_source(source, query, **_kwargs):
+                    return SourceResult(FakeSearcher().search().get(source, []), f"{source}: {query}")
+
                 client = TestClient(web_app.create_app())
-                with patch("agents.search_condition_agent.query_llm", side_effect=fake_llm), patch(
+                with patch("agents.collection_agent.search_source", side_effect=fake_search_source), patch("agents.search_condition_agent.query_llm", side_effect=fake_llm), patch(
                     "utils.llm.query_llm", side_effect=fake_llm
                 ), patch("utils.fast_pdf_downloader.FastCascadePDFDownloader", FakeFastDownloader), patch.object(
                     ExtractionAgent, "_read_pdf", lambda self, path: "This paper reports clinical triage support."

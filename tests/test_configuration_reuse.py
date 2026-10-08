@@ -176,7 +176,7 @@ class ExplicitReuseTests(unittest.TestCase):
             response = self.client.put('/projects/target/setup', json=payload)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertFalse((self.target / 'memory/search_setup_draft.json').exists())
-        self.assertEqual(confirmed_decisions(self.target)['search_setup']['configuration']['search_terms'], config['search_terms'])
+        self.assertEqual(confirmed_decisions(self.target)['search_setup']['configuration']['search_terms'], '(cancer) AND (intervention)')
 
     def test_interrupted_or_external_schema_edit_cannot_reuse_old_confirmation(self):
         self.through_extraction(self.target)

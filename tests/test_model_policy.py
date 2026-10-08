@@ -4,7 +4,6 @@ import inspect
 import config
 from agents.extraction_agent import ExtractionAgent
 from agents.filtering_agent import FilteringAgent
-from agents.coordinator import PipelineCoordinator
 from reviewpilot_core.model_policy import (
     CATEGORIZATION_MODEL,
     COLLECTION_MODEL,
@@ -43,8 +42,6 @@ class ModelPolicyTests(unittest.TestCase):
     def test_legacy_llm_sub_agents_default_to_model_policy(self):
         self.assertEqual(FilteringAgent(project_path=".").model, FILTERING_MODEL)
         self.assertEqual(ExtractionAgent(project_path=".").model, EXTRACTION_MODEL)
-        default_model = inspect.signature(PipelineCoordinator.run_pipeline).parameters["model"].default
-        self.assertEqual(default_model, FILTERING_MODEL)
 
     def test_model_cost_table_includes_target_models(self):
         self.assertIn(LEAD_AGENT_DEV_MODEL, MODEL_COSTS)

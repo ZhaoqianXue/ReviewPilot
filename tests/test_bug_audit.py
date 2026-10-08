@@ -187,8 +187,8 @@ class BugAuditTests(unittest.TestCase):
 const fs=require('fs'), assert=require('node:assert/strict');
 const src=fs.readFileSync('frontend/app.js','utf8');
 const esc=x=>String(x), unescapePayloadValue=x=>String(x);
-eval(src.slice(src.indexOf('  function queryClauses('), src.indexOf('  function setupDraftFromData(')));
-assert.deepEqual(queryClauses("Alzheimer's AND medicine"), ["Alzheimer's", 'medicine']);
+eval(src.slice(src.indexOf('  // Concept blocks are the search strategy'), src.indexOf('  function setupDraftFromData(')));
+assert.equal(buildBooleanQuery([{label:"Alzheimer's",role:'condition',eligibility_group:'c',required_for_eligibility:true,query_terms:["Alzheimer's disease"]},{label:'Medicine',role:'context',eligibility_group:'m',required_for_eligibility:true,query_terms:['medicine']}]), '("Alzheimer\'s disease") AND (medicine)');
 let D={project:{id:'a'},categorizationWorkflow:{decisions:{revision:'r1'}}};
 let state={setupDraft:{},actionPending:false,chatPending:false,decisionPending:false};
 let activeTaskMonitor={generation:1}, paints=0, updates=0, pending=[];
@@ -216,18 +216,23 @@ const fs=require('fs'), assert=require('node:assert/strict');
 const src=fs.readFileSync('frontend/app.js','utf8');
 const esc=x=>String(x).replaceAll('&','&amp;').replaceAll('"','&quot;');
 const unescapePayloadValue=x=>String(x).replaceAll('&quot;','"').replaceAll('&amp;','&');
-const state={setupDraft:{keywords:['clinical',esc('"machine learning"')]}};
-eval(src.slice(src.indexOf('  function queryClauses('), src.indexOf('  function setupDraftFromData(')));
-removeQueryClause('"machine learning"');
-assert.deepEqual(state.setupDraft.keywords,['clinical']);
-assert.equal(state.setupDraft.search_terms,'(clinical)');
+const block=(label,group)=>({label,role:'other',eligibility_group:group,required_for_eligibility:true,query_terms:[label]});
+const state={setupDraft:{concept_blocks:[block('clinical','a'),block('machine learning','b')]},actionError:''};
+eval(src.slice(src.indexOf('  // Concept blocks are the search strategy'), src.indexOf('  function setupDraftFromData(')));
+removeConcept(1);
+assert.deepEqual(state.setupDraft.concept_blocks.map(b=>b.label),['clinical']);
+assert.equal(buildBooleanQuery(state.setupDraft.concept_blocks),'(clinical)');
+removeConcept(0);
+assert.match(state.actionError,/at least one required concept/);
 const D={searchReuseDraft:null}, shouldRestoreSnapshotData=false, sameSetupRevision=true;
-const ui={setupDraft:{search_terms:'(clinical)',keywords:['obsolete']}};
-const setupDraftFromData=()=>({search_terms:'clinical AND AI',keywords:['clinical','AI']});
+const ui={setupDraft:{concept_blocks:[block('clinical','a')]}};
+const setupDraftFromData=()=>({concept_blocks:[block('clinical','a'),block('AI','b')]});
 const normalizeSourceLimits=()=>({});
-eval(src.slice(src.indexOf('    const baseDraft = setupDraftFromData(D);'), src.indexOf("    state.keywordDraft = '';",src.indexOf('    const baseDraft = setupDraftFromData(D);'))));
-assert.equal(state.setupDraft.search_terms,'(clinical)');
-assert.deepEqual(state.setupDraft.keywords,['(clinical)']);
+eval(src.slice(src.indexOf('    const baseDraft = setupDraftFromData(D);'), src.indexOf("    state.conceptEdit = null;",src.indexOf('    const baseDraft = setupDraftFromData(D);'))));
+assert.deepEqual(state.setupDraft.concept_blocks.map(b=>b.label),['clinical']);
+ui.setupDraft.concept_blocks='corrupt';
+eval(src.slice(src.indexOf('    const baseDraft = setupDraftFromData(D);'), src.indexOf("    state.conceptEdit = null;",src.indexOf('    const baseDraft = setupDraftFromData(D);'))));
+assert.deepEqual(state.setupDraft.concept_blocks.map(b=>b.label),['clinical','AI']);
 '''
         result = subprocess.run(['node','-e',script], cwd=ROOT, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)

@@ -143,6 +143,28 @@ class SearchConditionAgentContract:
 
 
 @dataclass(frozen=True)
+class RefineSearchSetupContract:
+    """Runs SearchConditionAgent.refine to revise the saved strategy from chat; writes nothing."""
+
+    action: str = "refine-search-setup"
+    agent_name: str = "SearchConditionAgent"
+    stage: str = "search_conditions"
+    model: str = SEARCH_CONDITION_MODEL
+    agent_cls: type = SearchConditionAgent
+
+    def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        from agents import search_condition_agent as search_condition_module
+
+        project_path = Path(output_root) / project_id
+        payload = dict(input_data or {})
+        payload["current"] = {**dict(payload.get("current") or {}), "project_path": str(project_path)}
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name,
+                                           llm_query or search_condition_module.query_llm, model=self.model)
+        result = self.agent_cls(output_dir=str(output_root), llm_query=skill_query).refine(payload)
+        return {**result, "status": "search_setup_refined"}
+
+
+@dataclass(frozen=True)
 class RelevancePromptAgentContract:
     """Runs the real PromptAgent for prompt_relevance artifacts."""
 
@@ -537,6 +559,7 @@ def default_sub_agent_contracts(
 ) -> list[SubAgentContract]:
     return [
         SearchConditionAgentContract(agent_cls=search_condition_agent_cls),
+        RefineSearchSetupContract(agent_cls=search_condition_agent_cls),
         RelevancePromptAgentContract(agent_cls=prompt_agent_cls),
         CollectionAgentContract(),
         FilteringAgentContract(),

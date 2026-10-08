@@ -25,6 +25,7 @@ class SearchConditionAgentTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": "I generated a search setup from the chat request.",
+                            "title": "Test review",
                             "research_description": "Review LLM systems in biomedicine",
                             "concept_blocks": [
                                 {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "large language models", "LLM", "LLMs"]},
@@ -79,6 +80,7 @@ class SearchConditionAgentTests(unittest.TestCase):
                     json.dumps(
                         {
                             "reply": "I generated a search setup from the chat request.",
+                            "title": "Test review",
                             "research_description": "Review LLM systems in care delivery",
                             "concept_blocks": [
                                 {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
@@ -113,80 +115,110 @@ class SearchConditionAgentTests(unittest.TestCase):
         self.assertEqual(written["platforms"], ["pubmed", "arxiv", "openalex"])
         self.assertEqual(written["source_limits"], {"pubmed": 10, "arxiv": 20, "openalex": 30})
 
-    def test_display_keywords_reject_query_syntax_and_duplicates(self):
-        invalid_values = [
-            ["LLM*", "Biomedicine"],
-            ["LLM OR GPT", "Biomedicine"],
-            ['"large language model"', "Biomedicine"],
-            ["Biomedicine", "biomedicine"],
-        ]
-
-        for keywords in invalid_values:
-            with self.subTest(keywords=keywords), self.assertRaisesRegex(ValueError, "keywords"):
-                SearchConditionAgent._validate_display_keywords(keywords)
-
-    def test_concept_blocks_are_the_single_authority_for_labels_and_query(self):
-        blocks = SearchConditionAgent._validate_concept_blocks([
-            {"label": "Telemedicine", "role": "intervention_or_exposure", "eligibility_group": "intervention", "required_for_eligibility": True, "query_terms": ["telemedicine", "telehealth"]},
-            {"label": "Medication adherence", "role": "outcome", "eligibility_group": "outcome", "required_for_eligibility": True, "query_terms": ["medication adherence"]},
-            {"label": "Implementation context", "role": "analytical_dimension", "eligibility_group": "analysis", "required_for_eligibility": False, "query_terms": []},
-        ])
-
-        self.assertEqual([block["label"] for block in blocks], ["Telemedicine", "Medication adherence", "Implementation context"])
-        self.assertEqual(SearchConditionAgent._build_boolean_query(blocks), '(telemedicine OR telehealth) AND ("medication adherence")')
-
-    def test_atomic_alternative_contexts_are_separate_labels_in_one_or_group(self):
-        blocks = SearchConditionAgent._validate_concept_blocks([
-            {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "large language models", "LLM", "LLMs"]},
-            {"label": "Biomedical research", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["biomedical research"]},
-            {"label": "Clinical care", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["clinical care"]},
-        ])
-
-        self.assertEqual([block["label"] for block in blocks], ["Large language models (LLMs)", "Biomedical research", "Clinical care"])
-        self.assertEqual(
-            SearchConditionAgent._build_boolean_query(blocks),
-            '("large language model" OR "large language models" OR LLM OR LLMs) AND ("biomedical research" OR "clinical care")',
-        )
-
-    def test_concept_block_validation_rejects_nonportable_or_incoherent_shapes(self):
-        invalid_blocks = [
-            [{"label": "Topic", "role": "unknown", "eligibility_group": "topic", "required_for_eligibility": True, "query_terms": ["topic"]}],
-            [{"label": "Topic", "role": "phenomenon", "eligibility_group": "topic", "required_for_eligibility": "yes", "query_terms": ["topic"]}],
-            [{"label": "Topic", "role": "phenomenon", "eligibility_group": "topic", "required_for_eligibility": True, "query_terms": ["topic*"]}],
-            [{"label": "Topic", "role": "phenomenon", "eligibility_group": "topic", "required_for_eligibility": False, "query_terms": []}],
-            [{"label": "Topic", "role": "phenomenon", "required_for_eligibility": True, "query_terms": ["topic"]}],
-            [{"label": "Topic", "role": "phenomenon", "eligibility_group": "Topic group", "required_for_eligibility": True, "query_terms": ["topic"]}],
-            [
-                {"label": "Technology", "role": "phenomenon", "eligibility_group": "scope", "required_for_eligibility": True, "query_terms": ["technology"]},
-                {"label": "Care", "role": "context", "eligibility_group": "scope", "required_for_eligibility": True, "query_terms": ["care"]},
-            ],
-        ]
-
-        for blocks in invalid_blocks:
-            with self.subTest(blocks=blocks), self.assertRaisesRegex(ValueError, "concept|eligibility|query_terms"):
-                SearchConditionAgent._validate_concept_blocks(blocks)
-
-    def test_search_setup_prompt_defines_keywords_as_scope_labels(self):
+    def test_derive_prompt_carries_data_and_contract_while_method_rules_live_in_the_skill(self):
         agent = SearchConditionAgent()
-
-        prompt = agent._llm_search_setup_prompt({}, "Review LLM use in clinical care")
-        system_prompt = agent._llm_search_setup_system_prompt()
+        prompt = agent._derive_prompt({}, "Review LLM use in clinical care", interpret_settings=False)
 
         self.assertIn('"concept_blocks"', prompt)
-        self.assertIn("Return 1 to 8 concept blocks", prompt)
-        self.assertIn("no more than 8 query terms", prompt)
         self.assertIn('"eligibility_group"', prompt)
-        self.assertIn("one atomic user-facing concept", prompt)
-        self.assertIn("Use only the keys shown in the schema", prompt)
+        self.assertIn("Return 1 to 12 concept blocks", prompt)
+        self.assertNotIn('"search_settings"', prompt)
         self.assertNotIn('"search_terms"', prompt)
-        self.assertNotIn('"keywords"', prompt)
-        self.assertNotIn('"platforms"', prompt)
-        self.assertIn("scope-faithful concept strategies", system_prompt)
-        self.assertIn("eligibility requirements from analytical dimensions", system_prompt)
-        for history_specific_text in ("LLM-only", "Generative AI", "Foundation models", "Changing interaction", "Support and use"):
-            self.assertNotIn(history_specific_text, system_prompt)
-        self.assertNotIn("Do not", system_prompt)
-        self.assertNotIn("do not", prompt)
+        self.assertNotIn("atomic", prompt)
+        self.assertNotIn("exact synonyms", prompt)
+        self.assertNotIn("do not", prompt.lower())
+        refine = agent._refine_prompt({"description": "Q"}, [], "Add X", [])
+        for text in (prompt, refine):
+            self.assertNotIn("never", text.lower())
+            self.assertNotIn("Database names", text)  # the settings rule lives in the skill
+            self.assertIn("a concept that is not required has 0 to 12", text)
+            self.assertNotIn("population_or_context", text)
+        self.assertIn("search-strategy skill", agent.system_prompt())
+        skill = (Path(__file__).resolve().parents[1] / ".agents/skills/systematic-review-search-strategy/SKILL.md").read_text()
+        for rule in ("one atomic concept", "exact synonyms", "Revise an existing strategy", "shared coverage",
+                     "Database names", "Publication language", "unambiguous", "broader umbrella"):
+            self.assertIn(rule, skill)
+        self.assertNotIn("Controlled-vocabulary", skill)
+        self.assertNotIn("languages, and document types", skill)
+
+    def test_provided_concept_blocks_are_saved_without_an_llm_call(self):
+        blocks = [
+            {"label": "Telemedicine", "role": "intervention_or_exposure", "eligibility_group": "intervention", "required_for_eligibility": True, "query_terms": ["telemedicine", "telehealth"]},
+            {"label": "Alzheimer's disease", "role": "condition", "eligibility_group": "condition", "required_for_eligibility": True, "query_terms": ["Alzheimer's disease"]},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = SearchConditionAgent(output_dir=tmp, llm_query=lambda **_kwargs: self.fail("no LLM call expected"))
+            result = agent.run({"project_name": "Telemedicine", "project_path": str(Path(tmp) / "t"), "description": "Telemedicine for Alzheimer's",
+                                "concept_blocks": blocks, "platforms": ["pubmed"], "source_limits": {"pubmed": 25}})
+        self.assertEqual(result["search_terms"], '(telemedicine OR telehealth) AND ("Alzheimer\'s disease")')
+        self.assertEqual(result["keywords"], ["Telemedicine", "Alzheimer's disease"])
+        self.assertEqual(result["primary_topic"], "Telemedicine")
+        self.assertEqual(result["domain"], "Alzheimer's disease")
+        self.assertEqual(result["source_limits"], {"pubmed": 25})
+        self.assertEqual(result["generated_by"], "user")
+
+    def test_legacy_query_becomes_concept_blocks_and_unsupported_shapes_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = SearchConditionAgent(output_dir=tmp)
+            base = {"project_name": "Legacy", "project_path": str(Path(tmp) / "legacy"), "description": "Legacy review", "platforms": ["pubmed"]}
+            result = agent.run({**base, "search_terms": '(LLM OR "large language model") AND (radiology)'})
+            self.assertEqual([block["query_terms"] for block in result["concept_blocks"]], [["LLM", "large language model"], ["radiology"]])
+            with self.assertRaisesRegex(ValueError, "AND together groups"):
+                agent.run({**base, "search_terms": "(LLM OR GPT) AND NOT radiology"})
+            with self.assertRaisesRegex(ValueError, "Unsupported search source"):
+                agent.run({**base, "search_terms": "LLM", "platforms": ["scopus"]})
+
+    def test_refine_returns_a_complete_setup_without_writing(self):
+        current = {"project_name": "Chatbots", "description": "LLM chatbots for mental health", "platforms": ["pubmed", "arxiv"],
+                   "source_limits": {"pubmed": 10, "arxiv": 10}, "date_range": {"start": "", "end": "2026-10-07"},
+                   "concept_blocks": [
+                       {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
+                       {"label": "Mental health", "role": "context", "eligibility_group": "context", "required_for_eligibility": True, "query_terms": ["mental health"]}]}
+        added = current["concept_blocks"] + [{"label": "Chatbots", "role": "intervention_or_exposure", "eligibility_group": "system", "required_for_eligibility": True, "query_terms": ["chatbot", "conversational agent"]}]
+        cases = (
+            ({"reply": "Added Chatbots as a required concept.", "concept_blocks": added, "search_settings": {"max_results": 25}}, True),
+            ({"reply": "The setup covers LLMs and mental health.", "concept_blocks": None, "search_settings": {}}, False),
+        )
+        for reply, changed in cases:
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as tmp:
+                prompts = []
+                agent = SearchConditionAgent(output_dir=tmp, llm_query=lambda *, text_prompt, **_kwargs: (prompts.append(text_prompt), (json.dumps(reply), {}))[1])
+                result = agent.refine({"current": {**current, "project_path": tmp}, "message": "Require chatbots and use 25 results per source"})
+                self.assertEqual(result["changed"], changed)
+                self.assertFalse((Path(tmp) / "search_conditions.json").exists())
+                self.assertIn('"Mental health"', prompts[0])
+                if changed:
+                    self.assertEqual([block["label"] for block in result["config"]["concept_blocks"]], ["Large language models (LLMs)", "Mental health", "Chatbots"])
+                    self.assertEqual(result["config"]["source_limits"], {"pubmed": 25, "arxiv": 25})
+                    self.assertEqual(result["config"]["date_range"]["end"], "2026-10-07")
+
+    def test_malformed_llm_setup_gets_one_corrective_retry(self):
+        valid = json.dumps({
+            "reply": "Setup ready.",
+            "title": "Test review",
+            "research_description": "Review LLM systems in biomedicine",
+            "concept_blocks": [
+                {"label": "Large language models (LLMs)", "role": "phenomenon", "eligibility_group": "technology", "required_for_eligibility": True, "query_terms": ["large language model", "LLM"]},
+            ],
+        })
+        for replies, recovers in ((["not json", valid], True), (["not json", "still not json"], False)):
+            with self.subTest(recovers=recovers), tempfile.TemporaryDirectory() as tmp:
+                output_root = Path(tmp)
+                prompts = []
+
+                def fake_llm_query(*, text_prompt, **_kwargs):
+                    prompts.append(text_prompt)
+                    return replies[len(prompts) - 1], {}
+
+                agent = SearchConditionAgent(output_dir=str(output_root), llm_query=fake_llm_query)
+                config = {"project_name": "Retry Review", "project_path": str(output_root / "retry-review"), "description": "Review LLM systems in biomedicine", "search_terms": "Review LLM systems in biomedicine", "platforms": ["pubmed"], "derive_search_terms": True, "model": "gpt-5.4-mini"}
+                if recovers:
+                    self.assertEqual(agent.run(config)["lead_agent_reply"], "Setup ready.")
+                else:
+                    with self.assertRaisesRegex(ValueError, "valid JSON"):
+                        agent.run(config)
+                self.assertEqual(len(prompts), 2)
+                self.assertIn("previous response was rejected", prompts[1])
 
     def test_derive_search_terms_fails_loudly_when_llm_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -106,7 +106,8 @@ class FrontendContractTests(unittest.TestCase):
 
         self.assertNotIn('id="rp-search-setup-form" style="border:1px solid #e5e7eb', source)
         self.assertIn('id="rp-setup-dialog-form"', source)
-        self.assertIn('data-act="add-keyword"', source)
+        self.assertIn('data-act="add-concept"', source)
+        self.assertIn('id="rp-concept-dialog-form"', source)
 
     def test_new_review_opens_search_setup_canvas_without_auto_dialog(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -211,7 +212,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("Project details", source)
         self.assertNotIn("function setupCanvasControls", source)
         self.assertIn(">Research question</div>", source)
-        self.assertIn(">Keywords</div>", source)
+        self.assertIn(">Search concepts</div>", source)
         self.assertIn(">Sources</div>", source)
 
     def test_chat_input_submits_with_enter_like_assistant_clients(self):
@@ -338,7 +339,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("state.activeProjectId = D.project.id || (shouldRestoreSnapshotData ? ui.activeProjectId : '') || '';", restore)
         self.assertIn("snapshot.data?.setupRevision === D.setupRevision", restore)
         self.assertIn("if (!D.searchReuseDraft && (shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft)", restore)
-        self.assertIn("mergedDraft.keywords = queryClauses(mergedDraft.search_terms);", restore)
+        self.assertIn("mergedDraft.concept_blocks = Array.isArray(mergedDraft.concept_blocks) ? mergedDraft.concept_blocks : baseDraft.concept_blocks;", restore)
 
     def test_refresh_migrates_stale_four_step_snapshot_to_current_five_step_workflow(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -407,24 +408,21 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn("padding: 24px", html_source)
         self.assertIn("#app { width: 100vw; height: 100vh; }", html_source)
 
-    def test_search_setup_keywords_are_card_grid_controls(self):
+    def test_search_setup_concepts_are_grouped_editable_chips(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        editor = source[source.index("function conceptEditor(v)") : source.index("function starterTopicButtons")]
 
-        self.assertIn('data-ui="keyword-card-grid"', source)
-        self.assertIn('<div data-ui="keyword-card"', source)
-        self.assertNotIn('<span data-ui="keyword-card"', source)
-        self.assertNotIn('data-ui="keyword-card-plus"', source)
-        self.assertIn('data-ui="keyword-card-remove"', source)
-        self.assertIn('data-act="remove-keyword"', source)
-        self.assertIn("ph ph-x", source)
-        self.assertIn('data-ui="keyword-add-card"', source)
-        self.assertIn("gap:7px", source)
-        self.assertIn("border:1px dashed #cfe0f5", source)
-        self.assertIn("border:1px solid #cfe0f5", source)
-        self.assertIn("background:#eaf0f7", source)
-        self.assertIn("font-size:11.5px", source)
-        self.assertIn("Add keyword", source)
-        self.assertNotIn('<i class="ph ph-pencil-simple" style="font-size:13px;"></i>Edit', source)
+        self.assertIn('data-ui="concept-group"', editor)
+        self.assertIn('data-ui="concept-chip"', editor)
+        for act in ("add-concept", "edit-concept", "remove-concept", "save-setup", "open-setup"):
+            self.assertIn(f'data-act="{act}"', editor)
+        self.assertIn("joiner('OR')", editor)
+        self.assertIn("joiner('AND')", editor)
+        self.assertIn("buildBooleanQuery(blocks)", editor)
+        self.assertIn('data-ui="search-draft-notice"', editor)
+        self.assertIn("Described, not searched", editor)
+        self.assertNotIn("keyword-card", source)
+        self.assertNotIn("queryClauses", source)
 
     def test_search_setup_sources_are_checkbox_controls_not_counts(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
@@ -464,7 +462,7 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_search_setup_sources_and_date_range_are_side_by_side(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
-        search_canvas = source[source.index("function searchCanvas(v)") : source.index("function keywordGrid")]
+        search_canvas = source[source.index("function searchCanvas(v)") : source.index("function conceptEditor")]
 
         self.assertIn('data-ui="search-setup-controls"', search_canvas)
         # Side by side when the canvas has room; stacked instead of clipped when it does not.
@@ -496,7 +494,8 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("date_start: unescapePayloadValue(state.setupDraft.date_start)", source)
         self.assertIn("date_end: unescapePayloadValue(state.setupDraft.date_end)", source)
         self.assertIn("function unescapePayloadValue(value)", source)
-        self.assertIn("unescapePayloadValue(state.setupDraft.search_terms)", source)
+        self.assertIn("...(derive ? {} : { concept_blocks: state.setupDraft.concept_blocks })", source)
+        self.assertNotIn("state.setupDraft.search_terms", source)
         self.assertLess(
             source.index("if (action === 'collect') await saveDraftSetup(projectId);"),
             source.index("const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`"),
@@ -519,7 +518,7 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("return String(sourceLimits[source] || fallbackMaxResults || DEFAULT_MAX_RESULTS_PER_PLATFORM);", source)
         self.assertIn("function maxResultsFromSourceLimits(sourceLimits, fallbackMaxResults = DEFAULT_MAX_RESULTS_PER_PLATFORM)", source)
         self.assertIn("[source]: state.setupDraft.max_results || DEFAULT_MAX_RESULTS_PER_PLATFORM", source)
-        self.assertIn("dialogInput('Max/source', 'max_results', d.max_results, DEFAULT_MAX_RESULTS_PER_PLATFORM", source)
+        self.assertNotIn("dialogInput('Max/source'", source)  # limits are edited per source on the canvas
         self.assertNotIn("setup.max_results || '50'", source)
         self.assertNotIn("fallbackMaxResults = '50'", source)
 

@@ -1,166 +1,66 @@
-import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agents.collection_agent import CollectionAgent
 from reviewpilot_core.project_store import read_json, read_jsonl
+from searchers.sources import SourceResult
+
+
+def fake_source(records_by_source=None, failures=()):
+    calls = []
+
+    def search(source, query, *, max_results, date_range=None, output_file=None):
+        calls.append({"source": source, "query": query, "max_results": max_results, "date_range": date_range})
+        if source in failures:
+            raise RuntimeError(f"{source} unavailable")
+        records = [dict(row) for row in (records_by_source or {}).get(source, [])]
+        return SourceResult(records, f"<{source}> {query}")
+    return search, calls
 
 
 class CollectionAgentTests(unittest.TestCase):
-    def test_run_defaults_to_frozen_platform_search_order(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-            calls = []
+    def run_agent(self, input_data, **source_kwargs):
+        search, calls = fake_source(**source_kwargs)
+        with tempfile.TemporaryDirectory() as tmp, patch("agents.collection_agent.search_source", side_effect=search):
+            project = Path(tmp) / "demo"
+            result = CollectionAgent(project).run(input_data)
+            summary = read_json(project / "collected" / "summary.json")
+            rows = {source: read_jsonl(project / "collected" / f"{source}.jsonl") for source in summary["platforms"]}
+        return result, summary, rows, calls
 
-            class FakeSearcher:
-                def search(self, **kwargs):
-                    calls.append(kwargs)
-                    return {}
-
-            previous_main = sys.modules.get("main")
-            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
-            try:
-                CollectionAgent(project_dir).run({"search_terms": "AI"})
-            finally:
-                if previous_main is None:
-                    sys.modules.pop("main", None)
-                else:
-                    sys.modules["main"] = previous_main
-
-            summary = read_json(project_dir / "collected" / "summary.json")
-
-        self.assertEqual(calls[0]["platforms"], ["pubmed", "arxiv", "openalex"])
+    def test_defaults_to_the_three_sources_in_order(self):
+        _result, summary, _rows, calls = self.run_agent({"search_terms": "(AI)"})
+        self.assertEqual([call["source"] for call in calls], ["pubmed", "arxiv", "openalex"])
         self.assertEqual(summary["platforms"], ["pubmed", "arxiv", "openalex"])
 
-    def test_run_preserves_explicit_platform_search_order(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-            calls = []
+    def test_writes_records_and_the_exact_query_each_source_executed(self):
+        result, summary, rows, calls = self.run_agent(
+            {"search_terms": "(AI) AND (surgery)", "platforms": ["openalex", "pubmed"],
+             "source_limits": {"openalex": 1, "pubmed": 5}, "date_range": {"start": "2024-01-01", "end": "2025-01-01"}},
+            records_by_source={"openalex": [{"id": "a"}, {"id": "b"}], "pubmed": [{"id": "p"}]})
+        self.assertEqual([call["max_results"] for call in calls], [1, 5])
+        self.assertEqual(calls[0]["date_range"], {"start": "2024-01-01", "end": "2025-01-01"})
+        self.assertEqual(summary["platform_stats"], {"openalex": 1, "pubmed": 1})
+        self.assertEqual(len(rows["openalex"]), 1)
+        self.assertEqual(summary["executed_queries"]["openalex"]["query"], "<openalex> (AI) AND (surgery)")
+        self.assertEqual(summary["executed_queries"]["pubmed"]["records"], 1)
+        self.assertEqual(summary["coverage"]["fields"], "title and abstract")
+        self.assertEqual(result["total_papers"], 2)
 
-            class FakeSearcher:
-                def search(self, **kwargs):
-                    calls.append(kwargs)
-                    return {}
+    def test_a_failed_source_is_recorded_with_zero_rows_and_others_still_run(self):
+        _result, summary, rows, calls = self.run_agent(
+            {"search_terms": "(AI)", "platforms": ["pubmed", "arxiv"]},
+            records_by_source={"pubmed": [{"id": "p"}]}, failures=("arxiv",))
+        self.assertEqual(summary["platform_errors"], {"arxiv": "arxiv unavailable"})
+        self.assertEqual(summary["platform_stats"], {"pubmed": 1, "arxiv": 0})
+        self.assertEqual(rows["arxiv"], [])
+        self.assertEqual(summary["executed_queries"]["arxiv"]["error"], "arxiv unavailable")
 
-            previous_main = sys.modules.get("main")
-            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
-            try:
-                CollectionAgent(project_dir).run(
-                    {"search_terms": "AI", "platforms": ["openalex", "pubmed", "arxiv"]}
-                )
-            finally:
-                if previous_main is None:
-                    sys.modules.pop("main", None)
-                else:
-                    sys.modules["main"] = previous_main
-
-            summary = read_json(project_dir / "collected" / "summary.json")
-
-        self.assertEqual(calls[0]["platforms"], ["openalex", "pubmed", "arxiv"])
-        self.assertEqual(summary["platforms"], ["openalex", "pubmed", "arxiv"])
-
-    def test_run_writes_collected_outputs_with_platform_stats(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-            calls = []
-
-            class FakeSearcher:
-                def search(self, **kwargs):
-                    calls.append(kwargs)
-                    return {"openalex": [{"title": "Paper A", "source": "openalex"}]}
-
-            previous_main = sys.modules.get("main")
-            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
-            try:
-                result = CollectionAgent(project_dir).run(
-                    {
-                        "search_terms": "AI",
-                        "platforms": ["openalex"],
-                        "max_results_per_platform": 1,
-                    }
-                )
-            finally:
-                if previous_main is None:
-                    sys.modules.pop("main", None)
-                else:
-                    sys.modules["main"] = previous_main
-
-            summary = read_json(project_dir / "collected" / "summary.json")
-            rows = read_jsonl(project_dir / "collected" / "openalex.jsonl")
-
-        self.assertEqual(calls[0]["platforms"], ["openalex"])
-        self.assertEqual(result["total_papers"], 1)
-        self.assertEqual(summary["platform_stats"], {"openalex": 1})
-        self.assertEqual(rows[0]["title"], "Paper A")
-
-    def test_run_uses_per_source_limits_when_source_limits_are_supplied(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-            calls = []
-
-            class FakeSearcher:
-                def search(self, **kwargs):
-                    calls.append(kwargs)
-                    platform = kwargs["platforms"][0]
-                    return {platform: [{"title": platform, "source": platform}]}
-
-            previous_main = sys.modules.get("main")
-            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
-            try:
-                result = CollectionAgent(project_dir).run(
-                    {
-                        "search_terms": "AI",
-                        "platforms": ["pubmed", "openalex", "arxiv"],
-                        "max_results_per_platform": 50,
-                        "source_limits": {"pubmed": 10, "openalex": 25, "arxiv": 75},
-                    }
-                )
-            finally:
-                if previous_main is None:
-                    sys.modules.pop("main", None)
-                else:
-                    sys.modules["main"] = previous_main
-
-            summary = read_json(project_dir / "collected" / "summary.json")
-
-        self.assertEqual([(call["platforms"], call["max_results"]) for call in calls], [(["pubmed"], 10), (["openalex"], 25), (["arxiv"], 75)])
-        self.assertEqual(result["platform_stats"], {"pubmed": 1, "openalex": 1, "arxiv": 1})
-        self.assertEqual(summary["total_papers"], 3)
-
-    def test_run_records_platform_errors_in_collection_summary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            project_dir = Path(tmp) / "demo"
-
-            class FakeSearcher:
-                last_errors = {"openalex": "503 Search temporarily unavailable"}
-
-                def search(self, **_kwargs):
-                    return {"openalex": []}
-
-            previous_main = sys.modules.get("main")
-            sys.modules["main"] = types.SimpleNamespace(AcademicSearcher=lambda: FakeSearcher())
-            try:
-                result = CollectionAgent(project_dir).run(
-                    {
-                        "search_terms": "LLM AND medicine",
-                        "platforms": ["openalex"],
-                        "max_results_per_platform": 10,
-                    }
-                )
-            finally:
-                if previous_main is None:
-                    sys.modules.pop("main", None)
-                else:
-                    sys.modules["main"] = previous_main
-
-            summary = read_json(project_dir / "collected" / "summary.json")
-
-        self.assertEqual(result["platform_stats"], {"openalex": 0})
-        self.assertEqual(result["platform_errors"], {"openalex": "503 Search temporarily unavailable"})
-        self.assertEqual(summary["platform_errors"], {"openalex": "503 Search temporarily unavailable"})
+    def test_requires_a_saved_query(self):
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(ValueError, "saved search query"):
+            CollectionAgent(Path(tmp) / "demo").run({"search_terms": "  "})
 
 
 if __name__ == "__main__":

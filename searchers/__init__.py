@@ -1,21 +1,7 @@
-"""
-Platform-specific academic paper searchers.
-"""
+"""Scholarly sources searched by ReviewPilot: PubMed, arXiv, and OpenAlex."""
 
-from searchers.pubmed import PubMedSearcher
-from searchers.openalex import OpenAlexSearcher
 from searchers.arxiv_search import ArxivSearcher
-from searchers.scopus import ScopusSearcher
-from searchers.wos import WoSSearcher
-from searchers.google_scholar import GoogleScholarSearcher
-from searchers.dblp import DBLPSearcher
+from searchers.openalex import OpenAlexSearcher
+from searchers.pubmed import PubMedSearcher
 
-__all__ = [
-    'PubMedSearcher',
-    'OpenAlexSearcher',
-    'ArxivSearcher',
-    'ScopusSearcher',
-    'WoSSearcher',
-    'GoogleScholarSearcher',
-    'DBLPSearcher'
-]
+__all__ = ["PubMedSearcher", "ArxivSearcher", "OpenAlexSearcher"]

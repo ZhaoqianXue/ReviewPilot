@@ -46,14 +46,14 @@ class OrdinaryChatPersistenceTests(unittest.TestCase):
     def test_chat_settings_override_defaults_only_on_initial_chat_path(self):
         defaults = {'project_name': 'Default', 'platforms': ['pubmed', 'arxiv', 'openalex'], 'max_results': 10, 'source_limits': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_range': {'start': '', 'end': '2026-09-12'}}
         settings = {'project_name': 'Urban live review', 'platforms': ['arxiv'], 'max_results': 5, 'date_start': '2023-01-01'}
-        result = SearchConditionAgent._apply_chat_settings(defaults, settings)
+        result = SearchConditionAgent.apply_chat_settings(defaults, settings)
         self.assertEqual(result['platforms'], ['arxiv'])
         self.assertEqual(result['source_limits'], {'arxiv': 5})
         self.assertEqual(result['date_range'], {'start': '2023-01-01', 'end': '2026-09-12'})
         self.assertEqual(defaults['source_limits']['arxiv'], 10)
         for invalid in [{'max_results': True}, {'max_results': 0}, {'max_results': {'pubmed': 0}}, {'platforms': ['invented']}, {'date_start': '2026-02-30'}, {'extra': 1}]:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
-                SearchConditionAgent._apply_chat_settings(defaults, invalid)
+                SearchConditionAgent.apply_chat_settings(defaults, invalid)
 
     def test_chat_settings_accept_defaults_echoed_in_config_shape(self):
         defaults = {'project_name': 'Default', 'platforms': ['pubmed', 'arxiv', 'openalex'], 'max_results': 10, 'source_limits': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_range': {'start': '', 'end': '2026-10-07'}}
@@ -63,10 +63,10 @@ class OrdinaryChatPersistenceTests(unittest.TestCase):
         ]
         for settings in echoes:
             with self.subTest(settings=settings):
-                result = SearchConditionAgent._apply_chat_settings(defaults, settings)
+                result = SearchConditionAgent.apply_chat_settings(defaults, settings)
                 self.assertEqual(result['source_limits'], {'pubmed': 10, 'arxiv': 10, 'openalex': 10})
                 self.assertEqual(result['date_range']['end'], '2026-10-07')
-        result = SearchConditionAgent._apply_chat_settings(defaults, {'platforms': ['pubmed', 'arxiv'], 'max_results': {'pubmed': 25}})
+        result = SearchConditionAgent.apply_chat_settings(defaults, {'platforms': ['pubmed', 'arxiv'], 'max_results': {'pubmed': 25}})
         self.assertEqual(result['source_limits'], {'pubmed': 25, 'arxiv': 10})
 
     def test_failed_project_creation_returns_json_detail_and_leaves_no_directory(self):

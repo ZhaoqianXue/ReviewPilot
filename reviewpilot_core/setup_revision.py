@@ -23,7 +23,7 @@ def _recovery_lock(project: Path) -> RLock:
     with _ACTIVE_LOCK:
         return _RECOVERY_LOCKS.setdefault(key, RLock())
 
-_FIELDS = ("project_name", "description", "primary_topic", "domain", "search_terms", "search_queries", "platforms", "max_results", "source_limits", "date_range", "model", "derive_search_terms")
+_FIELDS = ("project_name", "description", "primary_topic", "domain", "concept_blocks", "search_terms", "search_queries", "platforms", "max_results", "source_limits", "date_range", "model", "derive_search_terms")
 _DEPENDENCY_FIELDS = set(_FIELDS) - {"project_name"}
 
 

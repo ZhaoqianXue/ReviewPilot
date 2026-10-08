@@ -294,7 +294,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     actionError: '',
     activeProjectId: D.project.id || '',
     setupDraft: setupDraftFromData(D),
-    keywordDraft: '',
+    conceptEdit: null,
+    conceptError: '',
     chatInputFocus: false,
     chatPending: false,
     quickStartOpen: false,
@@ -410,7 +411,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const baseDraft = setupDraftFromData(D);
     if (!D.searchReuseDraft && (shouldRestoreSnapshotData || sameSetupRevision) && ui.setupDraft) {
       const mergedDraft = { ...baseDraft, ...ui.setupDraft };
-      mergedDraft.keywords = queryClauses(mergedDraft.search_terms);
+      mergedDraft.concept_blocks = Array.isArray(mergedDraft.concept_blocks) ? mergedDraft.concept_blocks : baseDraft.concept_blocks;
       mergedDraft.source_limits = normalizeSourceLimits(
         mergedDraft.source_limits || baseDraft.source_limits,
         mergedDraft.platforms || baseDraft.platforms,
@@ -420,7 +421,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     } else {
       state.setupDraft = baseDraft;
     }
-    state.keywordDraft = '';
+    state.conceptEdit = null;
+    state.conceptError = '';
     // Server-confirmed configuration wins over an old browser confirmation flag.
     state.catDraft = categorizationDraftFromData(D);
     state.chatInputFocus = false;
@@ -509,6 +511,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       optionalCapabilities: data.optionalCapabilities || [],
       platforms: data.platforms || [],
       platformIssues: data.platformIssues || [],
+      executedQueries: data.executedQueries || {},
       keywords: data.keywords || [],
       groups: data.groups || [],
       retrieved: data.retrieved || [],
@@ -589,35 +592,94 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   // Keep OR groups, nested expressions and quoted phrases intact. Chips are
   // executable top-level conjuncts, never descriptive labels detached from a query.
-  function queryClauses(query) {
-    const text = unescapePayloadValue(query || '').trim();
-    const parts = []; let depth = 0, quote = '', start = 0;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (quote) { if (ch === quote && text[i-1] !== '\\') quote = ''; continue; }
-      if (ch === "'" && i > 0 && /[\p{L}\p{N}]/u.test(text[i-1])) continue;
-      if (ch === '"' || ch === "'") { quote = ch; continue; }
-      if (ch === '(') depth++;
-      if (ch === ')') depth--;
-      if (depth === 0 && /^\s+OR\s+/i.test(text.slice(i))) return [esc(text)];
-      if (depth === 0 && /^\s+AND\s+/i.test(text.slice(i))) {
-        const match = text.slice(i).match(/^\s+AND\s+/i)[0];
-        parts.push(text.slice(start,i).trim()); i += match.length-1; start = i+1;
-      }
+  // Concept blocks are the search strategy; these rules mirror reviewpilot_core/search_concepts.py.
+  const CONCEPT_ROLES = [
+    ['phenomenon', 'Topic'], ['intervention_or_exposure', 'Intervention or exposure'], ['population', 'Population'],
+    ['condition', 'Condition'], ['context', 'Setting or context'], ['outcome', 'Outcome'], ['study_design', 'Study design'], ['other', 'Other'],
+  ];
+
+  function rawConceptBlocks(blocks) {
+    return (Array.isArray(blocks) ? blocks : []).map((block) => ({
+      label: unescapePayloadValue(block.label),
+      role: unescapePayloadValue(block.role),
+      eligibility_group: unescapePayloadValue(block.eligibility_group),
+      required_for_eligibility: block.required_for_eligibility !== false,
+      query_terms: (block.query_terms || []).map(unescapePayloadValue),
+    }));
+  }
+
+  function formatQueryTerm(term) {
+    return /^[\p{L}\p{N}_.+:/-]+$/u.test(term) ? term : `"${term}"`;
+  }
+
+  function buildBooleanQuery(blocks) {
+    const groups = new Map();
+    blocks.filter((block) => block.required_for_eligibility).forEach((block) => {
+      const terms = groups.get(block.eligibility_group) || [];
+      block.query_terms.map(formatQueryTerm).forEach((term) => { if (!terms.includes(term)) terms.push(term); });
+      groups.set(block.eligibility_group, terms);
+    });
+    return [...groups.values()].map((terms) => `(${terms.join(' OR ')})`).join(' AND ');
+  }
+
+  function requiredConceptGroups(blocks) {
+    const groups = [];
+    blocks.forEach((block, index) => {
+      if (!block.required_for_eligibility) return;
+      let group = groups.find((item) => item.group === block.eligibility_group);
+      if (!group) { group = { group: block.eligibility_group, role: block.role, items: [] }; groups.push(group); }
+      group.items.push({ block, index });
+    });
+    return groups;
+  }
+
+  function conceptDraftError(label, terms, index) {
+    if (!label) return 'Give the concept a name.';
+    if (!terms.length) return 'Add at least one search term, one per line.';
+    if (terms.some((term) => /["*]|\[[^\]]*\]|\b(AND|OR|NOT)\b/.test(term) || /(^|[^\p{L}\p{N}])'|'($|[^\p{L}\p{N}])/u.test(term))) {
+      return 'Write search terms as plain words or phrases, without quotes, wildcards, field tags, or AND/OR/NOT.';
     }
-    parts.push(text.slice(start).trim());
-    return parts.filter(Boolean).map(esc);
+    if (new Set(terms.map((term) => term.toLowerCase())).size !== terms.length) return 'Each search term should appear once.';
+    if (state.setupDraft.concept_blocks.some((block, i) => i !== index && block.label.toLowerCase() === label.toLowerCase())) return 'Another concept already has this name.';
+    return '';
   }
 
-  function editQueryClauses(clauses) {
-    if (!clauses.length) { state.actionError = 'Keep at least one query group, or replace the query in search setup.'; return; }
-    state.setupDraft.keywords = clauses;
-    state.setupDraft.search_terms = clauses.map(c => `(${unescapePayloadValue(c)})`).join(' AND ');
+  function saveConceptFromForm(form) {
+    const data = new FormData(form);
+    const edit = state.conceptEdit || {};
+    const label = String(data.get('label') || '').trim();
+    const terms = [...new Set(String(data.get('terms') || '').split(/\n|;/).map((term) => term.trim().replace(/\s+/g, ' ')).filter(Boolean))];
+    const index = Number.isInteger(edit.index) ? edit.index : -1;
+    const error = conceptDraftError(label, terms, index);
+    if (error) { state.conceptError = error; return false; }
+    const blocks = state.setupDraft.concept_blocks.slice();
+    if (index >= 0) {
+      blocks[index] = { ...blocks[index], label, query_terms: terms };
+    } else if (edit.group) {
+      const sibling = blocks.find((block) => block.eligibility_group === edit.group);
+      blocks.push({ label, role: sibling.role, eligibility_group: edit.group, required_for_eligibility: true, query_terms: terms });
+    } else {
+      const base = (label.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'concept').replace(/^([^a-z])/, 'c_$1');
+      let group = base; let n = 2;
+      while (blocks.some((block) => block.eligibility_group === group)) group = `${base}_${n++}`;
+      const role = CONCEPT_ROLES.some(([key]) => key === data.get('role')) ? String(data.get('role')) : 'other';
+      blocks.push({ label, role, eligibility_group: group, required_for_eligibility: true, query_terms: terms });
+    }
+    state.setupDraft.concept_blocks = blocks;
     state.setupDraft.derive_search_terms = false;
+    state.conceptEdit = null;
+    state.conceptError = '';
+    return true;
   }
 
-  function removeQueryClause(keyword) {
-    editQueryClauses(state.setupDraft.keywords.filter(kw => unescapePayloadValue(kw) !== keyword));
+  function removeConcept(index) {
+    const blocks = state.setupDraft.concept_blocks.filter((_block, i) => i !== index);
+    if (!blocks.some((block) => block.required_for_eligibility)) {
+      state.actionError = 'Keep at least one required concept, or regenerate concepts from the research question.';
+      return;
+    }
+    state.setupDraft.concept_blocks = blocks;
+    state.setupDraft.derive_search_terms = false;
   }
 
   function setupDraftFromData(data) {
@@ -632,9 +694,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return {
       project_name: setup.project_name || (data.isNewProject ? '' : (data.project.title || '')),
       description: setup.description || data.researchQuestion || '',
-      primary_topic: setup.primary_topic || '',
-      domain: setup.domain || '',
-      search_terms: setup.search_terms || data.keywords[0] || '',
       platforms: selectedPlatforms,
       max_results: fallbackMaxResults,
       source_limits: normalizeSourceLimits(setup.source_limits || {}, selectedPlatforms, fallbackMaxResults),
@@ -642,7 +701,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       date_end: setup.date_end || '',
       model: material.model || data.project.model || '',
       derive_search_terms: material.derive_search_terms,
-      keywords: queryClauses(setup.search_terms || data.keywords[0] || ''),
+      concept_blocks: rawConceptBlocks(setup.concept_blocks),
     };
   }
 
@@ -675,20 +734,18 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function setupPayloadFromDraft(overrides = {}) {
     const sourceLimits = selectedSourceLimits();
-    const keywordText = state.setupDraft.keywords.map(unescapePayloadValue).join(' AND ');
+    const derive = !!state.setupDraft.derive_search_terms || !state.setupDraft.concept_blocks.length;
     return {
       project_name: unescapePayloadValue(state.setupDraft.project_name || D.project.title || 'Untitled review'),
-      description: unescapePayloadValue(state.setupDraft.description || D.researchQuestion || state.setupDraft.search_terms || keywordText || 'Review project'),
-      primary_topic: unescapePayloadValue(state.setupDraft.primary_topic || ''),
-      domain: unescapePayloadValue(state.setupDraft.domain || ''),
-      search_terms: unescapePayloadValue(state.setupDraft.search_terms) || keywordText,
+      description: unescapePayloadValue(state.setupDraft.description || D.researchQuestion || 'Review project'),
+      ...(derive ? {} : { concept_blocks: state.setupDraft.concept_blocks }),
       platforms: state.setupDraft.platforms.join(', '),
       source_limits: sourceLimits,
       max_results: maxResultsFromSourceLimits(sourceLimits, state.setupDraft.max_results),
       date_start: unescapePayloadValue(state.setupDraft.date_start),
       date_end: unescapePayloadValue(state.setupDraft.date_end),
       model: unescapePayloadValue(state.setupDraft.model),
-      derive_search_terms: !!state.setupDraft.derive_search_terms,
+      derive_search_terms: derive,
       ...overrides,
     };
   }
@@ -698,7 +755,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function platformLabel(key) {
-    const labels = { pubmed: 'PubMed', openalex: 'Openalex', arxiv: 'arXiv', ieee: 'IEEE', acm: 'ACM DL', semantic: 'Semantic Scholar' };
+    const labels = { pubmed: 'PubMed', openalex: 'OpenAlex', arxiv: 'arXiv', ieee: 'IEEE', acm: 'ACM DL', semantic: 'Semantic Scholar' };
     return labels[key] || key.replace(/[_-]/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
@@ -1255,6 +1312,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       v: p[1],
       pct: Math.round(((Number(p[1]) || 0) / MAX) * 100),
       issue: platformIssueByLabel.get(String(p[0]).toLowerCase()) || null,
+      query: (D.executedQueries || {})[platformKey(p[0])]?.query || '',
     }));
     const draftSources = ['pubmed', 'arxiv', 'openalex'].map((key) => ({
       key,
@@ -1331,7 +1389,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       platforms,
       platformIssues: D.platformIssues,
       draftSources,
-      keywords: step === 'search' ? state.setupDraft.keywords : D.keywords,
+      keywords: D.keywords,
+      searchReuseDraft: D.searchReuseDraft,
+      savedConceptBlocks: rawConceptBlocks(D.setup?.concept_blocks),
       groups: D.groups,
       retrieved: D.retrieved,
       extractionPreview: D.extractionPreview,
@@ -1384,7 +1444,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       exportPackage: D.exportPackage,
       setupDraft: state.setupDraft,
       showSetupDialog: state.dialog === 'setup',
-      showKeywordDialog: state.dialog === 'keyword',
+      showConceptDialog: state.dialog === 'concept',
+      conceptEdit: state.conceptEdit,
+      conceptError: state.conceptError,
       showMemoryDialog: state.dialog === 'memory',
       reuseOptions: state.reuseOptions,
       reusePreview: state.reusePreview,
@@ -1474,6 +1536,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     const issue = p.issue;
     return `<div style="padding:5px 0;">
       <div style="display:flex;align-items:center;gap:12px;"><span style="width:130px;flex:0 0 130px;font-size:12.5px;color:#1a1a1a;">${p.k}</span><span style="flex:1;height:5px;background:#eef0ee;border-radius:999px;overflow:hidden;"><span style="display:block;height:100%;width:${p.pct}%;background:${issue ? '#b45309' : '#1a365d'};"></span></span><span style="width:32px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6b746c;">${p.v}</span></div>
+      ${p.query ? `<details data-ui="executed-query" style="margin:5px 0 0 130px;font-size:11px;color:#68798c;"><summary style="cursor:pointer;">Query sent</summary><code style="display:block;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#3a4252;overflow-wrap:anywhere;white-space:pre-wrap;">${p.query}</code></details>` : ''}
       ${issue ? `<div data-ui="source-warning" style="margin:7px 0 0 130px;border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:7px 9px;font-size:11.5px;line-height:1.35;"><strong>Platform issue</strong>: ${issue.message}</div>` : ''}
     </div>`;
   };
@@ -1503,7 +1566,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
           </button>
           <label style="margin-left:auto;display:flex;align-items:center;gap:8px;justify-content:flex-end;color:${source.selected ? '#6b746c' : '#b4bbb2'};font-size:11px;letter-spacing:-0.01em;">
             <span style="white-space:nowrap;">Max results/platform</span>
-            <input data-source-limit="${source.key}" type="number" min="0" inputmode="numeric" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${source.selected ? '#c8d8e8' : '#e0e4df'};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
+            <input data-source-limit="${source.key}" type="number" min="1" inputmode="numeric" value="${value}" ${source.selected ? '' : 'disabled'} style="width:58px;border:1px solid ${source.selected ? '#c8d8e8' : '#e0e4df'};border-radius:8px;background:${source.selected ? '#fffefc' : '#f7f8f6'};color:${source.selected ? '#1a365d' : '#aab1a9'};font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;padding:5px 7px;box-sizing:border-box;">
           </label>
         </div>`;
       }).join('')}
@@ -1520,7 +1583,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
         </div>
         <div data-ui="date-range-inputs" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
           <label data-ui="date-range-field" style="display:block;min-height:58px;box-sizing:border-box;border:1px solid #eef0ee;border-radius:10px;background:#fbfcfa;padding:9px 10px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">From
-            <input data-draft-field="date_start" value="${start}" placeholder="2020-01-01" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
+            <input data-draft-field="date_start" value="${start}" placeholder="Earliest available" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
           </label>
           <label data-ui="date-range-field" style="display:block;min-height:58px;box-sizing:border-box;border:1px solid #eef0ee;border-radius:10px;background:#fbfcfa;padding:9px 10px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">To
             <input data-draft-field="date_end" value="${end}" placeholder="blank=now" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;background:transparent;padding:0;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:0;color:#1a1a1a;outline:none;">
@@ -1559,7 +1622,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function render(v) {
     return `
 ${v.showSetupDialog ? setupDialog(v) : ''}
-${v.showKeywordDialog ? keywordDialog(v) : ''}
+${v.showConceptDialog ? conceptDialog(v) : ''}
 ${v.showMemoryDialog ? memoryDialog(v) : ''}
 ${state.dialog === 'help' ? helpDialog() : ''}
 ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
@@ -1719,13 +1782,7 @@ ${reviewUI.dialog()}
         <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:7px;">Research question</div>
         <div style="font-size:15px;color:#1a1a1a;line-height:1.45;letter-spacing:-0.01em;">${v.researchQuestion || 'Review project'}</div>
       </div>
-      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
-        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:11px;">Keywords</div>
-        ${keywordGrid(v.keywords, true)}
-        <p style="font-size:11px;color:#68798c;">Each chip is a required query group. Alternatives inside a group stay together. Added keywords are exact phrases.</p>
-        <div data-ui="effective-query" style="font:12px monospace;overflow-wrap:anywhere;">${esc(unescapePayloadValue(v.setupDraft.search_terms))}</div>
-        <button data-act="open-setup" style="${buttonStyle};margin-top:10px;">Review and save search setup</button>
-      </div>
+      ${conceptEditor(v)}
       <div data-ui="search-setup-controls" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;align-items:stretch;">
         <div data-ui="sources-card" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;height:100%;box-sizing:border-box;">
           <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:12px;">Sources</div>
@@ -1735,21 +1792,45 @@ ${reviewUI.dialog()}
       </div>`;
   }
 
-  function keywordGrid(keywords, editable) {
-    const items = keywords.map((kw) => keywordCard(kw, editable)).join('');
-    const add = editable ? `<button data-ui="keyword-add-card" data-act="add-keyword" title="Add keyword" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.2;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;"><i class="ph ph-plus" style="font-size:11px;"></i><span>Add keyword</span></button>` : '';
-    if (!items && !editable) return emptyHint('No keywords yet');
-    return `<div data-ui="keyword-card-grid" style="display:flex;flex-wrap:wrap;gap:7px;align-items:flex-start;">${items}${add}</div>`;
+  function conceptEditor(v) {
+    const blocks = v.setupDraft.concept_blocks || [];
+    const groups = requiredConceptGroups(blocks);
+    const described = blocks.map((block, index) => ({ block, index })).filter((item) => !item.block.required_for_eligibility);
+    const unsaved = JSON.stringify(blocks) !== JSON.stringify(v.savedConceptBlocks);
+    const label = 'font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;';
+    const joiner = (text) => `<span aria-hidden="true" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9aa39b;">${text}</span>`;
+    const rows = groups.map((group, groupIndex) => `${groupIndex ? `<div style="margin:6px 0 6px 2px;">${joiner('AND')}</div>` : ''}
+      <div data-ui="concept-group" role="group" aria-label="Required concept group ${groupIndex + 1}" style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;">
+        ${group.items.map((item, k) => `${k ? joiner('OR') : ''}${conceptChip(item.block, item.index)}`).join('')}
+        <button type="button" data-act="add-concept" data-group="${esc(group.group)}" title="Add an alternative to this group" style="min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;cursor:pointer;">+ or</button>
+      </div>`).join('');
+    return `<div data-ui="concept-editor" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px;"><div style="${label}">Search concepts</div>${unsaved ? '<span data-ui="concepts-unsaved" style="font-size:11px;color:#b45309;">Unsaved changes</span>' : ''}</div>
+        ${v.searchReuseDraft ? '<div data-ui="search-draft-notice" role="status" style="border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.4;margin-bottom:10px;">Proposed search changes are shown below. Save the search setup to apply them.</div>' : ''}
+        ${rows || '<span style="font-size:12.5px;color:#9aa39b;">No concepts yet. Regenerate them from the research question.</span>'}
+        <button type="button" data-act="add-concept" style="margin-top:10px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add required concept</button>
+        ${described.length ? `<div style="margin-top:12px;"><div style="${label}margin-bottom:6px;">Described, not searched</div><div style="display:flex;flex-wrap:wrap;gap:6px;">${described.map((item) => conceptChip(item.block, item.index, true)).join('')}</div></div>` : ''}
+        <p style="font-size:11px;color:#68798c;line-height:1.45;">Concepts in one row are alternatives (OR); every row must match (AND). Terms are matched in titles and abstracts.</p>
+        <div data-ui="effective-query" style="font:12px 'IBM Plex Mono',monospace;color:#3a4252;overflow-wrap:anywhere;background:#f8fbff;border-radius:8px;padding:8px 10px;">${esc(buildBooleanQuery(blocks))}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">
+          <button type="button" data-act="save-setup" style="${buttonStyle}">Save search setup</button>
+          <button type="button" data-act="open-setup" style="${buttonStyle}">Edit research question</button>
+        </div>
+      </div>`;
+  }
+
+  function conceptChip(block, index, muted = false) {
+    const terms = block.query_terms.length;
+    return `<span data-ui="concept-chip" style="display:inline-flex;align-items:center;max-width:280px;border:1px solid ${muted ? '#e0e4df' : '#cfe0f5'};background:${muted ? '#f7f8f6' : '#eaf0f7'};color:#1a365d;border-radius:6px;min-height:26px;box-sizing:border-box;">
+      <button type="button" data-act="edit-concept" data-index="${index}" title="${esc(block.query_terms.join(' · '))}" aria-label="Edit concept ${esc(block.label)}" style="border:none;background:transparent;color:inherit;font:inherit;font-size:11.5px;padding:4px 4px 4px 9px;cursor:pointer;display:inline-flex;align-items:baseline;gap:6px;min-width:0;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(block.label)}</span><span style="font-size:10px;color:#68798c;flex:0 0 auto;">${terms} term${terms === 1 ? '' : 's'}</span></button>
+      <button type="button" data-act="remove-concept" data-index="${index}" aria-label="Remove concept ${esc(block.label)}" style="border:none;background:transparent;color:#1a365d;padding:0 7px 0 3px;cursor:pointer;opacity:.7;display:inline-flex;align-items:center;"><i class="ph ph-x" style="font-size:10px;"></i></button>
+    </span>`;
   }
 
   function starterTopicButtons() {
     return `<div data-ui="starter-topic-buttons" style="display:grid;grid-template-columns:minmax(0,1fr);gap:7px;margin-top:12px;max-width:620px;margin-left:auto;margin-right:auto;">
       ${STARTER_TOPICS.map((topic) => `<button type="button" data-act="starter-topic" data-topic="${esc(topic)}" style="border:1px solid #c8d8e8;background:#fffefc;color:#1a365d;border-radius:10px;padding:9px 10px;font:inherit;font-size:11.5px;letter-spacing:-0.01em;cursor:pointer;display:flex;align-items:flex-start;gap:7px;text-align:left;line-height:1.35;min-width:0;transition:background .15s ease,border-color .15s ease;" data-hover="background:#eef4fb;border-color:#9bb8d8;"><i class="ph ph-arrow-right" style="font-size:12px;flex:0 0 auto;margin-top:2px;"></i><span style="min-width:0;">${topic}</span></button>`).join('')}
     </div>`;
-  }
-
-  function keywordCard(kw, removable) {
-    return `<div data-ui="keyword-card" style="position:relative;min-height:26px;max-width:260px;border:1px solid #cfe0f5;background:#eaf0f7;color:#1a365d;border-radius:6px;padding:4px 24px 4px 9px;display:inline-flex;align-items:center;justify-content:center;min-width:0;box-sizing:border-box;"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${kw}</span>${removable ? `<button data-ui="keyword-card-remove" data-act="remove-keyword" data-keyword="${kw}" title="Remove keyword" aria-label="Remove keyword ${kw}" style="position:absolute;top:2px;right:3px;width:14px;height:14px;border:none;background:transparent;color:#1a365d;border-radius:999px;padding:0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;opacity:.78;"><i class="ph ph-x" style="font-size:9px;"></i></button>` : ''}</div>`;
   }
 
   function emptyHint(text) {
@@ -2168,12 +2249,9 @@ ${reviewUI.dialog()}
         ${dialogInput('Project name', 'project_name', d.project_name, 'AI surgery review', 'required')}
         <label style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Research question</label>
         <textarea name="description" required rows="3" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;margin-bottom:10px;color:#1a1a1a;resize:vertical;" placeholder="Review evidence for AI tools in surgical decision support">${d.description}</textarea>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${dialogInput('Primary topic', 'primary_topic', d.primary_topic, 'AI tools')}${dialogInput('Domain', 'domain', d.domain, 'Surgery')}</div>
-        ${dialogInput('Boolean query / search terms', 'search_terms', d.search_terms || d.keywords.join(' AND '), 'AI AND surgery')}
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">${dialogInput('Max/source', 'max_results', d.max_results, DEFAULT_MAX_RESULTS_PER_PLATFORM, 'inputmode="numeric"')}${dialogInput('Start date', 'date_start', d.date_start, '2020-01-01')}${dialogInput('End date', 'date_end', d.date_end, '2026-12-31')}</div>
         ${dialogInput('Model', 'model', d.model, 'Model name')}
-        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms ? 'checked' : ''}> Derive search terms from the research question</label>
-        <div style="font-size:11px;color:#6b746c;margin-top:10px;">Sources are selected on the canvas: ${d.platforms.map(platformLabel).join(', ')}</div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#6b746c;margin-top:10px;"><input type="checkbox" name="derive_search_terms" ${d.derive_search_terms ? 'checked' : ''}> Regenerate search concepts from this research question (replaces the current concepts)</label>
+        <div style="font-size:11px;color:#6b746c;margin-top:10px;">Concepts, sources, limits, and dates are edited on the canvas.</div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="ph ph-check-circle" style="font-size:15px;"></i>${v.isNewProject ? 'Create project' : 'Save setup'}</button></div>
       </form>
     </div>`;
@@ -2183,8 +2261,24 @@ ${reviewUI.dialog()}
     return `<div><label style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">${label}</label><input name="${name}" value="${esc(value)}" ${extra} style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;" placeholder="${placeholder}"></div>`;
   }
 
-  function keywordDialog() {
-    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;"><form id="rp-keyword-dialog-form" style="width:360px;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;"><div style="font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;margin-bottom:12px;">Add keyword</div><input name="keyword" required autofocus value="${esc(state.keywordDraft)}" style="width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:10px 11px;font:inherit;font-size:13px;color:#1a1a1a;" placeholder="clinical NLP"><div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;">Add</button></div></form></div>`;
+  function conceptDialog(v) {
+    const edit = v.conceptEdit || {};
+    const block = Number.isInteger(edit.index) ? v.setupDraft.concept_blocks[edit.index] : null;
+    const newGroup = !block && !edit.group;
+    const groupLabel = edit.group ? v.setupDraft.concept_blocks.filter((item) => item.eligibility_group === edit.group).map((item) => item.label).join(' or ') : '';
+    const title = block ? 'Edit concept' : newGroup ? 'Add required concept' : 'Add alternative';
+    const field = 'width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;';
+    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:55;padding:16px;"><form id="rp-concept-dialog-form" role="dialog" aria-modal="true" aria-labelledby="rp-concept-title" style="width:min(420px,100%);background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;box-sizing:border-box;">
+      <div id="rp-concept-title" style="font-family:Newsreader,Georgia,serif;font-size:19px;color:#1a1a1a;">${title}</div>
+      ${groupLabel ? `<div style="font-size:12px;color:#6b746c;margin-top:4px;">A record may match this instead of ${esc(groupLabel)}.</div>` : ''}
+      ${v.conceptError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:10px;">${esc(v.conceptError)}</div>` : ''}
+      <label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept name</label>
+      <input name="label" required maxlength="120" value="${esc(block ? block.label : (edit.label || ''))}" style="${field}" placeholder="Telemedicine">
+      <label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Search terms (one per line; synonyms, spellings, abbreviations)</label>
+      <textarea name="terms" required rows="5" style="${field}resize:vertical;" placeholder="telemedicine&#10;telehealth">${esc(block ? block.query_terms.join('\n') : (edit.terms || ''))}</textarea>
+      ${newGroup ? `<label style="display:block;font-size:11px;color:#6b746c;margin:12px 0 5px;">Concept type</label><select name="role" style="${field}">${CONCEPT_ROLES.map(([key, name]) => `<option value="${key}">${name}</option>`).join('')}</select>` : ''}
+      <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" style="${buttonStyle}">Cancel</button><button type="submit" style="border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:9px 14px;font:inherit;font-size:13px;cursor:pointer;">${block ? 'Update concept' : 'Add concept'}</button></div>
+    </form></div>`;
   }
 
   function memoryDialog(v) {
@@ -2228,7 +2322,6 @@ ${reviewUI.dialog()}
     const previousMaxResults = state.setupDraft.max_results;
     const mergedDraft = { ...state.setupDraft, ...payload };
     state.setupDraft = applySubmittedMaxToSourceLimits(mergedDraft, previousMaxResults, payload.max_results);
-    state.setupDraft.keywords = queryClauses(state.setupDraft.search_terms);
   }
 
   function updateSetupDraftField(field, value) {
@@ -2534,10 +2627,14 @@ ${reviewUI.dialog()}
         state.actionError = '';
       }
       else if (act === 'toggle-source') toggleSource(t.getAttribute('data-source'));
-      else if (act === 'add-keyword') state.dialog = 'keyword';
-      else if (act === 'remove-keyword') {
-        const keyword = t.getAttribute('data-keyword');
-        removeQueryClause(keyword);
+      else if (act === 'add-concept') { state.conceptEdit = { group: t.getAttribute('data-group') || '' }; state.conceptError = ''; state.dialog = 'concept'; }
+      else if (act === 'edit-concept') { state.conceptEdit = { index: Number(t.getAttribute('data-index')) }; state.conceptError = ''; state.dialog = 'concept'; }
+      else if (act === 'remove-concept') { state.actionError = ''; removeConcept(Number(t.getAttribute('data-index'))); }
+      else if (act === 'save-setup') {
+        if (state.actionPending || state.chatPending) return;
+        state.actionError = '';
+        updateProjectSetup(null).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
+        return;
       }
       else if (act === 'cat-mode') updateCategorizationMode(t.getAttribute('data-mode'));
       else if (act === 'confirm-categories') {
@@ -2725,13 +2822,10 @@ ${reviewUI.dialog()}
         submitChatForm(e.target).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
         return;
       }
-      if (e.target.id === 'rp-keyword-dialog-form') {
+      if (e.target.id === 'rp-concept-dialog-form') {
         e.preventDefault();
-        const keyword = String(new FormData(e.target).get('keyword') || '').trim();
-        if (keyword.replaceAll('"', '').trim() && !state.setupDraft.keywords.includes(esc(keyword))) {
-          editQueryClauses([...state.setupDraft.keywords, esc('"' + keyword.replaceAll('"', '') + '"')]);
-        }
-        state.dialog = '';
+        if (saveConceptFromForm(e.target)) state.dialog = '';
+        else state.conceptEdit = { ...state.conceptEdit, label: String(new FormData(e.target).get('label') || ''), terms: String(new FormData(e.target).get('terms') || '') };
         paint();
         return;
       }

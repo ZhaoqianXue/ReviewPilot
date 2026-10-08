@@ -19,6 +19,7 @@ class ArxivSearcher:
     def __init__(self):
         """Initialize arXiv searcher."""
         self._last_status_code = None
+        self.last_query = ""
 
     def search(self, query: str, max_results: int = 100,
                categories: Optional[List[str]] = None,
@@ -38,39 +39,11 @@ class ArxivSearcher:
         from reviewpilot_core.publication_dates import resolve_range
         self._date_range = resolve_range(date_range) if date_range is not None else None
 
-        # Check if query is complex and needs to be split
-        parsed_groups = self._parse_query(query)
-
-        if parsed_groups and len(parsed_groups) >= 2:
-            # Try arXiv's native boolean syntax first. Expanding broad OR groups into
-            # every AND combination can create hundreds of API calls and trigger 429s.
-            native_results = self._search_simple(
-                query,
-                max_results,
-                categories,
-                output_file=output_file,
-            )
-            if len(native_results) >= max_results:
-                return native_results[:max_results]
-            if self._last_status_code == 429:
-                print("  arXiv native query rate limited; skipping split fallback")
-                return native_results[:max_results]
-
-            split_results = self._search_split(parsed_groups, max_results, categories, output_file)
-            merged = {}
-            for article in native_results + split_results:
-                article_id = article.get("id") or article.get("url") or article.get("title")
-                if article_id and article_id not in merged:
-                    merged[article_id] = article
-
-            return list(merged.values())[:max_results]
-
-        # Simple query - use standard approach
+        # One native Boolean query: what is sent is exactly what is recorded.
         return self._search_simple(query, max_results, categories, output_file=output_file)
 
     def _search_simple(self, query: str, max_results: int,
                       categories: Optional[List[str]] = None,
-                      is_boolean_query: bool = False,
                       output_file: Optional[str] = None) -> List[Dict]:
         """Standard search for simple queries. Saves incrementally if output_file is provided."""
         articles = []
@@ -93,11 +66,7 @@ class ArxivSearcher:
             print(f"  Resuming: loaded {len(articles)} existing records")
             start = len(articles)
 
-        # Build search query
-        if is_boolean_query:
-            search_query = query
-        else:
-            search_query = self._format_query(query)
+        search_query = self._format_query(query)
 
         if categories:
             cat_query = " OR ".join([f"cat:{cat}" for cat in categories])
@@ -109,6 +78,7 @@ class ArxivSearcher:
             end_date = bounds['end'].replace('-', '')
             search_query = f"({search_query}) AND submittedDate:[{start_date}0000 TO {end_date}2359]"
 
+        self.last_query = search_query
         print(f"  arXiv query: {search_query[:80]}...")
 
         while len(articles) < max_results:
@@ -196,123 +166,16 @@ class ArxivSearcher:
 
         return articles[:max_results]
 
-    def _parse_query(self, query: str) -> Optional[tuple]:
-        """Parse query into groups for complex boolean queries."""
-        from reviewpilot_core.query_syntax import parse, conjunctive_groups
-        return conjunctive_groups(parse(query)) if query else None
-
-    def _search_split(self, groups: tuple, max_results: int,
-                     categories: Optional[List[str]] = None,
-                     output_file: Optional[str] = None) -> List[Dict]:
-        """
-        Search by splitting large queries into smaller batches.
-        This considers ALL combinations but sends them in manageable chunks.
-        Uses proper arXiv query syntax with all: prefix on each term.
-        Saves incrementally if output_file is provided.
-        """
-        all_articles = {}  # Deduplicate by ID
-        max_split_queries = self._max_split_queries()
-        attempted_queries = 0
-
-        # Load existing articles if output file exists
-        if output_file and os.path.exists(output_file):
-            with open(output_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        article = json.loads(line.strip())
-                        all_articles[article.get('id')] = article
-                    except:
-                        pass
-            print(f"  Resuming: loaded {len(all_articles)} existing records")
-
-        def format_term(term: str) -> str:
-            """Format a term for arXiv query - wrap multi-word terms in quotes."""
-            term = term.strip()
-            if ' ' in term:
-                return f'all:"{term}"'
-            return f'all:{term}'
-
-        def save_article(article):
-            """Save a single article to the output file."""
-            if output_file:
-                with open(output_file, 'a', encoding='utf-8') as f:
-                    f.write(json.dumps(article, ensure_ascii=False) + '\n')
-
-        if len(groups) == 2:
-            # Two-group query: search each combination individually
-            group1 = groups[0]
-            group2 = groups[1]
-
-            for term1 in group1:
-                for term2 in group2:
-                    if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
-                        break
-
-                    search_query = f'{format_term(term1)} AND {format_term(term2)}'
-                    attempted_queries += 1
-                    batch_articles = self._search_simple(search_query, max_results, categories, is_boolean_query=True)
-
-                    for article in batch_articles:
-                        article_id = article.get("id")
-                        if article_id and article_id not in all_articles:
-                            all_articles[article_id] = article
-                            save_article(article)
-
-                if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
-                    break
-
-        elif len(groups) >= 3:
-            # Three-group query: search each combination individually
-            # Limit terms per group to avoid rate limiting (too many combinations)
-            group1 = groups[0][:4]
-            group2 = groups[1][:4]
-            group3 = groups[2][:4]
-
-            for term1 in group1:
-                for term2 in group2:
-                    for term3 in group3:
-                        if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
-                            break
-
-                        search_query = f'{format_term(term1)} AND {format_term(term2)} AND {format_term(term3)}'
-                        attempted_queries += 1
-                        batch_articles = self._search_simple(search_query, max_results, categories, is_boolean_query=True)
-
-                        for article in batch_articles:
-                            article_id = article.get("id")
-                            if article_id and article_id not in all_articles:
-                                all_articles[article_id] = article
-                                save_article(article)
-
-                    if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
-                        break
-                if len(all_articles) >= max_results or attempted_queries >= max_split_queries:
-                    break
-
-        if attempted_queries >= max_split_queries and len(all_articles) < max_results:
-            print(f"  arXiv split fallback stopped after {attempted_queries} queries")
-        print(f"  Total unique articles: {len(all_articles)}")
-        return list(all_articles.values())[:max_results]
-
-    def _max_split_queries(self) -> int:
-        """Maximum arXiv combination fallback requests after native boolean search."""
-        try:
-            return max(0, int(os.getenv("REVIEWPILOT_ARXIV_MAX_SPLIT_QUERIES", "6")))
-        except ValueError:
-            return 6
-
     def _format_query(self, query: str) -> str:
-        """
-        Format boolean query for arXiv API.
-
-        arXiv API format:
-        - Use all:term for searching all fields
-        - Use ti:term for title, abs:term for abstract
-        - AND, OR, ANDNOT for boolean operators
-        - Quotes for phrases: all:"machine learning"
-        """
+        """Render the Boolean query for the arXiv API, matching each term in titles or abstracts."""
         from reviewpilot_core.query_syntax import parse, render, phrase
-        return render(parse(query), lambda value: value if re.match(r'^(all|ti|abs|au|cat):', value) else 'all:' + phrase(value), negative='ANDNOT')
+
+        def term(value: str) -> str:
+            if re.match(r'^(all|ti|abs|au|cat):', value):
+                return value
+            quoted = phrase(value)
+            return f'(ti:{quoted} OR abs:{quoted})'
+        return render(parse(query), term, negative='ANDNOT')
 
     def _parse_response(self, xml_text: str) -> List[Dict]:
         """Parse arXiv Atom feed response."""

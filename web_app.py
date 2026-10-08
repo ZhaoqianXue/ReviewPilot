@@ -319,7 +319,9 @@ async def project_chat(request):
         if context_step not in {"search", "screening", "retrieval", "extraction", "categorize"}:
             context_step = None
         def respond():
-            return LeadAgent(OUTPUT_ROOT).handle_message(project_id=project_id, message=message, context_step=context_step)
+            return LeadAgent(OUTPUT_ROOT).handle_message(
+                project_id=project_id, message=message, context_step=context_step,
+                apply_setup=lambda setup: update_project_setup(OUTPUT_ROOT, project_id, setup, exclusive=False))
         # Any chat can save messages or edit a draft schema. Keep deletion,
         # configuration changes and workflow tasks from racing that publication.
         result = task_runner.run_if_idle(project_id, respond)
@@ -488,7 +490,8 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
     return {"id": project_id, "title": search_conditions["project_name"], "path": search_conditions["project_path"]}
 
 
-def update_project_setup(output_root: Path | str, project_id: str, payload: dict) -> dict:
+def update_project_setup(output_root: Path | str, project_id: str, payload: dict, *, exclusive: bool = True) -> dict:
+    """Save a search setup. Callers already holding the project's mutation slot pass exclusive=False."""
     require_mutable(Path(output_root), project_id)
     if not known_project(output_root, project_id):
         raise ValueError("project not found")
@@ -498,11 +501,6 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
     config = _setup_config(payload)
     confirmation = payload.get("confirmation") if isinstance(payload.get("confirmation"), dict) else {}
     project_path = Path(output_root) / project_id
-    imported = read_json(project_path / "memory/search_setup_draft.json", {})
-    if imported and not config.get("derive_search_terms") and all(config.get(key) == imported.get(key) for key in ("search_terms", "description", "primary_topic", "domain")):
-        for key in ("search_queries", "concept_blocks", "keywords", "primary_synonyms", "domain_synonyms"):
-            if key in imported:
-                config[key] = imported[key]
 
     def transact():
         reconcile_setup_transaction(project_path)
@@ -550,7 +548,7 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
         finally:
             abandon_setup_transaction(project_path)
 
-    if hasattr(task_runner, "run_if_idle"):
+    if exclusive and hasattr(task_runner, "run_if_idle"):
         return task_runner.run_if_idle(project_id, transact)
     return transact()
 
@@ -571,23 +569,18 @@ def _setup_config(payload: dict) -> dict:
         raise ValueError("description is required")
 
     platforms = _normalize_platforms(payload.get("platforms"))
-    search_terms = _payload_text(payload, "search_terms") or description
     max_results = _positive_int(payload.get("max_results"), default=DEFAULT_MAX_RESULTS_PER_PLATFORM)
     source_limits = _normalize_source_limits(payload.get("source_limits"), platforms, default=max_results)
     max_results = max(source_limits.values()) if source_limits else max_results
-    derive_search_terms = bool(payload.get("derive_search_terms"))
-    if not derive_search_terms and _payload_text(payload, 'search_terms'):
-        from reviewpilot_core.query_syntax import parse
-        parse(search_terms)
     from reviewpilot_core.publication_dates import resolve_range
-    bounds = resolve_range({"start": _payload_text(payload, "date_start", "start"), "end": _payload_text(payload, "date_end", "end")})
-    return {
+    date_range = payload.get("date_range") if isinstance(payload.get("date_range"), dict) else {}
+    bounds = resolve_range({"start": _payload_text(date_range, "start") or _payload_text(payload, "date_start", "start"),
+                            "end": _payload_text(date_range, "end") or _payload_text(payload, "date_end", "end")})
+    # Without concept blocks or a query there is nothing to edit: derive the strategy from the description.
+    derive_search_terms = bool(payload.get("derive_search_terms")) or not (payload.get("concept_blocks") or _payload_text(payload, "search_terms"))
+    config = {
         "project_name": title,
         "description": description,
-        "primary_topic": _payload_text(payload, "primary_topic") or ("" if derive_search_terms else title),
-        "domain": _payload_text(payload, "domain"),
-        "search_terms": search_terms,
-        "search_queries": [{"name": "main", "query": search_terms}],
         "platforms": platforms,
         "max_results": max_results,
         "source_limits": source_limits,
@@ -596,6 +589,16 @@ def _setup_config(payload: dict) -> dict:
         "derive_search_terms": derive_search_terms,
         "interpret_chat_settings": payload.get("interpret_chat_settings") is True,
     }
+    if derive_search_terms:
+        return {**config, "primary_topic": "", "domain": "", "search_terms": description,
+                "search_queries": [{"name": "main", "query": description}]}
+    # Concept blocks are the search strategy; a bare query is accepted only in AND-of-OR form.
+    from reviewpilot_core.search_concepts import blocks_from_query, derived_fields, validate_concept_blocks
+    if payload.get("concept_blocks"):
+        blocks = validate_concept_blocks(payload["concept_blocks"])
+    else:
+        blocks = blocks_from_query(_payload_text(payload, "search_terms"))
+    return {**config, **derived_fields(blocks)}
 
 
 def _payload_text(payload: dict, *keys: str) -> str:

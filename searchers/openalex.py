@@ -35,6 +35,7 @@ class OpenAlexSearcher:
         """
         self.email = email
         self.api_key = api_key or os.getenv("OPENALEX_API_KEY") or (getattr(config, "OPENALEX_API_KEY", None) if config else None)
+        self.last_query = ""
         self.last_error = ""
 
     def search(self, query: str, max_results: int = 100,
@@ -72,6 +73,7 @@ class OpenAlexSearcher:
             return existing_articles[:max_results]
 
         query_param_sets = self._build_query_param_sets(query)
+        network_failures = 0
 
         if self._date_range:
             for params in query_param_sets:
@@ -79,6 +81,7 @@ class OpenAlexSearcher:
                 if self._date_range['start']:
                     filters.append(f"from_publication_date:{self._date_range['start']}")
                 params['filter'] = ','.join(part for part in filters if part)
+        self.last_query = query_param_sets[0]['filter']
         articles = list(existing_articles)
 
         for base_params in query_param_sets:
@@ -136,6 +139,9 @@ class OpenAlexSearcher:
                     time.sleep(0.1)  # Rate limiting
 
                 except requests.exceptions.Timeout:
+                    network_failures += 1
+                    if network_failures >= 3:
+                        raise OpenAlexSearchError("OpenAlex search timed out after 3 attempts. Retry collection later.")
                     print(f"  Timeout at {len(articles)} articles, retrying in 5s...")
                     time.sleep(5)
                     continue
@@ -146,7 +152,10 @@ class OpenAlexSearcher:
                         raise OpenAlexSearchError(self.last_error)
                     break
                 except requests.exceptions.ConnectionError:
+                    network_failures += 1
                     self.last_error = f"Connection error at {len(articles)} articles"
+                    if network_failures >= 3:
+                        raise OpenAlexSearchError("Could not reach OpenAlex after 3 attempts. Retry collection later.")
                     print(f"  {self.last_error}, retrying in 5s...")
                     time.sleep(5)
                     continue
@@ -182,58 +191,14 @@ class OpenAlexSearcher:
         return str(exc)
 
     def _build_query_param_sets(self, query: str) -> List[Dict[str, str]]:
-        # Native search supports Boolean operators, parentheses and exact phrases.
-        # Sending a cleaned bag of words silently changes the approved scope.
+        """Boolean expression matched against titles and abstracts only.
+
+        The title_and_abstract.search filter accepts AND/OR/NOT, parentheses and
+        quoted phrases. Commas separate filters, so they are removed from terms.
+        """
         from reviewpilot_core.query_syntax import parse, render, phrase
-        return [{'search': render(parse(query), phrase)}]
-
-    def _parse_boolean_groups(self, query: str) -> List[List[str]]:
-        groups = []
-        for part in re.split(r'\bAND\b', query or "", flags=re.IGNORECASE):
-            terms = []
-            for term in re.split(r'\bOR\b', part.strip().strip("()"), flags=re.IGNORECASE):
-                cleaned = self._clean_query_text(term)
-                if cleaned and cleaned.lower() not in {"and", "or"}:
-                    terms.append(cleaned)
-            if terms:
-                groups.append(terms)
-        return groups
-
-    def _clean_query_text(self, text: str) -> str:
-        text = (text or "").replace("*", " ")
-        text = text.replace("'", " ").replace('"', " ")
-        text = re.sub(r"[()]", " ", text)
-        text = re.sub(r"\b(AND|OR)\b", " ", text, flags=re.IGNORECASE)
-        return " ".join(text.split())
-
-    def _convert_to_openalex_format(self, query: str) -> str:
-        """
-        Convert boolean query to OpenAlex filter format.
-        OpenAlex uses title_and_abstract.search with | for OR.
-        """
-        import re
-
-        # Clean up the query
-        query = query.replace("'", "").replace('"', "")
-
-        # Check if it's a complex boolean query
-        if ' AND ' not in query.upper():
-            return f"title_and_abstract.search:{query}"
-
-        # Split by AND
-        and_parts = re.split(r'\bAND\b', query, flags=re.IGNORECASE)
-
-        filter_parts = []
-        for part in and_parts:
-            part = part.strip().strip('()')
-            # Replace OR with |
-            part = re.sub(r'\bOR\b', '|', part, flags=re.IGNORECASE)
-            # Clean up extra spaces
-            part = ' '.join(part.split())
-            filter_parts.append(f"title_and_abstract.search:{part}")
-
-        # Join with comma (AND in OpenAlex filter syntax)
-        return ",".join(filter_parts)
+        expression = render(parse(query), lambda value: phrase(value.replace(',', ' ')))
+        return [{'filter': f'title_and_abstract.search:{expression}'}]
 
     def _parse_result(self, result: Dict) -> Optional[Dict]:
         """Parse an OpenAlex result into standard format."""

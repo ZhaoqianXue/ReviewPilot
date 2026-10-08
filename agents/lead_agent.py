@@ -9,14 +9,16 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from agents.prompt_agent import PromptAgent
 from agents.search_condition_agent import SearchConditionAgent
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
 from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
+from reviewpilot_core.atomic_files import atomic_write_json
 from reviewpilot_core.project_store import read_json
+from reviewpilot_core.search_concepts import derived_fields
 from reviewpilot_core.extraction_schema import (
     add_schema_field,
     finalize_schema,
@@ -99,6 +101,7 @@ class LeadAgent:
         action: str | None = None,
         input_data: dict[str, Any] | None = None,
         context_step: str | None = None,
+        apply_setup: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> LeadAgentResult:
         if action and message:
             raise ValueError("Provide either message or action, not both")
@@ -111,6 +114,8 @@ class LeadAgent:
                 raise ValueError("project_id is required for chat messages")
             if context_step == "screening":
                 return self._screening_chat(project_id, message)
+            if context_step == "search":
+                return self._search_setup_chat(project_id, message, apply_setup)
             schema_result = self._handle_schema_chat_if_applicable(project_id, message, context_step=context_step)
             if schema_result is not None:
                 return schema_result
@@ -767,6 +772,38 @@ Supported commands:
                                if key in {"field", "mode", "categories", "category_descriptions"}},
             "workflow": workflow["stages"],
         }
+
+    def _search_setup_chat(self, project_id: str, message: str,
+                           apply_setup: Callable[[dict[str, Any]], dict[str, Any]] | None) -> LeadAgentResult:
+        """Revise the concept strategy or search settings from chat.
+
+        A change that leaves no results stale is saved directly. A change that would
+        invalidate existing results is kept as a draft for review in the Search Setup
+        canvas, where saving it asks for confirmation of the affected stages.
+        """
+        project = self.output_root / project_id
+        current = self._load_search_conditions(project)
+        expected_revision = project_decision_revision(project)
+        result = self._call_workflow_action("refine-search-setup", project_id, input_data={
+            "current": current, "message": message, "history": self._session_history(project)})
+        if project_decision_revision(project) != expected_revision:
+            raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
+        reply = str(result.get("reply") or "").strip()
+        if result.get("changed"):
+            saved = apply_setup(result["config"]) if apply_setup else {"confirmationRequired": True}
+            if saved.get("confirmationRequired"):
+                draft = {**result["config"], **{key: value for key, value in derived_fields(result["config"]["concept_blocks"]).items() if key != "concept_blocks"}}
+                atomic_write_json(project / "memory/search_setup_draft.json", draft)
+                labels = {"collection": "paper collection", "screening": "screening", "retrieval": "full-text retrieval",
+                          "extraction": "information extraction", "categorization": "categorization"}
+                stages = ", ".join(labels.get(stage, stage) for stage in saved.get("affectedStages") or []) or "existing results"
+                reply += f"\n\nThis change would make {stages} out of date, so it is saved as a draft. Review it in Search Setup and save to apply."
+            else:
+                reply += "\n\nSearch setup saved."
+        now = datetime.now().isoformat()
+        for role, text in (("u", message), ("a", reply)):
+            append_jsonl(str(project / "chat/messages.jsonl"), {"step": 1, "role": role, "text": text, "created_at": now})
+        return LeadAgentResult(stage="search_conditions", status="completed", reply=reply, data={"changed": bool(result.get("changed"))})
 
     def _screening_chat(self, project_id: str, message: str) -> LeadAgentResult:
         project = self.output_root / project_id

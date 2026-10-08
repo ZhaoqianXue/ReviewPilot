@@ -24,6 +24,7 @@ class PubMedSearcher:
             api_key: Optional API key for higher rate limits (10 req/sec vs 3 req/sec)
         """
         self.email = email
+        self.last_query = ""
         self.api_key = api_key
 
     def search(self, query: str, max_results: int = 100, search_scope: str = "title_abstract",
@@ -60,6 +61,10 @@ class PubMedSearcher:
         # Convert query to PubMed format with field restrictions
         if search_scope == "title_abstract":
             query = self._add_field_restrictions(query)
+        bounds = self._date_range
+        # The recorded query reproduces the search in PubMed's web interface, dates included.
+        self.last_query = query if not bounds else (
+            f'({query}) AND ("{(bounds["start"] or "0001-01-01").replace("-", "/")}"[pdat] : "{bounds["end"].replace("-", "/")}"[pdat])')
 
         # Step 1: Search for PMIDs
         pmids = self._search_pmids(query, max_results)

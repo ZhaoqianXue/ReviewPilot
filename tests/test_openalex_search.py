@@ -51,7 +51,7 @@ class OpenAlexSearchTests(unittest.TestCase):
         self.assertEqual(len(param_sets), 1)
         self.assertEqual(
             param_sets[0],
-            {"search": '((("large language model" OR LLM) OR "generative AI") AND (biomedical OR clinical))'},
+            {"filter": 'title_and_abstract.search:((("large language model" OR LLM) OR "generative AI") AND (biomedical OR clinical))'},
         )
 
     def test_rate_limited_boolean_query_does_not_fan_out_more_requests(self):

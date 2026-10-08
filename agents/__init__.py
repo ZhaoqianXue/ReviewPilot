@@ -7,7 +7,6 @@ from .collection_agent import CollectionAgent
 from .filtering_agent import FilteringAgent
 from .download_agent import DownloadAgent
 from .extraction_agent import ExtractionAgent
-from .coordinator import PipelineCoordinator
 
 __all__ = [
     'BaseAgent',
@@ -16,6 +15,5 @@ __all__ = [
     'CollectionAgent',
     'FilteringAgent',
     'DownloadAgent',
-    'ExtractionAgent',
-    'PipelineCoordinator'
+    'ExtractionAgent'
 ]

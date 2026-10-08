@@ -423,7 +423,7 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(data["setup"]["platforms"], ["pubmed", "arxiv", "openalex"])
         self.assertEqual(list(data["setup"]["source_limits"]), ["pubmed", "arxiv", "openalex"])
         self.assertEqual(data["setup"]["source_limits"], {"pubmed": 10, "openalex": 10, "arxiv": 10})
-        self.assertEqual(data["platforms"], [["PubMed", 0], ["arXiv", 0], ["Openalex", 0]])
+        self.assertEqual(data["platforms"], [["PubMed", 0], ["arXiv", 0], ["OpenAlex", 0]])
         self.assertEqual(data["history"][0]["label"], "Examples")
         self.assertEqual(data["history"][1], {"label": "Chats", "items": []})
         self.assertEqual(
@@ -715,7 +715,7 @@ class StateProjectionTests(unittest.TestCase):
         self.assertNotIn("Lead Agent generated this Search Setup", data["messages"][1]["text"])
         self.assertFalse(any("3 PDFs retrieved" in message["text"] for message in data["messages"]))
         self.assertTrue(any("3 PDFs fetched" in line["msg"] for line in data["activityByStep"]["retrieval"]))
-        self.assertEqual(data["platforms"], [["PubMed", 7], ["Openalex", 5]])
+        self.assertEqual(data["platforms"], [["PubMed", 7], ["OpenAlex", 5]])
         self.assertEqual(data["retrieved"][0]["t"], "First paper")
         self.assertEqual(data["fields"], [])
         self.assertEqual(data["keywords"], ["RAG", "Medicine"])
@@ -754,7 +754,7 @@ class StateProjectionTests(unittest.TestCase):
             [
                 {
                     "platform": "openalex",
-                    "label": "Openalex",
+                    "label": "OpenAlex",
                     "message": "503 Search temporarily unavailable",
                     "severity": "warning",
                 }

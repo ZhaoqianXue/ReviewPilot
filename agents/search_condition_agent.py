@@ -1,85 +1,62 @@
 """
 Search Condition Agent.
-Intelligently generates search conditions based on user's research description.
 
-The agent:
-1. Asks user to describe their research topic in natural language
-2. Generates Boolean search queries
-3. Iteratively refines based on user feedback
-4. Suggests appropriate platforms based on domain
-5. Allows user to approve at each step
+Turns a research request into a concept strategy and keeps it as the single
+source of truth for the project's search:
+
+- derive: an LLM proposes concept blocks from the user's request;
+- provided: caller-supplied concept blocks (or a legacy AND-of-OR query) are validated;
+- refine: an LLM revises the current concept blocks from a chat message.
+
+The Boolean query is always rebuilt from the concept blocks
+(reviewpilot_core.search_concepts). Method rules for designing concepts live in
+the systematic-review-search-strategy Agent Skill; the prompts here only define
+the data supplied and the JSON contract returned.
 """
 
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, date
-import json
-import re
+from __future__ import annotations
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, SEARCH_CONDITION_MODEL
-from utils.llm import query_llm
-from utils.human_interaction import (
-    ask_text, ask_confirm, ask_multiselect, ask_date, ask_number,
-    print_header, print_subheader, print_summary, print_box, print_text
+from reviewpilot_core.publication_dates import resolve_range
+from reviewpilot_core.search_concepts import (
+    BLOCK_KEYS,
+    MAX_BLOCKS,
+    MAX_TERMS_PER_BLOCK,
+    ROLES,
+    blocks_from_query,
+    derived_fields,
+    validate_concept_blocks,
 )
 from utils.jsonl_handler import save_json
+from utils.llm import query_llm
 
+SUPPORTED_SOURCES = ("pubmed", "arxiv", "openalex")
+SETTINGS_KEYS = {"project_name", "platforms", "max_results", "date_start", "date_end"}
 
-# Platform configurations
-PLATFORMS = {
-    "pubmed": {
-        "name": "PubMed",
-        "description": "Biomedical and life science literature",
-        "domains": ["healthcare", "medical", "clinical", "biomedical", "health"],
-        "requires_key": False
-    },
-    "openalex": {
-        "name": "OpenAlex",
-        "description": "Open scholarly metadata (all fields)",
-        "domains": ["*"],
-        "requires_key": False
-    },
-    "arxiv": {
-        "name": "arXiv",
-        "description": "Preprints in CS, physics, math, biology",
-        "domains": ["machine learning", "deep learning", "AI", "NLP", "LLM"],
-        "requires_key": False
-    },
-    "dblp": {
-        "name": "DBLP",
-        "description": "Computer science conferences and journals",
-        "domains": ["machine learning", "NLP", "AI", "LLM", "computer science"],
-        "requires_key": False
-    },
-    "scopus": {
-        "name": "Scopus",
-        "description": "Elsevier's citation database",
-        "domains": ["*"],
-        "requires_key": True
-    },
-    "wos": {
-        "name": "Web of Science",
-        "description": "Clarivate citation database",
-        "domains": ["*"],
-        "requires_key": True
-    },
-    "google_scholar": {
-        "name": "Google Scholar",
-        "description": "Web scraping (rate limited)",
-        "domains": ["*"],
-        "requires_key": False
-    }
-}
+_CONCEPT_SCHEMA = """{
+  "label": "concise canonical concept label",
+  "role": "%s",
+  "eligibility_group": "concise_snake_case_group",
+  "required_for_eligibility": true | false,
+  "query_terms": ["plain source-neutral term or phrase"]
+}""" % " | ".join(ROLES)
+
+_FORMAT_RULES = f"""Output constraints:
+- Return 1 to {MAX_BLOCKS} concept blocks with only the keys {", ".join(BLOCK_KEYS)}.
+- A required concept has 1 to {MAX_TERMS_PER_BLOCK} unique query terms; a concept that is not required has 0 to {MAX_TERMS_PER_BLOCK}.
+- Write query terms as plain text without Boolean operators, field tags, wildcards, or quotation marks.
+- Concepts sharing one eligibility_group share one role and one required_for_eligibility value."""
+
+_SETTINGS_CONTRACT = """"search_settings" holds only operational settings the CURRENT message explicitly requests: project_name (string), platforms (array drawn from pubmed, arxiv, openalex), max_results (positive integer per source), date_start and date_end (ISO dates). Return {} when none are requested."""
 
 
 class SearchConditionAgent(BaseAgent):
-    """
-    Agent that intelligently generates search conditions with iterative refinement.
-    """
+    """Builds, validates, and refines a project's concept-based search strategy."""
 
     def __init__(self, output_dir: str = "output", llm_query=None):
         self.output_dir = Path(output_dir)
@@ -88,384 +65,240 @@ class SearchConditionAgent(BaseAgent):
         self.state = {}
         self.logger = None
 
+    # ------------------------------------------------------------------ save
     def run(self, input_data: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Interactively collect and generate search conditions.
-        If input_data has all required fields, skip interactive prompts.
-        """
-        defaults = input_data or {}
-
-        # Check if an external caller supplied a complete config.
-        required_fields = ['project_name', 'search_terms', 'platforms']
-        if all(defaults.get(f) for f in required_fields) and (defaults.get('primary_topic') or defaults.get('derive_search_terms')):
-            return self._use_provided_config(defaults)
-
-        # Interactive mode
-        print_header("Research Topic Configuration")
-
-        # 1. Project name
-        project_name = ask_text(
-            "Project name (for organizing output)",
-            default=defaults.get("project_name"),
-            required=True
-        )
-
-        safe_name = self._sanitize_name(project_name)
-        project_path = self.output_dir / safe_name
-
-        if project_path.exists():
-            if not ask_confirm(f"Project '{safe_name}' exists. Continue?", default=False):
-                return self.run(input_data)
-        else:
-            project_path.mkdir(parents=True, exist_ok=True)
-
-        super().__init__(project_path, self.agent_name)
-
-        # 2. Research description (natural language)
-        print("\n  Describe your research topic in plain language.")
-        print("  Example: 'papers about using LLMs as judges for evaluating")
-        print("           medical text generation quality'")
-        print()
-
-        research_description = ask_text(
-            "Describe your research topic",
-            required=True
-        )
-
-        # 3. Extract concepts and generate query with iterative refinement
-        concepts = self._extract_concepts(research_description)
-
-        print("\n  Detected concepts:")
-        if concepts["primary_topics"]:
-            print(f"    Topics: {', '.join(concepts['primary_topics'])}")
-        if concepts["domains"]:
-            print(f"    Domains: {', '.join(concepts['domains'])}")
-        if concepts["methods"]:
-            print(f"    Methods: {', '.join(concepts['methods'])}")
-
-        # Generate initial query
-        search_terms = self._generate_search_query(concepts)
-
-        # Interactive refinement loop for search query
-        search_terms = self._refine_search_query(search_terms, concepts, research_description)
-
-        # 4. Platforms with refinement
-        suggested_platforms = self._suggest_platforms(concepts)
-        platforms = self._refine_platforms(suggested_platforms)
-
-        # 5. Date range with refinement
-        suggested_dates = self._suggest_date_range(concepts)
-        start_date, end_date = self._refine_date_range(suggested_dates)
-
-        # 6. Max results
-        print("\n  How many results per platform?")
-        print("  (Use 0 for unlimited, or limit to manage processing time)")
-        max_results = ask_number("Max results per platform", default=DEFAULT_MAX_RESULTS_PER_PLATFORM, min_val=0)
-
-        # 7. arXiv-specific query (if arxiv selected)
-        arxiv_query = None
-        if "arxiv" in platforms:
-            arxiv_query = self._generate_arxiv_query(concepts)
-            print_subheader("arXiv-Specific Query")
-            print_text(arxiv_query)
-            if ask_confirm("Modify arXiv query?", default=False):
-                arxiv_query = ask_text("arXiv query", default=arxiv_query)
-
-        # Build and save search conditions
-        search_conditions = {
-            "project_name": project_name,
-            "project_path": str(project_path),
-            "created_at": datetime.now().isoformat(),
-            "research_description": research_description,
-            "extracted_concepts": concepts,
-            "search_terms": search_terms,
-            "arxiv_search_terms": arxiv_query,
-            "platforms": platforms,
-            "date_range": {
-                "start_date": start_date,
-                "end_date": end_date
-            },
-            "max_results_per_platform": max_results
-        }
-
-        output_file = project_path / "search_conditions.json"
-        save_json(str(output_file), search_conditions)
-
-        print_summary({
-            "Project": project_name,
-            "Query": search_terms[:80] + "..." if len(search_terms) > 80 else search_terms,
-            "Platforms": ", ".join(platforms),
-            "Date range": f"{start_date} to {end_date}",
-            "Max results": max_results if max_results > 0 else "unlimited"
-        }, title="Search Configuration Summary")
-
-        self.state = {"completed": True, "conditions": search_conditions}
-        self.save_state()
-
-        return search_conditions
-
-    def _use_provided_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Use pre-configured settings without interactive prompts.
-        Called when an external workflow provides complete configuration.
-        """
-        project_name = config['project_name']
-        project_path = Path(config.get("project_path") or (self.output_dir / self._sanitize_name(project_name)))
+        """Save a project's search setup and return the persisted search conditions."""
+        config = dict(input_data or {})
+        project_name = str(config.get("project_name") or "").strip()
+        if not project_name:
+            raise ValueError("project_name is required")
+        project_path = Path(config.get("project_path") or self.output_dir / project_name)
         project_path.mkdir(parents=True, exist_ok=True)
-
-        # Initialize base agent
         super().__init__(project_path, self.agent_name)
+        description = str(config.get("description") or config.get("research_description") or "").strip()
 
-        description = str(config.get('description') or config.get('research_description') or config.get('search_terms') or project_name)
-        derive_search_terms = bool(config.get('derive_search_terms')) or not str(config.get('search_terms') or '').strip()
-        if derive_search_terms:
-            return self._use_llm_derived_config(config, project_name, project_path, description)
-
-        concepts = config.get('extracted_concepts') if isinstance(config.get('extracted_concepts'), dict) else self._extract_concepts(description)
-        search_terms = str(config.get('search_terms') or '')
-        platforms = config.get('platforms') or self._suggest_platforms(concepts)
-
-        # Build date range
-        date_range = config.get('date_range', {})
-        if isinstance(date_range, dict):
-            start_date = date_range.get('start')
-            end_date = date_range.get('end')
+        if config.get("derive_search_terms") or not (config.get("concept_blocks") or str(config.get("search_terms") or "").strip()):
+            if not description:
+                raise ValueError("description is required to derive a search strategy")
+            conditions = self._derive(config, project_path, description)
         else:
-            start_date = config.get('date_range_start')
-            end_date = config.get('date_range_end')
-        if derive_search_terms and not start_date and not end_date:
-            start_year, _end_year = self._suggest_date_range(concepts)
-            start_date = f"{start_year}-01-01"
-            end_date = ""
+            blocks = (validate_concept_blocks(config["concept_blocks"]) if config.get("concept_blocks")
+                      else blocks_from_query(str(config["search_terms"])))
+            conditions = self._assemble(config, project_path, description, blocks)
+            conditions["generated_by"] = "user"
 
-        max_results = config.get('max_results', config.get('max_results_per_platform', DEFAULT_MAX_RESULTS_PER_PLATFORM)) or DEFAULT_MAX_RESULTS_PER_PLATFORM
-        source_limits = config.get('source_limits') if isinstance(config.get('source_limits'), dict) else {}
-        if not source_limits:
-            source_limits = {platform: max_results for platform in platforms}
+        save_json(str(project_path / "search_conditions.json"), conditions)
+        self.log(f"Search conditions saved: {project_path / 'search_conditions.json'}")
+        self.state = {"completed": True, "conditions": conditions}
+        self.save_state()
+        return conditions
 
-        # Build search conditions
-        search_conditions = {
-            **{key: value for key, value in config.items() if key != "memory_context"},
-            "project_name": project_name,
+    def _derive(self, config: Dict[str, Any], project_path: Path, description: str) -> Dict[str, Any]:
+        model = str(config.get("model") or SEARCH_CONDITION_MODEL)
+        interpret_settings = config.get("interpret_chat_settings") is True
+        prompt = self._derive_prompt(config, description, interpret_settings)
+        payload, usage = self._query_json(prompt, model, lambda data: self._check_derive_payload(data, interpret_settings))
+        if interpret_settings:
+            settings = payload.get("search_settings", {})
+            config = self.apply_chat_settings(config, settings)
+            if "project_name" not in settings:
+                # A chat-created project is named from the request unless the user named it.
+                config["project_name"] = payload["title"].strip()
+        blocks = validate_concept_blocks(payload["concept_blocks"])
+        conditions = self._assemble(config, project_path, description, blocks)
+        conditions.update(
+            research_description=payload["research_description"].strip(),
+            lead_agent_reply=payload["reply"].strip(),
+            llm_usage=usage or {},
+            model=model,
+            generated_by="llm",
+        )
+        return conditions
+
+    def _assemble(self, config: Dict[str, Any], project_path: Path, description: str,
+                  blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        platforms = self._platforms(config.get("platforms"))
+        limits = self._source_limits(config, platforms)
+        configured_range = config.get("date_range") if isinstance(config.get("date_range"), dict) else {}
+        date_range = resolve_range({"start": configured_range.get("start") or "", "end": configured_range.get("end") or ""})
+        carried = {key: value for key, value in config.items()
+                   if key not in {"memory_context", "interpret_chat_settings", "search_settings"}}
+        return {
+            **carried,
+            "project_name": str(config["project_name"]).strip(),
             "project_path": str(project_path),
             "description": description,
-            "research_description": description,
-            "extracted_concepts": concepts,
-            "search_terms": search_terms,
-            "search_queries": [{"name": "main", "query": search_terms}],
+            "research_description": str(config.get("research_description") or description),
+            **derived_fields(blocks),
             "platforms": platforms,
-            "date_range": {"start": start_date, "end": end_date},
-            "max_results": max_results,
-            "max_results_per_platform": max_results,
-            "source_limits": source_limits,
-            "primary_topic": config.get('primary_topic') or (concepts.get("primary_topics") or [""])[0],
-            "domain": config.get('domain') or ", ".join(concepts.get("domains") or []),
-            "extraction_fields": config.get('extraction_fields', 'datasets used, methods, key findings, evaluation metrics'),
-            "arxiv_query": self._generate_arxiv_query(concepts) if "arxiv" in platforms else None
+            "date_range": date_range,
+            "source_limits": limits,
+            "max_results": max(limits.values()),
+            "max_results_per_platform": max(limits.values()),
+            "derive_search_terms": False,
         }
 
-        # Save conditions
-        conditions_file = project_path / "search_conditions.json"
-        save_json(str(conditions_file), search_conditions)
-        self.log(f"Search conditions saved: {conditions_file}")
+    # ---------------------------------------------------------------- refine
+    def refine(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Revise the saved strategy from one chat message.
 
-        # Show summary
-        print_summary({
-            "Project": project_name,
-            "Query": search_conditions['search_terms'][:60] + "...",
-            "Platforms": ", ".join(search_conditions['platforms']),
-            "Max results": search_conditions.get('max_results', DEFAULT_MAX_RESULTS_PER_PLATFORM) or "unlimited"
-        }, title="Using Provided Configuration")
-
-        self.state = {"completed": True, "conditions": search_conditions}
-        self.save_state()
-
-        return search_conditions
-
-    def _use_llm_derived_config(
-        self,
-        config: Dict[str, Any],
-        project_name: str,
-        project_path: Path,
-        description: str,
-    ) -> Dict[str, Any]:
+        Returns {"reply", "changed", "config"}; ``config`` is the complete setup to
+        save when ``changed`` is true. Nothing is written here: the caller saves
+        it through the normal setup path so revision checks and impacts apply.
         """
-        Generate chat-derived search setup through a real LLM call.
-        No deterministic search-query fallback is allowed in this path.
-        """
-        model = str(config.get("model") or SEARCH_CONDITION_MODEL)
-        response_text, usage = self.llm_query(
-            text_prompt=self._llm_search_setup_prompt(config, description),
-            system_prompt=self._llm_search_setup_system_prompt(),
-            model=model,
-            provider="openai",
-        )
-        llm_payload = self._parse_llm_search_setup(response_text)
-        search_conditions = self._normalize_llm_search_setup(
-            config=config,
-            project_name=project_name,
-            project_path=project_path,
-            description=description,
-            model=model,
-            llm_payload=llm_payload,
-            usage=usage or {},
-        )
+        current = dict(input_data.get("current") or {})
+        message = str(input_data.get("message") or "").strip()
+        if not message:
+            raise ValueError("message is required")
+        project_path = Path(current.get("project_path") or self.output_dir)
+        super().__init__(project_path, self.agent_name)
+        blocks = (validate_concept_blocks(current["concept_blocks"]) if current.get("concept_blocks")
+                  else blocks_from_query(str(current.get("search_terms") or "")))
+        model = str(current.get("model") or SEARCH_CONDITION_MODEL)
+        prompt = self._refine_prompt(current, blocks, message, input_data.get("history") or [])
+        payload, _usage = self._query_json(prompt, model, self._check_refine_payload)
+        baseline = self.apply_chat_settings({**current, "concept_blocks": blocks}, {})
+        updated = self.apply_chat_settings(baseline, payload["search_settings"])
+        if payload["concept_blocks"] is not None:
+            updated["concept_blocks"] = validate_concept_blocks(payload["concept_blocks"])
+        changed = any(updated.get(key) != baseline.get(key)
+                      for key in ("project_name", "platforms", "source_limits", "date_range", "concept_blocks"))
+        setup = {key: updated.get(key) for key in ("project_name", "description", "concept_blocks", "platforms", "source_limits", "date_range", "model")}
+        setup.update(derive_search_terms=False, max_results=max((updated.get("source_limits") or {"_": DEFAULT_MAX_RESULTS_PER_PLATFORM}).values()))
+        return {"reply": payload["reply"].strip(), "changed": changed, "config": setup}
 
-        conditions_file = project_path / "search_conditions.json"
-        save_json(str(conditions_file), search_conditions)
-        self.log(f"Search conditions saved: {conditions_file}")
-
-        self.state = {"completed": True, "conditions": search_conditions}
-        self.save_state()
-        return search_conditions
-
+    # --------------------------------------------------------------- prompts
     @staticmethod
-    def _llm_search_setup_system_prompt() -> str:
-        return (
-            "You design rigorous, scope-faithful concept strategies for systematic-review searches. "
-            "Identify atomic user-facing concepts, distinguish eligibility requirements from analytical dimensions, "
-            "and provide canonical labels with supported equivalent query terms. Return only valid JSON."
-        )
+    def system_prompt() -> str:
+        return ("You design and revise concept strategies for systematic-review searches. "
+                "Follow the attached search-strategy skill and return only valid JSON.")
 
-    def _llm_search_setup_prompt(self, config: Dict[str, Any], description: str) -> str:
-        settings_instruction = ""
-        if config.get("interpret_chat_settings"):
+    def _derive_prompt(self, config: Dict[str, Any], description: str, interpret_settings: bool) -> str:
+        settings = ""
+        if interpret_settings:
             defaults = {key: config.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
-            settings_instruction = f"""
-This is an initial chat setup. Also return a top-level "search_settings" object containing only explicitly requested operational settings: project_name (string), platforms (array of source keys), max_results (positive integer per source), date_start and date_end (ISO dates). Omit unspecified settings; if none are requested, return "search_settings": {{}}. Supported source keys: pubmed, arxiv, openalex. Preserve these defaults for unspecified settings: {json.dumps(defaults, ensure_ascii=False)}.
-"""
-        return f"""Generate Search Setup for ReviewPilot from this user chat request.
+            settings = (f'\nAlso return a top-level "search_settings" object. {_SETTINGS_CONTRACT} '
+                        f"Current defaults, for reference only: {json.dumps(defaults, ensure_ascii=False)}\n")
+        return f"""Design the concept strategy for this research request.
 
 USER RESEARCH REQUEST DATA:
 {json.dumps(description, ensure_ascii=False)}
 
 OPTIONAL APPROVED VOCABULARY DATA:
-{json.dumps(config.get('memory_context') or "", ensure_ascii=False)}
+{json.dumps(config.get("memory_context") or "", ensure_ascii=False)}
 
-Return ONLY valid JSON with this exact top-level shape:
+Return ONLY a JSON object with this shape:
 {{
-  "reply": "brief assistant message to the user",
+  "reply": "brief message to the user describing the concepts",
+  "title": "concise project title of 3 to 8 words in the user's language",
   "research_description": "the user's research question in clear prose",
-  "concept_blocks": [
-    {{
-      "label": "concise canonical concept label",
-      "role": "phenomenon | population | condition | context | intervention_or_exposure | outcome | study_design | analytical_dimension | other",
-      "eligibility_group": "concise_snake_case_group",
-      "required_for_eligibility": true,
-      "query_terms": ["plain source-neutral term or phrase"]
-    }}
-  ]
+  "concept_blocks": [{_CONCEPT_SCHEMA}]{', "search_settings": {}' if interpret_settings else ''}
 }}
 
-Rules:
-- Return exactly the JSON object described above.
-- Separate research eligibility from operational instructions. Database names, result limits, date controls, session names, and workflow-testing instructions belong to settings, not concept_blocks or query_terms.
-- The reply describes the generated research concepts. Source, date, and result-limit settings are reviewed in the Search Setup canvas before collection.
-- Return 1 to 8 concept blocks.
-- Make every concept block one atomic user-facing concept at the specificity stated by the user. Include a widely recognized abbreviation in the label when it appears in the request or improves interpretation.
-- Keep alternatives within one conceptual dimension as separate concepts with the same eligibility_group. A record satisfies that group by matching any concept in it.
-- Treat a list of settings, domains, populations, or interventions as shared coverage when an eligible record may address any listed member. Reuse one eligibility_group for that list even when the user's wording joins its members with "and".
-- Use distinct required eligibility groups only when every eligible record must match at least one concept from every group.
-- Assign population, condition, context, phenomenon, intervention or exposure, outcome, and study design to distinct roles. Concepts sharing one eligibility_group must have the same role.
-- Treat relational wording that expresses the review's interest as synthesis intent unless the relation itself determines record eligibility.
-- Return no more than 8 query terms in each block.
-- Use the minimum sufficient set of supported equivalents; the term limit is a cap rather than a target.
-- Populate query_terms only with spelling variants, inflections, sufficiently specific abbreviations, historical names, and exact synonyms of that block's label. Broader categories, narrower instances, products, methods, applications, enabling architectures, and associated concepts remain separate scope decisions and enter retrieval only when explicitly included by the user.
-- Express query terms as plain source-neutral text without Boolean operators, field tags, wildcard syntax, or quotation marks.
-- Use only the keys shown in the schema.
-{settings_instruction}"""
+{_FORMAT_RULES}
+{settings}"""
 
-    def _parse_llm_search_setup(self, response_text: str) -> Dict[str, Any]:
-        try:
-            payload = json.loads(str(response_text or "").strip())
-        except json.JSONDecodeError as exc:
-            raise ValueError("SearchConditionAgent LLM did not return valid JSON") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("SearchConditionAgent LLM response must be a JSON object")
-        return payload
+    def _refine_prompt(self, current: Dict[str, Any], blocks: List[Dict[str, Any]], message: str, history: list) -> str:
+        settings = {key: current.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
+        return f"""Revise the saved concept strategy only as the CURRENT USER MESSAGE requests.
 
-    def _normalize_llm_search_setup(
-        self,
-        *,
-        config: Dict[str, Any],
-        project_name: str,
-        project_path: Path,
-        description: str,
-        model: str,
-        llm_payload: Dict[str, Any],
-        usage: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        required = {"reply", "research_description", "concept_blocks"}
-        missing = sorted(required - set(llm_payload))
+RESEARCH DESCRIPTION DATA:
+{json.dumps(current.get("description") or "", ensure_ascii=False)}
+
+SAVED CONCEPT BLOCKS DATA (authoritative):
+{json.dumps(blocks, ensure_ascii=False)}
+
+SAVED SETTINGS DATA (authoritative):
+{json.dumps(settings, ensure_ascii=False)}
+
+CONVERSATION HISTORY DATA (context only; earlier requests are already handled):
+{json.dumps(history[-12:], ensure_ascii=False)}
+
+CURRENT USER MESSAGE DATA:
+{json.dumps(message, ensure_ascii=False)}
+
+Return ONLY a JSON object with this shape:
+{{
+  "reply": "brief message stating exactly what changed, or answering the question",
+  "concept_blocks": null or the complete updated list of [{_CONCEPT_SCHEMA}],
+  "search_settings": {{}}
+}}
+
+Use null for concept_blocks when the message does not change concepts or terms; otherwise return the complete list, preserving every block the message does not ask to change. {_SETTINGS_CONTRACT}
+The reply describes only changes carried by concept_blocks or search_settings.
+
+{_FORMAT_RULES}"""
+
+    # ------------------------------------------------------------- LLM calls
+    def _query_json(self, prompt: str, model: str, check) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Call the LLM; on a rejected response retry once with the rejection reason."""
+        request = prompt
+        for attempt in range(2):
+            response_text, usage = self.llm_query(text_prompt=request, system_prompt=self.system_prompt(),
+                                                  model=model, provider="openai")
+            try:
+                payload = json.loads(str(response_text or "").strip())
+                if not isinstance(payload, dict):
+                    raise ValueError("SearchConditionAgent LLM response must be a JSON object")
+                check(payload)
+                return payload, usage or {}
+            except json.JSONDecodeError as exc:
+                error = ValueError("SearchConditionAgent LLM did not return valid JSON")
+                error.__cause__ = exc
+            except ValueError as exc:
+                error = exc
+            if attempt:
+                raise error
+            self.log(f"Search strategy response rejected ({error}); retrying once", level="warning")
+            request = f"{prompt}\nYour previous response was rejected: {error}. Return a corrected JSON object that follows the shape exactly."
+        raise AssertionError("unreachable")
+
+    @classmethod
+    def _check_derive_payload(cls, payload: Dict[str, Any], interpret_settings: bool) -> None:
+        required = {"reply", "title", "research_description", "concept_blocks"}
+        allowed = required | ({"search_settings"} if interpret_settings else set())
+        cls._check_keys(payload, required, allowed)
+        for key in ("reply", "title", "research_description"):
+            cls._require_text(payload[key], key)
+        if len(payload["title"].strip()) > 120:
+            raise ValueError("SearchConditionAgent LLM response title must be at most 120 characters")
+        validate_concept_blocks(payload["concept_blocks"])
+        if interpret_settings and not isinstance(payload.get("search_settings", {}), dict):
+            raise ValueError("search_settings must be an object")
+
+    @classmethod
+    def _check_refine_payload(cls, payload: Dict[str, Any]) -> None:
+        cls._check_keys(payload, {"reply", "concept_blocks", "search_settings"}, {"reply", "concept_blocks", "search_settings"})
+        cls._require_text(payload["reply"], "reply")
+        if payload["concept_blocks"] is not None:
+            validate_concept_blocks(payload["concept_blocks"])
+        if not isinstance(payload["search_settings"], dict):
+            raise ValueError("search_settings must be an object")
+
+    @staticmethod
+    def _check_keys(payload: Dict[str, Any], required: set, allowed: set) -> None:
+        missing = sorted(required - set(payload))
         if missing:
             raise ValueError(f"SearchConditionAgent LLM response missing required fields: {', '.join(missing)}")
-        allowed = required | ({"search_settings"} if config.get("interpret_chat_settings") else set())
-        unexpected = sorted(set(llm_payload) - allowed)
+        unexpected = sorted(set(payload) - allowed)
         if unexpected:
             raise ValueError(f"SearchConditionAgent LLM response has unexpected fields: {', '.join(unexpected)}")
 
-        reply = self._validate_required_text(llm_payload["reply"], "reply")
-        research_description = self._validate_required_text(llm_payload["research_description"], "research_description")
-
-        if config.get("interpret_chat_settings"):
-            config = self._apply_chat_settings(config, llm_payload.get("search_settings", {}))
-            project_name = config["project_name"]
-
-        concept_blocks = self._validate_concept_blocks(llm_payload["concept_blocks"])
-        keywords = [block["label"] for block in concept_blocks if block["required_for_eligibility"]]
-        search_terms = self._build_boolean_query(concept_blocks)
-        selected_platforms = [str(platform).strip().lower() for platform in config.get("platforms") or ["pubmed", "arxiv", "openalex"]]
-        preserved_source_limits = self._preserved_source_limits(config, selected_platforms)
-        preserved_max_results = max(preserved_source_limits.values()) if preserved_source_limits else DEFAULT_MAX_RESULTS_PER_PLATFORM
-        configured_date_range = config.get("date_range") if isinstance(config.get("date_range"), dict) else {}
-        primary_labels = [block["label"] for block in concept_blocks if block["role"] in {"phenomenon", "intervention_or_exposure"}]
-        context_labels = [block["label"] for block in concept_blocks if block["role"] in {"population", "condition", "context", "population_or_context"}]
-        method_labels = [block["label"] for block in concept_blocks if block["role"] in {"study_design", "analytical_dimension"}]
-        outcome_labels = [block["label"] for block in concept_blocks if block["role"] == "outcome"]
-        primary_topic = primary_labels[0] if primary_labels else concept_blocks[0]["label"]
-        domain = ", ".join(context_labels) or primary_topic
-        concepts = {
-            "primary_topics": primary_labels or [primary_topic],
-            "domains": context_labels,
-            "methods": method_labels,
-            "outcomes": outcome_labels,
-        }
-
-        return {
-            **{key: value for key, value in config.items() if key != "memory_context"},
-            "project_name": project_name,
-            "project_path": str(project_path),
-            "description": description,
-            "research_description": research_description,
-            "concept_blocks": concept_blocks,
-            "extracted_concepts": concepts,
-            "search_terms": search_terms,
-            "search_queries": [{"name": "main", "query": search_terms}],
-            "platforms": selected_platforms,
-            "date_range": {
-                "start": str(configured_date_range.get("start") or ""),
-                "end": str(configured_date_range.get("end") or ""),
-            },
-            "max_results": preserved_max_results,
-            "max_results_per_platform": preserved_max_results,
-            "source_limits": preserved_source_limits,
-            "primary_topic": primary_topic,
-            "domain": domain,
-            "keywords": keywords,
-            "lead_agent_reply": reply,
-            "llm_usage": usage,
-            "model": model,
-            "generated_by": "llm",
-        }
-
     @staticmethod
-    def _apply_chat_settings(config: Dict[str, Any], settings: Any) -> Dict[str, Any]:
-        allowed = {"project_name", "platforms", "max_results", "date_start", "date_end"}
+    def _require_text(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"SearchConditionAgent LLM response {field} must be non-empty text")
+        return value.strip()
+
+    # -------------------------------------------------------------- settings
+    @staticmethod
+    def apply_chat_settings(config: Dict[str, Any], settings: Any) -> Dict[str, Any]:
+        """Apply operational settings requested in chat; unspecified settings keep their values."""
         if not isinstance(settings, dict):
             raise ValueError("Invalid chat search settings")
         settings = dict(settings)
-        # Models often echo the defaults in their config shape (source_limits,
-        # date_range, per-source max_results); map those onto the settings schema.
+        # Models often echo defaults in config shape (source_limits, date_range,
+        # per-source max_results); map those onto the settings schema.
         if "source_limits" in settings and "max_results" not in settings:
             settings["max_results"] = settings.pop("source_limits")
         if isinstance(settings.get("date_range"), dict):
@@ -473,7 +306,7 @@ Rules:
             for key in ("start", "end"):
                 if key in date_range:
                     settings.setdefault("date_" + key, date_range[key])
-        if set(settings) - allowed:
+        if set(settings) - SETTINGS_KEYS:
             raise ValueError("Invalid chat search settings")
         result = dict(config)
         if "project_name" in settings:
@@ -481,8 +314,8 @@ Rules:
             if not isinstance(name, str) or not name.strip() or len(name) > 120:
                 raise ValueError("Invalid chat project name")
             result["project_name"] = name.strip()
-        platforms = settings.get("platforms", result.get("platforms"))
-        if not isinstance(platforms, list) or not platforms or any(not isinstance(p, str) or p not in {"pubmed", "arxiv", "openalex"} for p in platforms):
+        platforms = settings.get("platforms", result.get("platforms") or list(SUPPORTED_SOURCES))
+        if not isinstance(platforms, list) or not platforms or any(not isinstance(p, str) or p not in SUPPORTED_SOURCES for p in platforms):
             raise ValueError("Invalid chat search sources")
         result["platforms"] = list(dict.fromkeys(platforms))
         limit = settings.get("max_results")
@@ -490,8 +323,8 @@ Rules:
         if any(type(value) is not int or value <= 0 for value in limits.values()):
             raise ValueError("Invalid chat result limit")
         old_limits = result.get("source_limits") or {}
-        result["source_limits"] = {p: limits.get(p) or old_limits.get(p, result.get("max_results", DEFAULT_MAX_RESULTS_PER_PLATFORM)) for p in result["platforms"]}
-        from reviewpilot_core.publication_dates import resolve_range
+        fallback = SearchConditionAgent._positive_int(result.get("max_results"), DEFAULT_MAX_RESULTS_PER_PLATFORM)
+        result["source_limits"] = {p: limits.get(p) or SearchConditionAgent._positive_int(old_limits.get(p), fallback) for p in result["platforms"]}
         bounds = dict(result.get("date_range") or {})
         for key in ("start", "end"):
             if "date_" + key in settings:
@@ -502,112 +335,19 @@ Rules:
         result["date_range"] = resolve_range(bounds)
         return result
 
-    @classmethod
-    def _validate_concept_blocks(cls, value: Any) -> List[Dict[str, Any]]:
-        if not isinstance(value, list) or not 1 <= len(value) <= 8:
-            raise ValueError("SearchConditionAgent LLM response concept_blocks must contain 1 to 8 blocks")
-        allowed_roles = {
-            "phenomenon",
-            "population",
-            "condition",
-            "context",
-            "population_or_context",
-            "intervention_or_exposure",
-            "outcome",
-            "study_design",
-            "analytical_dimension",
-            "other",
-        }
-        blocks: List[Dict[str, Any]] = []
-        for raw in value:
-            if not isinstance(raw, dict) or set(raw) != {"label", "role", "eligibility_group", "required_for_eligibility", "query_terms"}:
-                raise ValueError("SearchConditionAgent LLM response concept block has an invalid schema")
-            label = cls._validate_display_keywords([raw["label"]])[0]
-            if not isinstance(raw["role"], str):
-                raise ValueError("SearchConditionAgent LLM response concept block role must be text")
-            role = raw["role"].strip()
-            if role not in allowed_roles:
-                raise ValueError("SearchConditionAgent LLM response concept block has an invalid role")
-            group = raw["eligibility_group"]
-            if not isinstance(group, str) or re.fullmatch(r"[a-z][a-z0-9_]*", group.strip()) is None:
-                raise ValueError("SearchConditionAgent LLM response concept block eligibility_group must be snake_case text")
-            group = group.strip()
-            required = raw["required_for_eligibility"]
-            if type(required) is not bool:
-                raise ValueError("SearchConditionAgent LLM response concept block eligibility must be boolean")
-            terms = raw["query_terms"]
-            if not isinstance(terms, list) or len(terms) > 8 or (required and not terms):
-                raise ValueError("SearchConditionAgent LLM response concept block has invalid query_terms")
-            normalized_terms = []
-            for term in terms:
-                if not isinstance(term, str):
-                    raise ValueError("SearchConditionAgent LLM response query_terms must contain text")
-                text = term.strip()
-                if not text or re.search(r'\*|\[[^]]*\]|[\"\']|\b(?:AND|OR|NOT)\b', text):
-                    raise ValueError("SearchConditionAgent LLM response query_terms must be source-neutral text")
-                normalized_terms.append(text)
-            if len({term.casefold() for term in normalized_terms}) != len(normalized_terms):
-                raise ValueError("SearchConditionAgent LLM response query_terms must be unique within a block")
-            blocks.append({"label": label, "role": role, "eligibility_group": group, "required_for_eligibility": required, "query_terms": normalized_terms})
-        if len({block["label"].casefold() for block in blocks}) != len(blocks):
-            raise ValueError("SearchConditionAgent LLM response concept block labels must be unique")
-        group_roles: Dict[str, str] = {}
-        for block in blocks:
-            previous_role = group_roles.setdefault(block["eligibility_group"], block["role"])
-            if previous_role != block["role"]:
-                raise ValueError("SearchConditionAgent LLM response eligibility_group cannot combine different concept roles")
-        if not any(block["required_for_eligibility"] for block in blocks):
-            raise ValueError("SearchConditionAgent LLM response requires at least one eligibility concept block")
-        return blocks
-
-    @classmethod
-    def _build_boolean_query(cls, concept_blocks: List[Dict[str, Any]]) -> str:
-        grouped_terms: Dict[str, List[str]] = {}
-        for block in concept_blocks:
-            if not block["required_for_eligibility"]:
-                continue
-            group = block["eligibility_group"]
-            grouped_terms.setdefault(group, []).extend(cls._format_query_term(term) for term in block["query_terms"])
-        return " AND ".join(f"({' OR '.join(terms)})" for terms in grouped_terms.values())
-
     @staticmethod
-    def _format_query_term(term: str) -> str:
-        return term if re.fullmatch(r"[\w.+:/-]+", term) else f'"{term}"'
+    def _platforms(value: Any) -> List[str]:
+        items = value.split(",") if isinstance(value, str) else value if isinstance(value, list) else []
+        platforms = list(dict.fromkeys(str(item).strip().lower() for item in items if str(item).strip()))
+        unsupported = [item for item in platforms if item not in SUPPORTED_SOURCES]
+        if unsupported:
+            raise ValueError(f"Unsupported search source: {', '.join(unsupported)}")
+        return platforms or list(SUPPORTED_SOURCES)
 
-    @staticmethod
-    def _validate_display_keywords(value: Any) -> List[str]:
-        if not isinstance(value, list) or not 1 <= len(value) <= 8:
-            raise ValueError("SearchConditionAgent LLM response keywords must contain 1 to 8 labels")
-        if not all(isinstance(item, str) for item in value):
-            raise ValueError("SearchConditionAgent LLM response keywords must contain text labels")
-        labels = [item.strip() for item in value]
-        if any(not label for label in labels):
-            raise ValueError("SearchConditionAgent LLM response keywords must be non-empty text")
-        if any(re.search(r'\*|\[[^]]+\]|\b(?:AND|OR|NOT)\b|[\"\']', label) for label in labels):
-            raise ValueError("SearchConditionAgent LLM response keywords must not contain search syntax")
-        if len({label.casefold() for label in labels}) != len(labels):
-            raise ValueError("SearchConditionAgent LLM response keywords must be unique")
-        return labels
-
-    @staticmethod
-    def _validate_required_text(value: Any, field: str) -> str:
-        if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"SearchConditionAgent LLM response {field} must be non-empty text")
-        return value.strip()
-
-    def _preserved_source_limits(self, config: Dict[str, Any], platforms: List[str]) -> Dict[str, int]:
-        configured_limits = config.get("source_limits") if isinstance(config.get("source_limits"), dict) else {}
-        default_limit = self._positive_int(
-            config.get("max_results") or config.get("max_results_per_platform"),
-            DEFAULT_MAX_RESULTS_PER_PLATFORM,
-        )
-        limits = {}
-        for platform in platforms:
-            if platform in configured_limits:
-                limits[platform] = self._positive_int(configured_limits.get(platform), default_limit)
-            else:
-                limits[platform] = default_limit
-        return limits
+    def _source_limits(self, config: Dict[str, Any], platforms: List[str]) -> Dict[str, int]:
+        configured = config.get("source_limits") if isinstance(config.get("source_limits"), dict) else {}
+        default = self._positive_int(config.get("max_results") or config.get("max_results_per_platform"), DEFAULT_MAX_RESULTS_PER_PLATFORM)
+        return {platform: self._positive_int(configured.get(platform), default) for platform in platforms}
 
     @staticmethod
     def _positive_int(value: Any, default: int) -> int:
@@ -616,357 +356,3 @@ Rules:
         except (TypeError, ValueError):
             return default
         return parsed if parsed > 0 else default
-
-    def _refine_search_query(self, initial_query: str, concepts: Dict, description: str) -> str:
-        """
-        Iteratively refine the search query based on user feedback.
-        """
-        query = initial_query
-
-        while True:
-            print_subheader("Generated Search Query")
-            print()
-            print_text(query)
-            print()
-
-            if ask_confirm("Is this search query correct?", default=True):
-                return query
-
-            # Get feedback
-            print("\n  What's wrong with the query? I'll help fix it.")
-            print("  Examples:")
-            print("    - 'missing LLM-as-a-judge'")
-            print("    - 'should include neural network'")
-            print("    - 'remove biomedical'")
-            print("    - 'let me type my own query'")
-            print()
-
-            feedback = ask_text("Your feedback", required=True)
-
-            # Check if user wants to type their own
-            if "own" in feedback.lower() or "type" in feedback.lower() or "manual" in feedback.lower():
-                query = ask_text("Enter your search query", default=query, required=True)
-                continue
-
-            # Process feedback and update query
-            query = self._apply_feedback(query, feedback, concepts, description)
-
-    def _apply_feedback(self, query: str, feedback: str, concepts: Dict, description: str) -> str:
-        """
-        Apply user feedback to improve the query.
-        """
-        feedback_lower = feedback.lower()
-
-        # Check for "missing X" or "add X" or "should include X"
-        missing_patterns = [
-            r"missing\s+(.+)",
-            r"add\s+(.+)",
-            r"should\s+(?:have|include)\s+(.+)",
-            r"need\s+(.+)",
-            r"include\s+(.+)"
-        ]
-
-        for pattern in missing_patterns:
-            match = re.search(pattern, feedback_lower)
-            if match:
-                missing_term = match.group(1).strip()
-                # Add the missing term to the query
-                return self._add_term_to_query(query, missing_term)
-
-        # Check for "remove X"
-        remove_patterns = [
-            r"remove\s+(.+)",
-            r"delete\s+(.+)",
-            r"don't\s+(?:need|want)\s+(.+)"
-        ]
-
-        for pattern in remove_patterns:
-            match = re.search(pattern, feedback_lower)
-            if match:
-                remove_term = match.group(1).strip()
-                return self._remove_term_from_query(query, remove_term)
-
-        # If feedback contains specific terms, try to incorporate them
-        # Re-extract concepts including the feedback
-        combined_description = f"{description}. Also: {feedback}"
-        new_concepts = self._extract_concepts(combined_description)
-
-        # Merge concepts
-        for key in concepts:
-            if isinstance(concepts[key], list):
-                combined = list(set(concepts[key] + new_concepts.get(key, [])))
-                concepts[key] = combined
-
-        # Regenerate query with merged concepts
-        return self._generate_search_query(concepts)
-
-    def _add_term_to_query(self, query: str, term: str) -> str:
-        """Add a term to the query."""
-        # Generate appropriate Boolean expression for the term
-        term_lower = term.lower().strip("'\"")
-
-        if "llm" in term_lower and "judge" in term_lower:
-            new_part = "('LLM-as-a-Judge' OR 'LLM as judge' OR 'agent-as-a-judge' OR 'GPT as judge' OR 'LLM evaluation' OR 'LLM-based assessment')"
-        elif "llm" in term_lower:
-            new_part = "('LLM' OR 'large language model' OR 'GPT' OR 'language model')"
-        else:
-            new_part = f"('{term}')"
-
-        if query:
-            return f"{new_part} AND {query}"
-        else:
-            return new_part
-
-    def _remove_term_from_query(self, query: str, term: str) -> str:
-        """Remove a term from the query."""
-        # Simple removal - remove the term and clean up
-        term_lower = term.lower().strip("'\"")
-
-        # Try to remove the term
-        query_modified = re.sub(rf"'{term_lower}'(\s+OR\s+)?", "", query, flags=re.IGNORECASE)
-        query_modified = re.sub(rf"(\s+OR\s+)?'{term_lower}'", "", query_modified, flags=re.IGNORECASE)
-
-        # Clean up empty parentheses and dangling operators
-        query_modified = re.sub(r"\(\s*\)", "", query_modified)
-        query_modified = re.sub(r"\s+AND\s+AND\s+", " AND ", query_modified)
-        query_modified = re.sub(r"^\s*AND\s+", "", query_modified)
-        query_modified = re.sub(r"\s+AND\s*$", "", query_modified)
-
-        return query_modified.strip()
-
-    def _refine_platforms(self, suggested: List[str]) -> List[str]:
-        """Refine platform selection with user."""
-        print_subheader("Suggested Platforms")
-        for p in suggested:
-            info = PLATFORMS.get(p, {})
-            print(f"  - {info.get('name', p)}: {info.get('description', '')}")
-
-        if ask_confirm("\nAre these platforms correct?", default=True):
-            return suggested
-
-        # Let user select
-        platform_options = [f"{PLATFORMS[p]['name']} - {PLATFORMS[p]['description']}"
-                         for p in PLATFORMS.keys()]
-        default_indices = [list(PLATFORMS.keys()).index(p) for p in suggested if p in PLATFORMS]
-        selected = ask_multiselect("Select platforms", platform_options, defaults=default_indices)
-        return [list(PLATFORMS.keys())[i] for i in selected]
-
-    def _refine_date_range(self, suggested: Tuple[int, int]) -> Tuple[str, str]:
-        """Refine date range with user."""
-        start_year, end_year = suggested
-        current_date = datetime.now().strftime("%Y-%m-%d")
-
-        print_subheader("Date Range")
-        print(f"  Suggested: {start_year} to {end_year}")
-        print("  (LLM/AI topics are recent; broader topics may need wider range)")
-
-        if ask_confirm("Is this date range correct?", default=True):
-            return f"{start_year}-01-01", current_date
-
-        start_date = ask_date("Start date (YYYY-MM-DD)", default=f"{start_year}-01-01")
-        end_date = ask_date("End date (YYYY-MM-DD)", default="today")
-
-        return start_date, end_date
-
-    def _extract_concepts(self, description: str) -> Dict[str, Any]:
-        """
-        Extract key concepts from natural language description.
-        """
-        desc_lower = description.lower()
-
-        concepts = {
-            "primary_topics": [],
-            "domains": [],
-            "methods": [],
-            "keywords": []
-        }
-
-        # Detect LLM-as-a-Judge patterns (improved)
-        llm_judge_patterns = [
-            r"llm[s]?\s+(?:as|used\s+as|are\s+used\s+as|for)\s+(?:a\s+)?(?:judge|judges|evaluator|evaluators|assessment)",
-            r"(?:use|using)\s+llm[s]?\s+(?:as|for)\s+(?:a\s+)?(?:judge|judges|evaluator)",
-            r"llm[s]?\s+(?:judge|judges|evaluation|eval)",
-            r"llm[-\s]as[-\s](?:a[-\s])?judge",
-            r"agent[-\s]as[-\s](?:a[-\s])?judge",
-            r"(?:gpt|claude|gemini|llama)[-\s]as[-\s](?:a[-\s])?judge",
-            r"(?:gpt|claude|gemini|llama)\s+(?:as|for)\s+(?:a\s+)?(?:judge|evaluator)",
-            r"large\s+language\s+model[s]?\s+(?:as|for)\s+(?:a\s+)?(?:judge|evaluator)",
-        ]
-
-        for pattern in llm_judge_patterns:
-            if re.search(pattern, desc_lower):
-                if "LLM-as-a-Judge" not in concepts["primary_topics"]:
-                    concepts["primary_topics"].append("LLM-as-a-Judge")
-                break
-
-        # Detect other LLM topics
-        if not concepts["primary_topics"]:
-            other_llm_patterns = [
-                (r"llm[s]?\b|large\s+language\s+model", "LLM"),
-                (r"\bgpt\b|\bclaude\b|\bgemini\b|\bllama\b", "LLM"),
-                (r"language\s+model", "language model"),
-            ]
-            for pattern, topic in other_llm_patterns:
-                if re.search(pattern, desc_lower):
-                    if topic not in concepts["primary_topics"]:
-                        concepts["primary_topics"].append(topic)
-
-        # Other topics
-        topic_patterns = [
-            (r"machine\s+learning", "machine learning"),
-            (r"deep\s+learning", "deep learning"),
-            (r"neural\s+network", "neural networks"),
-            (r"transformer[s]?", "transformers"),
-            (r"natural\s+language\s+processing|nlp", "NLP"),
-            (r"text\s+(?:generation|mining|classification)", "NLP"),
-        ]
-
-        for pattern, topic in topic_patterns:
-            if re.search(pattern, desc_lower):
-                if topic not in concepts["primary_topics"]:
-                    concepts["primary_topics"].append(topic)
-
-        # Detect domains
-        domain_patterns = [
-            (r"biomedicine|biomedical|bio-medical", "biomedical"),
-            (r"healthcare|health\s*care", "healthcare"),
-            (r"clinical|clinic", "clinical"),
-            (r"medical|medicine", "medical"),
-            (r"health(?!\s*care)", "health"),
-            (r"ehr|electronic\s+health\s+record|electronic\s+medical\s+record", "EHR"),
-            (r"radiology|imaging", "radiology"),
-            (r"pathology", "pathology"),
-            (r"drug|pharma", "pharmaceutical"),
-            (r"finance|financial|banking", "finance"),
-            (r"legal|law", "legal"),
-            (r"education", "education"),
-        ]
-
-        for pattern, domain in domain_patterns:
-            if re.search(pattern, desc_lower):
-                if domain not in concepts["domains"]:
-                    concepts["domains"].append(domain)
-
-        # Detect methods
-        method_patterns = [
-            (r"evaluat|assess|judg|scor|rat", "evaluation"),
-            (r"generat|creat|produc", "generation"),
-            (r"classif|categor", "classification"),
-            (r"extract|retriev", "extraction"),
-            (r"summar", "summarization"),
-            (r"question\s+answering|qa|q&a", "QA"),
-        ]
-
-        for pattern, method in method_patterns:
-            if re.search(pattern, desc_lower):
-                if method not in concepts["methods"]:
-                    concepts["methods"].append(method)
-
-        return concepts
-
-    def _generate_search_query(self, concepts: Dict[str, Any]) -> str:
-        """
-        Generate Boolean search query from extracted concepts.
-        """
-        parts = []
-
-        # Primary topics
-        if concepts["primary_topics"]:
-            topic_parts = []
-            for topic in concepts["primary_topics"]:
-                if topic == "LLM-as-a-Judge":
-                    topic_parts.append(
-                        "'LLM-as-a-Judge' OR 'LLM as judge' OR 'agent-as-a-judge' OR "
-                        "'GPT as judge' OR 'LLM evaluation' OR 'LLM-based assessment' OR "
-                        "'LLM evaluator' OR 'GPT evaluator'"
-                    )
-                elif topic == "LLM":
-                    topic_parts.append("'LLM' OR 'large language model' OR 'GPT' OR 'language model'")
-                else:
-                    topic_parts.append(f"'{topic}'")
-
-            if topic_parts:
-                parts.append(f"({' OR '.join(topic_parts)})")
-
-        # Domains
-        if concepts["domains"]:
-            domains = set(concepts["domains"])
-            # Expand healthcare-related terms
-            if any(d in domains for d in ["healthcare", "medical", "clinical", "health"]):
-                domains.update(["healthcare", "clinical", "medical", "health", "biomedical"])
-            domain_str = " OR ".join([f"'{d}'" for d in sorted(domains)])
-            parts.append(f"({domain_str})")
-
-        # Combine with AND
-        if parts:
-            return " AND ".join(parts)
-        elif concepts["keywords"]:
-            return " AND ".join([f"'{k}'" for k in concepts["keywords"][:3]])
-        else:
-            return ""
-
-    def _generate_arxiv_query(self, concepts: Dict[str, Any]) -> str:
-        """Generate arXiv-optimized query (simpler syntax)."""
-        terms = []
-
-        if concepts["primary_topics"]:
-            for topic in concepts["primary_topics"][:2]:
-                simple = topic.lower().replace("-", " ").replace("'", "")
-                terms.append(simple)
-
-        if concepts["domains"]:
-            terms.extend(concepts["domains"][:2])
-
-        if terms:
-            return " AND ".join(terms)
-        return ""
-
-    def _suggest_platforms(self, concepts: Dict[str, Any]) -> List[str]:
-        """Suggest platforms based on detected domains."""
-        suggested = set(["openalex"])  # Always include
-
-        domains = concepts.get("domains", [])
-        topics = concepts.get("primary_topics", [])
-
-        # Healthcare → PubMed
-        if any(d in ["healthcare", "clinical", "medical", "biomedical", "health", "EHR"]
-               for d in domains):
-            suggested.add("pubmed")
-
-        # AI/ML/LLM → arXiv, DBLP
-        if any(t in ["LLM", "LLM-as-a-Judge", "machine learning", "deep learning", "NLP", "transformers", "language model"]
-               for t in topics):
-            suggested.add("arxiv")
-            suggested.add("dblp")
-
-        if len(suggested) <= 1:
-            suggested.update(["pubmed", "arxiv", "dblp"])
-
-        return list(suggested)
-
-    def _suggest_date_range(self, concepts: Dict[str, Any]) -> Tuple[int, int]:
-        """Suggest date range based on topic recency."""
-        topics = concepts.get("primary_topics", [])
-        current_year = datetime.now().year
-
-        # LLM topics are very recent (2022+)
-        if any("LLM" in str(t) or "GPT" in str(t) or "judge" in str(t).lower() for t in topics):
-            return (2022, current_year)
-
-        # Deep learning (2018+)
-        if any(t in ["deep learning", "neural networks", "transformers"] for t in topics):
-            return (2018, current_year)
-
-        # General ML (2015+)
-        if "machine learning" in topics:
-            return (2015, current_year)
-
-        return (current_year - 5, current_year)
-
-    def _sanitize_name(self, name: str) -> str:
-        """Sanitize project name for folder."""
-        safe = name.lower()
-        safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in safe)
-        while "--" in safe:
-            safe = safe.replace("--", "-")
-        return safe.strip("-") or "unnamed-project"

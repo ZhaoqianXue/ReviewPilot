@@ -16,7 +16,7 @@ class SkillRuntimeTests(unittest.TestCase):
 
         activations = [registry.activate(action, agent) for action, (agent, _skill) in SKILL_ASSIGNMENTS.items()]
 
-        self.assertEqual(len(activations), 6)
+        self.assertEqual(len(activations), 7)
         self.assertEqual({activation.name for activation in activations}, {
             "systematic-review-search-strategy",
             "evidence-screening",
@@ -24,8 +24,9 @@ class SkillRuntimeTests(unittest.TestCase):
             "evidence-synthesis-and-categorization",
         })
         self.assertTrue(all(activation.instructions for activation in activations))
-        self.assertEqual(registry.activate("save-search-setup", "SearchConditionAgent").version, "2.1.0")
-        self.assertTrue(all(activation.version in {"2.0.0", "2.1.0"} for activation in activations))
+        self.assertEqual(registry.activate("save-search-setup", "SearchConditionAgent").version, "3.0.0")
+        self.assertEqual(registry.activate("refine-search-setup", "SearchConditionAgent").name, "systematic-review-search-strategy")
+        self.assertTrue(all(activation.version in {"2.0.0", "2.1.0", "3.0.0"} for activation in activations))
         self.assertTrue(all(len(activation.content_hash) == 64 for activation in activations))
 
     def test_search_skill_contains_reusable_methodology_without_product_workflow(self):
@@ -34,10 +35,11 @@ class SkillRuntimeTests(unittest.TestCase):
         self.assertIn("Frame the scope", instructions)
         self.assertIn("minimum set of distinct concepts", instructions)
         self.assertIn("every user-facing concept as one atomic concept", instructions)
-        self.assertIn("alternatives within the same conceptual dimension", instructions)
-        self.assertIn("Build the concept strategy", instructions)
+        self.assertIn("alternatives within one conceptual dimension", instructions)
+        self.assertIn("Choose query terms", instructions)
+        self.assertIn("Revise an existing strategy", instructions)
         self.assertIn("same concept at the same level of specificity", instructions)
-        self.assertIn("independently of database-specific field tags", instructions)
+        self.assertIn("plain, source-neutral text", instructions)
         for history_specific_text in ("Biomedical:", "HCI:", "Urban:", "LLM-only", "Changing interaction", "Support and use"):
             self.assertNotIn(history_specific_text, instructions)
         for product_workflow_text in ("collection code", "pagination", "download", "source_limits", "concept_blocks"):

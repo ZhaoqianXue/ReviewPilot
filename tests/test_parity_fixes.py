@@ -180,29 +180,38 @@ class ParityFixTests(unittest.TestCase):
             ArxivSearcher().search('clinical',max_results=5,date_range=bounds)
             self.assertIn('submittedDate:[202509010000 TO 202509302359]',get.call_args.kwargs['params']['search_query'])
 
-    def test_keyword_edit_changes_payload_and_preserves_boolean_groups(self):
+    def test_concept_edits_change_payload_and_frontend_query_matches_backend(self):
         script=r'''
 const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const src=fs.readFileSync('frontend/app.js','utf8');
-const ctx={state:{setupDraft:{project_name:'Test',description:'Clinical',platforms:['pubmed'],max_results:5}},D:{project:{title:'Test'}},esc:v=>v,unescapePayloadValue:v=>v||'',selectedSourceLimits:()=>({pubmed:5}),maxResultsFromSourceLimits:()=>5};vm.createContext(ctx);
-vm.runInContext(src.slice(src.indexOf('  function queryClauses('),src.indexOf('  function setupDraftFromData(')),ctx);
+const blocks=[
+ {label:'Large language models (LLMs)',role:'phenomenon',eligibility_group:'technology',required_for_eligibility:true,query_terms:['large language model','LLM']},
+ {label:"Crohn's disease",role:'condition',eligibility_group:'condition',required_for_eligibility:true,query_terms:["Crohn's disease"]},
+ {label:'Ulcerative colitis',role:'condition',eligibility_group:'condition',required_for_eligibility:true,query_terms:['ulcerative colitis']},
+ {label:'Costs',role:'analytical_dimension',eligibility_group:'analysis',required_for_eligibility:false,query_terms:[]}];
+const ctx={state:{setupDraft:{project_name:'Test',description:'Clinical',platforms:['pubmed'],max_results:5,concept_blocks:JSON.parse(JSON.stringify(blocks))},actionError:'',conceptEdit:null,conceptError:''},D:{project:{title:'Test'}},esc:v=>v,unescapePayloadValue:v=>v||'',selectedSourceLimits:()=>({pubmed:5}),maxResultsFromSourceLimits:()=>5,FormData:class{constructor(f){this.f=f}get(k){return this.f[k]}}};vm.createContext(ctx);
+vm.runInContext(src.slice(src.indexOf('  // Concept blocks are the search strategy'),src.indexOf('  function setupDraftFromData(')),ctx);
 vm.runInContext(src.slice(src.indexOf('  function setupPayloadFromDraft('),src.indexOf('  function platformKey(')),ctx);
-const base='(clinical OR trial) AND (AI OR "machine learning")';
-const clauses=ctx.queryClauses(base);assert.equal(clauses.length,2);
-ctx.editQueryClauses([...clauses,'"auditmarker"']);const payload=ctx.setupPayloadFromDraft();
-assert.match(payload.search_terms,/auditmarker/);assert.match(payload.search_terms,/clinical OR trial/);assert.match(payload.search_terms,/AI OR "machine learning"/);assert.equal(payload.derive_search_terms,false);
-const restored=ctx.queryClauses(payload.search_terms);assert.equal(restored.length,3);
-ctx.editQueryClauses(restored.filter(c=>!c.includes('auditmarker')));assert.doesNotMatch(ctx.setupPayloadFromDraft().search_terms,/auditmarker/);
-assert.equal(ctx.queryClauses('A OR B AND C').length,1);assert.equal(ctx.queryClauses('"A AND B" AND C').length,2);
-const previous=ctx.setupPayloadFromDraft().search_terms;ctx.editQueryClauses([]);assert.equal(ctx.setupPayloadFromDraft().search_terms,previous);
-process.stdout.write(JSON.stringify(payload));
+const query=ctx.buildBooleanQuery(ctx.state.setupDraft.concept_blocks);
+ctx.state.conceptEdit={group:''};assert.equal(ctx.saveConceptFromForm({label:'Chatbots',terms:'chatbot\nconversational agent',role:'intervention_or_exposure'}),true);
+ctx.state.conceptEdit={group:'condition'};assert.equal(ctx.saveConceptFromForm({label:'IBD',terms:'inflammatory bowel disease'}),true);
+ctx.state.conceptEdit={index:0};assert.equal(ctx.saveConceptFromForm({label:'LLMs',terms:'"large language model"'}),false);
+assert.match(ctx.state.conceptError,/without quotes/);
+const payload=ctx.setupPayloadFromDraft();
+assert.equal(payload.derive_search_terms,false);assert.equal(payload.concept_blocks.length,6);
+assert.equal(payload.concept_blocks[4].eligibility_group,'chatbots');assert.equal(payload.concept_blocks[5].eligibility_group,'condition');
+ctx.removeConcept(0);ctx.removeConcept(0);ctx.removeConcept(0);ctx.removeConcept(1);ctx.removeConcept(1);
+assert.match(ctx.state.actionError,/at least one required concept/);
+process.stdout.write(JSON.stringify({query, blocks, payload}));
 '''
         result=subprocess.run(['node','-e',script],cwd=ROOT,text=True,capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        payload=json.loads(result.stdout)
-        payload['date_end']='2026-09-12'
-        # The backend stores the exact reviewed Boolean expression.
-        self.assertEqual(web_app._setup_config(payload)['search_terms'],payload['search_terms'])
+        data=json.loads(result.stdout)
+        from reviewpilot_core.search_concepts import build_boolean_query, validate_concept_blocks
+        self.assertEqual(data['query'],build_boolean_query(validate_concept_blocks(data['blocks'])))
+        payload={**data['payload'],'date_end':'2026-09-12'}
+        config=web_app._setup_config(payload)
+        self.assertEqual(config['search_terms'],'("large language model" OR LLM) AND ("Crohn\'s disease" OR "ulcerative colitis" OR "inflammatory bowel disease") AND (chatbot OR "conversational agent")')
 
     def test_finalized_extraction_action_state_matrix(self):
         script=r'''const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
@@ -229,10 +238,9 @@ for (const status of ['draft','missing'])assert.doesNotMatch(ctx.extractionCanva
         self.assertEqual(PubMedSearcher(email='test@example.org')._add_field_restrictions(query),
                          '((clinical[Title/Abstract] OR trial[Title/Abstract]) AND ((AI[Title/Abstract] AND "data AND evidence"[Title/Abstract]) OR learning[Title/Abstract]))')
         arxiv=ArxivSearcher()
-        self.assertEqual(arxiv._format_query(query), '((all:clinical OR all:trial) AND ((all:AI AND all:"data AND evidence") OR all:learning))')
-        self.assertIsNone(arxiv._parse_query(query))  # cannot flatten into AND-of-OR fallback
-        self.assertEqual(OpenAlexSearcher()._build_query_param_sets(query),[{'search':'((clinical OR trial) AND ((AI AND "data AND evidence") OR learning))'}])
-        self.assertEqual(arxiv._format_query('AI AND NOT animal'),'(all:AI ANDNOT all:animal)')
+        self.assertEqual(arxiv._format_query(query), '(((ti:clinical OR abs:clinical) OR (ti:trial OR abs:trial)) AND (((ti:AI OR abs:AI) AND (ti:"data AND evidence" OR abs:"data AND evidence")) OR (ti:learning OR abs:learning)))')
+        self.assertEqual(OpenAlexSearcher()._build_query_param_sets(query),[{'filter':'title_and_abstract.search:((clinical OR trial) AND ((AI AND "data AND evidence") OR learning))'}])
+        self.assertEqual(arxiv._format_query('AI AND NOT animal'),'((ti:AI OR abs:AI) ANDNOT (ti:animal OR abs:animal))')
         with self.assertRaises(ValueError):PubMedSearcher(email='test@example.org')._add_field_restrictions('(AI OR learning')
 
     def test_saved_query_and_dates_are_consumed_by_collection_worker(self):
@@ -245,13 +253,12 @@ for (const status of ['draft','missing'])assert.doesNotMatch(ctx.extractionCanva
             response=self.client.put('/projects/study/setup',json=payload)
         self.assertEqual(response.status_code,200,response.text)
         saved=read_json(self.project/'search_conditions.json',{})
-        self.assertEqual(saved['search_terms'],query)
-        worker=Mock();worker.last_errors={}
-        worker.search.side_effect=lambda **kw:{source:[] for source in kw['platforms']}
-        with patch('main.AcademicSearcher',return_value=worker),patch.dict('os.environ',{'REVIEWPILOT_OFFLINE_ACTIONS':'0'}),contextlib.redirect_stdout(io.StringIO()):
+        self.assertEqual(saved['search_terms'],'(clinical OR trial) AND (AI OR "machine learning") AND (auditmarker)')
+        from searchers.sources import SourceResult
+        worker=Mock(side_effect=lambda source, query, **kw: SourceResult([], query))
+        with patch('agents.collection_agent.search_source',worker),patch.dict('os.environ',{'REVIEWPILOT_OFFLINE_ACTIONS':'0'}),contextlib.redirect_stdout(io.StringIO()):
             CollectionAgentContract().run(self.root,'study')
-        self.assertEqual(worker.search.call_count,3)
-        for call in worker.search.call_args_list:
-            self.assertEqual(call.kwargs['query'],query)
+        self.assertEqual([call.args[0] for call in worker.call_args_list],['pubmed','arxiv','openalex'])
+        for call in worker.call_args_list:
+            self.assertEqual(call.args[1],saved['search_terms'])
             self.assertEqual(call.kwargs['date_range'],{'start':'2025-09-01','end':date.today().isoformat()})
-            if call.kwargs['platforms']==['arxiv']:self.assertEqual(call.kwargs['arxiv_query'],query)
