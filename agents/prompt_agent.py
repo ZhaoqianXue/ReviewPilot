@@ -453,7 +453,8 @@ Your response:"""
             "domain": input_data.get("domain") or "",
             "requested_extraction_fields": extraction_prompt.get("extraction_fields") or extraction_prompt.get("fields") or [],
         }
-        return f"""Design an extraction schema for a systematic review.
+        return f"""Task: extraction, step 1 of 2 (schema). Follow the skill's "Extraction schema" section.
+Design an extraction schema for a systematic review.
 
 CURRENT PROJECT DATA (authoritative):
 {json.dumps(project_data, ensure_ascii=False)}
@@ -500,6 +501,133 @@ Generate 8-12 fields when the request is broad. Preserve user-requested concepts
             raise ValueError("PromptAgent extraction schema field names must be unique")
         from reviewpilot_core.extraction_schema import validate_schema
         return validate_schema({"fields": fields})
+
+    # ------------------------------------------------------------ review guidance
+    GUIDANCE_SYSTEM_PROMPT = (
+        "You write review-specific guidance for systematic-review screening and extraction instructions. "
+        "Follow the attached prompt-design skill and return only valid JSON."
+    )
+
+    def generate_screening_guidance(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Write the review focus and domain rules that the screening instruction carries.
+
+        Inputs: the review objectives, the confirmed criteria, the search concepts, and the
+        candidate records (titles and abstract openings). No reviewer labels are involved.
+        """
+        from reviewpilot_core.review_guidance import record_sample, render_screening_guidance, validate_screening_guidance
+
+        criteria = input_data.get("criteria") or {}
+        if not criteria.get("inclusion"):
+            raise ValueError("Screening guidance needs confirmed inclusion criteria")
+        sample = record_sample(input_data.get("candidates") or [], limit=200, abstract_chars=500)
+        prompt = f"""Task: screening (screening guidance). Follow the skill's "Screening guidance" section.
+Write the screening guidance for this review.
+
+REVIEW OBJECTIVES DATA:
+{json.dumps(self._objectives(input_data), ensure_ascii=False)}
+
+CONFIRMED ELIGIBILITY CRITERIA DATA:
+{json.dumps({"inclusion": criteria.get("inclusion") or [], "exclusion": criteria.get("exclusion") or []}, ensure_ascii=False)}
+
+SEARCH CONCEPTS DATA:
+{json.dumps(self._concept_labels(input_data), ensure_ascii=False)}
+
+CANDIDATE RECORDS DATA ({len(sample)} records, titles and abstract openings):
+{json.dumps(sample, ensure_ascii=False)}
+
+Return ONLY a JSON object with this shape:
+{{
+  "review_focus": "the review focus paragraph",
+  "definitions": ["operational definition"],
+  "include_when": ["kind of study or result"],
+  "exclude_when": ["kind of near-miss work, ending with the condition that would rescue it"],
+  "tie_breakers": ["tie-breaking rule"]
+}}
+
+Output constraints:
+- definitions: 0 to 4 items; include_when: 4 to 12 items; exclude_when: 3 to 10 items; tie_breakers: 0 to 4 items.
+- Each item is plain text without numbering or bullet characters.
+- include_when and exclude_when items are noun phrases that complete the lead-ins "Include when the record's own work reports or will clearly produce at least one of:" and "Exclude when the record's own work is:"; they do not start with "The study" or "The record"."""
+        draft, usage = self._query_guidance(prompt, validate_screening_guidance)
+        # A single draft varies from call to call; a second pass checks it against the skill's
+        # review checklist and corrects it, which steadies the parts the draft tends to drop.
+        review = (f"{prompt}\n\nYOUR DRAFT DATA:\n{json.dumps(validate_screening_guidance(draft), ensure_ascii=False)}\n\n"
+                  "Review step: check the draft against the skill's screening review checklist, point by point, and return "
+                  "the corrected guidance as a JSON object with the same shape. Keep what already meets the checklist.")
+        payload, review_usage = self._query_guidance(review, validate_screening_guidance)
+        guidance = validate_screening_guidance(payload)
+        return {**guidance, "text": render_screening_guidance(guidance), "candidate_count": len(sample),
+                "model": self.model, "llm_usage": self._add_usage(usage, review_usage)}
+
+    def generate_coding_rules(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Write per-field coding rules that the extraction instruction carries."""
+        from reviewpilot_core.review_guidance import record_sample, render_coding_rules, validate_coding_rules
+
+        schema = input_data.get("schema") or {}
+        if not schema.get("fields"):
+            raise ValueError("Coding rules need a confirmed extraction schema")
+        sample = record_sample(input_data.get("papers") or [], limit=25, abstract_chars=1200)
+        prompt = f"""Task: extraction, step 2 of 2 (coding rules). Follow the skill's "Extraction coding rules" section.
+Write the extraction coding rules for this review.
+
+REVIEW OBJECTIVES DATA:
+{json.dumps(self._objectives(input_data), ensure_ascii=False)}
+
+CONFIRMED EXTRACTION SCHEMA DATA:
+{json.dumps(schema, ensure_ascii=False)}
+
+SAMPLE PAPERS DATA ({len(sample)} included papers, titles and abstracts):
+{json.dumps(sample, ensure_ascii=False)}
+
+Return ONLY a JSON object with this shape:
+{{
+  "preamble": "one or two sentences introducing the review's coding conventions",
+  "fields": [{{"field": "schema field name", "rules": ["coding rule"]}}]
+}}
+
+Output constraints:
+- List only the fields that need rules, using the schema's field names exactly; each listed field has 1 to 8 rules.
+- Each rule is one plain sentence, without numbering or bullet characters, using option labels exactly as the schema declares them."""
+        payload, usage = self._query_guidance(prompt, lambda data: validate_coding_rules(data, schema))
+        rules = validate_coding_rules(payload, schema)
+        return {**rules, "text": render_coding_rules(rules), "paper_count": len(sample), "model": self.model, "llm_usage": usage}
+
+    @staticmethod
+    def _objectives(input_data: Dict[str, Any]) -> str:
+        parts = [str(input_data.get(key) or "").strip() for key in ("objectives", "description", "research_description")]
+        return "\n\n".join(dict.fromkeys(part for part in parts if part))
+
+    @staticmethod
+    def _concept_labels(input_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [{"label": block.get("label"), "required": block.get("required_for_eligibility", True)}
+                for block in input_data.get("concept_blocks") or [] if isinstance(block, dict)]
+
+    @staticmethod
+    def _add_usage(*usages: Dict[str, Any]) -> Dict[str, Any]:
+        total: Dict[str, Any] = {}
+        for usage in usages:
+            for key, value in (usage or {}).items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    total[key] = total.get(key, 0) + value
+        return total
+
+    def _query_guidance(self, prompt: str, check) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """One LLM call; a rejected response gets one corrective retry carrying the reason."""
+        query = self.llm_query or self._default_llm_query
+        request = prompt
+        for attempt in range(2):
+            response, usage = query(text_prompt=request, system_prompt=self.GUIDANCE_SYSTEM_PROMPT,
+                                    model=self.model, provider="openai")
+            try:
+                payload = json.loads(str(response or "").strip())
+                check(payload)
+                return payload, usage or {}
+            except (json.JSONDecodeError, ValueError) as exc:
+                if attempt:
+                    raise ValueError(f"PromptAgent guidance response rejected: {exc}") from exc
+                self.log(f"Guidance response rejected ({exc}); retrying once", level="warning")
+                request = f"{prompt}\nYour previous response was rejected: {exc}. Return a corrected JSON object that follows the shape exactly."
+        raise AssertionError("unreachable")
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
         stripped = text.strip()

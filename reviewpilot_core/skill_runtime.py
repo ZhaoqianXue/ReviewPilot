@@ -15,7 +15,9 @@ SKILL_ASSIGNMENTS = {
     "save-search-setup": ("SearchConditionAgent", "systematic-review-search-strategy"),
     "refine-search-setup": ("SearchConditionAgent", "systematic-review-search-strategy"),
     "screen": ("FilteringAgent", "evidence-screening"),
-    "generate-schema": ("PromptAgent", "structured-evidence-extraction"),
+    "generate-schema": ("PromptAgent", "review-prompt-design"),
+    "generate-screening-guidance": ("PromptAgent", "review-prompt-design"),
+    "generate-coding-rules": ("PromptAgent", "review-prompt-design"),
     "run-extraction": ("ExtractionAgent", "structured-evidence-extraction"),
     "suggest-categories": ("LeadAgentCategorization", "evidence-synthesis-and-categorization"),
     "categorize": ("LeadAgentCategorization", "evidence-synthesis-and-categorization"),
@@ -26,6 +28,7 @@ SKILL_VERSIONS = {
     "evidence-screening": "2.0.0",
     "structured-evidence-extraction": "2.0.0",
     "evidence-synthesis-and-categorization": "2.0.0",
+    "review-prompt-design": "1.5.0",
 }
 
 _START_MARKER = "<reviewpilot-agent-skill"

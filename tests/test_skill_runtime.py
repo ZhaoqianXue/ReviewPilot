@@ -16,17 +16,20 @@ class SkillRuntimeTests(unittest.TestCase):
 
         activations = [registry.activate(action, agent) for action, (agent, _skill) in SKILL_ASSIGNMENTS.items()]
 
-        self.assertEqual(len(activations), 7)
+        self.assertEqual(len(activations), 9)
         self.assertEqual({activation.name for activation in activations}, {
             "systematic-review-search-strategy",
             "evidence-screening",
             "structured-evidence-extraction",
             "evidence-synthesis-and-categorization",
+            "review-prompt-design",
         })
+        for action in ("generate-schema", "generate-screening-guidance", "generate-coding-rules"):
+            self.assertEqual(registry.activate(action, "PromptAgent").name, "review-prompt-design")
         self.assertTrue(all(activation.instructions for activation in activations))
         self.assertEqual(registry.activate("save-search-setup", "SearchConditionAgent").version, "3.0.0")
         self.assertEqual(registry.activate("refine-search-setup", "SearchConditionAgent").name, "systematic-review-search-strategy")
-        self.assertTrue(all(activation.version in {"2.0.0", "2.1.0", "3.0.0"} for activation in activations))
+        self.assertTrue(all(activation.version in {"1.5.0", "2.0.0", "2.1.0", "3.0.0"} for activation in activations))
         self.assertTrue(all(len(activation.content_hash) == 64 for activation in activations))
 
     def test_search_skill_contains_reusable_methodology_without_product_workflow(self):
@@ -53,6 +56,7 @@ class SkillRuntimeTests(unittest.TestCase):
             "evidence-screening": ("Operationalize criteria", "Represent uncertainty as uncertainty"),
             "structured-evidence-extraction": ("Design the schema", "source provenance"),
             "evidence-synthesis-and-categorization": ("Build categories", "Check coverage"),
+            "review-prompt-design": ("Screening guidance", "Extraction coding rules"),
         }
 
         for action, agent in (

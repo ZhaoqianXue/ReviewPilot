@@ -206,6 +206,54 @@ class RelevancePromptAgentContract:
 
 
 @dataclass(frozen=True)
+class ScreeningGuidanceContract:
+    """PromptAgent writes the review focus and domain rules for the screening instruction (a draft)."""
+
+    action: str = "generate-screening-guidance"
+    agent_name: str = "PromptAgent"
+    stage: str = "prompt_relevance"
+    model: str = PROMPT_MODEL
+    agent_cls: type = PromptAgent
+
+    def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        from .screening_criteria import criteria_state
+
+        project_path = Path(output_root) / project_id
+        config = read_json(project_path / "search_conditions.json", {}) or {}
+        criteria = criteria_state(project_path)
+        candidates = [row for path in sorted((project_path / "collected").glob("*.jsonl")) for row in read_jsonl(path)]
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        guidance = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_screening_guidance(
+            {**config, **(input_data or {}), "criteria": {"inclusion": criteria["inclusion"], "exclusion": criteria["exclusion"]},
+             "candidates": candidates})
+        atomic_write_json(project_path / "prompts" / "screening_guidance.json", {**guidance, "status": "draft"}, indent=None)
+        return {"status": "screening_guidance_generated", "guidance": guidance}
+
+
+@dataclass(frozen=True)
+class CodingRulesContract:
+    """PromptAgent writes per-field coding rules for the extraction instruction (a draft)."""
+
+    action: str = "generate-coding-rules"
+    agent_name: str = "PromptAgent"
+    stage: str = "prompt_extraction"
+    model: str = PROMPT_MODEL
+    agent_cls: type = PromptAgent
+
+    def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        from .extraction_schema import load_schema_draft
+
+        project_path = Path(output_root) / project_id
+        config = read_json(project_path / "search_conditions.json", {}) or {}
+        papers = read_jsonl(project_path / "filtered" / "included_papers.jsonl")
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
+        rules = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_coding_rules(
+            {**config, **(input_data or {}), "schema": load_schema_draft(project_path), "papers": papers})
+        atomic_write_json(project_path / "extraction" / "coding_rules.json", {**rules, "status": "draft"}, indent=None)
+        return {"status": "coding_rules_generated", "coding_rules": rules}
+
+
+@dataclass(frozen=True)
 class CollectionAgentContract:
     """Runs the real CollectionAgent behind the Lead Agent contract boundary."""
 
@@ -564,6 +612,8 @@ def default_sub_agent_contracts(
         SearchConditionAgentContract(agent_cls=search_condition_agent_cls),
         RefineSearchSetupContract(agent_cls=search_condition_agent_cls),
         RelevancePromptAgentContract(agent_cls=prompt_agent_cls),
+        ScreeningGuidanceContract(agent_cls=prompt_agent_cls),
+        CodingRulesContract(agent_cls=prompt_agent_cls),
         CollectionAgentContract(),
         FilteringAgentContract(),
         PromptAgentContract(agent_cls=prompt_agent_cls),
