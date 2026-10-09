@@ -103,6 +103,15 @@ class ExtractionAgentTests(unittest.TestCase):
                 self.assertEqual(output_file.read_bytes(), previous)
                 self.assertEqual(list(output_file.parent.glob(".*.tmp")), [])
 
+    def test_extraction_cost_uses_the_model_price_list(self):
+        from utils.llm import MODEL_COSTS
+        agent = ExtractionAgent(Path("."))
+        input_rate, output_rate = MODEL_COSTS[agent.model]
+        self.assertAlmostEqual(agent._usage_cost({"input_tokens": 100_000, "output_tokens": 2_000}),
+                               0.1 * input_rate + 0.002 * output_rate)
+        self.assertEqual(agent._usage_cost({"input_tokens": 5, "output_tokens": 5, "cost_usd": 0.42}), 0.42)
+        self.assertAlmostEqual(agent._usage_cost({"total_tokens": 1_000_000}), input_rate)
+
     def test_direct_openai_extraction_uses_max_completion_tokens_for_gpt5_models(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

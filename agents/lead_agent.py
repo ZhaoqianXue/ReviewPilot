@@ -371,17 +371,20 @@ Return ONLY valid JSON:
                 raise ValueError("Finalize the extraction schema before drafting coding rules.")
             rules = self._draft_coding_rules(project_path, project_id)
             if rules["status"] != "draft":
+                self._record_coding_rules_activity(project_path, "The coding rules could not be drafted. Try again from the canvas.")
                 raise ValueError(f"The coding rules could not be drafted: {rules['error'] or 'unknown error'}")
-            return LeadAgentResult(stage="prompt_extraction", status="completed",
-                reply="The Prompt Agent drafted new coding rules. Review and confirm them in the canvas before extraction.",
+            reply = "The Prompt Agent drafted new coding rules. Review and confirm them in the canvas before extraction."
+            self._record_coding_rules_activity(project_path, reply)
+            return LeadAgentResult(stage="prompt_extraction", status="completed", reply=reply,
                 data={"coding_rules": rules}, artifacts=[str(project_path / "extraction/coding_rules.json")])
 
         if action == "confirm-coding-rules":
             if not is_schema_finalized(project_path):
                 raise ValueError("Finalize the extraction schema before confirming coding rules.")
             rules = confirm_coding_rules(project_path, input_data or {})
-            return LeadAgentResult(stage="prompt_extraction", status="completed",
-                reply="Coding rules confirmed. Run Information Extraction when ready.",
+            reply = "Coding rules confirmed. Run Information Extraction when ready."
+            self._record_coding_rules_activity(project_path, reply)
+            return LeadAgentResult(stage="prompt_extraction", status="completed", reply=reply,
                 data={"coding_rules": rules}, artifacts=[str(project_path / "prompts/extraction_prompt.json")])
 
         if action == "run-extraction":
@@ -405,6 +408,7 @@ Return ONLY valid JSON:
             rules = self._ensure_coding_rules(project_path, project_id)
             if rules["status"] != "confirmed":
                 # Extraction waits for the researcher to confirm the coding rules drafted for this schema.
+                self._record_coding_rules_activity(project_path, self._coding_rules_reply(rules))
                 return LeadAgentResult(stage="prompt_extraction", status="completed", reply=self._coding_rules_reply(rules),
                     data={"coding_rules": rules}, artifacts=artifacts + [str(project_path / "extraction/coding_rules.json")])
             result = self._call_workflow_action("run-extraction", project_id)
@@ -695,9 +699,17 @@ Supported commands:
 
     def _record_guidance_activity(self, project_path: Path, text: str) -> None:
         """Show the latest review-guidance step in the Paper Screening activity, like other canvas actions."""
+        self._record_canvas_activity(project_path, 2, "screening_guidance", text)
+
+    def _record_coding_rules_activity(self, project_path: Path, text: str) -> None:
+        """Show the latest coding-rules step in the Information Extraction activity."""
+        self._record_canvas_activity(project_path, 4, "coding_rules", text)
+
+    @staticmethod
+    def _record_canvas_activity(project_path: Path, step: int, stage: str, text: str) -> None:
         append_jsonl(str(project_path / "chat" / "messages.jsonl"), {
-            "step": 2, "role": "a", "text": text, "created_at": datetime.now().isoformat(),
-            "model": LEAD_AGENT_DEV_MODEL, "source": "canvas_action", "stage": "screening_guidance"})
+            "step": step, "role": "a", "text": text, "created_at": datetime.now().isoformat(),
+            "model": LEAD_AGENT_DEV_MODEL, "source": "canvas_action", "stage": stage})
 
     def _draft_screening_guidance(self, project_path: Path, project_id: str) -> dict[str, Any]:
         """Ask the Prompt Agent for review guidance; a failure is recorded so the canvas can offer a retry."""

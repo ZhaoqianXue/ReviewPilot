@@ -223,14 +223,19 @@ process.stdout.write(JSON.stringify({query, blocks, payload}));
     def test_finalized_extraction_action_state_matrix(self):
         script=r'''const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const src=fs.readFileSync('frontend/app.js','utf8');
-const ctx={state:{actionPending:''},D:{stageState:{retrieval:{status:'completed'}}},buttonStyle:'',extractionSchemaAction:()=> 'regenerate-schema',fieldsTable:()=>'',previewTable:()=>'',reviewUI:{extraction:()=>''}};vm.createContext(ctx);
+const ctx={state:{actionPending:''},D:{stageState:{retrieval:{status:'completed'}},codingRules:{status:'confirmed'}},buttonStyle:'',extractionSchemaAction:()=> 'regenerate-schema',fieldsTable:()=>'',previewTable:()=>'',codingRulesPanel:()=>'',reviewUI:{extraction:()=>''}};vm.createContext(ctx);
 vm.runInContext(src.slice(src.indexOf('  function extractionCanvas('),src.indexOf('  function fieldsTable(')),ctx);
 for(const status of ['completed','failed','partial','ready']) {
  ctx.D.stageState.extraction={status};
  let html=ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},isFieldsTab:true,allFields:[]});assert.match(html,/data-action="run-extraction"/);
  if(['failed','partial'].includes(status))assert.match(html,/Retry extraction with this schema/);
- ctx.D.stageState.extraction.stale=true;html=ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]});assert.match(html,/Rerun extraction with this schema/);
+ ctx.D.stageState.extraction.stale=true;ctx.D.stageState.extraction.last_valid={status:'completed'};html=ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]});assert.match(html,/Rerun extraction with this schema/);
 }
+// A stale stage that never produced results has nothing to rerun.
+ctx.D.stageState.extraction={status:'ready',stale:true,last_valid:null};assert.match(ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]}),/>Run Extraction</);
+// Extraction waits for confirmed coding rules.
+for (const rules of ['missing','draft','stale','failed']) {ctx.D.codingRules={status:rules};assert.doesNotMatch(ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]}),/data-action="run-extraction"/);}
+ctx.D.codingRules={status:'confirmed'};
 ctx.state.actionPending='run-extraction';assert.match(ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]}),/data-action="run-extraction" disabled/);
 for (const status of ['draft','missing'])assert.doesNotMatch(ctx.extractionCanvas({schemaWorkbench:{status},allFields:[]}),/data-action="run-extraction"/);
 '''

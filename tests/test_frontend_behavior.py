@@ -328,7 +328,8 @@ assert.equal(workflowStepForAction('unknown-action'), '');
 
 assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'completed',originStep:'search',visibleStep:'search',steps}), 'screening');
 assert.equal(autoAdvanceStepForTask({action:'download-pdfs',taskStatus:'partial',originStep:'retrieval',visibleStep:'retrieval',steps}), 'extraction');
-assert.equal(autoAdvanceStepForTask({action:'finalize-and-run-extraction',taskStatus:'completed',originStep:'extraction',visibleStep:'extraction',steps}), 'categorize');
+// Finalizing the schema stops at the coding rules, so it never moves the researcher on.
+assert.equal(autoAdvanceStepForTask({action:'finalize-and-run-extraction',taskStatus:'completed',originStep:'extraction',visibleStep:'extraction',steps}), '');
 
 assert.equal(autoAdvanceStepForTask({action:'collect',taskStatus:'failed',originStep:'search',visibleStep:'search',steps}), '');
 assert.equal(autoAdvanceStepForTask({action:'generate-schema',taskStatus:'completed',originStep:'extraction',visibleStep:'extraction',steps}), '');

@@ -1460,8 +1460,8 @@ def _activity_by_step(
             activity[step_key].append({"t": "--:--:--", "tag": notice["status"], "msg": f"{notice['succeeded']} completed · {notice['failed']} failed · {notice['nextAction'] or 'recovery required'}"})
     for step_key, line in _canvas_action_activity(path):
         stage_name = {"search": "collection", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorize": "categorization"}.get(step_key)
-        # Guidance lines describe the next screening run, so a stale earlier run does not hide them.
-        if stage_name and line["tag"] != "guidance" and (workflow_state["stages"][stage_name]["stale"] or stage_name in notices):
+        # Guidance and coding-rule lines describe the next run, so a stale earlier run does not hide them.
+        if stage_name and line["tag"] not in {"guidance", "rules"} and (workflow_state["stages"][stage_name]["stale"] or stage_name in notices):
             continue
         activity.setdefault(step_key, []).append(line)
     return activity
@@ -1555,6 +1555,8 @@ def _canvas_action_tag(row: dict[str, Any]) -> str:
     key = _canvas_action_message_key(row)
     if stage == "screening_guidance":
         return "guidance"
+    if stage == "coding_rules":
+        return "rules"
     if stage == "prompt_extraction":
         return "schema"
     if key == "prompt_extraction":

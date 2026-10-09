@@ -124,8 +124,12 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         previous = stage["last_valid"]
         is_rerun = previous is not None
         result = result or {}
-        status, outcome_counts = structured_action_outcome(action, result)
-        counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction", "finalize-and-run-extraction"} else _counts(result)
+        if _stopped_at_coding_rules(action, result):
+            # Finalizing the schema drafted coding rules for the researcher to confirm; extraction did not run.
+            status, counts = "ready", {}
+        else:
+            status, outcome_counts = structured_action_outcome(action, result)
+            counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction", "finalize-and-run-extraction"} else _counts(result)
         if action in _READY_ACTIONS:
             status = "ready"
         error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
@@ -174,6 +178,14 @@ def restore_downstream_freshness(project_path: Path | str, stage_name: str, prev
             state["stages"][name]["stale"] = previous["stages"][name]["stale"]
         _write(project_path, state)
         return state
+
+
+def _stopped_at_coding_rules(action: str, result: dict[str, Any]) -> bool:
+    """finalize-and-run-extraction returns the coding rules instead of extraction counts when it waits for their confirmation."""
+    if action != "finalize-and-run-extraction" or "coding_rules" not in result:
+        return False
+    nested = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+    return not any(key in result or key in nested for key in ("processed", "success", "errors", "failed"))
 
 
 def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str, dict[str, int]]:

@@ -501,13 +501,18 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
         }
 
     def _usage_cost(self, usage: Any) -> float:
+        """Cost at the extraction model's listed price; a usage report that already carries its cost is taken as is."""
+        from utils.llm import calculate_cost
+
         data = self._usage_dict(usage)
+        if isinstance(data.get("cost_usd"), (int, float)):
+            return float(data["cost_usd"])
         input_tokens = int(data.get("input_tokens") or 0)
         output_tokens = int(data.get("output_tokens") or 0)
-        total_tokens = int(data.get("total_tokens") or input_tokens + output_tokens)
-        if input_tokens or output_tokens:
-            return (input_tokens / 1_000_000) * 0.25 + (output_tokens / 1_000_000) * 2.0
-        return total_tokens / 1_000_000 * 2.25
+        if not (input_tokens or output_tokens):
+            # Only a total is known; price it all as input, the larger share for full-text extraction.
+            input_tokens = int(data.get("total_tokens") or 0)
+        return calculate_cost(input_tokens, output_tokens, self.model)
 
     def _web_search_error_record(self, paper: Dict[str, Any], row_number: int, message: str) -> Dict[str, Any]:
         return {
@@ -653,10 +658,7 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
                 model=self.model,
                 provider="openai",
             )
-            total_tokens = 0
-            if isinstance(usage, dict):
-                total_tokens = int(usage.get("total_tokens") or usage.get("input_tokens") or 0)
-            return response, total_tokens / 1_000_000 * 2.25
+            return response, self._usage_cost(usage if isinstance(usage, dict) else {})
 
         try:
             request = {
@@ -682,8 +684,7 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             input_tokens = response.usage.prompt_tokens if response.usage else 0
             output_tokens = response.usage.completion_tokens if response.usage else 0
 
-            # Cost per 1M tokens for the active extraction model.
-            cost = (input_tokens / 1_000_000) * 0.25 + (output_tokens / 1_000_000) * 2.0
+            cost = self._usage_cost({"input_tokens": input_tokens, "output_tokens": output_tokens})
 
             return extracted, cost
 

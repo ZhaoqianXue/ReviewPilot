@@ -194,7 +194,7 @@ const WORKFLOW_ACTION_META = Object.freeze({
   'generate-schema': { step: 'extraction', label: 'Schema generation', advances: false },
   'regenerate-schema': { step: 'extraction', label: 'Schema regeneration', advances: false },
   'preview-extraction': { step: 'extraction', label: 'Extraction preview', advances: false },
-  'finalize-and-run-extraction': { step: 'extraction', label: 'Information extraction', advances: true },
+  'finalize-and-run-extraction': { step: 'extraction', label: 'Finalizing schema and drafting coding rules', advances: false },
   'run-extraction': { step: 'extraction', label: 'Information extraction', advances: true },
   'suggest-categories': { step: 'categorize', label: 'Category generation', advances: false },
   categorize: { step: 'categorize', label: 'Categorization', advances: false },
@@ -292,6 +292,38 @@ function guidanceConfirmPayload(saved, draft, revision) {
   return { payload, error: '' };
 }
 
+// Coding rules: one entry per schema field that has rules, 1 to 8 rules each (reviewpilot_core/review_guidance.py).
+const MAX_CODING_RULES_PER_FIELD = 8;
+
+function codingRuleFieldLabel(name) {
+  const words = String(name || '').replace(/_/g, ' ').trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Every schema field gets a slot, in schema order, so a rule can be added to a field the draft left out.
+function codingRulesDraftFromRules(rules, fieldNames) {
+  const byField = new Map(((rules && rules.fields) || []).map((entry) => [String(entry.field), (entry.rules || []).map(String)]));
+  const names = [...fieldNames.map(String), ...[...byField.keys()].filter((name) => !fieldNames.includes(name))];
+  return { preamble: String((rules && rules.preamble) || ''), fields: names.map((field) => ({ field, rules: byField.get(field) || [] })) };
+}
+
+// The confirm payload: the revision, plus the preamble and the field rules only when the researcher changed them.
+function codingRulesConfirmPayload(saved, draft, revision) {
+  const payload = { revision: revision || '' };
+  if (!draft) return { payload, error: '' };
+  const clean = (text) => String(text || '').split(/\s+/).filter(Boolean).join(' ');
+  const preamble = clean(draft.preamble);
+  if (!preamble) return { payload, error: 'The general coding instructions cannot be empty.' };
+  if (preamble !== clean(saved && saved.preamble)) payload.preamble = preamble;
+  const entries = (draft.fields || []).map((entry) => ({ field: entry.field, rules: (entry.rules || []).map(clean).filter(Boolean) }))
+    .filter((entry) => entry.rules.length);
+  const crowded = entries.find((entry) => entry.rules.length > MAX_CODING_RULES_PER_FIELD);
+  if (crowded) return { payload, error: `${codingRuleFieldLabel(crowded.field)} has ${crowded.rules.length} rules; at most ${MAX_CODING_RULES_PER_FIELD} are allowed.` };
+  const before = ((saved && saved.fields) || []).map((entry) => ({ field: String(entry.field), rules: (entry.rules || []).map(clean) }));
+  if (JSON.stringify(entries) !== JSON.stringify(before)) payload.fields = entries;
+  return { payload, error: '' };
+}
+
 function schemaJsonForDisplay(value) {
   const decode = (item) => {
     if (typeof item === 'string') {
@@ -307,7 +339,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS };
+  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS, codingRulesDraftFromRules, codingRulesConfirmPayload };
 }
 
 /* ReviewPilot workspace UI.
@@ -383,6 +415,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     guidanceDraft: null,
     guidanceError: '',
     guidanceOpen: {},
+    rulesDraft: null,
+    rulesError: '',
   };
   let chatSubmission = 0;
   let actionTicker = null;
@@ -600,6 +634,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       confirmedDecisions: data.confirmedDecisions || {},
       screeningCriteria: data.screeningCriteria || { inclusion: [], exclusion: [], status: 'draft', revision: '', prompt: '' },
       screeningGuidance: data.screeningGuidance || { status: 'missing', revision: '', guidance: null, text: '', error: '' },
+      codingRules: data.codingRules || { status: 'missing', revision: '', rules: null, text: '', error: '' },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
       retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
       categorizationSummary: data.categorizationSummary || { papers: 0, groups: 0 },
@@ -1495,6 +1530,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       : 0;
     if (state.criteriaDraft && (state.criteriaDraft.projectId !== D.project.id || state.criteriaDraft.revision !== D.screeningCriteria.revision)) state.criteriaDraft = null;
     if (state.guidanceDraft && (state.guidanceDraft.projectId !== D.project.id || state.guidanceDraft.revision !== D.screeningGuidance.revision)) state.guidanceDraft = null;
+    if (state.rulesDraft && (state.rulesDraft.projectId !== D.project.id || state.rulesDraft.revision !== D.codingRules.revision)) state.rulesDraft = null;
     const activeAction = step === 'screening' && state.criteriaDraft ? 'finalize-criteria' : (D.quietActions[step] || '');
     const canvasActionPending = !!state.actionPending && state.actionPending === activeAction;
     const workflowRunningStepKey = workflowStepForAction(state.actionPending);
@@ -1609,6 +1645,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       criteriaDraft: state.criteriaDraft,
       screeningGuidance: D.screeningGuidance,
       guidanceDraft: state.guidanceDraft,
+      codingRules: D.codingRules,
+      rulesDraft: state.rulesDraft,
       retrievalSummary: D.retrievalSummary,
       retryRecoveryVisible,
       retryRecoveryRunning,
@@ -2143,6 +2181,17 @@ ${reviewUI.dialog()}
     return Object.fromEntries(Object.entries(guidance).map(([key, value]) => [key, Array.isArray(value) ? value.map(unescapePayloadValue) : unescapePayloadValue(value)]));
   }
 
+  // Rules and guidance items run long; each box grows to show its whole text.
+  function fitTextarea(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight + 2}px`;
+  }
+
+  function decodeCodingRules(rules) {
+    if (!rules) return null;
+    return { preamble: unescapePayloadValue(rules.preamble), fields: (rules.fields || []).map((entry) => ({ field: unescapePayloadValue(entry.field), rules: (entry.rules || []).map(unescapePayloadValue) })) };
+  }
+
   function guidanceTextareaRows(text) {
     return Math.max(2, Math.min(8, Math.ceil(String(text || '').length / 92)));
   }
@@ -2192,7 +2241,7 @@ ${reviewUI.dialog()}
       const openKey = D.project.id || '';
       const open = state.guidanceOpen[openKey] ?? !(confirmed && D.stageState.screening?.last_valid);
       const ruleCount = GUIDANCE_SECTIONS.reduce((sum, { key }) => sum + (g.guidance[key] || []).length, 0);
-      body = `${confirmed ? `<details data-ui="guidance-details" data-rendered-open="${open}" ${open ? 'open' : ''}><summary style="font-size:12px;color:#1a365d;cursor:pointer;margin-bottom:8px;">${open ? 'Hide' : 'Show'} the confirmed guidance · review focus and ${formatCount(ruleCount, 'rule')}</summary>${guidanceReadView(g.guidance)}</details>` : guidanceReadView(g.guidance)}
+      body = `${confirmed ? `<details data-ui="guidance-details" data-open-key="${esc(openKey)}" data-rendered-open="${open}" ${open ? 'open' : ''}><summary style="font-size:12px;color:#1a365d;cursor:pointer;margin-bottom:8px;">${open ? 'Hide' : 'Show'} the confirmed guidance · review focus and ${formatCount(ruleCount, 'rule')}</summary>${guidanceReadView(g.guidance)}</details>` : guidanceReadView(g.guidance)}
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #eef0ee;">
           ${confirmed ? '' : `<button type="button" data-ui="guidance-confirm" data-act="guidance-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? '<span aria-hidden="true" style="width:12px;height:12px;border:2px solid #9bb8d8;border-top-color:#fffefc;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>Confirming…' : '<i class="ph ph-check-circle" aria-hidden="true"></i>Confirm Guidance'}</button>`}
           <button type="button" data-act="guidance-edit" ${locked} style="${buttonStyle}"><i class="ph ph-pencil-simple" aria-hidden="true"></i>Edit guidance</button>
@@ -2223,7 +2272,7 @@ ${reviewUI.dialog()}
   }
 
   function guidanceEditView(draft, locked, confirming, status) {
-    const area = (key, index, text) => `<textarea id="rp-guidance-${key}-${index}" data-guidance-field="${key}" ${index === null ? '' : `data-guidance-index="${index}"`} ${locked} rows="${guidanceTextareaRows(text)}" aria-label="${key === 'review_focus' ? 'Review focus' : `${GUIDANCE_SECTIONS.find((s) => s.key === key).label} item ${index + 1}`}" style="display:block;box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;font-size:12.5px;line-height:1.5;background:#fffefc;color:#243449;">${esc(text)}</textarea>`;
+    const area = (key, index, text) => `<textarea data-autosize id="rp-guidance-${key}-${index}" data-guidance-field="${key}" ${index === null ? '' : `data-guidance-index="${index}"`} ${locked} rows="${guidanceTextareaRows(text)}" aria-label="${key === 'review_focus' ? 'Review focus' : `${GUIDANCE_SECTIONS.find((s) => s.key === key).label} item ${index + 1}`}" style="display:block;box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;font-size:12.5px;line-height:1.5;background:#fffefc;color:#243449;">${esc(text)}</textarea>`;
     const sections = GUIDANCE_SECTIONS.map(({ key, label, hint, min, max }) => {
       const items = draft[key] || [];
       return `<fieldset data-guidance-section="${key}" style="border:none;margin:14px 0 0;padding:0;min-width:0;">
@@ -2298,9 +2347,109 @@ ${reviewUI.dialog()}
         ${!v.isNewProject ? `<button data-act="action" data-action="${schemaAction}" ${pending ? 'disabled aria-busy="true"' : ''} style="${buttonStyle};margin-left:auto;${pending ? 'opacity:.72;cursor:wait;' : ''}"><i class="ph ph-${wb.status === 'missing' ? 'sparkle' : 'arrows-clockwise'}" style="font-size:13px;"></i>${schemaLabel}</button>` : ''}
       </div>
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
-      ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;"><button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale ? 'Rerun extraction with this schema' : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button><button data-act="schema-json" style="${buttonStyle}">Schema JSON</button></div>` : ''}
+      ${!v.isNewProject ? codingRulesPanel(v) : ''}
+      ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;">${D.codingRules.status === 'confirmed' ? `<button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale && D.stageState.extraction?.last_valid ? 'Rerun extraction with this schema' : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button>` : ''}<button data-act="schema-json" style="${buttonStyle}">Schema JSON</button></div>` : ''}
       ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}
       ${!v.isNewProject ? reviewUI.extraction() : ''}`;
+  }
+
+  function codingRulesPanel(v) {
+    const r = v.codingRules || {};
+    const finalized = (v.schemaWorkbench || {}).status === 'finalized';
+    const drafting = ['finalize-and-run-extraction', 'finalize-schema', 'generate-coding-rules'].includes(state.actionPending);
+    if (!finalized && !drafting) return '';
+    const locked = v.workflowRunning || v.chatPending || D.readOnlyExample ? 'disabled' : '';
+    const confirming = state.actionPending === 'confirm-coding-rules';
+    const papers = Number(r.paper_count) > 0 ? `the full text of ${formatCount(Number(r.paper_count), 'included paper')}` : 'the included papers';
+    const badge = drafting ? ['Drafting…', '#1a365d', '#eaf0f7']
+      : ({ draft: ['Needs your confirmation', '#7a4b00', '#fff4dc'], confirmed: ['Confirmed', '#245c37', '#eaf6ee'],
+           stale: ['Out of date', '#7a4b00', '#fff4dc'], failed: ['Not drafted', '#8a1f1f', '#fff1f1'],
+           missing: ['Not drafted', '#6b746c', '#f2f4f1'] })[r.status] || ['', '', ''];
+    const draftButton = (label) => `<button type="button" data-act="action" data-action="generate-coding-rules" ${locked} style="${buttonStyle}"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${label}</button>`;
+    let body;
+    if (drafting) {
+      body = `<div data-ui="rules-drafting" role="status" aria-live="polite" style="display:flex;align-items:center;gap:10px;border:1px solid #c8d8e8;background:#f8fbff;border-radius:10px;padding:13px 14px;">
+        <span aria-hidden="true" style="width:15px;height:15px;flex:0 0 15px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
+        <div><div style="font-size:13px;color:#1a365d;">Drafting coding rules…${v.workflowElapsedLabel ? ` <span data-elapsed style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b746c;">${v.workflowElapsedLabel}</span>` : ''}</div><div style="font-size:11.5px;color:#6b746c;margin-top:2px;line-height:1.45;">The Prompt Agent reads the finalized schema and how the retrieved papers report each field. Extraction does not run until you confirm the rules here.</div></div>
+      </div>`;
+    } else if (r.status === 'failed') {
+      body = `<div data-ui="rules-failed" role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:13px;color:#8a1f1f;">The coding rules could not be drafted.</div>
+        ${r.error ? `<div style="font-size:11.5px;color:#8a1f1f;opacity:.85;margin-top:4px;line-height:1.45;overflow-wrap:anywhere;">${r.error}</div>` : ''}
+        <div style="font-size:11.5px;color:#6b746c;margin:6px 0 10px;">Extraction needs confirmed coding rules. Try drafting them again.</div>
+        ${draftButton('Draft Coding Rules')}
+      </div>`;
+    } else if (r.status === 'missing' || !r.rules) {
+      body = `<div data-ui="rules-missing" style="border:1px dashed #c8d8e8;background:#f8fbff;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:12.5px;color:#3a4252;line-height:1.5;margin-bottom:10px;">No coding rules yet. Extraction needs rules drafted for the finalized schema and confirmed by you.</div>
+        ${draftButton('Draft Coding Rules')}
+      </div>`;
+    } else if (r.status === 'stale') {
+      body = `<div data-ui="rules-stale" role="status" style="border:1px solid #e5c88f;background:#fffbf2;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:13px;color:#7a4b00;">The schema or the included papers changed after these rules were drafted.</div>
+        <div style="font-size:11.5px;color:#6b746c;margin:4px 0 10px;line-height:1.45;">Extraction cannot use them. Redraft the rules for the current schema and papers, then confirm them.</div>
+        ${draftButton('Redraft Coding Rules')}
+      </div>
+      <details style="margin-top:12px;"><summary style="font-size:12px;color:#6b746c;cursor:pointer;">Previous coding rules</summary>${codingRulesReadView(r.rules)}</details>`;
+    } else if (v.rulesDraft) {
+      body = codingRulesEditView(v.rulesDraft, locked, confirming, r.status);
+    } else {
+      const confirmed = r.status === 'confirmed';
+      // Once extraction has results the confirmed rules fold away so the results stay in reach.
+      const openKey = `rules:${D.project.id || ''}`;
+      const open = state.guidanceOpen[openKey] ?? !(confirmed && D.stageState.extraction?.last_valid);
+      const ruleCount = (r.rules.fields || []).reduce((sum, entry) => sum + (entry.rules || []).length, 0);
+      body = `${confirmed ? `<details data-ui="guidance-details" data-open-key="${esc(openKey)}" data-rendered-open="${open}" ${open ? 'open' : ''}><summary style="font-size:12px;color:#1a365d;cursor:pointer;margin-bottom:8px;">${open ? 'Hide' : 'Show'} the confirmed coding rules · ${formatCount(ruleCount, 'rule')} for ${formatCount((r.rules.fields || []).length, 'field')}</summary>${codingRulesReadView(r.rules)}</details>` : codingRulesReadView(r.rules)}
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #eef0ee;">
+          ${confirmed ? '' : `<button type="button" data-ui="rules-confirm" data-act="rules-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? '<span aria-hidden="true" style="width:12px;height:12px;border:2px solid #9bb8d8;border-top-color:#fffefc;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>Confirming…' : '<i class="ph ph-check-circle" aria-hidden="true"></i>Confirm Coding Rules'}</button>`}
+          <button type="button" data-act="rules-edit" ${locked} style="${buttonStyle}"><i class="ph ph-pencil-simple" aria-hidden="true"></i>Edit rules</button>
+          ${draftButton('Redraft')}
+          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Extraction uses these rules.${D.stageState.extraction?.last_valid ? ' Editing them marks the extraction results out of date.' : ''}` : 'Extraction runs after you confirm.'}</span>
+        </div>`;
+    }
+    const intro = r.status === 'confirmed' && !drafting
+      ? `Extraction reads these rules right before each paper's text. The Prompt Agent drafted them from the finalized schema and ${papers}.`
+      : `The Prompt Agent drafts these rules from the finalized schema and ${papers}. Extraction reads them right before each paper's text, so check that each rule codes the field the way your review needs before you confirm.`;
+    return `<section data-ui="coding-rules" style="border:1px solid #d8e2f0;border-radius:12px;padding:16px 18px;margin:14px 0 16px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h3 style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Coding rules</h3>${badge[0] ? `<span data-ui="rules-status" style="font-size:11.5px;color:${badge[1]};background:${badge[2]};border-radius:999px;padding:3px 9px;white-space:nowrap;">${badge[0]}</span>` : ''}</div>
+      <p style="font-size:12px;color:#6b746c;line-height:1.5;margin:8px 0 12px;">${intro}</p>
+      ${state.rulesError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px;">${esc(state.rulesError)}</div>` : ''}
+      ${body}
+    </section>`;
+  }
+
+  function codingRulesReadView(rules) {
+    const fieldNames = (D.schemaJson.fields || []).map((field) => field.name);
+    const ruled = new Set((rules.fields || []).map((entry) => entry.field));
+    const without = fieldNames.filter((name) => !ruled.has(name));
+    const item = (text) => `<li style="position:relative;padding:4px 0 4px 16px;font-size:12.5px;line-height:1.55;color:#243449;"><span aria-hidden="true" style="position:absolute;left:2px;top:11px;width:6px;height:6px;border-radius:999px;background:#9bb8d8;"></span>${text}</li>`;
+    return `<div data-ui="rules-read">
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#8a938b;margin-bottom:4px;">General instructions</div>
+      <p style="margin:0;font-size:13px;line-height:1.6;color:#1a1a1a;background:#f8fbff;border-left:3px solid #c8d8e8;border-radius:0 8px 8px 0;padding:9px 12px;">${rules.preamble || ''}</p>
+      ${(rules.fields || []).map((entry) => `<div data-rules-section="${entry.field}" style="margin-top:12px;"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px;"><span style="font-size:12.5px;color:#1a365d;">${evidenceFieldLabel(entry.field)}</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9aa39b;">${entry.field} · ${formatCount(entry.rules.length, 'rule')}</span></div><ul style="list-style:none;margin:0;padding:0;">${entry.rules.map(item).join('')}</ul></div>`).join('')}
+      ${without.length ? `<p style="font-size:11.5px;color:#8a938b;margin:12px 0 0;line-height:1.5;">No field-specific rules: ${without.map(codingRuleFieldLabel).join(', ')}. These fields follow the schema description only.</p>` : ''}
+    </div>`;
+  }
+
+  function codingRulesEditView(draft, locked, confirming, status) {
+    const area = (id, attrs, label, text) => `<textarea data-autosize id="${id}" ${attrs} ${locked} rows="${guidanceTextareaRows(text)}" aria-label="${esc(label)}" style="display:block;box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;font-size:12.5px;line-height:1.5;background:#fffefc;color:#243449;">${esc(text)}</textarea>`;
+    const sections = draft.fields.map((entry, fi) => {
+      const label = evidenceFieldLabel(entry.field);
+      return `<fieldset data-rules-section="${esc(entry.field)}" style="border:none;margin:14px 0 0;padding:0;min-width:0;">
+        <legend style="font-size:12.5px;color:#1a1a1a;padding:0;">${esc(label)} <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9aa39b;">${esc(entry.field)}</span> <span style="font-size:11px;color:#8a938b;">· ${entry.rules.length ? `up to ${MAX_CODING_RULES_PER_FIELD} rules` : 'no rules; follows the schema description'}</span></legend>
+        ${entry.rules.map((text, index) => `<div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">${area(`rp-rules-${fi}-${index}`, `data-rules-group="${fi}" data-rules-index="${index}"`, `${label} rule ${index + 1}`, text)}<button type="button" data-act="rules-remove" data-group="${fi}" data-index="${index}" ${locked} aria-label="Remove ${esc(label)} rule ${index + 1}" style="border:none;background:transparent;color:#68798c;padding:7px 4px;cursor:pointer;"><i class="ph ph-x" aria-hidden="true"></i></button></div>`).join('')}
+        ${entry.rules.length < MAX_CODING_RULES_PER_FIELD ? `<button type="button" data-act="rules-add" data-group="${fi}" ${locked} style="margin-top:6px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add rule</button>` : ''}
+      </fieldset>`;
+    }).join('');
+    return `<div data-ui="rules-edit">
+      <label style="display:block;font-size:12.5px;color:#1a1a1a;">General instructions<div style="margin-top:6px;">${area('rp-rules-preamble', 'data-rules-group="preamble"', 'General coding instructions', draft.preamble)}</div></label>
+      ${sections}
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid #eef0ee;">
+        <button type="button" data-ui="rules-confirm" data-act="rules-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? 'Confirming…' : `<i class="ph ph-check-circle" aria-hidden="true"></i>${status === 'confirmed' ? 'Confirm edited rules' : 'Confirm Coding Rules'}`}</button>
+        <button type="button" data-act="rules-cancel" ${locked} style="${buttonStyle}">Discard edits</button>
+        <span style="font-size:11px;color:#68798c;line-height:1.4;">Edits apply only after you confirm. One rule per box.</span>
+      </div>
+    </div>`;
   }
 
   function fieldsTable(v) {
@@ -2567,7 +2716,7 @@ ${reviewUI.dialog()}
     const disabled = pending ? 'disabled aria-busy="true"' : '';
     return `<section data-ui="extraction-decision-card" style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:12px;padding:14px;margin-top:2px;">
       <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#6b746c;margin-bottom:7px;">Decision needed</div>
-      <div style="font-size:13px;color:#1a1a1a;line-height:1.45;margin-bottom:12px;">Finalize this ${v.allFields.length}-field schema and run extraction on all retrieved papers?</div>
+      <div style="font-size:13px;color:#1a1a1a;line-height:1.45;margin-bottom:12px;">Finalize this ${v.allFields.length}-field schema? The Prompt Agent then drafts coding rules from the retrieved papers; you confirm them in the canvas before extraction runs.</div>
       <button data-act="action" data-action="finalize-and-run-extraction" ${disabled} style="width:100%;border:none;background:#1a365d;color:#fffefc;border-radius:9px;padding:10px 12px;font:inherit;font-size:12.5px;cursor:${pending ? 'wait' : 'pointer'};"><i class="ph ph-check-circle" style="margin-right:6px;"></i>Finalize Schema</button>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;"><button data-act="open-preview" ${disabled} style="${buttonStyle};justify-content:center;"><i class="ph ph-eye"></i>Preview</button><button data-act="schema-json" ${disabled} style="${buttonStyle};justify-content:center;"><i class="ph ph-brackets-curly"></i>JSON</button></div>
       <button data-act="action" data-action="generate-schema" ${disabled} style="border:none;background:none;color:#6b746c;width:100%;padding:10px 4px 2px;font:inherit;font-size:11.5px;cursor:${pending ? 'wait' : 'pointer'};">Regenerate schema</button>
@@ -2831,6 +2980,7 @@ ${reviewUI.dialog()}
       const conv = document.getElementById('rp-conv');
       if (conv) conv.scrollTop = previousProject !== (D.project.id || '') || atBottom ? conv.scrollHeight : scrollTop;
       wireHover(root);
+      root.querySelectorAll('textarea[data-autosize]').forEach(fitTextarea);
       if (state.chatInputFocus) {
         state.chatInputFocus = false;
         focusResearchTopicInput(root);
@@ -3134,6 +3284,45 @@ ${reviewUI.dialog()}
         postAction(actionName, payload).catch(() => {});
         return;
       }
+      else if (act === 'rules-edit') {
+        if (state.actionPending) return;
+        const fieldNames = (D.schemaJson.fields || []).map((field) => unescapePayloadValue(field.name));
+        state.rulesDraft = { projectId: D.project.id, revision: D.codingRules.revision,
+          ...codingRulesDraftFromRules(decodeCodingRules(D.codingRules.rules), fieldNames) };
+        state.rulesError = '';
+        state.returnFocus = '#rp-rules-preamble';
+      }
+      else if (act === 'rules-cancel') {
+        state.rulesDraft = null;
+        state.rulesError = '';
+        state.returnFocus = '[data-act="rules-edit"]';
+      }
+      else if (act === 'rules-add' || act === 'rules-remove') {
+        const fi = Number(t.getAttribute('data-group'));
+        const items = state.rulesDraft?.fields[fi]?.rules;
+        if (!items) return;
+        if (act === 'rules-add') {
+          items.push('');
+          state.returnFocus = `#rp-rules-${fi}-${items.length - 1}`;
+        } else {
+          const index = Number(t.getAttribute('data-index'));
+          items.splice(index, 1);
+          state.returnFocus = items.length ? `#rp-rules-${fi}-${Math.min(index, items.length - 1)}` : `[data-act="rules-add"][data-group="${fi}"]`;
+        }
+      }
+      else if (act === 'rules-confirm') {
+        if (state.actionPending) return;
+        const { payload, error } = codingRulesConfirmPayload(decodeCodingRules(D.codingRules.rules), state.rulesDraft, D.codingRules.revision);
+        state.rulesError = error;
+        if (error) { paint(); return; }
+        state.actionPending = 'confirm-coding-rules';
+        state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
+        state.actionError = '';
+        paint();
+        postAction('confirm-coding-rules', payload).catch(() => {});
+        return;
+      }
       else if (act === 'guidance-edit') {
         if (state.actionPending) return;
         state.guidanceDraft = { projectId: D.project.id, revision: D.screeningGuidance.revision,
@@ -3216,7 +3405,7 @@ ${reviewUI.dialog()}
       if (details.matches && details.matches('details[data-ui="guidance-details"]')) {
         // Rendering an open <details> fires toggle too; only a change from the rendered state is the user's.
         if (details.getAttribute('data-rendered-open') === String(details.open)) return;
-        state.guidanceOpen[D.project.id || ''] = details.open;
+        state.guidanceOpen[details.getAttribute('data-open-key') || ''] = details.open;
         paint();
         return;
       }
@@ -3230,6 +3419,13 @@ ${reviewUI.dialog()}
       if (e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT' && reviewUI.input(e.target,e)) return;
       if (e.target.id === 'rp-concept-terms') { e.target.rows = Math.min(12, Math.max(5, e.target.value.split('\n').length + 1)); return; }
       if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; if (!e.isComposing) paint(); return; }
+      if (e.target.matches('textarea[data-autosize]')) fitTextarea(e.target);
+      if (e.target.matches('[data-rules-group]') && state.rulesDraft) {
+        const group = e.target.getAttribute('data-rules-group');
+        if (group === 'preamble') state.rulesDraft.preamble = e.target.value;
+        else if (state.rulesDraft.fields[Number(group)]) state.rulesDraft.fields[Number(group)].rules[Number(e.target.getAttribute('data-rules-index'))] = e.target.value;
+        return;
+      }
       if (e.target.matches('[data-guidance-field]') && state.guidanceDraft) {
         const key = e.target.getAttribute('data-guidance-field');
         if (key === 'review_focus') state.guidanceDraft.review_focus = e.target.value;
