@@ -175,6 +175,21 @@ class RecordReviewTests(unittest.TestCase):
         self.assertEqual((self.project/'filtered/included_papers.jsonl').read_bytes(),before)
         with self.assertRaises(ValueError):review.run_sample(self.project,{'mode':'screening','keys':['x']*6,'revision':review.revision(self.project)},llm_query=llm)
 
+    def test_live_samples_use_the_saved_project_model(self):
+        config = json.loads((self.project / 'search_conditions.json').read_text())
+        atomic_write_json(self.project / 'search_conditions.json', {**config, 'model': 'gpt-5.4'})
+        calls = []
+        def screening_llm(**kwargs):
+            calls.append(kwargs)
+            return json.dumps({'include': True, 'reason': 'Clinical study', 'criterion': '', 'quote': '', 'uncertain': False}), {}
+        review.run_sample(self.project, {'mode': 'screening', 'keys': [review.key({'id': 'p1'})], 'revision': review.revision(self.project)}, llm_query=screening_llm)
+        def extraction_llm(**kwargs):
+            calls.append(kwargs)
+            return json.dumps({'participants': 42}), {}
+        review.run_sample(self.project, {'mode': 'extraction', 'keys': [review.key({'paper_id': 'p1'})], 'revision': review.revision(self.project)},
+                          llm_query=extraction_llm, pdf_reader=lambda path: '[PDF page 1]\nWe enrolled 42 adults.')
+        self.assertEqual([call['model'] for call in calls], ['gpt-5.4', 'gpt-5.4'])
+
     def test_all_example_mutations_blocked_and_copy_is_independent(self):
         source=make_project(self.root,'quick-start-hci-showcase')
         papers = review.read_jsonl(source / 'filtered/included_papers.jsonl')

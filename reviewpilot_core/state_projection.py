@@ -15,6 +15,7 @@ from ui_state import project_stage_label, schema_workbench_state
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .screening_criteria import criteria_state
 from .screening_guidance import guidance_state
+from .coding_rules import rules_state as coding_rules_state
 from .project_decisions import confirmed_decisions
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
@@ -83,6 +84,10 @@ METADATA_FIELDS = {
     "title_match",
     "title_similarity",
     "extraction_source",
+    "extracted_text",
+    "pdf_failure_class",
+    "retrieval_status",
+    "web_search_fallback_pending",
     "url",
     "abstract",
 }
@@ -99,6 +104,8 @@ EXPORT_ARTIFACTS = {
     "extraction-results": ("Extraction results", Path("extraction/extraction_results.jsonl"), "application/x-ndjson"),
     "categorization-mapping": ("Categorization mapping", Path("categorization/categorization_mapping.json"), "application/json"),
     "categorized-results": ("Categorized results", Path("categorization/categorized_results.jsonl"), "application/x-ndjson"),
+    # Computed on request from the project files; extraction results gate availability.
+    "prisma": ("PRISMA flow counts", Path("extraction/extraction_results.jsonl"), "application/json"),
 }
 
 
@@ -116,7 +123,7 @@ def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
             return None
     export_stage = {
         "relevance-prompt": "collection", "included-papers": "screening", "excluded-papers": "screening", "removed-records": "screening", "download-report": "retrieval",
-        "extraction-results": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
+        "extraction-results": "extraction", "prisma": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
     }.get(export_key)
     if export_stage:
         try:
@@ -329,6 +336,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
         "screeningCriteria": criteria_state(path),
         "screeningGuidance": _screening_guidance_view(path),
+        "codingRules": _coding_rules_view(path),
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
@@ -791,11 +799,22 @@ def _result_overview(
         {"label": "PDFs retrieved", "value": f"{retrieval['retrieved']} / {retrieval['total']}"},
         {"label": "Subscribed/unavailable", "value": str(retrieval["unavailable"])},
         {"label": "Extracted", "value": str(len(extraction_rows))},
+        *_full_text_overview(extraction_rows),
         {"label": "Categorized", "value": str(categorization_summary["papers"])},
         {"label": "Sources", "value": ", ".join(_platform_label(item) for item in config.get("platforms") or []) or "not set"},
         {"label": "Date range", "value": _date_range_label(config.get("date_range") or {})},
         {"label": "Search strategy", "value": str(config.get("search_terms") or _query_text(config) or "not set")},
     ]
+
+
+def _full_text_overview(extraction_rows: list[dict]) -> list[dict[str, str]]:
+    from .fulltext_eligibility import FIELD, assessed, is_excluded
+    if not any(FIELD in row for row in extraction_rows):
+        return []
+    full_text_excluded = sum(1 for row in extraction_rows if assessed(row) and is_excluded(row))
+    included = sum(1 for row in extraction_rows if str(row.get("extraction_status") or "success").lower() == "success" and not is_excluded(row))
+    return [{"label": "Full-text excluded", "value": str(full_text_excluded)},
+            {"label": "Included in review", "value": str(included)}]
 
 
 def _date_range_label(date_range: dict) -> str:
@@ -1024,8 +1043,10 @@ def _categorization_workflow(
     recommended = _recommended_categorization_field(field_names)
     selected = str(categorization.get("field") or suggestions.get("field") or recommended or (field_names[0] if field_names else ""))
     mode = str(categorization.get("mode") or suggestions.get("mode") or "multiple")
-    rows_for_analysis = categorized_rows if categorized_rows else extraction_rows
-    field_profiles = {field: _field_profile(extraction_rows, field) for field in field_names}
+    from .fulltext_eligibility import is_excluded
+    eligible_rows = [row for row in extraction_rows if not is_excluded(row)]
+    rows_for_analysis = categorized_rows if categorized_rows else eligible_rows
+    field_profiles = {field: _field_profile(eligible_rows, field) for field in field_names}
     categorized_field = f"{selected}_category" if selected else ""
     return {
         "done": bool(categorization),
@@ -1047,12 +1068,13 @@ def _categorization_workflow(
 
 
 def _categorization_field_names(schema: dict, rows: list[dict]) -> list[str]:
-    names = [field[0] for field in _schema_fields(schema)]
+    from .fulltext_eligibility import FIELD
+    names = [field[0] for field in _schema_fields(schema) if field[0] != FIELD]
     for row in rows:
         for key, value in row.items():
             if key in METADATA_FIELDS or key.endswith("_category") or key in {"id", "row_number", "extracted_data", "source_urls", "confidence", "extraction_status", "extraction_model", "extraction_cost_usd", "extracted_at", "error_message"}:
                 continue
-            if value in (None, "") or key in names:
+            if value in (None, "") or key in names or key.startswith(FIELD):
                 continue
             names.append(str(key))
     return names
@@ -1168,7 +1190,7 @@ def _quiet_labels(path: Path, workflow_state: dict | None = None) -> dict[str, s
         "search": "Run collection",
         "screening": _screening_step(path)[1],
         "retrieval": "Download PDFs",
-        "extraction": "Run extraction",
+        "extraction": _extraction_step(path)[1],
     }
     if extraction_done:
         labels["categorize"] = "Apply categorization"
@@ -1187,6 +1209,23 @@ def _screening_step(path: Path) -> tuple[str, str]:
     return "generate-screening-guidance", "Draft Guidance"
 
 
+def _extraction_step(path: Path) -> tuple[str, str]:
+    """The next extraction-step action once the schema is finalized: draft or confirm the coding rules, then extract."""
+    if not is_schema_finalized(path):
+        return "run-extraction", "Run extraction"
+    status = coding_rules_state(path)["status"]
+    if status == "confirmed":
+        return "run-extraction", "Run extraction"
+    if status == "draft":
+        return "confirm-coding-rules", "Confirm Coding Rules"
+    return "generate-coding-rules", "Draft Coding Rules"
+
+
+def _coding_rules_view(path: Path) -> dict:
+    state = coding_rules_state(path)
+    return {key: state.get(key) for key in ("status", "revision", "rules", "text", "error", "generated_at", "confirmed_at", "paper_count")}
+
+
 def _screening_guidance_view(path: Path) -> dict:
     state = guidance_state(path)
     return {key: state.get(key) for key in ("status", "revision", "guidance", "text", "error", "generated_at", "confirmed_at", "candidate_count")}
@@ -1198,7 +1237,7 @@ def _quiet_actions(path: Path, workflow_state: dict | None = None) -> dict[str, 
         "search": "collect",
         "screening": _screening_step(path)[0],
         "retrieval": "download-pdfs",
-        "extraction": "run-extraction",
+        "extraction": _extraction_step(path)[0],
     }
     if extraction_done:
         actions["categorize"] = "categorize"

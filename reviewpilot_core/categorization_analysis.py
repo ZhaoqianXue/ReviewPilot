@@ -347,7 +347,7 @@ def _recommended_category_field(rows: list[dict]) -> str:
     candidates: dict[str, set[str]] = {}
     for row in rows:
         for key, value in row.items():
-            if key in METADATA_FIELDS or key.endswith("_category"):
+            if key in METADATA_FIELDS or key.endswith("_category") or key.startswith("full_text_eligibility"):
                 continue
             text = str(value or "").strip()
             if text:
@@ -358,7 +358,8 @@ def _recommended_category_field(rows: list[dict]) -> str:
 
 
 def _successful_rows(rows: list[dict]) -> list[dict]:
-    return [row for row in rows if str(row.get("extraction_status") or "success").lower() == "success"]
+    from .fulltext_eligibility import is_excluded
+    return [row for row in rows if str(row.get("extraction_status") or "success").lower() == "success" and not is_excluded(row)]
 
 
 def _category_mode(payload: dict[str, Any]) -> str:

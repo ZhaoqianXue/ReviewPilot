@@ -80,6 +80,19 @@ class WorkflowStateTests(unittest.TestCase):
         for invalid in invalid_contracts:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 structured_action_outcome("retry-failed-downloads", invalid)
+    def test_download_retry_stales_downstream_only_when_it_recovers_pdfs(self):
+        for retry_result, expect_stale in (({"success": 1, "failed": 1}, False), ({"success": 2, "failed": 0}, True)):
+            with self.subTest(retry_result=retry_result), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp); initialize_workflow_state(project)
+                for action, result in (("collect", _terminal_result("collect")), ("screen", {}),
+                                       ("download-pdfs", {"success": 1, "failed": 1}), ("run-extraction", {"processed": 1, "errors": 0})):
+                    start_action(project, action); complete_action(project, action, result)
+                running = start_action(project, "retry-failed-downloads")
+                self.assertFalse(running["stages"]["extraction"]["stale"])
+                stages = complete_action(project, "retry-failed-downloads", retry_result)["stages"]
+                self.assertEqual(stages["extraction"]["stale"], expect_stale)
+                self.assertFalse(stages["retrieval"]["stale"])
+
     def test_starting_material_rerun_atomically_stales_current_and_downstream_outputs(self):
         for rerun_action, stage_name in (("collect", "collection"), ("download-pdfs", "retrieval"), ("run-extraction", "extraction")):
             with self.subTest(action=rerun_action), tempfile.TemporaryDirectory() as tmp:

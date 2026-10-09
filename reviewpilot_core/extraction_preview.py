@@ -11,6 +11,7 @@ from agents.extraction_agent import ExtractionAgent
 
 from .atomic_files import atomic_write_json
 from .extraction_schema import build_extraction_prompts, load_schema_draft, normalize_schema
+from .model_policy import EXTRACTION_MODEL, project_model
 from .project_store import read_json, read_jsonl
 from .safe_text import safe_display_text
 
@@ -168,6 +169,7 @@ def run_project_preview(
     pdf_folder = project / "pdfs"
     row = ExtractionAgent(
         project,
+        model=project_model(read_json(project / "search_conditions.json", {}) or {}, EXTRACTION_MODEL),
         llm_query=llm_query,
         pdf_reader=pdf_reader,
         web_search_query=web_search_query,

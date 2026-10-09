@@ -1,7 +1,7 @@
 # ReviewPilot Lead Agent UI/UX Boundary
 
 ## Relationship to Architecture
-This document defines how the Lead Agent architecture should appear in the web app. It must be read together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which defines the Lead Agent, six evidence Sub Agents, the internal seven-stage evidence pipeline, the user-facing five-step workflow, model policy, and artifact contracts; [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md), which defines the internal four-Skill catalog and loading boundary; and [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md), which defines invisible session context and minimal cross-project memory controls.
+This document defines how the Lead Agent architecture should appear in the web app. It must be read together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which defines the Lead Agent, four evidence Sub Agents, two deterministic tools, the internal seven-stage evidence pipeline, the user-facing five-step workflow, model policy, and artifact contracts; [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md), which defines the internal four-Skill catalog and loading boundary; and [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md), which defines invisible session context and minimal cross-project memory controls.
 
 The Lead Agent architecture is primarily a backend kernel change. It should not substantially redesign ReviewPilot's frontend appearance, layout, or interaction model.
 
@@ -56,7 +56,7 @@ I drafted the extraction schema. Review it in the canvas and approve or revise i
 ```
 
 ```text
-DownloadAgent could not retrieve 8 subscribed papers. I will route them through the web-search fallback during extraction unless you adjust retrieval settings in the canvas.
+Full-text retrieval could not get 8 subscribed papers. I will route them through the web-search fallback during extraction unless you adjust retrieval settings in the canvas.
 ```
 
 Bad chat behavior:
@@ -67,13 +67,22 @@ Bad chat behavior:
 
 Those controls belong in the canvas.
 
+### Replies must match what was saved
+A chat reply describes only changes that were actually saved, and the saved state decides the wording, not the model's intent:
+
+- Search Setup replies end with a summary built from the saved difference: a "Search settings: …" line when a project is created from chat, the list of concept and setting changes after a revision, or "The search setup was not changed." when nothing was saved.
+- When a revision would make existing results stale, it is kept as a draft and the reply says so; the canvas shows the draft with a notice, and the researcher saves or discards it there.
+- Requests the system cannot carry out are named rather than dropped, for example databases ReviewPilot cannot search (Scopus, Web of Science) or record filters such as publication language.
+- Chat on a step that cannot change the requested setting says plainly that nothing was changed and names the step where it can be changed.
+- A message that fails to send stays in the conversation marked "Not sent" with the reason, and its text returns to the input so it can be resent.
+
 ## Lead Agent Visibility
 The Lead Agent may explain progress in chat, but agent/stage status should not be surfaced as primary canvas content. The canvas should show the business result, not the internal orchestration.
 
 Acceptable chat text:
 
 ```text
-CollectionAgent finished searching the approved sources and found 312 records.
+Search finished on the approved sources and found 312 records.
 ```
 
 Acceptable canvas result:
@@ -85,7 +94,7 @@ Acceptable canvas result:
 Avoid canvas content such as:
 
 ```text
-Lead Agent is dispatching CollectionAgent.
+Lead Agent is running the search.
 ```
 
 Internal agent traces are useful for logs and debugging, but they should not dominate the user-facing canvas.

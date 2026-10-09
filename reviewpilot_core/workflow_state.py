@@ -107,7 +107,9 @@ def start_action(project_path: Path | str, action: str) -> dict[str, Any]:
             raise ValueError(f"Action '{action}' requires completed stage '{prerequisite}'")
         stage_name = _action_stage(action)
         stage = state["stages"][stage_name]
-        if _has_material_output(stage):
+        # A download retry only adds PDFs and never replaces existing ones, so
+        # current outputs stay valid unless the retry actually recovers files.
+        if _has_material_output(stage) and action != "retry-failed-downloads":
             _stale_material_outputs(state, stage_name, include_current=True)
         stage.update(status="running", attempt=stage["attempt"] + 1, updated_at=_now(), error=None, counts={})
         _write(project_path, state)
@@ -119,7 +121,8 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
         state = load_workflow_state(project_path)
         stage_name = _action_stage(action)
         stage = state["stages"][stage_name]
-        is_rerun = stage["last_valid"] is not None
+        previous = stage["last_valid"]
+        is_rerun = previous is not None
         result = result or {}
         status, outcome_counts = structured_action_outcome(action, result)
         counts = outcome_counts if action in {"collect", "download-pdfs", "retry-failed-downloads", "run-extraction", "finalize-and-run-extraction"} else _counts(result)
@@ -135,6 +138,15 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
             # when every item failed. Only outputs from later stages are obsolete.
             stage["stale"] = False
         next_index = STAGE_NAMES.index(stage_name) + 1
+        if action == "retry-failed-downloads":
+            # Downstream outputs go stale only when the retry recovered new PDFs;
+            # this applies the staling start_action deferred for retries.
+            if not retry_recovered_pdfs(previous, counts):
+                is_rerun = False
+            else:
+                for downstream_name in STAGE_NAMES[next_index:]:
+                    if _has_material_output(state["stages"][downstream_name]):
+                        state["stages"][downstream_name]["stale"] = True
         if is_rerun:
             for downstream_name in STAGE_NAMES[next_index:]:
                 downstream = state["stages"][downstream_name]
@@ -146,6 +158,12 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
                 next_stage.update(status="ready", updated_at=_now())
         _write(project_path, state)
         return state
+
+
+def retry_recovered_pdfs(previous_valid: dict[str, Any] | None, counts: dict[str, Any]) -> bool:
+    """Whether a download retry added PDFs beyond the last valid retrieval."""
+    before = (previous_valid or {}).get("counts", {}).get("succeeded", 0)
+    return int(counts.get("succeeded") or 0) > int(before or 0)
 
 
 def restore_downstream_freshness(project_path: Path | str, stage_name: str, previous: dict[str, Any]) -> dict[str, Any]:

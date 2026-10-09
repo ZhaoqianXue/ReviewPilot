@@ -4,10 +4,20 @@ import unittest
 from pathlib import Path
 
 from agents.lead_agent import LeadAgent
+from reviewpilot_core.coding_rules import confirm as confirm_coding_rules, save_draft as save_coding_rules_draft
 from reviewpilot_core.extraction_schema import finalize_schema, save_schema_draft
 from reviewpilot_core.project_store import read_json, read_jsonl
 from reviewpilot_core.state_projection import build_rp_data
 from reviewpilot_core.workflow_state import complete_action, initialize_workflow_state, start_action
+
+
+def rules_for(field: str) -> dict:
+    return {"preamble": "Code what the study itself reports.", "fields": [{"field": field, "rules": ["Code the study's own result, not background."]}]}
+
+
+def confirm_rules(project: Path, field: str) -> None:
+    save_coding_rules_draft(project, rules_for(field))
+    confirm_coding_rules(project)
 
 
 def ledger_through(project: Path, stage: str) -> None:
@@ -48,15 +58,21 @@ class LeadAgentTests(unittest.TestCase):
                 def contract_for(self, action): return self.Contract()
                 def run(self, action, output_root, project_id, **kwargs):
                     calls.append(action)
+                    if action == "generate-coding-rules":
+                        return {"coding_rules": save_coding_rules_draft(project, rules_for("methods"))}
                     (project / "extraction" / "extraction_results.jsonl").write_text(json.dumps({"paper_id": "p1", "methods": "Survey"}) + "\n", encoding="utf-8")
                     return {"processed": 1, "errors": 0}
 
-            result = LeadAgent(root, workflow_adapter=Adapter(), llm_query=lambda **kwargs: (json.dumps({"reply": "Extraction complete."}), {})).handle_message(
-                project_id="demo", action="finalize-and-run-extraction"
-            )
+            agent = LeadAgent(root, workflow_adapter=Adapter(), llm_query=lambda **kwargs: (json.dumps({"reply": "Extraction complete."}), {}))
+            drafted = agent.handle_message(project_id="demo", action="finalize-and-run-extraction")
             marker_exists = (project / "extraction" / "schema_finalized.json").exists()
+            # Extraction waits until the researcher confirms the coding rules drafted for the new schema.
+            self.assertEqual(calls, ["generate-coding-rules"])
+            self.assertEqual(drafted.data["coding_rules"]["status"], "draft")
+            agent.handle_message(project_id="demo", action="confirm-coding-rules")
+            result = agent.handle_message(project_id="demo", action="run-extraction")
 
-        self.assertEqual(calls, ["run-extraction"])
+        self.assertEqual(calls, ["generate-coding-rules", "run-extraction"])
         self.assertTrue(marker_exists)
         self.assertEqual(result.data["processed"], 1)
 
@@ -312,6 +328,37 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual([field["name"] for field in draft["fields"]], ["methods", "sample_size"])
         self.assertIn("sample_size", result.reply)
         self.assertEqual([row["role"] for row in chat_rows], ["u", "a"])
+
+    def test_extraction_schema_chat_applies_every_requested_edit_and_reports_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            (project_dir / "extraction").mkdir(parents=True)
+            (project_dir / "pdfs").mkdir(parents=True)
+            (project_dir / "search_conditions.json").write_text(json.dumps({"project_name": "Demo", "description": "Review LLM systems in medicine", "platforms": ["openalex"], "model": "gpt-5.4-mini"}), encoding="utf-8")
+            (project_dir / "pdfs" / "download_report.json").write_text(json.dumps({"success": 1, "failed": 0}), encoding="utf-8")
+            (project_dir / "extraction" / "extraction_schema_draft.json").write_text(
+                json.dumps({"fields": [
+                    {"name": "methods", "type": "Text", "description": "Methods", "required": False, "example": "RCT"},
+                    {"name": "comparators", "type": "Text", "description": "Comparison groups", "required": False, "example": "usual care"},
+                ]}),
+                encoding="utf-8",
+            )
+            commands = {"commands": [
+                {"action": "add_field", "args": {"name": "country", "description": "Country where the study was conducted"}},
+                {"action": "remove_field", "args": {"field_name": "comparators"}},
+                {"action": "remove_field", "args": {"field_name": "not_a_field"}},
+            ]}
+            result = LeadAgent(output_root, llm_query=lambda **_kwargs: (json.dumps(commands), {})).handle_message(
+                project_id="demo",
+                message="Add a country field, remove comparators and not_a_field",
+            )
+            draft = json.loads((project_dir / "extraction" / "extraction_schema_draft.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([field["name"] for field in draft["fields"]], ["methods", "country"])
+        self.assertIn("Added field: country", result.reply)
+        self.assertIn("Removed field: comparators", result.reply)
+        self.assertIn("Could not remove field not_a_field", result.reply)
 
     def test_extraction_schema_chat_answers_step_four_questions_without_mutating_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -771,12 +818,17 @@ class LeadAgentTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = LeadAgent(output_root).handle_message(project_id="demo", action="finalize-schema")
+            def llm(**kwargs):
+                if kwargs.get("text_prompt", "").startswith("Task: extraction, step 2 of 2 (coding rules)"):
+                    return json.dumps(rules_for("key_findings")), {}
+                return json.dumps({"reply": "ok"}), {}
+
+            result = LeadAgent(output_root, llm_query=llm).handle_message(project_id="demo", action="finalize-schema")
             marker_exists = (project_dir / "extraction" / "schema_finalized.json").exists()
             chat_rows = read_jsonl(project_dir / "chat" / "messages.jsonl")
 
         self.assertEqual(result.next_actions, ["run_extraction"])
-        self.assertIn("Information Extraction", result.reply)
+        self.assertIn("drafted coding rules", result.reply)
         self.assertTrue(marker_exists)
         self.assertEqual(chat_rows[-1]["text"], result.reply)
         self.assertEqual(chat_rows[-1]["stage"], "prompt_extraction")
@@ -945,6 +997,7 @@ class LeadAgentTests(unittest.TestCase):
             (project_dir / "pdfs" / "download_report.json").write_text(json.dumps({"success": 0, "failed": 1}), encoding="utf-8")
             save_schema_draft(project_dir, {"fields": [{"name": "key_findings", "type": "Text", "description": "Findings"}]})
             finalize_schema(project_dir)
+            confirm_rules(project_dir, "key_findings")
             calls = []
 
             class FakeWorkflowAdapter:
@@ -1004,6 +1057,7 @@ class LeadAgentTests(unittest.TestCase):
             )
             save_schema_draft(project_dir, {"fields": [{"name": "finding", "type": "Text", "description": "Finding"}]})
             finalize_schema(project_dir)
+            confirm_rules(project_dir, "finding")
             unix_path = "/Users/private-user/ReviewPilot/output/demo/extraction/results.jsonl"
             windows_path = r"C:\Users\private-user\ReviewPilot\output\demo\report.json"
             unix_path_with_spaces = "/Users/private-user/Review Pilot/out.json"

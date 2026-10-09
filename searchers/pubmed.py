@@ -180,9 +180,14 @@ class PubMedSearcher:
                 title_elem = article_elem.find(".//ArticleTitle")
                 title = "".join(title_elem.itertext()) if title_elem is not None else ""
 
-                # Abstract
-                abstract_elem = article_elem.find(".//Abstract/AbstractText")
-                abstract = "".join(abstract_elem.itertext()) if abstract_elem is not None else ""
+                # Abstract: keep every section of a structured abstract, with its label
+                sections = []
+                for section in article_elem.findall(".//Abstract/AbstractText"):
+                    text = " ".join("".join(section.itertext()).split())
+                    if text:
+                        label = (section.get("Label") or "").strip()
+                        sections.append(f"{label}: {text}" if label else text)
+                abstract = "\n".join(sections)
 
                 # Authors
                 authors = []

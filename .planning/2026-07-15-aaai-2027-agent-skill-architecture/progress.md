@@ -33,11 +33,11 @@
 - Resumed the completed research plan for a documentation phase requested by the user.
 - Recovered unsynced context, checked the working tree, and confirmed existing untracked planning/temp files must be preserved.
 - Added Phase 6 for the canonical architecture record and Phase 7 for reciprocal references and verification.
-- Audited headings and cross-references in the Lead architecture, UI/UX boundary, system overview figure prompt, design index, and root README.
+- Audited headings and cross-references in the Lead architecture, UI/UX boundary, design index, and root README.
 - Selected the canonical filename and the minimal reciprocal-reference set.
 - Created `design/AGENT_SKILL_ARCHITECTURE.md` as the canonical, complete Agent Skill architecture record.
 - Kept the document explicitly at the target-design level and recorded that no Skill runtime currently exists.
-- Added reciprocal references in the Lead architecture, UI/UX boundary, design index, root README, and system overview figure prompt.
+- Added reciprocal references in the Lead architecture, UI/UX boundary, design index, and root README.
 - `git diff --check` passed for all modified tracked Markdown files; the new untracked canonical document remains to be included in the final link/content audit.
 - Reran the link audit with explicit UTF-8 encoding and verified 20 relative Markdown links with zero missing targets.
 - Verified four Skill sections, seven Agent assignment rows, no trailing whitespace, and no tracked diff-check failures.

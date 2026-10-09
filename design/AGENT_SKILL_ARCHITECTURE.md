@@ -4,7 +4,7 @@
 
 This document is the canonical architecture and implementation record for Agent Skills in ReviewPilot. It defines the boundary between system prompts and Agent Skills, the Skill catalog, agent-to-Skill assignments, activation and loading policy, traceability requirements, and engineering change controls.
 
-Read this document together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which remains authoritative for the one-Lead-plus-six-Sub-Agent roster, bounded orchestration, workflow order, model policy, and artifact contracts; [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md), which remains authoritative for session and cross-project memory; and [LEAD_AGENT_UI_UX_BOUNDARY.md](LEAD_AGENT_UI_UX_BOUNDARY.md), which remains authoritative for how internal Agent behavior may appear in the product. [SYSTEM_OVERVIEW_FIGURE_PROMPT.md](SYSTEM_OVERVIEW_FIGURE_PROMPT.md) remains authoritative for the current publication-facing Agent-and-workflow figure and must not reinterpret Skills as additional Agents or stages.
+Read this document together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which remains authoritative for the roster of one Lead Agent, four Sub Agents, and two tools, bounded orchestration, workflow order, model policy, and artifact contracts; [AGENT_MEMORY_ARCHITECTURE.md](AGENT_MEMORY_ARCHITECTURE.md), which remains authoritative for session and cross-project memory; and [LEAD_AGENT_UI_UX_BOUNDARY.md](LEAD_AGENT_UI_UX_BOUNDARY.md), which remains authoritative for how internal Agent behavior may appear in the product.
 
 This architecture is implemented in the Web App runtime as of 2026-07-15. The canonical packages live under `.agents/skills/`; `reviewpilot_core/skill_runtime.py` owns loading, validation, version identity, deterministic assignment, prompt injection, and internal activation provenance; and `reviewpilot_core/sub_agent_contracts.py` activates the selected Skill at the existing workflow boundary. Adding or editing a Skill folder without preserving these runtime responsibilities does not constitute a valid integration.
 
@@ -17,7 +17,7 @@ ReviewPilot will initially define **four reusable systematic-review Agent Skills
 3. `structured-evidence-extraction`
 4. `evidence-synthesis-and-categorization`
 
-Five of the seven named Agents use at least one Skill: the Lead Agent, `SearchConditionAgent`, `PromptAgent`, `FilteringAgent`, and `ExtractionAgent`. `CollectionAgent` and `DownloadAgent` do not use a Skill in their default paths.
+The Lead Agent and all four Sub Agents use at least one Skill: `SearchConditionAgent`, `PromptAgent`, `FilteringAgent`, and `ExtractionAgent`. The two deterministic tools, `CollectionAgent` and `DownloadAgent`, do not use a Skill in their default paths.
 
 The four Skills represent reusable review-method competencies. They do not mirror Python class boundaries. `PromptAgent` shares the screening Skill with `FilteringAgent` and the extraction Skill with `ExtractionAgent`; it does not receive a generic prompt-engineering Skill.
 
@@ -83,9 +83,9 @@ A capability does not qualify merely because an Agent performs it. API routing, 
 | Lead Agent | `evidence-synthesis-and-categorization` | The Lead's orchestration remains system/code behavior; only its Lead-owned final semantic synthesis uses a Skill |
 | `SearchConditionAgent` | `systematic-review-search-strategy` | Search conceptualization and query design are reusable professional judgment |
 | `PromptAgent` | `evidence-screening`; `structured-evidence-extraction` | Loads the method corresponding to the artifact it is generating; has no generic prompt-engineering Skill |
-| `CollectionAgent` | None in the default path | Executes approved searches through deterministic database tools and preserves source results |
+| `CollectionAgent` (tool) | None | Executes approved searches through deterministic database tools and preserves source results |
 | `FilteringAgent` | `evidence-screening` | Applies operationalized inclusion and exclusion criteria to study records |
-| `DownloadAgent` | None in the default path | Executes deterministic full-text retrieval and records retrieval status |
+| `DownloadAgent` (tool) | None | Executes deterministic full-text retrieval and records retrieval status |
 | `ExtractionAgent` | `structured-evidence-extraction` | Performs schema-grounded extraction from full text or explicitly labeled web evidence |
 
 Categorization & Analysis remains a Lead-owned capability and does not create a seventh Sub Agent. Its Skill assignment does not change the roster defined in [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md).
@@ -265,13 +265,13 @@ Category-quality rubrics, examples at different sample sizes, single-versus-mult
 
 Categories must be materially fewer and broader than papers when the sample permits, cover the evidence without unsupported interpretation, preserve the selected categorization mode, and remain editable before application.
 
-## Why `CollectionAgent` Has No Default Skill
+## Why the Literature Search Tool (`CollectionAgent`) Has No Skill
 
 `CollectionAgent` receives an approved query and executes it against configured academic sources. Source invocation, pagination, rate-limit handling, metadata preservation, and collection artifact generation are tool and code responsibilities. It must not silently rewrite a query with an LLM.
 
 When collection is too broad, narrow, or empty, the Lead Agent routes query revision back to `SearchConditionAgent`, which uses `systematic-review-search-strategy`, and then re-runs collection. This preserves reproducibility and ownership.
 
-## Why `DownloadAgent` Has No Default Skill
+## Why the PDF Download Tool (`DownloadAgent`) Has No Skill
 
 `DownloadAgent` executes deterministic full-text retrieval, records availability, and writes the retrieval report. URL and identifier resolution, download cascades, retries, file checks, checksums, duplicate handling, and report reconciliation remain code and tool behavior.
 
@@ -389,7 +389,7 @@ The UI may explain that ReviewPilot applied a structured review method when that
 - Do not create a generic Lead orchestration Skill.
 - Do not create a generic prompt-engineering Skill for `PromptAgent`.
 - Do not move routing, stage order, retry, transaction, or artifact validation into Skill prose.
-- Do not assign Skills to `CollectionAgent` or `DownloadAgent` merely to make every Agent appear skill-enabled.
+- Do not assign Skills to the literature search or PDF download tools; they make no model calls.
 - Do not introduce implicit LLM Skill routing in the initial implementation.
 - Do not expose internal Skill traces as primary UI content.
 - Do not claim a fifth retrieval-recovery Skill before that workflow and its evaluation exist.

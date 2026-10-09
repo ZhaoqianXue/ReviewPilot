@@ -32,8 +32,15 @@ The frontend calls:
 
 - `POST /projects` to create a project.
 - `GET /projects/{project_id}/state` to refresh state.
+- `PUT /projects/{project_id}/setup` to save the search setup (concept blocks, sources, limits, dates); a change that makes results stale first returns the affected stages for confirmation.
+- `DELETE /projects/{project_id}/setup/draft` to discard an imported or chat-proposed search setup draft.
+- `POST /projects/{project_id}/chat` to send a chat message; the `step` field routes it (for example `search` revises the search setup and `screening` revises criteria).
+- `GET /projects/{project_id}/configuration-reuse` and `POST /projects/{project_id}/configuration-reuse/{operation}` to list, preview, and import configurations from other local projects.
+- `PATCH` / `DELETE /projects/{project_id}` to rename or delete a conversation (deletion moves it to `output/.trash`).
 - `POST /projects/{project_id}/actions/{action}` to run workflow stages.
 - `GET /tasks/{task_id}` to poll background task status.
+
+Errors return JSON with a `detail` field carrying the reason, which the workspace shows to the user.
 
 The primary source of truth remains the existing output folder shape:
 `search_conditions.json`, `collected/`, `filtered/`, `pdfs/`, `extraction/`, and

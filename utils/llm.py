@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from openai import OpenAI
 from pydantic import BaseModel
 import config
+from reviewpilot_core.model_policy import accepts_custom_temperature
 
 try:
     import google.generativeai as genai
@@ -56,6 +57,7 @@ MODEL_COSTS = {
     "o3": (2.0, 8.0),
     "o3-mini": (1.1, 4.4),
     "o4-mini": (4.0, 16.0),
+    "gpt-6-luna": (0.10, 0.50),
     "gpt-5.4": (1.75, 14.0),
     "gpt-5.4-mini": (0.25, 2.0),
     "gpt-5.2": (1.75, 14.0),
@@ -278,8 +280,8 @@ def query_openai(
     if _messages_request_json(messages_payload):
         request_params["response_format"] = {"type": "json_object"}
 
-    # o3 models don't support temperature parameter
-    if any(m in model for m in ["o3", "o3-mini", "o4-mini"]):
+    # o-series and GPT-6 models reject a custom temperature at their default reasoning effort
+    if not accepts_custom_temperature(model):
         response = client.chat.completions.create(**request_params)
     else:
         response = client.chat.completions.create(**request_params, temperature=config.TEMPERATURE)

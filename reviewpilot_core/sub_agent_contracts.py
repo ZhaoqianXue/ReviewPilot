@@ -28,6 +28,7 @@ from .model_policy import (
     FILTERING_MODEL,
     PROMPT_MODEL,
     SEARCH_CONDITION_MODEL,
+    project_model,
 )
 
 
@@ -260,12 +261,15 @@ class CodingRulesContract:
 
         project_path = Path(output_root) / project_id
         config = read_json(project_path / "search_conditions.json", {}) or {}
+        # Rules are written for the finalized schema, the one extraction uses.
+        schema = (read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {}).get("schema") or load_schema_draft(project_path)
         papers = [{**paper, "text": _paper_text(paper)} for paper in read_jsonl(project_path / "filtered" / "included_papers.jsonl")]
         skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
         rules = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_coding_rules(
-            {**config, **(input_data or {}), "schema": load_schema_draft(project_path), "papers": papers})
-        atomic_write_json(project_path / "extraction" / "coding_rules.json", {**rules, "status": "draft"}, indent=None)
-        return {"status": "coding_rules_generated", "coding_rules": rules}
+            {**config, **(input_data or {}), "schema": schema, "papers": papers})
+        from .coding_rules import save_draft
+
+        return {"status": "coding_rules_generated", "coding_rules": save_draft(project_path, rules)}
 
 
 @dataclass(frozen=True)
@@ -374,9 +378,10 @@ class FilteringAgentContract:
             "auto_approve": True,
         }
 
-        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
-        result = self.agent_cls(project_path, model=self.model, llm_query=skill_query).run(input_data)
-        return self._normalize_result(project_path, result)
+        model = project_model(config, self.model)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=model)
+        result = self.agent_cls(project_path, model=model, llm_query=skill_query).run(input_data)
+        return {**self._normalize_result(project_path, result), "model": model}
 
     def _filtering_date_range(self, date_range: dict[str, Any]) -> dict[str, str]:
         return {
@@ -536,9 +541,10 @@ class ExtractionAgentContract:
             "extraction_prompt": extraction_prompt,
             "download_report": read_json(project_path / "pdfs" / "download_report.json", {}) or {},
         }
-        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
-        result = self.agent_cls(project_path, model=self.model, llm_query=skill_query).run(input_data)
-        return self._normalize_result(project_path, result)
+        model = project_model(read_json(project_path / "search_conditions.json", {}) or {}, self.model)
+        skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=model)
+        result = self.agent_cls(project_path, model=model, llm_query=skill_query).run(input_data)
+        return {**self._normalize_result(project_path, result), "model": model}
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:
         extraction_dir = project_path / "extraction"

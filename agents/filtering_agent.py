@@ -246,21 +246,37 @@ class FilteringAgent(BaseAgent):
         return filtered
 
     def _deduplicate_exact(self, papers: List[Dict]) -> List[Dict]:
-        """Remove exact title duplicates."""
-        seen_titles = {}
+        """Remove exact title duplicates, keeping records whose DOI or PMID differ."""
+        seen_titles: Dict[str, List[Dict]] = {}
         unique_papers = []
 
         for paper in papers:
             title = paper.get("title", "")
             normalized = self._normalize_title(title)
+            if not normalized:
+                unique_papers.append(paper)
+                continue
 
-            if not normalized or normalized not in seen_titles:
-                seen_titles[normalized] = paper
+            kept = seen_titles.setdefault(normalized, [])
+            representative = next((other for other in kept if not self._distinct_identifiers(other, paper)), None)
+            if representative is None:
+                kept.append(paper)
                 unique_papers.append(paper)
             else:
-                self._record_removal(paper, 'exact_duplicate', 'Identical normalized title.', seen_titles[normalized])
+                self._record_removal(paper, 'exact_duplicate', 'Identical normalized title.', representative)
 
         return unique_papers
+
+    @staticmethod
+    def _identifiers(paper: Dict) -> Tuple[str, str]:
+        """Return the normalized DOI and PMID of a collected record."""
+        doi = re.sub(r'^(https?://(dx\.)?doi\.org/|doi:\s*)', '', str(paper.get("doi") or "").strip().lower())
+        pmid = paper.get("pmid") or (paper.get("id") if paper.get("source") == "pubmed" else "")
+        return doi, str(pmid or "").strip()
+
+    def _distinct_identifiers(self, first: Dict, second: Dict) -> bool:
+        """Records whose DOIs or PMIDs differ are different papers, whatever their titles and authors."""
+        return any(a and b and a != b for a, b in zip(self._identifiers(first), self._identifiers(second)))
 
     def _normalize_title(self, title: str) -> str:
         """Normalize title for comparison."""
@@ -303,7 +319,7 @@ class FilteringAgent(BaseAgent):
             for j in range(i + 1, len(papers)):
                 if j in to_remove:
                     continue
-                if similarity_matrix[i, j] >= threshold:
+                if similarity_matrix[i, j] >= threshold and not self._distinct_identifiers(papers[i], papers[j]):
                     to_remove.add(j)
                     self._record_removal(papers[j], 'similar_duplicate', f'Title/author similarity {similarity_matrix[i, j]:.3f} >= {threshold}.', papers[i])
 

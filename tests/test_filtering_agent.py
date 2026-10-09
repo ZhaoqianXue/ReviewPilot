@@ -172,6 +172,36 @@ class FilteringAgentTests(unittest.TestCase):
 
         self.assertEqual(result["filtered_count"], 0)
 
+    def test_exact_title_deduplication_merges_the_same_paper_and_keeps_different_ones(self):
+        papers = [
+            {"id": "123", "source": "pubmed", "doi": "10.1000/ABC", "title": "Lassa fever transmission in Nigeria"},
+            {"id": "W9", "source": "openalex", "doi": "https://doi.org/10.1000/abc", "title": "Lassa Fever Transmission in Nigeria."},
+            {"id": "W10", "source": "openalex", "doi": "", "title": "Lassa fever transmission in Nigeria"},
+            {"id": "456", "source": "pubmed", "doi": "", "title": "Lassa fever transmission in Nigeria"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = FilteringAgent(Path(tmp))
+            kept = agent._deduplicate_exact(papers)
+
+        self.assertEqual([paper["id"] for paper in kept], ["123", "456"])
+        self.assertEqual([(row["id"], row["removal"]["representative"]["id"]) for row in agent.removed_records], [("W9", "123"), ("W10", "123")])
+
+    def test_near_duplicate_detection_keeps_records_whose_doi_or_pmid_differ(self):
+        authors = ["Ada Okafor", "Ben Sesay", "Chi Ilori", "Dan Jalloh", "Eve Kamara", "Fay Conteh"]
+        first = {"id": "W1", "source": "openalex", "title": "Seroepidemiology of Lassa virus in pregnant women in Sierra Leone", "authors": authors}
+        second = {"id": "W2", "source": "openalex", "title": "Transplacental transfer of Lassa antibodies in pregnant women in Sierra Leone", "authors": authors}
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = FilteringAgent(Path(tmp))
+            without_ids, _ = agent._deduplicate_similarity([dict(first), dict(second)])
+            different_dois, _ = agent._deduplicate_similarity([{**first, "doi": "10.1/a"}, {**second, "doi": "10.1/b"}])
+            different_pmids, _ = agent._deduplicate_similarity([{**first, "source": "pubmed", "id": "111"}, {**second, "source": "pubmed", "id": "222"}])
+            same_doi, _ = agent._deduplicate_similarity([{**first, "doi": "10.1/A"}, {**second, "doi": "doi: 10.1/a"}])
+
+        self.assertEqual([paper["id"] for paper in without_ids], ["W1"])
+        self.assertEqual([paper["id"] for paper in different_dois], ["W1", "W2"])
+        self.assertEqual([paper["id"] for paper in different_pmids], ["111", "222"])
+        self.assertEqual([paper["id"] for paper in same_doi], ["W1"])
+
     def test_current_source_row_count_mismatch_fails_loud(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

@@ -1,7 +1,9 @@
 # ReviewPilot Lead Agent Architecture Setting
 
 ## Position
-ReviewPilot's target agent architecture is **one Lead Agent plus six specialized evidence Sub Agents**. The Lead Agent owns user conversation, pipeline orchestration, and final result presentation. The six Sub Agents retain focused responsibilities from the prototype agent system. The execution model is a bounded evidence pipeline plus a user-facing result stage, not an unconstrained autonomous agent loop.
+ReviewPilot's agent architecture is **one Lead Agent, four specialized evidence Sub Agents, and two deterministic tools**. The Lead Agent owns user conversation, pipeline orchestration, and final result presentation.
+
+A component is a **Sub Agent** when an LLM makes its stage's decisions under a role-specific Agent Skill and a validated output contract: `SearchConditionAgent`, `FilteringAgent`, `PromptAgent`, and `ExtractionAgent`. A component is a **tool** when it carries out a step that the PRISMA workflow requires to be reproducible and makes no model call: the Literature Search Tool (`CollectionAgent`) and the PDF Download Tool (`DownloadAgent`). The two tool classes keep the `Agent` suffix for historical reasons. The fixed stage order follows the PRISMA flow by design. The execution model is a bounded evidence pipeline plus a user-facing result stage, not an unconstrained autonomous agent loop.
 
 There are two layers that must not be collapsed:
 
@@ -32,13 +34,13 @@ This architecture follows Anthropic's orchestrator-worker guidance: a central ag
 | Lead Agent | 1 | Owns user dialogue, determines current stage from artifacts, routes work, calls Sub Agents, verifies outputs, asks for user confirmation when needed |
 | `SearchConditionAgent` | 1 | Produces search setup and `search_conditions.json` |
 | `PromptAgent` | 1 | Produces both relevance and extraction prompts |
-| `CollectionAgent` | 1 | Searches configured academic platforms and writes collection outputs |
+| `CollectionAgent` (tool) | 1 | Runs the saved query on the configured sources (titles and abstracts), writes collection outputs, and records the exact query each source received |
 | `FilteringAgent` | 1 | Deduplicates and screens collected records using relevance criteria |
-| `DownloadAgent` | 1 | Retrieves full-text PDFs for included papers |
+| `DownloadAgent` (tool) | 1 | Retrieves full-text PDFs for included papers |
 | `ExtractionAgent` | 1 | Extracts structured information from PDFs or fallback metadata |
 | Lead-owned Categorization & Analysis capability | 0 Sub Agents | Groups extracted field values into semantic categories, presents final result summaries, and writes final categorized artifacts |
 
-There are **six evidence Sub Agents**, not seven. The internal evidence pipeline has seven stages because `PromptAgent` is used twice. Categorization & Analysis is a Lead Agent-owned product/result capability, not a seventh evidence Sub Agent. If ReviewPilot later needs independent scaling, evals, or long-running categorization recovery, this capability can be promoted into a dedicated `CategorizationAgent` through a separate architecture decision.
+There are **four evidence Sub Agents and two tools**. The internal evidence pipeline has seven stages because `PromptAgent` is used twice. Categorization & Analysis is a Lead Agent-owned product/result capability, not a seventh evidence Sub Agent. If ReviewPilot later needs independent scaling, evals, or long-running categorization recovery, this capability can be promoted into a dedicated `CategorizationAgent` through a separate architecture decision.
 
 ## Model Assignment Setting
 The model ID must use OpenAI's canonical hyphenated spelling: `gpt-5.4-mini`, not `gpt5.4mini`.
@@ -71,15 +73,15 @@ The prototype also contains a more advanced `utils/pdf_downloader.py` with optio
 | Lead Agent | Development: `gpt-5.4-mini`; production: `gpt-5.4` | `gpt-5.5` | Owns dialogue, routing, artifact checks, and bounded planning; mini is acceptable during development, but production should use `gpt-5.4` once the architecture is stable |
 | `SearchConditionAgent` | `gpt-5.4-mini` | `gpt-5.4` for difficult multidisciplinary query design | Search setup benefits from semantic query expansion and domain-sensitive platform choice |
 | `PromptAgent` | `gpt-5.4-mini` | `gpt-5.4` for complex extraction schemas or difficult inclusion criteria | Prompt generation is structured, but quality affects downstream screening and extraction |
-| `CollectionAgent` | `gpt-5.4-mini` assigned, but no LLM call in the default collection path | Route query repair back to Lead/SearchCondition | Core collection should remain deterministic API/tool execution; the assigned model is only for optional LLM-assisted query repair, metadata normalization, or source-specific recovery |
+| `CollectionAgent` (tool) | None | Route query repair back to Lead/SearchCondition | Collection is deterministic API execution so the search is reproducible |
 | `FilteringAgent` | `gpt-5.4-mini` | `gpt-5.4` for borderline screening audits | False exclusions are expensive; avoid `nano` for final include/exclude decisions unless evals prove it is safe |
-| `DownloadAgent` | `gpt-5.4-mini` assigned, but no LLM call in the default download path | `gpt-5.4` for difficult subscribed-paper recovery | Downloading is mostly deterministic; the assigned model is for optional PDF URL discovery and subscribed-paper fallback extraction with strict source validation |
+| `DownloadAgent` (tool) | None | Subscribed-paper fallback belongs to `ExtractionAgent` | Retrieval is deterministic; it records retrieval status for every paper |
 | `ExtractionAgent` | `gpt-5.4-mini` | `gpt-5.4` for noisy PDFs, long papers, or high-value extraction | Extraction is the most information-dense stage; use mini for throughput and escalate when confidence is low |
 
-All six Sub Agents must have an explicit model assignment of `gpt-5.4-mini`. For deterministic agents such as `CollectionAgent` and `DownloadAgent`, this does not mean every run must call an LLM. It means any LLM-assisted branch inside that Sub Agent uses `gpt-5.4-mini` unless an escalation rule says otherwise.
+All four Sub Agents have an explicit model assignment. The two tools make no model calls; work that needs a model before or after them belongs to a Sub Agent or the Lead Agent.
 
-### CollectionAgent LLM Policy
-It is reasonable for `CollectionAgent` to avoid LLM calls in its default path. Academic collection should be reproducible: given search terms, platforms, date range, and limits, it should call deterministic search APIs/scrapers and write raw records. LLMs should not silently rewrite queries or alter platform results inside collection.
+### Literature Search Tool Policy
+The Literature Search Tool makes no LLM calls. Academic collection should be reproducible: given search terms, platforms, date range, and limits, it should call deterministic search APIs/scrapers and write raw records. LLMs should not silently rewrite queries or alter platform results inside collection.
 
 LLM use belongs either before collection or in explicitly named recovery branches:
 
@@ -88,7 +90,21 @@ LLM use belongs either before collection or in explicitly named recovery branche
 | Generate or revise Boolean query | `SearchConditionAgent` |
 | Explain why collection returned too few/too many records | Lead Agent with `CollectionAgent` summary |
 | Retry with a revised search strategy | Lead Agent routes back to `SearchConditionAgent`, then re-runs `CollectionAgent` |
-| Normalize odd metadata from collected records | Optional `CollectionAgent` LLM-assisted branch using `gpt-5.4-mini`, with original raw metadata preserved |
+
+#### Source failures and retries
+- Each source runs independently. A failed source is recorded with zero records and its error, and the other sources keep their results.
+- Transient failures (HTTP 429, 5xx, timeouts, dropped connections) are retried per request with bounded backoff (`searchers/http_retry.py`): 3 attempts, waiting 5 s then 20 s for arXiv and 2 s then 5 s for PubMed and OpenAlex, with a server `Retry-After` honored up to 60 s. Other errors, such as a rejected query, fail at once.
+- After all sources finish, each source that failed transiently gets one deferred retry, at least 15 s after its failure. No further automatic retries follow.
+- Sources that still failed can be retried from Records by source ("Retry <source>"). The retry leaves the other sources' records, queries, and timestamps untouched. It is refused when the saved query, dates, limits, or source list changed since that collection, and a retry that adds no records does not mark screening stale.
+- PubMed batch failures, OpenAlex pagination errors, and arXiv error feeds fail the source rather than returning silently truncated results.
+- No anti-bot measures: requests are sent as plain API calls without header rotation or proxies.
+
+#### Search record
+`collected/summary.json` records, per source in `executed_queries`, the exact query sent (also the attempted query when the source failed), the search time, the limit, the record count, the error if any, and the number of attempts. PubMed's recorded query includes the date filter in PubMed syntax, so it can be pasted into PubMed's web interface.
+
+#### Limits and dates
+- Per-source limits are whole numbers of at least 1, enforced in the canvas and by the API (invalid values are rejected, not replaced). There is no "all results" option; results are the top records by relevance up to each limit.
+- An open start date is sent to arXiv as 1991-01-01, because arXiv rejects year 0001 with HTTP 500 and holds nothing submitted before August 1991. PubMed and OpenAlex receive the open start unchanged.
 
 ### Implementation Notes
 The active codebase should not hard-code model strings in scattered locations. Add a central model policy, for example `reviewpilot_core/model_policy.py`, with named roles:

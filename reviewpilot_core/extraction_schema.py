@@ -161,10 +161,15 @@ def modify_schema_field(project_path: Path | str, field_name: str, updates: dict
 def finalize_schema(project_path: Path | str) -> dict[str, Any]:
     project = Path(project_path)
     paths = schema_paths(project)
-    schema = load_schema_draft(project)
+    from .fulltext_eligibility import refresh
+    drafted = load_schema_draft(project)
+    # Full-text eligibility options follow the criteria in force at finalization.
+    schema = refresh(project, drafted)
     if not schema["fields"]:
         raise ValueError("cannot finalize extraction schema without fields")
     validate_schema(schema)
+    if schema != drafted:
+        _write_json(paths["draft"], schema)
     config = _read_json(paths["search_conditions"]) or {}
     system_prompt, extraction_prompt, user_prompt_template = build_extraction_prompts(config, schema)
     paths["extraction_dir"].mkdir(parents=True, exist_ok=True)
@@ -197,10 +202,14 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
               "setup_revision": setup_revision(_read_json(project / "search_conditions.json"))}
     _write_json(paths["finalized"], marker)
     remember_confirmed(project, 'extraction_schema')
+    from .coding_rules import invalidate as invalidate_coding_rules
+    # Coding rules were written for the previous schema and leave the instruction until redrafted.
+    invalidate_coding_rules(project)
     return {"status": "schema_finalized", "field_count": len(schema["fields"]), "schema": schema}
 
 
-def build_extraction_prompts(config: dict[str, Any], schema: dict[str, Any]) -> tuple[str, str, str]:
+def build_extraction_prompts(config: dict[str, Any], schema: dict[str, Any], coding_rules: str = "") -> tuple[str, str, str]:
+    """The extraction instruction; confirmed coding rules, when present, stand right before the paper text."""
     scope = {
         "research_description": config.get("description") or config.get("research_description") or "",
         "primary_topic": config.get("primary_topic") or "",
@@ -213,8 +222,9 @@ def build_extraction_prompts(config: dict[str, Any], schema: dict[str, Any]) -> 
 FINALIZED EXTRACTION SCHEMA:
 {json.dumps(schema, ensure_ascii=False)}
 
-Populate every declared schema field from the supplied paper evidence. Preserve reported units, denominators, time points, comparison groups, and uncertainty. Use an empty string or null when the supplied evidence does not support a field, even for required fields. Match declared JSON types: Number/float are finite JSON numbers, integer is an integer, Text/Long text/Select are strings, Text (list) is an array of strings, list/array is an array, boolean/bool is a boolean, object/dict is an object. Respect enum/options and items constraints; never invent evidence to satisfy a type. Return exactly one JSON object containing every declared field name and the _field_evidence object for supporting excerpts; no other fields."""
-    user_prompt_template = f"{extraction_prompt}\n\nPAPER EVIDENCE DATA:\n{{paper_text}}\n\nJSON response:"
+Populate every declared schema field from the supplied paper evidence. Preserve reported units, denominators, time points, comparison groups, and uncertainty. Use an empty string, empty array or null when the supplied evidence neither states nor necessarily implies a value, even for required fields. Match declared JSON types: Number/float are finite JSON numbers, integer is an integer, Text/Long text/Select are strings, Text (list) is an array of strings, list/array is an array, boolean/bool is a boolean, object/dict is an object. Respect enum/options and items constraints; never invent evidence to satisfy a type. Return exactly one JSON object containing every declared field name and the _field_evidence object for supporting excerpts; no other fields."""
+    rules = f"\n\n{coding_rules.strip()}" if coding_rules and coding_rules.strip() else ""
+    user_prompt_template = f"{extraction_prompt}{rules}\n\nPAPER EVIDENCE DATA:\n{{paper_text}}\n\nJSON response:"
     return system_prompt, extraction_prompt, user_prompt_template
 
 

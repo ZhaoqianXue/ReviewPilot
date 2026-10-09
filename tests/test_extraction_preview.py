@@ -123,6 +123,23 @@ class ExtractionPreviewProjectionTests(unittest.TestCase):
         self.assertFalse((self.project / "extraction" / "extraction_results.jsonl").exists())
         self.assertFalse((self.project / "extraction" / "extraction_stats.json").exists())
 
+    def test_run_project_preview_uses_the_saved_project_model(self):
+        pdf = self.project / "pdfs" / "row1_paper.pdf"
+        pdf.parent.mkdir(parents=True)
+        pdf.write_bytes(b"%PDF-1.4\n")
+        write_jsonl(self.project / "filtered" / "included_papers.jsonl",
+                    [{"id": "p1", "title": "Paper A", "source": "pubmed", "pdf_path": str(pdf), "pdf_downloaded": True}])
+        write_json(self.project / "search_conditions.json", {"model": "gpt-5.4"})
+        calls = []
+
+        def llm(**kwargs):
+            calls.append(kwargs)
+            return json.dumps({"methods": "Survey", "key_findings": ""}), {"total_tokens": 1}
+
+        run_project_preview(self.project, 0, llm_query=llm, pdf_reader=lambda path: "paper text")
+
+        self.assertEqual([call["model"] for call in calls], ["gpt-5.4"])
+
     def test_schema_change_during_preview_prevents_cache_publication(self):
         with patch("reviewpilot_core.extraction_preview.ExtractionAgent.extract_one") as extract:
             def mutate(**kwargs):

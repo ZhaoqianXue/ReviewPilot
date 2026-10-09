@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
 from reviewpilot_core.extraction_schema import build_extraction_prompts, save_schema_draft
+from reviewpilot_core import fulltext_eligibility
 from reviewpilot_core.model_policy import PROMPT_MODEL
 from utils.human_interaction import (
     ask_text, ask_confirm, print_header, print_subheader, print_box, print_text
@@ -338,6 +339,7 @@ Your response (True/False):"""
         extraction_prompt["extraction_fields"] = extraction_fields
         extraction_prompt["output_structured"] = structured
         schema, source, usage = self._generate_extraction_schema(input_data, extraction_prompt, llm_query)
+        schema = fulltext_eligibility.with_field(self.project_path, schema)
         system_prompt, stage_prompt, user_prompt_template = build_extraction_prompts(input_data, schema)
         extraction_prompt["system_prompt"] = system_prompt
         extraction_prompt["user_prompt_template"] = user_prompt_template

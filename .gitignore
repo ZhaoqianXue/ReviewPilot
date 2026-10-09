@@ -27,6 +27,7 @@ ReviewPilot_prototype/
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
 .benchmark_step3_download/
+.benchmark_pdf_retrieval/
 .cache/
 *.csv
 *.xlsx

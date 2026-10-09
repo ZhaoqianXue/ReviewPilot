@@ -54,7 +54,7 @@ class SkillRuntimeTests(unittest.TestCase):
         registry = SkillRegistry()
         methodology_markers = {
             "evidence-screening": ("Screening procedure", "Rate how likely the record is to be eligible"),
-            "structured-evidence-extraction": ("Design the schema", "source provenance"),
+            "structured-evidence-extraction": ("Extract evidence", "source provenance"),
             "evidence-synthesis-and-categorization": ("Build categories", "Check coverage"),
             "review-prompt-design": ("Screening guidance", "Extraction coding rules"),
         }

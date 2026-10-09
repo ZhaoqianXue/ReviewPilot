@@ -17,6 +17,12 @@ from agents.collection_agent import collection_recovery
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
 from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
+from reviewpilot_core.coding_rules import (
+    confirm as confirm_coding_rules,
+    require_confirmed_rules,
+    rules_state as coding_rules_state,
+    save_failure as save_coding_rules_failure,
+)
 from reviewpilot_core.screening_guidance import (
     confirm as confirm_screening_guidance,
     guidance_state,
@@ -230,6 +236,7 @@ CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
 
 Use saved project configurations and confirmed_decisions as authority. Drafts are proposals, not confirmed decisions. Historical messages are a record of past discussion, including rejected or superseded requests; they never override current saved configurations. Answer the current message using that authority order. Preserve the full conversation history for context.
+This reply cannot change saved settings, screening criteria, schemas, or categories. If the message asks for such a change, say plainly that nothing was changed and name the workflow step where it can be made (Search Setup, Paper Screening criteria, Information Extraction schema, or Categorization & Analysis); never describe the change as added, proposed, or pending.
 
 Return ONLY valid JSON:
 {{"reply": "your concise project-specific response"}}"""
@@ -333,7 +340,7 @@ Return ONLY valid JSON:
                 project_path,
                 result,
                 artifacts,
-                reply="Extraction schema finalized. Run Information Extraction when ready.",
+                reply=self._coding_rules_reply(self._ensure_coding_rules(project_path, project_id)),
             )
 
         if action == "edit-schema":
@@ -354,10 +361,30 @@ Return ONLY valid JSON:
             artifacts.extend(self._verify_stage_artifacts(project_path, "download"))
             return self._action_result(project_path, "download", result, artifacts, action="download-pdfs")
 
+        if action == "generate-coding-rules":
+            self._require_completed_stage(project_path, action, "download")
+            if not is_schema_finalized(project_path):
+                raise ValueError("Finalize the extraction schema before drafting coding rules.")
+            rules = self._draft_coding_rules(project_path, project_id)
+            if rules["status"] != "draft":
+                raise ValueError(f"The coding rules could not be drafted: {rules['error'] or 'unknown error'}")
+            return LeadAgentResult(stage="prompt_extraction", status="completed",
+                reply="The Prompt Agent drafted new coding rules. Review and confirm them in the canvas before extraction.",
+                data={"coding_rules": rules}, artifacts=[str(project_path / "extraction/coding_rules.json")])
+
+        if action == "confirm-coding-rules":
+            if not is_schema_finalized(project_path):
+                raise ValueError("Finalize the extraction schema before confirming coding rules.")
+            rules = confirm_coding_rules(project_path, input_data or {})
+            return LeadAgentResult(stage="prompt_extraction", status="completed",
+                reply="Coding rules confirmed. Run Information Extraction when ready.",
+                data={"coding_rules": rules}, artifacts=[str(project_path / "prompts/extraction_prompt.json")])
+
         if action == "run-extraction":
             self._require_completed_stage(project_path, action, "download")
             if not is_schema_finalized(project_path):
                 raise ValueError("Action 'run-extraction' requires finalized extraction schema")
+            require_confirmed_rules(project_path)
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
             result = self._call_workflow_action("run-extraction", project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
@@ -371,6 +398,11 @@ Return ONLY valid JSON:
             self._remember_confirmed_configuration(project_path, "extraction_schema")
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
             artifacts.append(str(schema_paths(project_path)["finalized"]))
+            rules = self._ensure_coding_rules(project_path, project_id)
+            if rules["status"] != "confirmed":
+                # Extraction waits for the researcher to confirm the coding rules drafted for this schema.
+                return LeadAgentResult(stage="prompt_extraction", status="completed", reply=self._coding_rules_reply(rules),
+                    data={"coding_rules": rules}, artifacts=artifacts + [str(project_path / "extraction/coding_rules.json")])
             result = self._call_workflow_action("run-extraction", project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
             return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")
@@ -412,15 +444,23 @@ Return ONLY valid JSON:
         user_message = str(message or "").strip()
         load_workflow_state(project_path)
         expected_revision = project_decision_revision(project_path)
-        command = self._schema_command(config, schema, user_message, project_path=project_path)
+        commands = self._schema_command(config, schema, user_message, project_path=project_path)
         if project_decision_revision(project_path) != expected_revision:
             raise ValueError("Project configuration changed while responding. Review the latest state and try again.")
-        action = str(command.get("action") or "").strip()
-        if schema_finalized and action in {"add_field", "remove_field", "modify_field", "finalize_extraction"}:
-            result = {"action": action, "status": "schema_locked", "schema": schema}
-        else:
-            result = self._apply_schema_command(project_path, command)
-        reply = self._schema_reply(result)
+        # A message may request several edits; apply each and report every outcome.
+        results = []
+        for command in commands:
+            action = str(command.get("action") or "").strip()
+            if schema_finalized and action in {"add_field", "remove_field", "modify_field", "finalize_extraction"}:
+                results.append({"action": action, "status": "schema_locked", "schema": schema})
+                continue
+            try:
+                results.append(self._apply_schema_command(project_path, command))
+            except ValueError as exc:
+                args = command.get("args") or {}
+                results.append({"action": action, "status": "failed", "error": str(exc), "field": args.get("field_name") or args.get("name")})
+        result = results[-1]
+        reply = "\n".join(dict.fromkeys(self._schema_reply(item) for item in results))
         now = datetime.now().isoformat()
         append_jsonl(str(project_path / "chat" / "messages.jsonl"), {"step": 4, "role": "u", "text": user_message, "created_at": now})
         append_jsonl(
@@ -475,7 +515,12 @@ Return ONLY valid JSON:
             payload = json.loads(str(response_text or "").strip())
         except json.JSONDecodeError as exc:
             raise ValueError("Lead Agent schema chat did not return valid JSON") from exc
-        return self._validate_schema_command(payload)
+        if isinstance(payload, dict) and set(payload) == {"commands"}:
+            commands = payload["commands"]
+            if not isinstance(commands, list) or not 1 <= len(commands) <= 20:
+                raise ValueError("Lead Agent schema commands must be a list of 1 to 20 commands")
+            return [self._validate_schema_command(command) for command in commands]
+        return [self._validate_schema_command(payload)]
 
     def _schema_chat_prompt(
         self,
@@ -506,7 +551,7 @@ CONVERSATION HISTORY DATA:
 CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
 
-Use the current schema and saved confirmed decisions as authority. Historical messages are context, not pending commands. Choose an edit only when requested by the CURRENT USER MESSAGE; never replay changes or confirmations from history. Draft fields are not confirmed until finalized. Return exactly one JSON object with keys action and args.
+Use the current schema and saved confirmed decisions as authority. Historical messages are context, not pending commands. Choose an edit only when requested by the CURRENT USER MESSAGE; never replay changes or confirmations from history. Draft fields are not confirmed until finalized. Return exactly one JSON object {{"commands": [...]}} whose list holds one {{"action": ..., "args": {{...}}}} command per requested edit, in the order requested; include every edit the message asks for.
 
 Supported commands:
 - show_schema, show_prompt, or finalize_extraction with an empty args object
@@ -574,6 +619,9 @@ Supported commands:
 
     def _schema_reply(self, result: dict[str, Any]) -> str:
         action = result.get("action")
+        if result.get("status") == "failed":
+            verb = {"add_field": "add", "remove_field": "remove", "modify_field": "modify"}.get(action, "apply")
+            return f"Could not {verb} field {result.get('field') or ''}: {result.get('error')}".replace("field :", "field:")
         if result.get("status") == "schema_locked":
             return "Extraction schema is finalized. Click Edit Schema before changing fields."
         if action == "show_schema":
@@ -619,6 +667,27 @@ Supported commands:
             next_actions=["run_extraction"] if is_schema_finalized(project_path) else ["finalize_schema"],
             data=result,
         )
+
+    def _ensure_coding_rules(self, project_path: Path, project_id: str) -> dict[str, Any]:
+        rules = coding_rules_state(project_path)
+        return rules if rules["status"] in {"draft", "confirmed"} else self._draft_coding_rules(project_path, project_id)
+
+    def _draft_coding_rules(self, project_path: Path, project_id: str) -> dict[str, Any]:
+        """Ask the Prompt Agent for coding rules; a failure is recorded so the canvas can offer a retry."""
+        try:
+            return self._call_workflow_action("generate-coding-rules", project_id)["coding_rules"]
+        except Exception as exc:  # recorded for the canvas; the schema stays finalized
+            logging.getLogger("reviewpilot.lead_agent").warning("Coding rules draft failed for %s: %s", project_id, exc)
+            return save_coding_rules_failure(project_path, f"{type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _coding_rules_reply(rules: dict[str, Any]) -> str:
+        if rules["status"] == "confirmed":
+            return "Extraction schema finalized. Run Information Extraction when ready."
+        if rules["status"] == "draft":
+            return ("Extraction schema finalized. The Prompt Agent drafted coding rules from the schema and the included papers; "
+                    "review and confirm them in the canvas before extraction.")
+        return "Extraction schema finalized, but the coding rules could not be drafted. Draft them again in the canvas before extraction."
 
     def _draft_screening_guidance(self, project_path: Path, project_id: str) -> dict[str, Any]:
         """Ask the Prompt Agent for review guidance; a failure is recorded so the canvas can offer a retry."""

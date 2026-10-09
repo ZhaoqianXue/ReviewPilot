@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from reviewpilot_core.project_store import iter_project_dirs
 from reviewpilot_core.state_projection import build_new_project_data, build_rp_data, export_artifact_path, list_projects
 from reviewpilot_core.workflow_state import STAGE_NAMES, complete_action, initialize_workflow_state, start_action
 
@@ -126,7 +128,36 @@ class StateProjectionTests(unittest.TestCase):
         self.assertNotIn("Human-Computer Interaction (HCI", keywords)
 
     def test_new_project_has_disabled_retrieval_recovery(self):
-        self.assertEqual(build_new_project_data("/tmp")["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(build_new_project_data(tmp)["retrievalRecovery"], {"canRetry": False, "reportRevision": "", "items": []})
+
+    def test_project_listing_skips_inaccessible_and_disappearing_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            valid = root / "valid"
+            unreadable = root / "unreadable"
+            vanished = root / "vanished"
+            unreadable_setup = root / "unreadable-setup"
+            for project in (valid, unreadable, vanished, unreadable_setup):
+                write_json(project / "search_conditions.json", {"project_name": project.name})
+            original_stat = Path.stat
+
+            def unavailable_stat(path, *args, **kwargs):
+                if path in (unreadable, unreadable_setup / "search_conditions.json"):
+                    raise PermissionError("Fixture access denied")
+                if path == vanished:
+                    raise FileNotFoundError("Fixture removed during listing")
+                return original_stat(path, *args, **kwargs)
+
+            with patch.object(Path, "stat", unavailable_stat):
+                self.assertEqual(iter_project_dirs(root), [valid])
+                self.assertEqual([project["id"] for project in list_projects(root)], ["valid"])
+                self.assertTrue(build_new_project_data(root)["isNewProject"])
+
+    def test_project_listing_handles_an_unavailable_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(Path, "iterdir", side_effect=PermissionError("Fixture access denied")):
+                self.assertEqual(iter_project_dirs(Path(tmp)), [])
 
     def test_valid_retry_projection_is_safe_and_malformed_facts_degrade_closed(self):
         variants = [
@@ -392,7 +423,7 @@ class StateProjectionTests(unittest.TestCase):
 
         self.assertTrue(data["isNewProject"])
         self.assertEqual(data["project"]["title"], "Untitled review")
-        self.assertEqual(data["project"]["model"], "gpt-5.4-mini")
+        self.assertEqual(data["project"]["model"], "gpt-6-luna")
         self.assertEqual(
             [(step["key"], step["label"], step["status"], step["sub"]) for step in data["steps"]],
             [
@@ -988,6 +1019,7 @@ class StateProjectionTests(unittest.TestCase):
                 "Extraction results",
                 "Categorization mapping",
                 "Categorized results",
+                "PRISMA flow counts",
             ],
         )
         self.assertEqual(
@@ -1000,6 +1032,7 @@ class StateProjectionTests(unittest.TestCase):
                 "extraction-results",
                 "categorization-mapping",
                 "categorized-results",
+                "prisma",
             ],
         )
         self.assertEqual(

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base_agent import BaseAgent
 from reviewpilot_core.extraction_schema import build_extraction_prompts
 from reviewpilot_core.atomic_files import atomic_output_path
-from reviewpilot_core.model_policy import EXTRACTION_MODEL
+from reviewpilot_core.model_policy import EXTRACTION_MODEL, accepts_custom_temperature
 from utils.jsonl_handler import read_jsonl, append_jsonl, save_json
 from utils.human_interaction import print_header, print_summary, show_progress
 
@@ -35,6 +35,8 @@ class ExtractionAgent(BaseAgent):
 
     Uses LLM to process PDF content based on extraction prompts.
     """
+
+    EXTRACTION_WORKERS = 8
 
     def __init__(self, project_path: Path, model: str = EXTRACTION_MODEL, llm_query=None, pdf_reader=None, web_search_query=None):
         """
@@ -137,7 +139,8 @@ class ExtractionAgent(BaseAgent):
                 config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
             except (OSError, json.JSONDecodeError):
                 config = {}
-            system_prompt, _stage_prompt, user_template = build_extraction_prompts(config, extraction_prompt["schema"])
+            system_prompt, _stage_prompt, user_template = build_extraction_prompts(
+                config, extraction_prompt["schema"], (extraction_prompt.get("coding_rules") or {}).get("text", ""))
             extraction_prompt = {**extraction_prompt, "system_prompt": system_prompt, "user_prompt_template": user_template}
         if not isinstance(system_prompt, str) or not system_prompt.strip() or not isinstance(user_template, str) or not user_template.strip():
             raise ValueError("Extraction requires an explicit extraction prompt")
@@ -150,23 +153,35 @@ class ExtractionAgent(BaseAgent):
         web_search_fallback = 0
         total_cost = 0.0
 
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        progress_lock = threading.Lock()
+        done = [0]
+        paper_prompt = {**extraction_prompt, "system_prompt": system_prompt, "user_prompt_template": user_template}
+
+        def extract(item):
+            row_number, paper_meta = item
+            result = self.extract_one(
+                paper=paper_meta,
+                row_number=row_number,
+                extraction_prompt=paper_prompt,
+                pdf_folder=pdf_folder,
+                pdf_files=pdf_files,
+                llm_query=active_llm_query,
+                pdf_reader=active_pdf_reader,
+                web_search_query=active_web_search_query,
+            )
+            with progress_lock:
+                done[0] += 1
+                show_progress(done[0], len(papers), prefix="  Extracting")
+            return result
+
+        # Papers are extracted several at a time; results are written in the input order.
+        with ThreadPoolExecutor(max_workers=max(1, min(self.EXTRACTION_WORKERS, len(papers)))) as pool:
+            results = list(pool.map(extract, enumerate(papers, start=1)))
         with atomic_output_path(output_file) as pending_output:
-            for i, paper_meta in enumerate(papers, start=1):
-                show_progress(i, len(papers), prefix="  Extracting")
-                result = self.extract_one(
-                    paper=paper_meta,
-                    row_number=i,
-                    extraction_prompt={
-                        **extraction_prompt,
-                        "system_prompt": system_prompt,
-                        "user_prompt_template": user_template,
-                    },
-                    pdf_folder=pdf_folder,
-                    pdf_files=pdf_files,
-                    llm_query=active_llm_query,
-                    pdf_reader=active_pdf_reader,
-                    web_search_query=active_web_search_query,
-                )
+            for paper_meta, result in zip(papers, results):
                 append_jsonl(str(pending_output), result)
                 if result["extraction_status"] == "success":
                     processed += 1
@@ -557,8 +572,13 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             return data
         from reviewpilot_core.extraction_schema import validate_schema
         validate_schema(schema)
+        from reviewpilot_core import fulltext_eligibility
+        if fulltext_eligibility.FIELD in expected and fulltext_eligibility.FIELD not in data:
+            # An omitted eligibility judgement keeps the paper, as an empty one does, and is counted as unclear.
+            data[fulltext_eligibility.FIELD] = ""
+            data[fulltext_eligibility.RAW_KEY] = fulltext_eligibility.MISSING
         missing = set(expected) - set(data)
-        unexpected = set(data) - set(expected) - auxiliary_fields
+        unexpected = set(data) - set(expected) - auxiliary_fields - {fulltext_eligibility.RAW_KEY}
         if missing or unexpected:
             details = []
             if missing:
@@ -568,6 +588,11 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             raise ValueError("Extraction model response violates schema: " + "; ".join(details))
         from reviewpilot_core.field_values import validate_value
         for field in schema.get('fields') or []:
+            if field['name'] == fulltext_eligibility.FIELD and isinstance(field.get('enum'), list):
+                # One stray dash or capital must not fail the whole paper; keep what could not be mapped.
+                data[field['name']], unmatched = fulltext_eligibility.normalize_value(data[field['name']], field['enum'])
+                if unmatched is not None:
+                    data[fulltext_eligibility.RAW_KEY] = unmatched
             validate_value(field, data[field['name']])
         return data
 
@@ -640,11 +665,12 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.3,
             }
+            if accepts_custom_temperature(self.model):
+                request["temperature"] = 0.3
             if "json" in f"{system_prompt}\n{user_prompt}".lower():
                 request["response_format"] = {"type": "json_object"}
-            if self.model.startswith("gpt-5"):
+            if self.model.startswith(("gpt-5", "gpt-6")):
                 request["max_completion_tokens"] = 4096
             else:
                 request["max_tokens"] = 4096

@@ -27,7 +27,7 @@ from .retrieval_retry import (
     _authoritative_fingerprint, _publication_pdf_fingerprint, _validate_merged_retry_delta,
     retrieval_report_revision, run_retry_staging, stable_retry_id,
 )
-from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, structured_action_outcome
+from .workflow_state import STAGE_NAMES, _validate as _validate_workflow_state, retry_recovered_pdfs, structured_action_outcome
 from .workflow_state import load_workflow_state, save_workflow_state
 
 
@@ -1227,14 +1227,15 @@ def _validate_target_ledger(marker: dict[str, Any], ledger: dict[str, Any],
     retrieval_index = STAGE_NAMES.index("retrieval")
     retrieval = stages["retrieval"]
 
-    if _material_output(retrieval):
-        retrieval["stale"] = True
+    previous_valid = deepcopy(retrieval["last_valid"])
+    recovered = retry_recovered_pdfs(previous_valid, counts)
+    if recovered:
         for name in STAGE_NAMES[retrieval_index + 1:]:
             if _material_output(stages[name]):
                 stages[name]["stale"] = True
     retrieval.update(status="running", attempt=retrieval["attempt"] + 1, error=None, counts={})
 
-    is_rerun = retrieval["last_valid"] is not None
+    is_rerun = previous_valid is not None and recovered
     target_retrieval = ledger["stages"]["retrieval"]
     error = None if status != "failed" else f"Action produced no successful outputs ({counts.get('failed', 0)} failed)."
     retrieval.update(status=status, updated_at=target_retrieval["updated_at"], error=error,

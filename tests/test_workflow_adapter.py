@@ -535,6 +535,49 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(screening_stats["total_screened"], 1)
         self.assertEqual(screening_stats["included_count"], 1)
         self.assertEqual(screening_stats["excluded_count"], 0)
+        self.assertEqual(result["model"], FILTERING_MODEL)
+
+    def test_screening_and_extraction_contracts_use_the_saved_project_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "demo"
+            for folder in ("collected", "prompts", "filtered", "pdfs", "extraction"):
+                (project_dir / folder).mkdir(parents=True, exist_ok=True)
+            atomic_write_json(project_dir / "search_conditions.json", {"model": "gpt-5.4"})
+            atomic_write_json(project_dir / "prompts" / "relevance_prompt.json", {"system_prompt": "Screen.", "user_prompt_template": "{title}"})
+            atomic_write_json(project_dir / "prompts" / "extraction_prompt.json", {"prompt_type": "extraction", "schema": {"fields": [{"name": "methods"}]}})
+            atomic_write_json(project_dir / "pdfs" / "download_report.json", {"success": 1, "failed": 0, "downloaded": [{"title": "Paper A"}], "failed_papers": []})
+            models = []
+
+            class FakeFilteringAgent:
+                def __init__(self, project_path, model, llm_query=None):
+                    models.append(("screen", model))
+                    self.project_path = Path(project_path)
+
+                def run(self, input_data):
+                    filtered_dir = self.project_path / "filtered"
+                    (filtered_dir / "filtered_papers.jsonl").write_text(json.dumps({"title": "Paper A", "is_relevant": True}) + "\n", encoding="utf-8")
+                    stats = {"initial_count": 1, "after_similarity_dedup": 1, "final_count": 1}
+                    (filtered_dir / "filtering_stats.json").write_text(json.dumps(stats), encoding="utf-8")
+                    return {"filtered_file": str(filtered_dir / "filtered_papers.jsonl"), "filtered_count": 1, "stats": stats}
+
+            class FakeExtractionAgent:
+                def __init__(self, project_path, model, llm_query=None):
+                    models.append(("extract", model))
+                    self.project_path = Path(project_path)
+
+                def run(self, input_data):
+                    output_file = self.project_path / "extraction" / "extraction_results.jsonl"
+                    output_file.write_text(json.dumps({"title": "Paper A", "methods": "Survey"}) + "\n", encoding="utf-8")
+                    return {"output_file": str(output_file), "processed": 1, "errors": 0}
+
+            screening = FilteringAgentContract(agent_cls=FakeFilteringAgent).run(output_root, "demo")
+            extraction = ExtractionAgentContract(agent_cls=FakeExtractionAgent).run(output_root, "demo")
+            traces = read_jsonl(project_dir / ".reviewpilot" / "skill_activations.jsonl")
+
+        self.assertEqual(models, [("screen", "gpt-5.4"), ("extract", "gpt-5.4")])
+        self.assertEqual((screening["model"], extraction["model"]), ("gpt-5.4", "gpt-5.4"))
+        self.assertEqual([trace["model"] for trace in traces], ["gpt-5.4", "gpt-5.4"])
 
     def test_prompt_contract_runs_prompt_agent_for_extraction_schema(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -703,6 +746,7 @@ class WorkflowActionAdapterTests(unittest.TestCase):
         self.assertEqual(result["status"], "extraction_done")
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["errors"], 0)
+        self.assertEqual(result["model"], EXTRACTION_MODEL)
 
     def test_adapter_rejects_unknown_action(self):
         adapter = WorkflowActionAdapter()

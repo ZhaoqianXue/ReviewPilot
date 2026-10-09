@@ -607,7 +607,9 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("function syncActionState(activeTask)", source)
         self.assertIn("syncActionState(D.activeTask);", set_data)
         self.assertIn("monitorActiveTask();", set_data)
-        self.assertIn("setData(await fetchProjectState(projectId));", source)
+        setup_update = source[source.index("async function updateProjectSetup") : source.index("async function saveDraftSetup")]
+        self.assertIn("const data = await fetchProjectState(projectId);", setup_update)
+        self.assertIn("if (!projectNavigation.owns(ownership)) return;\n      setData(data);", setup_update)
 
         # Interleaving 3: navigation A->B invalidates resume and submit continuations.
         self.assertIn("const generation = ++activeTaskMonitor.generation;", monitor)

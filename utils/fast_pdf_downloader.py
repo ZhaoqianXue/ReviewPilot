@@ -18,19 +18,56 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager, nullcontext
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
 from lxml import html as lxml_html
 
+from utils.oa_sources import (
+    OAMetadataIndex,
+    api_user_agent,
+    arxiv_id_from_text,
+    arxiv_title_matches,
+    crossref_has_open_licence,
+    crossref_published_dois,
+    crossref_related_dois,
+    europepmc_fulltext_urls,
+    openalex_title_versions,
+    surnames,
+    doaj_fulltext_links,
+    dspace7_pdf_urls,
+    figshare_article_id,
+    figshare_article_id_from_url,
+    figshare_pdf_urls,
+    handle_from_url,
+    nva_pdf_urls,
+    nva_publication_id,
+    ieee_oa_pdf_urls,
+    is_metadata_url,
+    jmir_asset_pdf_urls,
+    normalize_doi,
+    normalize_pmcid,
+    ojs_download_url,
+    osf_id_from,
+    osf_pdf_urls,
+    paper_pmid,
+    pmc_cloud_pdf_url,
+    repository_pdf_urls,
+    zenodo_pdf_urls,
+)
 from utils.pdf_downloader import CascadePDFDownloader
 
 
-PDF_URL_MARKERS = (
+# Markers that identify a URL as a PDF endpoint. Only these legacy markers make a
+# URL eligible for the curl_cffi transport; the repository markers below widen
+# discovery (static HTML, OA locations) without widening that transport.
+CURL_CFFI_PDF_URL_MARKERS = (
     ".pdf",
     "/pdf",
     "showpdf",
@@ -41,6 +78,89 @@ PDF_URL_MARKERS = (
     "type=printable",
     "blobtype=pdf",
 )
+
+PDF_URL_MARKERS = CURL_CFFI_PDF_URL_MARKERS + (
+    "/article/download/",  # OJS galley download
+    "viewcontent.cgi",  # bepress Digital Commons
+    "/bitstream/",  # DSpace 6
+    "/bitstreams/",  # DSpace 7
+    "/smash/get/",  # DiVA
+    "/download_pub",  # Preprints.org
+    "servlets/purl",  # OSTI
+    "zenodo.org/api/records/",
+    "osf.io/download/",
+    "mfr.osf.io/export",
+)
+
+# Publishers whose own sites answer every programmatic request with a JavaScript
+# challenge; their papers are fetched only through repositories and OA copies.
+CHALLENGE_ONLY_PUBLISHERS = {"jmir"}
+CHALLENGE_ONLY_HOSTS = (
+    "jmir.org",
+    "researchprotocols.org",
+    "i-jmr.org",
+    "jmir.pub",
+    "jmirx.org",
+    "iproc.org",
+    # Preprint servers that challenge every client (no official programmatic route).
+    "ssrn.com",
+    "techrxiv.org",
+    "preprints.org",
+)
+
+# Repository and API hosts that expect an identifying, non-browser User-Agent
+# (Zenodo refuses browser UAs; Anubis-protected repositories exempt them).
+HONEST_UA_HOSTS = (
+    "zenodo.org",
+    "osf.io",
+    "hal.science",
+    "archives-ouvertes.fr",
+    "pmc-oa-opendata.s3.amazonaws.com",
+    "api.crossref.org",
+    "api.openalex.org",
+    "export.arxiv.org",
+    # Springer's Fastly "Client Challenge" targets browser-like clients; an identified
+    # tool receives the open-access PDF (303 to idp.springer.com sets a cookie).
+    "link.springer.com",
+    "idp.springer.com",
+    "springeropen.com",
+    "figshare.com",
+    "osti.gov",
+    "api.nva.unit.no",
+    "doaj.org",
+    "hdl.handle.net",
+    "content.openalex.org",
+    "api.elsevier.com",
+    "api.wiley.com",
+)
+# Hosts that served a PDF only to the honest User-Agent during this process.
+_LEARNED_HONEST_HOSTS: set = set()
+_LEARNED_HONEST_LOCK = threading.Lock()
+
+# Wolters Kluwer journals (LWW, Medknow, ...) hosted on Ovid.
+OVID_DOI_PREFIXES = ("10.1097/", "10.4103/", "10.1213/", "10.1227/", "10.1249/", "10.1212/")
+
+# Metered or rate-limited keyed routes, shared by all workers in the process.
+_KEYED_ROUTE_LOCK = threading.Lock()
+_KEYED_ROUTE_STATE = {"openalex_content_used": 0, "openalex_content_disabled": False, "wiley_calls": []}
+
+ANUBIS_MARKERS = (b"making sure you&#39;re not a bot", b"making sure you're not a bot", b"/.within.website/")
+
+# MDPI DOI journal codes whose site slug differs from the code.
+MDPI_JOURNAL_SLUGS = {
+    "info": "information",
+    "s": "sensors",
+    "bs": "behavsci",
+    "app": "applsci",
+    "dj": "dentistry",
+    "bdcc": "BDCC",
+    "fi": "futureinternet",
+    "en": "energies",
+}
+MDPI_PROCEEDINGS_CODES = {"engproc", "proceedings", "csmf", "asec", "ecsa", "iocag", "cmsf", "environsciproc"}
+
+_ARXIV_API_LOCK = threading.Lock()
+_ARXIV_API_LAST_CALL = [0.0]
 
 ARTICLE_PRINT_PAYWALL_MARKERS = (
     "get full access to this article",
@@ -63,9 +183,22 @@ PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES = {
     "pdf_endpoint_waf",
 }
 
+# Challenge classes that cool down a whole domain wherever they occur (not only on
+# PDF endpoints). A plain 401/403 is "access_denied" and never cools a domain.
+DOMAIN_COOLDOWN_FAILURE_CLASSES = {
+    "pmc_recaptcha",
+    "pmc_pow_challenge",
+    "antibot_challenge",
+    "metadata_api_429",
+    "rate_limited",
+}
+
 NON_BROWSER_PDF_ENDPOINT_FAILURE_CLASSES = {
     "pdf_endpoint_tdm_blocked",
     "pdf_endpoint_waf",
+    "antibot_challenge",
+    "pmc_pow_challenge",
+    "repository_bot_check",
 }
 
 PRIMARY_FAILURE_CLASS_PRIORITY = {
@@ -73,16 +206,22 @@ PRIMARY_FAILURE_CLASS_PRIORITY = {
     "article_print_incomplete": 95,
     "article_print_paywalled": 94,
     "pmc_recaptcha": 90,
+    "pmc_pow_challenge": 90,
     "pmc_not_open_access": 89,
     "publisher_paywalled": 88,
     "pdf_endpoint_tdm_blocked": 85,
     "pdf_endpoint_waf": 84,
     "pdf_endpoint_cloudflare": 83,
+    "antibot_challenge": 82,
+    "repository_bot_check": 81,
     "domain_cooldown_skip": 80,
+    "access_denied": 78,
+    "rate_limited": 77,
     "article_print_failed": 75,
     "wrong_publisher_detection": 70,
     "non_pdf_html": 60,
     "access_blocked": 55,
+    "pmc_not_in_oa_cloud": 40,
     "metadata_api_429": 30,
     "metadata_api_error": 25,
     "network_error": 20,
@@ -115,7 +254,10 @@ def _is_likely_non_article_pdf_url(url: str) -> bool:
     path = parsed.path.lower()
     query = parsed.query.lower()
     filename = path.rsplit("/", 1)[-1]
-    if path.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff")):
+    if path.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".tif", ".tiff", ".svg", ".ico", ".css", ".js")):
+        return True
+    # Repository cover sheets, title pages and abstract-only parts; T&F figshare supplements (_smNNNN).
+    if re.search(r"(_cover\.|_title\.pdf|abstrak|[-_]abstract\.pdf|_sm\d{3,}\b)", f"{path}?{query}"):
         return True
     candidate_text = f"{filename}?{query}"
     markers = (
@@ -123,11 +265,112 @@ def _is_likely_non_article_pdf_url(url: str) -> bool:
         "supplement",
         "supplementary",
         "appendix",
+        "multimedia",
         "thumb",
     )
     if any(marker in candidate_text for marker in markers):
         return True
+    # Publisher supplementary-file names: Elsevier mmcN, Springer MOESM/ESM, JMIR _appN, PLOS .s001
+    if re.search(r"(^|[-_.=])(mmc\d+|moesm\d+|esm\d*|app\d+|s\d{3})([._-]|$)", candidate_text):
+        return True
     return bool(re.search(r"(^|[-_])(fig|figure|table|tbl|f|t)\d+([._-]|$)", candidate_text))
+
+
+def _host_matches(url: str, hosts) -> bool:
+    host = urlparse(url or "").netloc.lower()
+    return any(host == h or host.endswith(f".{h}") for h in hosts)
+
+
+# Topic-neutral title words; they count a quarter as much as a paper's distinctive words in the
+# title gate. Words generic for one review's topic (e.g. "language model" in an LLM review) are
+# learned per batch from the titles themselves (see batch_generic_title_tokens).
+GENERIC_TITLE_TOKENS = {
+    "based", "study", "studies", "review", "systematic", "scoping", "analysis", "approach", "evaluation",
+    "evaluating", "research", "data", "use", "case", "applications", "application", "towards", "toward",
+    "role", "potential", "impact", "new", "framework", "system", "systems", "tool", "tools", "performance",
+    "method", "methods", "results", "effect", "effects", "development", "design", "assessment",
+}
+
+
+def batch_generic_title_tokens(titles: Iterable[str], min_share: float = 0.04, min_count: int = 5) -> set:
+    """Title words frequent across this batch (the review's topic words), plus the neutral core.
+
+    In a batch about one topic, words that occur in many titles do not tell its papers apart, so
+    the title gate gives them a quarter weight. Small batches fall back to the neutral core.
+    """
+    titles = [title for title in titles if title]
+    counts: Dict[str, int] = {}
+    for title in titles:
+        for token in set(_title_match_tokens(title)):
+            counts[token] = counts.get(token, 0) + 1
+    threshold = max(min_count, int(min_share * len(titles)))
+    learned = {token for token, count in counts.items() if count >= threshold} if len(titles) >= 2 * min_count else set()
+    return set(GENERIC_TITLE_TOKENS) | learned
+# Routes that fetch by the paper's own identifier: a textless PDF from them is still the paper.
+IDENTIFIER_TRUSTED_METHODS = {
+    "pmc_cloud", "pmc", "arxiv", "arxiv_twin", "direct_pdf", "europepmc", "publisher_zenodo", "publisher_osf",
+    "publisher_figshare", "publisher_acl", "publisher_arxiv",
+}
+
+
+# Routes that fetch the record's *own* repository deposit (its arXiv id, or a repository
+# DOI). Identifiers derived from another source (a PMCID or an arXiv twin found via the
+# DOI) are not on this list: a wrong DOI in the record would make them another paper.
+RECORD_ID_METHODS = {
+    "arxiv", "publisher_zenodo", "publisher_osf", "publisher_figshare", "publisher_acl", "publisher_arxiv",
+}
+
+
+def _weighted_coverage(title_tokens: List[str], text_tokens: set, generic: Optional[set] = None) -> Tuple[float, int, int]:
+    """(weighted coverage, distinctive hits, distinctive tokens) of title words in a text."""
+    generic = GENERIC_TITLE_TOKENS if generic is None else generic
+    weight = lambda token: 0.25 if token in generic else 1.0
+    total = sum(weight(token) for token in title_tokens) or 1.0
+    covered = sum(weight(token) for token in title_tokens if token in text_tokens)
+    distinctive = [token for token in title_tokens if token not in generic]
+    return covered / total, sum(token in text_tokens for token in distinctive), len(distinctive)
+
+
+_ENGLISH_MARKERS = {"the", "and", "of", "in", "to", "for", "with", "is", "are", "this", "that", "was", "were", "on"}
+
+
+def _text_is_english(text: str) -> bool:
+    words = re.findall(r"[^\W\d_]+", (text or "").lower())
+    if len(words) < 30:
+        return True
+    letters = [ch for ch in text if ch.isalpha()]
+    if letters and sum(ord(ch) > 0x24F for ch in letters) / len(letters) > 0.3:
+        return False
+    return sum(word in _ENGLISH_MARKERS for word in words) / len(words) >= 0.04
+
+
+_NON_ENGLISH_FUNCTION_WORDS = {
+    "de", "da", "do", "das", "dos", "la", "el", "los", "las", "en", "para", "con", "por", "del", "une", "des",
+    "der", "die", "und", "mit", "für", "och", "av", "för", "og", "til", "het", "een", "van", "il", "di", "della",
+}
+
+
+def _looks_non_english_title(text: str) -> bool:
+    if any(ch.isalpha() and ord(ch) > 0x7F for ch in text or ""):
+        return True
+    words = re.findall(r"[a-z]+", (text or "").lower())
+    return sum(word in _NON_ENGLISH_FUNCTION_WORDS for word in words) >= 2
+
+
+def _title_overlap(a: str, b: str) -> float:
+    tokens_a, tokens_b = set(_title_match_tokens(a)), set(_title_match_tokens(b))
+    return len(tokens_a & tokens_b) / max(1, min(len(tokens_a), len(tokens_b)))
+
+
+def _front_page_is_supplement(text: str) -> bool:
+    """True when page 1 opens like a supplementary file rather than an article."""
+    head = re.sub(r"\s+", " ", (text or "")[:200]).strip().lower()
+    return bool(re.match(
+        r"^(multimedia\s+appendix|supplementary\s+(material|information|appendix|file|data|table|figure)s?|"
+        r"supplemental\s+(material|digital content)|online\s+(supplement|resource|appendix)|"
+        r"appendix\s+[0-9a-z]\b|additional\s+file\s+\d|s\d+\s+(table|fig|figure|file|appendix|text))",
+        head,
+    ))
 
 
 def _dedupe_keep_order(urls: List[str]) -> List[str]:
@@ -193,12 +436,25 @@ def _title_match_tokens(value: str) -> List[str]:
     return deduped
 
 
+def _declared_citation_title(html_text: str) -> str:
+    """citation_title / DC.title a landing page declares for its item (any language)."""
+    match = re.search(
+        r"<meta[^>]+name=[\"'](?:citation_title|dc\.title|DC\.title)[\"'][^>]+content=[\"']([^\"']{8,500})[\"']",
+        html_text or "",
+        flags=re.IGNORECASE,
+    )
+    return stdlib_html.unescape(match.group(1)).strip() if match else ""
+
+
 def extract_static_pdf_urls(html_text: str, base_url: str) -> List[str]:
     """Extract likely PDF URLs from static publisher HTML."""
     if not html_text:
         return []
 
     candidates: List[str] = []
+    # Declared by the page itself (citation metadata, typed links): kept even when the
+    # URL has no PDF-looking marker (e.g. DSpace /bitstreams/<uuid>/download).
+    declared: List[str] = []
 
     try:
         doc = lxml_html.fromstring(html_text)
@@ -206,13 +462,18 @@ def extract_static_pdf_urls(html_text: str, base_url: str) -> List[str]:
         doc = None
 
     if doc is not None:
-        meta_xpaths = [
+        declared_xpaths = [
             "//meta[translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='citation_pdf_url']/@content",
             "//meta[translate(@property, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='citation_pdf_url']/@content",
-            "//meta[contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pdf')]/@content",
+            "//meta[translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='bepress_citation_pdf_url']/@content",
+            "//link[translate(@type, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='application/pdf']/@href",
         ]
-        for xpath in meta_xpaths:
-            candidates.extend(doc.xpath(xpath))
+        for xpath in declared_xpaths:
+            declared.extend(doc.xpath(xpath))
+        candidates.extend(declared)
+        candidates.extend(doc.xpath(
+            "//meta[contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pdf')]/@content"
+        ))
 
         for attr in ("href", "data-pdf-url", "data-pdf", "data-download-url"):
             for value in doc.xpath(f"//*[@{attr}]/@{attr}"):
@@ -231,10 +492,13 @@ def extract_static_pdf_urls(html_text: str, base_url: str) -> List[str]:
         r'"pdf_url"\s*:\s*"([^"]+)"',
         r'data-pdf-url=["\']([^"\']+)["\']',
         r'href=["\']([^"\']*(?:\.pdf|/pdf|showPdf|stampPDF|pdfft)[^"\']*)["\']',
+        # Quoted .pdf paths inside scripts / window.open(...) / onclick handlers.
+        r'["\']((?:https?://|/)[^"\'\s<>]+\.pdf)["\']',
     ]
     for pattern in regex_patterns:
         candidates.extend(re.findall(pattern, html_text, flags=re.IGNORECASE))
 
+    declared_absolute = {urljoin(base_url, str(value).strip()) for value in declared if str(value).strip()}
     absolute = []
     for candidate in candidates:
         candidate = str(candidate).strip()
@@ -242,7 +506,13 @@ def extract_static_pdf_urls(html_text: str, base_url: str) -> List[str]:
             continue
         absolute_url = urljoin(base_url, candidate)
         parsed = urlparse(absolute_url)
-        if parsed.scheme in {"http", "https"} and _looks_like_pdf_url(absolute_url):
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        ojs = ojs_download_url(absolute_url)
+        if ojs:
+            # OJS galley viewer link: the direct download is the PDF.
+            absolute.append(ojs)
+        if absolute_url in declared_absolute or _looks_like_pdf_url(absolute_url):
             absolute.append(absolute_url)
 
     return _dedupe_keep_order(absolute)
@@ -364,6 +634,15 @@ def _extract_preprint_dois_from_article_html(html_text: str) -> List[str]:
     return _dedupe_keep_order(dois)
 
 
+def _config_value(name: str) -> Optional[str]:
+    try:
+        import config
+    except Exception:
+        return None
+    value = getattr(config, name, None)
+    return str(value) if value else None
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, ""))
@@ -421,7 +700,7 @@ class DomainConcurrencyPolicy:
             self._browser_semaphore.release()
 
     def register_failure(self, url: str, failure_class: Optional[str]) -> None:
-        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | {"pmc_recaptcha", "metadata_api_429"}:
+        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | DOMAIN_COOLDOWN_FAILURE_CLASSES:
             return
         domain = self.domain_for_url(url)
         if not domain:
@@ -471,6 +750,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         browser_concurrency: Optional[int] = None,
         domain_policy: Optional[DomainConcurrencyPolicy] = None,
         semantic_cache_lock: Optional[threading.RLock] = None,
+        oa_index: Optional[OAMetadataIndex] = None,
+        max_candidates_per_method: int = 6,
     ):
         super().__init__(email=email, output_dir=output_dir)
         self.request_timeout = request_timeout
@@ -517,43 +798,100 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self._playwright = None
         self._browser = None
         self._browser_context = None
+        # Batch-shared open-access metadata (OpenAlex, Semantic Scholar, NCBI ID converter).
+        # REVIEWPILOT_PDF_OA_INDEX=0 disables it (offline tests).
+        self.oa_index_enabled = os.getenv("REVIEWPILOT_PDF_OA_INDEX", "1") != "0"
+        self.oa_index = oa_index
+        self.max_candidates_per_method = max(1, max_candidates_per_method)
+        # Batch-learned topic words (set in download_batch); single downloads use the neutral core.
+        self.generic_title_tokens: set = set(GENERIC_TITLE_TOKENS)
+        self._current_paper_doi = ""
+        self._tried_urls: set = set()
+        self._paper_meta: Dict = {"locations": []}
+        self._reset_paper_request_state()
+        # Official keyed routes, used only when the user configured a key.
+        self.elsevier_api_key = os.getenv("ELSEVIER_API_KEY") or _config_value("ELSEVIER_API_KEY") or _config_value("SCOPUS_API_KEY")
+        self.wiley_tdm_token = os.getenv("WILEY_TDM_TOKEN") or _config_value("WILEY_TDM_TOKEN")
+        self.openalex_api_key = os.getenv("OPENALEX_API_KEY") or _config_value("OPENALEX_API_KEY")
+        self.openalex_content_max = _env_int("OPENALEX_CONTENT_MAX_PER_RUN", 100)
+
+    def _reset_paper_request_state(self) -> None:
+        """Per-paper request state: URL-specific headers/params, honest-UA URLs, alt titles."""
+        self._url_headers: Dict[str, Dict[str, str]] = {}
+        self._url_params: Dict[str, Dict[str, str]] = {}
+        self._url_min_pages: Dict[str, int] = {}
+        self._repository_urls: set = set()
+        self._alt_titles: List[str] = []
+        self._network_error_urls: List[str] = []
+        self._active_download_url = ""
 
     def _new_browser_profile_dir(self) -> Path:
         run_id = f"run-{os.getpid()}-{int(self.time_func() * 1000)}-{id(self)}"
         return Path(".cache/playwright_fast_pdf_profile") / "runs" / run_id
 
     def download(self, paper: Dict) -> Tuple[bool, str, Optional[str]]:
-        """Download with HTTP-first ordering and method-level telemetry."""
+        """Download with identifier-first ordering and method-level telemetry.
+
+        Order: the record's own PDF link, identifier routes into official open
+        copies (arXiv, PMC Cloud), the publisher, every indexed OA location
+        (OpenAlex, Semantic Scholar, Unpaywall, then repository landing pages),
+        landing-page discovery, preprint routes, and finally browser printing.
+        A method may yield several candidates; each URL is fetched at most once.
+        """
         self.last_method_timings = []
         self.last_failure_detail = None
+        self.last_success_class = None
 
         title = paper.get("title", "unknown")
         doi = paper.get("doi")
-        arxiv_id = paper.get("arxiv_id")
         direct_url = paper.get("pdf_url") or paper.get("url")
         paper_id = paper.get("paper_id")
         journal = paper.get("journal", "")
         source = (paper.get("source") or "").lower()
-        pmid = paper.get("pmid")
-        if not pmid and source == "pubmed":
-            pubmed_id = str(paper.get("id") or "").strip()
-            if pubmed_id.isdigit():
-                pmid = pubmed_id
+        pmid = paper_pmid(paper) or None
+
+        meta = self._oa_metadata(paper)
+        if not doi and meta.get("doi"):
+            doi = meta["doi"]
+        pmid = pmid or meta.get("pmid") or None
+        pmcid = normalize_pmcid(paper.get("pmcid")) or meta.get("pmcid") or ""
+        own_arxiv_id = paper.get("arxiv_id") or (
+            arxiv_id_from_text(f"{paper.get('id') or ''} {direct_url or ''}") if source == "arxiv" or "arxiv.org" in (direct_url or "").lower() else ""
+        )
+        twin_arxiv_id = meta.get("arxiv_id") or ""
+        self._current_paper_doi = normalize_doi(doi)
+        self._paper_authors = list(paper.get("authors") or [])[:5]
+        self._reset_paper_request_state()
+        self._tried_urls = set()
+        self._definitive_failed_urls = set()
+        self._cooldown_skipped_urls = []
+        self._paper_meta = meta
+        self._unpaywall_landings = []
+
         self.last_publisher_detection = self._resolve_publisher(doi, journal)
         detected_publisher = self.last_publisher_detection["selected_publisher"]
+        challenge_only = detected_publisher in CHALLENGE_ONLY_PUBLISHERS
 
-        methods: List[Tuple[str, Callable[[], Optional[str]]]] = []
-        semantic_added_early = False
-        pmc_added_early = False
+        methods: List[Tuple[str, Callable[[], object]]] = []
 
-        # Layer 1: HTTP/direct/static discovery.
-        methods.append(("direct_pdf", lambda: self._try_direct_pdf_url(direct_url)))
+        # Layer 1: the record's own link and identifier routes into official open copies.
+        if direct_url and not is_metadata_url(direct_url):
+            methods.append(("direct_pdf", lambda: self._try_direct_pdf_url(direct_url)))
+        if own_arxiv_id or source == "arxiv":
+            methods.append(("arxiv", lambda: self._arxiv_version_candidates(own_arxiv_id or paper.get("id"), title)))
+        if pmcid:
+            methods.append(("pmc_cloud", lambda: self._try_pmc_cloud(pmcid)))
+        # Author copies linked from the abstract (project pages) beat a publisher paywall.
         methods.append(("abstract_static_html", lambda: self._try_abstract_link_pdf(paper)))
-        if self._has_semantic_scholar_cache(doi, title) or self.semantic_scholar_api_key:
+        legacy_semantic_scholar = not self.oa_index_enabled
+        if legacy_semantic_scholar and (self._has_semantic_scholar_cache(doi, title) or self.semantic_scholar_api_key):
+            # Without the batch index, Semantic Scholar is queried per paper as before.
             methods.append(("semantic_scholar", lambda: self._try_semantic_scholar(doi, title)))
-            semantic_added_early = True
-        if source == "arxiv" or (direct_url and "arxiv.org" in direct_url.lower()):
-            methods.append(("arxiv", lambda: self._try_arxiv(arxiv_id or paper.get("id"), title)))
+            legacy_semantic_scholar = False
+        pmc_early = source == "pubmed" and bool(pmid) and not doi and not pmcid
+        if pmc_early:
+            # PubMed records without a DOI: PMC is the only identifier route.
+            methods.append(("pmc", lambda: self._try_pmc(pmid, doi)))
         if detected_publisher:
             if detected_publisher == "biorxiv":
                 publisher_method = lambda: self._try_biorxiv_medrxiv(doi, title)
@@ -561,49 +899,72 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 publisher_method = self._get_publisher_method(detected_publisher, doi, direct_url)
             if publisher_method:
                 methods.append((f"publisher_{detected_publisher}", publisher_method))
-        methods.append(("static_html", lambda: self._try_static_html_pdf(direct_url, title)))
-        methods.append(("doi_static_html", lambda: self._try_static_html_pdf(f"https://doi.org/{doi}", title) if doi else None))
-        methods.append(("publisher_url", lambda: self._try_publisher_pattern(direct_url, doi)))
-        if source == "pubmed" and pmid and not doi:
-            methods.append(("pmc", lambda: self._try_pmc(pmid, doi)))
-            methods.append(("europepmc", lambda: self._try_europe_pmc(pmid, doi)))
-            pmc_added_early = True
 
-        # Layer 2: API/direct sources. Keep slower aggregators after cheap/direct checks.
+        # Layer 2: every indexed open-access location, then repository landing pages.
+        methods.append(("oa_locations", lambda: self._oa_location_candidates(meta, doi, pmcid)))
         methods.append(("unpaywall", lambda: self._try_unpaywall(doi)))
-        if not semantic_added_early:
+        if legacy_semantic_scholar:
             methods.append(("semantic_scholar", lambda: self._try_semantic_scholar(doi, title)))
-        methods.append(("arxiv", lambda: self._try_arxiv(arxiv_id, title)))
+        methods.append(("oa_landing_pages", lambda: self._oa_landing_page_candidates(meta, doi)))
+        if twin_arxiv_id and twin_arxiv_id != own_arxiv_id:
+            methods.append(("arxiv_twin", lambda: self._arxiv_version_candidates(twin_arxiv_id, title)))
+
+        # Layer 3: landing-page discovery on the record and publisher pages.
+        if doi and normalize_doi(doi).startswith(OVID_DOI_PREFIXES):
+            methods.append(("ovid_open_access", lambda: self._try_ovid_open_access(doi)))
+        if not challenge_only:
+            if direct_url and not is_metadata_url(direct_url):
+                methods.append(("static_html", lambda: self._try_static_html_pdf(direct_url, title)))
+            methods.append(("doi_static_html", lambda: self._try_static_html_pdf(f"https://doi.org/{doi}", title) if doi else None))
+            methods.append(("publisher_url", lambda: self._try_publisher_pattern(direct_url, doi)))
+
+        # Layer 4: preprints and remaining repositories.
+        if not own_arxiv_id and not twin_arxiv_id:
+            methods.append(("arxiv", lambda: self._try_arxiv(None, title)))
         methods.append(("biorxiv", lambda: self._try_biorxiv_medrxiv(doi, title)))
         methods.append(("preprint_lookup", lambda: self._try_find_preprint(doi, title)))
-        if not pmc_added_early:
+        methods.append(("published_version", lambda: self._published_version_candidates(doi, title)))
+        if not pmc_early:
             methods.append(("pmc", lambda: self._try_pmc(pmid, doi)))
-            methods.append(("europepmc", lambda: self._try_europe_pmc(pmid, doi)))
-        methods.append(("article_preprint_pdf", lambda: self._try_article_preprint_pdf(paper)))
-        methods.append(("doi_redirect", lambda: self._try_doi_redirect(doi)))
+        methods.append(("europepmc", lambda: self._try_europe_pmc(pmid, doi)))
+        if not challenge_only:
+            methods.append(("article_preprint_pdf", lambda: self._try_article_preprint_pdf(paper)))
+            methods.append(("doi_redirect", lambda: self._try_doi_redirect(doi)))
         methods.append(("core", lambda: self._try_core(doi, title)))
+        methods.append(("network_retry", lambda: list(self._network_error_urls)))
+        if self.openalex_api_key and meta.get("content_pdf"):
+            # Metered official route (OpenAlex's cached OA copy): after every free route.
+            methods.append(("openalex_content", lambda: self._openalex_content_candidate(meta)))
 
         # Keep LLM search opt-in only. The speed benchmark disables it by default.
         if self.use_web_search:
             methods.append(("web_search", lambda: self._try_llm_web_search(title, doi, journal)))
-        methods.append(("verified_article_print_pdf", lambda: self._try_verified_article_print_pdf(paper)))
+        if not challenge_only:
+            methods.append(("verified_article_print_pdf", lambda: self._try_verified_article_print_pdf(paper)))
 
         for method_name, method_func in methods:
             started = time.perf_counter()
             pdf_url = None
             success = False
             error = None
+            candidates_tried = 0
             self._last_failure_class = None
             self._last_failure_detail = None
             self._last_success_class = None
             try:
-                pdf_url = method_func()
-                if pdf_url:
-                    file_path = self._download_with_domain_policy(pdf_url, title, method_name, paper_id)
+                for candidate in self._iter_candidates(method_func()):
+                    if candidate in self._tried_urls and method_name != "network_retry":
+                        continue
+                    self._tried_urls.add(candidate)
+                    pdf_url = candidate
+                    candidates_tried += 1
+                    file_path = self._download_with_domain_policy(candidate, title, method_name, paper_id)
                     if file_path:
                         success = True
                         self.last_success_class = self._last_success_class
                         return True, method_name, str(file_path)
+                    if candidates_tried >= self.max_candidates_per_method:
+                        break
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 self._last_failure_class = self._last_failure_class or "method_exception"
@@ -613,6 +974,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     "method": method_name,
                     "seconds": round(time.perf_counter() - started, 3),
                     "candidate_url": pdf_url,
+                    "candidates_tried": candidates_tried,
                     "success": success,
                     "success_class": self._last_success_class if success else None,
                     "failure_class": None if success else self._last_failure_class,
@@ -641,13 +1003,21 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     self.last_failure_detail = primary_detail
                 elif self._last_failure_detail:
                     self.last_failure_detail = self._last_failure_detail
-
-            if self.domain_policy and self._last_failure_class == "article_print_failed":
-                self.last_failure_class = "article_print_failed"
-                self.last_failure_detail = self._last_failure_detail
-                return False, "none", "Article print deferred for isolated batch retry"
+            # A deferred article print no longer ends the cascade: the remaining
+            # sources still run, and the batch retries the print only if all fail.
 
         return False, "none", "All download methods failed"
+
+    @staticmethod
+    def _iter_candidates(result) -> Iterable[str]:
+        if not result:
+            return
+        if isinstance(result, str):
+            yield result
+            return
+        for candidate in result:
+            if candidate:
+                yield str(candidate)
 
     def download_batch(self, papers: List[Dict], progress_callback=None, progress_file: Optional[str] = None) -> Dict:
         """Download a batch with per-domain concurrency and single-writer progress."""
@@ -680,6 +1050,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         )
         semantic_cache_lock = self.semantic_cache_lock or threading.RLock()
         worker_count = min(max(1, self.batch_workers), len(pending))
+        self._prefetch_oa_metadata([paper for _, paper in pending])
+        self.generic_title_tokens = batch_generic_title_tokens(paper.get("title") for paper in papers)
+        self._batch_definitive_failed_urls: Dict[int, set] = {}
+        self._batch_cooldown_skipped_urls: Dict[int, List[str]] = {}
 
         thread_local = threading.local()
         worker_lock = threading.Lock()
@@ -722,6 +1096,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         if timing.get("failure_class")
                     ]),
                     "success_class": getattr(downloader, "last_success_class", None),
+                    "definitive_failed_urls": set(getattr(downloader, "_definitive_failed_urls", set())),
+                    "cooldown_skipped_urls": list(getattr(downloader, "_cooldown_skipped_urls", [])),
                 }
 
         try:
@@ -751,6 +1127,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                         }
 
                     completed += 1
+                    self._batch_definitive_failed_urls[index] = row.get("definitive_failed_urls") or set()
+                    self._batch_cooldown_skipped_urls[index] = row.get("cooldown_skipped_urls") or []
                     self._apply_batch_result(row, papers[index], results)
                     if progress_callback:
                         progress_callback(completed, len(papers), papers[index].get("title", "")[:50])
@@ -759,6 +1137,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             self._close_spawned_downloaders(spawned_downloaders)
             spawned_downloaders = []
             self._retry_failed_open_access_pdfs(papers, results, progress_file)
+            self._retry_failed_via_other_versions(papers, results, progress_file)
             self._retry_batch_article_print_failures(papers, results, progress_file)
         finally:
             self._close_spawned_downloaders(spawned_downloaders)
@@ -850,10 +1229,19 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                     or "publisher_paywalled" in (paper.get("pdf_failure_classes") or [])
                 ):
                     continue
+                # Only papers whose cascade deferred an article print get the (slow,
+                # browser-based) retry; the others have no printable landing page.
+                recorded_classes = paper.get("pdf_failure_classes") or (
+                    [paper["pdf_failure_class"]] if paper.get("pdf_failure_class") else []
+                )
+                if recorded_classes and "article_print_failed" not in recorded_classes:
+                    continue
                 retry_target = self._article_print_retry_target_for_paper(paper)
                 if not retry_target:
                     continue
                 method, url = retry_target
+                if _host_matches(url, CHALLENGE_ONLY_HOSTS) or self._is_metadata_article_source_url(url):
+                    continue
                 domain = self._domain_for_url(url) or "unknown"
                 retry_downloader = retry_downloaders.get(domain)
                 if retry_downloader is None:
@@ -906,16 +1294,29 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         results: Dict,
         progress_file: Optional[str],
     ) -> None:
-        """Sequentially rescue failed papers with trusted OA PDF URLs."""
-        for paper in papers:
+        """Sequentially rescue failed papers with trusted OA PDF URLs.
+
+        The rescue bypasses domain cooldowns, so it retries what the cascade skipped
+        under a cooldown or lost to a network error; URLs that already failed
+        definitively in the cascade are not fetched again.
+        """
+        definitive = getattr(self, "_batch_definitive_failed_urls", {}) or {}
+        skipped = getattr(self, "_batch_cooldown_skipped_urls", {}) or {}
+        attempts = 1 if self.oa_index_enabled else 2
+        for index, paper in enumerate(papers):
             if paper.get("pdf_downloaded"):
                 continue
 
             title = paper.get("title", "unknown")
             paper_id = paper.get("paper_id")
-            for _attempt in range(2):
+            self._current_paper_doi = normalize_doi(paper.get("doi"))
+            already_failed = definitive.get(index, set())
+            for _attempt in range(attempts):
                 rescued = False
-                for candidate in self._open_access_rescue_candidates(paper):
+                candidates = _dedupe_keep_order(self._open_access_rescue_candidates(paper) + list(skipped.get(index, [])))
+                for candidate in candidates:
+                    if candidate in already_failed:
+                        continue
                     file_path = self._download_pdf(candidate, title, "open_access_rescue", paper_id)
                     if not file_path:
                         continue
@@ -928,10 +1329,129 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 if rescued:
                     break
 
+    def _retry_failed_via_other_versions(
+        self,
+        papers: List[Dict],
+        results: Dict,
+        progress_file: Optional[str],
+    ) -> None:
+        """Last pass for papers still failing: other versions of the same work.
+
+        Batched lookups (Crossref preprint/version relations, Europe PMC full-text links,
+        arXiv title search at 1 request / 3 s, OpenAlex title search within its daily
+        budget) run once for all failed papers; each paper then tries at most six
+        candidates, which still pass the record's title gate. Versions are labelled
+        "other_version" so a reviewer can see that the file is not the publisher copy.
+        """
+        if not self.oa_index_enabled:
+            return
+        failed = [(index, paper) for index, paper in enumerate(papers) if not paper.get("pdf_downloaded")]
+        if not failed:
+            return
+        headers = self._api_headers()
+        dois = [normalize_doi(paper.get("doi")) for _, paper in failed if paper.get("doi")]
+        titles = [paper.get("title") for _, paper in failed if paper.get("title")]
+        lookups = {}
+        for name, call in (
+            ("related", lambda: crossref_related_dois(self.session, dois, headers)),
+            ("europepmc", lambda: europepmc_fulltext_urls(self.session, dois, headers)),
+            ("arxiv", lambda: arxiv_title_matches(self.session, titles, headers, sleep_func=self.sleep_func)),
+            ("openalex", lambda: openalex_title_versions(
+                self.session, titles, headers, email=self.email, api_key=self.openalex_api_key or "")),
+        ):
+            try:
+                lookups[name] = call() or {}
+            except Exception:
+                lookups[name] = {}
+        definitive = getattr(self, "_batch_definitive_failed_urls", {}) or {}
+        for index, paper in failed:
+            doi = normalize_doi(paper.get("doi"))
+            title = paper.get("title") or ""
+            self._reset_paper_request_state()
+            self._current_paper_doi = doi
+            self._paper_meta = self._oa_metadata(paper)
+            candidates: List[str] = []
+            for url in lookups["europepmc"].get(doi, []):
+                candidates.extend(self._rewrite_oa_url(url))
+            # A title match alone identifies a work only when the title is distinctive;
+            # otherwise ("Large Language Models") an author surname must match too.
+            record_surnames = surnames((paper.get("authors") or [])[:5])
+            distinctive_title = sum(
+                token not in self.generic_title_tokens for token in _title_match_tokens(title)
+            ) >= 3
+
+            def same_work(candidate_authors) -> bool:
+                if record_surnames and surnames(candidate_authors) & record_surnames:
+                    return True
+                return distinctive_title and not record_surnames
+
+            arxiv_match = lookups["arxiv"].get(title)
+            if arxiv_match and same_work(arxiv_match.get("authors")):
+                candidates.extend(self._arxiv_version_candidates(arxiv_match["id"]))
+            for related in lookups["related"].get(doi, []):
+                if related.startswith("10.48550/arxiv."):
+                    candidates.extend(self._arxiv_version_candidates(arxiv_id_from_text(related)))
+                    continue
+                meta = self._oa_metadata({"doi": related})
+                if meta.get("pmcid"):
+                    cloud = self._try_pmc_cloud(meta["pmcid"])
+                    if cloud:
+                        candidates.append(cloud)
+                candidates.extend(self._oa_location_candidates(meta, related))
+            for work in lookups["openalex"].get(title, []):
+                work_doi = normalize_doi(work.get("doi"))
+                if doi and work_doi == doi:
+                    continue
+                work_authors = [((a or {}).get("author") or {}).get("display_name") for a in work.get("authorships") or []]
+                if not same_work(work_authors):
+                    continue
+                if work_doi.startswith("10.48550/arxiv."):
+                    candidates.extend(self._arxiv_version_candidates(arxiv_id_from_text(work_doi)))
+                for location in [work.get("best_oa_location")] + list(work.get("locations") or []):
+                    pdf_url = (location or {}).get("pdf_url")
+                    if pdf_url and not is_metadata_url(pdf_url) and not _host_matches(pdf_url, CHALLENGE_ONLY_HOSTS):
+                        candidates.extend(self._rewrite_oa_url(pdf_url))
+            already_failed = definitive.get(index, set())
+            tried = 0
+            for candidate in _dedupe_keep_order([c for c in candidates if c]):
+                if candidate in already_failed:
+                    continue
+                if tried >= 6:
+                    break
+                tried += 1
+                self._strict_title_gate = True
+                try:
+                    file_path = self._download_with_domain_policy(candidate, title, "other_version", paper.get("paper_id"))
+                finally:
+                    self._strict_title_gate = False
+                if file_path:
+                    self._record_batch_retry_success(paper, results, "other_version", file_path)
+                    if progress_file:
+                        self._append_batch_progress(progress_file, paper)
+                    break
+
     def _open_access_rescue_candidates(self, paper: Dict) -> List[str]:
         title = paper.get("title", "unknown")
         doi = paper.get("doi")
         candidates: List[str] = []
+
+        if self.oa_index_enabled:
+            # Built from the batch metadata already fetched: no further API calls.
+            meta = self._oa_metadata(paper)
+            direct_url = paper.get("pdf_url") or ""
+            if _looks_like_pdf_url(direct_url):
+                candidates.append(direct_url)
+            pmcid = normalize_pmcid(paper.get("pmcid")) or meta.get("pmcid")
+            if pmcid:
+                cloud = self._try_pmc_cloud(pmcid)
+                if cloud:
+                    candidates.append(cloud)
+            candidates.extend(self._oa_location_candidates(meta, doi))
+            if (doi or "").lower().startswith(("10.1101/", "10.64898/")):
+                preprint_pdf = self._try_biorxiv_medrxiv(doi, title)
+                if preprint_pdf:
+                    candidates.append(preprint_pdf)
+            return _dedupe_keep_order(candidates)
 
         direct_url = paper.get("pdf_url") or ""
         if _looks_like_pdf_url(direct_url):
@@ -1027,8 +1547,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             browser_concurrency=1,
             domain_policy=None,
             semantic_cache_lock=self.semantic_cache_lock,
+            oa_index=self.oa_index,
+            max_candidates_per_method=self.max_candidates_per_method,
         )
         retry_downloader.core_api_key = self.core_api_key
+        retry_downloader.generic_title_tokens = self.generic_title_tokens
         if self.llm_query_func:
             retry_downloader.set_llm_query_func(self.llm_query_func)
         if self.use_web_search:
@@ -1169,8 +1692,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             browser_concurrency=self.browser_concurrency,
             domain_policy=domain_policy,
             semantic_cache_lock=semantic_cache_lock,
+            oa_index=self.oa_index,
+            max_candidates_per_method=self.max_candidates_per_method,
         )
         worker.core_api_key = self.core_api_key
+        worker.generic_title_tokens = self.generic_title_tokens
         if self.llm_query_func:
             worker.set_llm_query_func(self.llm_query_func)
         if self.use_web_search:
@@ -1180,13 +1706,21 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     def _paper_primary_domain(self, paper: Dict) -> str:
         direct_url = paper.get("pdf_url") or paper.get("url")
         direct_domain = self._domain_for_url(direct_url or "")
-        aggregator_domains = {"pubmed.ncbi.nlm.nih.gov", "openalex.org", "doi.org"}
+        aggregator_domains = {"pubmed.ncbi.nlm.nih.gov", "openalex.org", "doi.org", "dx.doi.org"}
         if direct_domain and direct_domain not in aggregator_domains:
             return direct_domain
 
         publisher = self._resolve_publisher(paper.get("doi"), paper.get("journal", "")).get("selected_publisher")
         publisher_domain = self._publisher_primary_domain(publisher)
-        return publisher_domain or direct_domain or "unknown"
+        if publisher_domain:
+            return publisher_domain
+        # Unknown publishers are grouped by DOI prefix (one registrant), not all under
+        # the aggregator host, so they do not serialize behind a single slot.
+        doi = normalize_doi(paper.get("doi"))
+        if doi:
+            return f"doi-prefix:{doi.split('/', 1)[0]}"
+        title_key = re.sub(r"[^a-z0-9]+", "", (paper.get("title") or "").lower())
+        return f"no-doi:{sum(map(ord, title_key)) % 8}"
 
     def _publisher_primary_domain(self, publisher: Optional[str]) -> Optional[str]:
         return {
@@ -1200,7 +1734,17 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             "frontiers": "frontiersin.org",
             "ieee": "ieeexplore.ieee.org",
             "ios": "ebooks.iospress.nl",
+            "jmir": "jmir.org",
             "jove": "app.jove.com",
+            "acm": "dl.acm.org",
+            "taylor": "tandfonline.com",
+            "sage": "journals.sagepub.com",
+            "jama": "jamanetwork.com",
+            "zenodo": "zenodo.org",
+            "osf": "osf.io",
+            "acl": "aclanthology.org",
+            "peerj": "peerj.com",
+            "elife": "elifesciences.org",
             "mdpi": "mdpi.com",
             "nature": "nature.com",
             "oxford": "academic.oup.com",
@@ -1211,6 +1755,399 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             "techrxiv": "techrxiv.org",
             "wiley": "onlinelibrary.wiley.com",
         }.get(publisher or "")
+
+    # ------------------------------------------------------------------
+    # Open-access metadata and official open-copy routes
+    # ------------------------------------------------------------------
+    def _api_headers(self) -> Dict[str, str]:
+        return {"User-Agent": api_user_agent(self.email), "Accept": "application/json"}
+
+    def _ensure_oa_index(self) -> Optional[OAMetadataIndex]:
+        if not self.oa_index_enabled:
+            return None
+        if self.oa_index is None:
+            self.oa_index = OAMetadataIndex(
+                email=self.email,
+                timeout=max(self.request_timeout, 15),
+                sleep_func=self.sleep_func,
+            )
+        return self.oa_index
+
+    def _prefetch_oa_metadata(self, papers: List[Dict]) -> None:
+        index = self._ensure_oa_index()
+        if index is None or not papers:
+            return
+        try:
+            index.prefetch(papers)
+        except Exception as exc:
+            index.errors.append(f"prefetch: {type(exc).__name__}: {exc}")
+
+    def _oa_metadata(self, paper: Dict) -> Dict:
+        index = self._ensure_oa_index()
+        if index is None:
+            return {"locations": []}
+        try:
+            return index.lookup(paper) or {"locations": []}
+        except Exception:
+            return {"locations": []}
+
+    def _try_pmc_cloud(self, pmcid: str) -> Optional[str]:
+        """PDF from NCBI's PMC Cloud Service bucket (PMC OA subset and author manuscripts)."""
+        url = pmc_cloud_pdf_url(self.session, pmcid, timeout=self.request_timeout, headers=self._api_headers())
+        if not url:
+            self._last_failure_class = "pmc_not_in_oa_cloud"
+            self._last_failure_detail = f"{pmcid} has no PDF in the PMC Cloud Service bucket"
+        return url
+
+    def _rewrite_oa_url(self, url: str) -> List[str]:
+        """Map an indexed OA URL to the copy that can be fetched programmatically."""
+        lowered = (url or "").lower()
+        if ("ncbi.nlm.nih.gov" in lowered or "europepmc.org" in lowered) and re.search(r"pmc\d+", lowered):
+            # PMC and Europe PMC web PDFs sit behind browser challenges; the same
+            # article is served from the PMC Cloud Service bucket.
+            pmcid = normalize_pmcid(re.search(r"(pmc\d+)", lowered).group(1))
+            cloud = self._try_pmc_cloud(pmcid)
+            if cloud:
+                return [cloud]
+            # Not in the bucket (e.g. PMC "free" articles outside the OA subset): the
+            # Europe PMC render is the only remaining copy; it is challenged only at times.
+            return [f"https://europepmc.org/articles/{pmcid}?pdf=render"]
+        if _is_likely_non_article_pdf_url(url):
+            return []
+        arxiv_id = arxiv_id_from_text(url) if "arxiv.org" in lowered else ""
+        if arxiv_id:
+            return [f"https://arxiv.org/pdf/{arxiv_id}"]
+        figshare_id = figshare_article_id_from_url(url)
+        if figshare_id:
+            # figshare's web UI is WAF-gated; its API names the files.
+            return figshare_pdf_urls(self.session, figshare_id, self._api_headers(), self.request_timeout)
+        if re.search(r"/bitstreams/[0-9a-f-]{36}/download", lowered):
+            # DSpace 7 UI download route -> documented REST content endpoint.
+            return dspace7_pdf_urls(self.session, url, self._api_headers(), self.request_timeout) + [url]
+        ojs = ojs_download_url(url)
+        return [ojs, url] if ojs else [url]
+
+    def _oa_location_candidates(self, meta: Dict, doi: Optional[str], pmcid: str = "") -> Iterable[str]:
+        """Direct PDF URLs that OpenAlex and Semantic Scholar list for the paper.
+
+        Locations flagged open come first; file-like locations OpenAlex does not flag
+        as open (its OA flags lag for repositories) are tried last.
+        """
+        own_doi = normalize_doi(doi)
+        locations = sorted(meta.get("locations") or [], key=lambda loc: bool(loc.get("low_priority")))
+        for location in locations:
+            url = location.get("pdf_url") or ""
+            if not url or is_metadata_url(url):
+                continue
+            if own_doi and normalize_doi(url) == own_doi:
+                continue
+            if _host_matches(url, CHALLENGE_ONLY_HOSTS):
+                continue
+            for candidate in self._rewrite_oa_url(url):
+                if location.get("host_type") == "repository" or location.get("low_priority"):
+                    self._repository_urls.add(candidate)
+                yield candidate
+
+    def _oa_landing_page_candidates(self, meta: Dict, doi: Optional[str], max_fetches: int = 3) -> Iterable[str]:
+        """Resolve repository landing pages (OpenAlex/Unpaywall) into the PDFs they declare.
+
+        Platform APIs come before HTML: DOAJ, figshare, NVA (Norway) and DSpace 7 REST;
+        other landings are fetched for citation_pdf_url / DiVA / HAL links.
+        """
+        own_doi = normalize_doi(doi)
+        located = [
+            (2 if loc.get("low_priority") else 0 if (loc.get("host_type") or "") == "repository" else 1, loc.get("landing_url"))
+            for loc in meta.get("locations") or []
+            if loc.get("landing_url")
+        ]
+        located += [(0 if host_type == "repository" else 1, url) for host_type, url in getattr(self, "_unpaywall_landings", [])]
+        queue = _dedupe_keep_order([url for _, url in sorted(located, key=lambda item: item[0])])
+        fetches = 0
+        seen = set()
+        while queue:
+            url = queue.pop(0)
+            if url in seen:
+                continue
+            seen.add(url)
+            if is_metadata_url(url) or _host_matches(url, CHALLENGE_ONLY_HOSTS):
+                continue
+            if own_doi and normalize_doi(url) == own_doi:
+                continue
+            lowered = url.lower()
+            arxiv_id = arxiv_id_from_text(url) if "arxiv.org" in lowered else ""
+            if arxiv_id:
+                yield f"https://arxiv.org/pdf/{arxiv_id}"
+                continue
+            zenodo = re.search(r"zenodo\.org/(?:records?|api/records)/(\d+)", url)
+            if zenodo:
+                yield from zenodo_pdf_urls(self.session, zenodo.group(1), self._api_headers(), self.request_timeout)
+                continue
+            osf_id = osf_id_from("", url)
+            if osf_id:
+                yield from osf_pdf_urls(self.session, osf_id, self._api_headers(), self.request_timeout)
+                continue
+            figshare_id = figshare_article_id_from_url(url)
+            if figshare_id:
+                yield from figshare_pdf_urls(self.session, figshare_id, self._api_headers(), self.request_timeout)
+                continue
+            if "doaj.org/" in lowered:
+                # DOAJ records are metadata; the DOAJ API names the journal's full text.
+                for link, content_type in doaj_fulltext_links(self.session, url, self._api_headers(), self.request_timeout):
+                    if content_type == "PDF" or _looks_like_pdf_url(link):
+                        yield link
+                    elif not is_metadata_url(link):
+                        queue.append(link)
+                continue
+            nva_id = nva_publication_id(self.session, url, self._api_headers(), self.request_timeout) if (
+                "nva.sikt.no" in lowered or "urn.nb.no" in lowered or re.search(r"hdl\.handle\.net/(11250|10852)/", lowered)
+                or "brage.unit.no" in lowered or "duo.uio.no" in lowered
+            ) else ""
+            if nva_id:
+                for presigned in nva_pdf_urls(self.session, nva_id, self._api_headers(), self.request_timeout):
+                    self._repository_urls.add(presigned)
+                    yield presigned
+                continue
+            if handle_from_url(url) or re.search(r"/(items|entities/[a-z]+)/[0-9a-f-]{36}", lowered):
+                rest_urls = dspace7_pdf_urls(self.session, url, self._api_headers(), self.request_timeout)
+                if rest_urls:
+                    for rest_url in rest_urls:
+                        self._repository_urls.add(rest_url)
+                        yield rest_url
+                    continue
+            if fetches >= max_fetches:
+                continue
+            fetches += 1
+            fetched = self._fetch_landing_html(url, prefer_honest=True)
+            if not fetched:
+                continue
+            final_url, html_text, is_pdf = fetched
+            if is_pdf:
+                yield final_url
+                continue
+            declared_title = _declared_citation_title(html_text[:200000])
+            if declared_title:
+                self._alt_titles.append(declared_title)
+            declared = repository_pdf_urls(final_url, html_text[:400000])
+            discovered = [
+                candidate
+                for candidate in extract_static_pdf_urls(html_text[:400000], final_url)
+                if not _is_likely_non_article_pdf_url(candidate)
+            ][:3]
+            for candidate in _dedupe_keep_order(declared + discovered):
+                self._repository_urls.add(candidate)
+                ojs = ojs_download_url(candidate)
+                if ojs:
+                    yield ojs
+                yield candidate
+
+    def _fetch_landing_html(self, url: str, prefer_honest: bool = False) -> Optional[Tuple[str, str, bool]]:
+        """GET a repository landing page -> (final_url, html, is_pdf).
+
+        Repositories get the identifying User-Agent first; a bot check, a bare 403 or a
+        connection reset is retried once with the other User-Agent.
+        """
+        honest = self._api_headers()
+        attempts = [honest, None] if (prefer_honest or _host_matches(url, HONEST_UA_HOSTS)) else [None, honest]
+        for headers in attempts:
+            self._rate_limit()
+            try:
+                kwargs = {"timeout": self.request_timeout, "allow_redirects": True}
+                if headers:
+                    kwargs["headers"] = headers
+                response = self.session.get(url, **kwargs)
+            except Exception:
+                continue
+            content = response.content or b""
+            content_type = response.headers.get("content-type", "").lower()
+            if response.status_code == 200 and (content[:5] == b"%PDF-" or "application/pdf" in content_type):
+                return response.url, "", True
+            if response.status_code == 200 and any(marker in content[:8000].lower() for marker in ANUBIS_MARKERS):
+                continue
+            if response.status_code == 200 and ("html" in content_type or b"<html" in content[:1000].lower()):
+                return response.url, response.text, False
+            if response.status_code in (401, 403, 405):
+                continue
+            return None
+        return None
+
+    def _should_retry_with_honest_ua(self, url: str, response) -> bool:
+        repository = url in getattr(self, "_repository_urls", set())
+        if response is None:
+            return repository
+        headers = {str(k).lower(): str(v).lower() for k, v in (getattr(response, "headers", None) or {}).items()}
+        if headers.get("cf-mitigated") == "challenge":
+            return False
+        head = (response.content or b"")[:8000].lower()
+        if any(marker in head for marker in ANUBIS_MARKERS):
+            return True
+        if b"<title>client challenge</title>" in head or b"/_fs-ch-" in head:
+            return True
+        if headers.get("x-amzn-waf-action") == "challenge" or b"gokuprops" in head:
+            return True
+        return repository and response.status_code in (401, 403, 405)
+
+    def _try_ovid_open_access(self, doi: Optional[str]) -> Optional[str]:
+        """Wolters Kluwer (Ovid) open-access PDF: /fulltext/ page -> /pdf/ on the same session."""
+        if not doi:
+            return None
+        self._rate_limit()
+        try:
+            response = self.session.get(f"https://doi.org/{doi}", timeout=self.request_timeout, allow_redirects=True)
+        except Exception:
+            return None
+        final_url = response.url or ""
+        if "ovid.com" not in self._domain_for_url(final_url) or "/fulltext/" not in final_url:
+            return None
+        body = response.content or b""
+        if b"FreeOpenAccessContent" not in body and b"openAccessLicense" not in body:
+            self._last_failure_class = "publisher_paywalled"
+            self._last_failure_detail = "Ovid article is not open access"
+            return None
+        pdf_url = final_url.replace("/fulltext/", "/pdf/", 1)
+        self._url_headers[pdf_url] = {"Referer": final_url}
+        return pdf_url
+
+    def _article_is_openly_licensed(self, doi: Optional[str]) -> bool:
+        meta = getattr(self, "_paper_meta", {}) or {}
+        if any(str(lic).lower().startswith("cc") for lic in meta.get("licenses") or []):
+            return True
+        licensed = crossref_has_open_licence(self.session, doi or "", self._api_headers(), self.request_timeout)
+        return bool(licensed)
+
+    def _elsevier_api_candidate(self, doi: Optional[str]) -> Optional[str]:
+        """Elsevier Article Retrieval API (user's key).
+
+        Open-access, open-archive and complimentary articles come back in full; for
+        articles the key is not entitled to, the API returns a one-page preview, which
+        the two-page minimum rejects.
+        """
+        if not self.elsevier_api_key or not normalize_doi(doi).startswith("10.1016/"):
+            return None
+        url = f"https://api.elsevier.com/content/article/doi/{normalize_doi(doi)}"
+        self._url_params[url] = {"httpAccept": "application/pdf"}
+        self._url_headers[url] = {"X-ELS-APIKey": self.elsevier_api_key, "Accept": "application/pdf"}
+        self._url_min_pages[url] = 2
+        return url
+
+    def _wiley_candidates(self, doi: Optional[str]) -> List[str]:
+        """Wiley TDM API (user's token) first, then the public pdfdirect URL."""
+        candidates = []
+        if self.wiley_tdm_token and doi:
+            now = time.monotonic()
+            with _KEYED_ROUTE_LOCK:
+                calls = [t for t in _KEYED_ROUTE_STATE["wiley_calls"] if now - t < 600]
+                allowed = len(calls) < 60  # Wiley TDM limit: 60 requests per 10 minutes
+                if allowed:
+                    calls.append(now)
+                _KEYED_ROUTE_STATE["wiley_calls"] = calls
+            if allowed:
+                url = f"https://api.wiley.com/onlinelibrary/tdm/v1/articles/{quote(normalize_doi(doi), safe='')}"
+                self._url_headers[url] = {"Wiley-TDM-Client-Token": self.wiley_tdm_token}
+                candidates.append(url)
+        if doi:
+            candidates.append(f"https://onlinelibrary.wiley.com/doi/pdfdirect/{doi}")
+        return candidates
+
+    def _openalex_content_candidate(self, meta: Dict) -> Optional[str]:
+        """OpenAlex's cached copy of an OA PDF (metered: user's key, capped per run)."""
+        url = meta.get("content_pdf")
+        if not url or not self.openalex_api_key:
+            return None
+        with _KEYED_ROUTE_LOCK:
+            if _KEYED_ROUTE_STATE["openalex_content_disabled"]:
+                return None
+            if _KEYED_ROUTE_STATE["openalex_content_used"] >= self.openalex_content_max:
+                self._last_failure_class = "metered_budget_exhausted"
+                self._last_failure_detail = f"OpenAlex content cap {self.openalex_content_max} reached"
+                return None
+            _KEYED_ROUTE_STATE["openalex_content_used"] += 1
+        # The key travels as a request parameter, never inside the recorded URL.
+        self._url_params[url] = {"api_key": self.openalex_api_key}
+        return url
+
+    def _arxiv_version_candidates(self, arxiv_ref, title: str = "") -> List[str]:
+        """arXiv PDF for an id, falling back to earlier versions (withdrawn latest versions 404)."""
+        raw = str(arxiv_ref or "")
+        arxiv_id = arxiv_id_from_text(raw) or re.sub(r"^(arxiv:|https?://arxiv\.org/abs/)", "", raw.strip(), flags=re.IGNORECASE)
+        if not re.match(r"^([a-z\-]+/\d{7}|\d{4}\.\d{4,5})(v\d+)?$", arxiv_id, re.IGNORECASE):
+            return []
+        match = re.match(r"^(.*?)(?:v(\d+))?$", arxiv_id)
+        base, version = match.group(1), match.group(2)
+        candidates = [f"https://arxiv.org/pdf/{arxiv_id}"]
+        if version and int(version) > 1:
+            candidates += [f"https://arxiv.org/pdf/{base}v{v}" for v in range(int(version) - 1, 0, -1)]
+        elif not version:
+            candidates.append(f"https://arxiv.org/pdf/{base}v1")
+        return candidates
+
+    def _try_arxiv(self, arxiv_id: Optional[str], title: str) -> Optional[str]:
+        """arXiv by id, or a strict title search under arXiv's 1-request-per-3-seconds rule.
+
+        The title search runs only when the open-access index has no record of the
+        paper; indexed papers already carry their arXiv id when one exists.
+        """
+        if arxiv_id:
+            return super()._try_arxiv(arxiv_id, title)
+        meta = getattr(self, "_paper_meta", {}) or {}
+        if self.oa_index_enabled and (meta.get("openalex_id") or meta.get("s2_found")):
+            return None
+        tokens = _title_match_tokens(title)
+        if len(tokens) < 4:
+            return None
+        clean_title = re.sub(r"[\"():]", " ", title or "")
+        clean_title = re.sub(r"\s+", " ", clean_title).strip()[:200]
+        with _ARXIV_API_LOCK:
+            wait = 3.0 - (time.monotonic() - _ARXIV_API_LAST_CALL[0])
+            if wait > 0:
+                time.sleep(wait)
+            _ARXIV_API_LAST_CALL[0] = time.monotonic()
+            try:
+                response = self.session.get(
+                    "https://export.arxiv.org/api/query",
+                    params={"search_query": f'ti:"{clean_title}"', "max_results": 5},
+                    headers=self._api_headers(),
+                    timeout=self.request_timeout,
+                )
+            except Exception as exc:
+                self._last_failure_class = "metadata_api_error"
+                self._last_failure_detail = f"arXiv API: {type(exc).__name__}"
+                return None
+        if response.status_code != 200:
+            self._last_failure_class = "metadata_api_429" if response.status_code == 429 else "metadata_api_error"
+            self._last_failure_detail = f"arXiv API HTTP {response.status_code}"
+            return None
+        expected = re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+        for entry in re.findall(r"<entry>(.*?)</entry>", response.text, flags=re.DOTALL):
+            id_match = re.search(r"<id>https?://arxiv\.org/abs/([^<]+)</id>", entry)
+            title_match = re.search(r"<title>(.*?)</title>", entry, flags=re.DOTALL)
+            if not id_match or not title_match:
+                continue
+            found = re.sub(r"[^a-z0-9]+", " ", stdlib_html.unescape(title_match.group(1)).lower()).strip()
+            if SequenceMatcher(None, expected, found).ratio() < 0.9:
+                continue
+            # Generic titles collide across works: require a shared author surname then.
+            record_surnames = surnames(getattr(self, "_paper_authors", []) or [])
+            entry_surnames = surnames(re.findall(r"<name>(.*?)</name>", entry, flags=re.DOTALL))
+            distinctive = sum(token not in self.generic_title_tokens for token in tokens) >= 3
+            if (record_surnames and entry_surnames & record_surnames) or (distinctive and not record_surnames):
+                return f"https://arxiv.org/pdf/{id_match.group(1)}"
+        return None
+
+    def _published_version_candidates(self, doi: Optional[str], title: str) -> Iterable[str]:
+        """For a preprint DOI, the open copies of its version of record (Crossref is-preprint-of)."""
+        doi_lower = normalize_doi(doi)
+        preprint_prefixes = ("10.36227/", "10.20944/", "10.2139/", "10.31234/", "10.31219/", "10.31235/",
+                             "10.21203/", "10.22541/", "10.26434/", "10.1101/", "10.64898/", "10.48550/")
+        if not doi_lower.startswith(preprint_prefixes):
+            return
+        for published in crossref_published_dois(self.session, doi_lower, self._api_headers(), self.request_timeout):
+            meta = self._oa_metadata({"doi": published})
+            if meta.get("pmcid"):
+                cloud = self._try_pmc_cloud(meta["pmcid"])
+                if cloud:
+                    yield cloud
+            for candidate in self._oa_location_candidates(meta, published):
+                yield candidate
 
     def _try_direct_pdf_url(self, url: Optional[str]) -> Optional[str]:
         if url and _looks_like_pdf_url(url):
@@ -1270,10 +2207,25 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             ("10.1038/", "nature"),
             ("10.1371/", "plos"),
             ("10.3390/", "mdpi"),
+            ("10.2196/", "jmir"),
+            ("10.5281/zenodo.", "zenodo"),
+            ("10.18653/", "acl"),
+            ("10.1007/", "springer"),
+            ("10.1080/", "taylor"),
+            ("10.1177/", "sage"),
+            ("10.1001/", "jama"),
+            ("10.7717/", "peerj"),
+            ("10.7554/", "elife"),
+            ("10.1126/", "science"),
+            ("10.48550/", "arxiv"),
         ]
         for prefix, publisher in doi_prefix_map:
             if doi_lower.startswith(prefix):
                 return publisher
+        if "/osf.io/" in doi_lower or doi_lower.startswith(("10.31234/", "10.31219/", "10.31235/", "10.35542/")):
+            return "osf"
+        if figshare_article_id(doi_lower):
+            return "figshare"
         if doi_lower.startswith("10.7759/"):
             return "cureus"
         if doi_lower.startswith("10.1200/"):
@@ -1288,7 +2240,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if publisher == "asco" and doi:
             return lambda: f"https://ascopubs.org/doi/{doi}"
         if publisher == "wiley" and doi:
-            return lambda: f"https://onlinelibrary.wiley.com/doi/pdfdirect/{doi}"
+            return lambda: self._wiley_candidates(doi)
         if publisher == "oxford" and doi:
             return lambda: self._try_oxford(doi)
         if publisher == "ios" and doi:
@@ -1299,6 +2251,24 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return lambda: self._try_techrxiv(doi)
         if publisher == "rsna" and doi:
             return lambda: f"https://pubs.rsna.org/doi/pdf/{doi}"
+        if publisher == "jmir" and doi:
+            # jmir.org answers programmatic clients with an AWS WAF challenge; JMIR's
+            # public asset bucket holds the accepted manuscript.
+            return lambda: jmir_asset_pdf_urls(doi)
+        if publisher == "zenodo" and doi:
+            record = re.search(r"zenodo\.(\d+)", doi.lower())
+            return (lambda: zenodo_pdf_urls(self.session, record.group(1), self._api_headers(), self.request_timeout)) if record else None
+        if publisher == "osf" and doi:
+            osf_id = osf_id_from(doi, url or "")
+            return (lambda: osf_pdf_urls(self.session, osf_id, self._api_headers(), self.request_timeout)) if osf_id else None
+        if publisher == "figshare" and doi:
+            article_id = figshare_article_id(doi)
+            return lambda: figshare_pdf_urls(self.session, article_id, self._api_headers(), self.request_timeout)
+        if publisher == "acl" and doi:
+            anthology_id = re.sub(r"^10\.18653/v1/", "", doi.strip(), flags=re.IGNORECASE)
+            return lambda: f"https://aclanthology.org/{anthology_id}.pdf"
+        if publisher == "arxiv" and doi:
+            return lambda: self._arxiv_version_candidates(arxiv_id_from_text(doi))
         return super()._get_publisher_method(publisher, doi, url)
 
     def _try_ios_press(self, doi: Optional[str]) -> Optional[str]:
@@ -1320,40 +2290,50 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return f"https://www.techrxiv.org/doi/pdf/{doi_without_version}"
 
     def _try_ieee(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
+        """IEEE: Computer Society CSDL first, then Xplore stampPDF only for openly licensed articles.
+
+        Crossref supplies the arnumber and licence, so subscription articles are not
+        requested from Xplore at all and are reported as paywalled.
+        """
         csdl_pdf_url = self._try_ieee_computer_society_pdf(doi)
         if csdl_pdf_url or self._last_failure_class == "publisher_paywalled":
             return csdl_pdf_url
 
         arnumber = None
-
         if url and "ieeexplore.ieee.org" in url:
             match = re.search(r"/document/(\d+)", url)
             if match:
                 arnumber = match.group(1)
-
-        if not arnumber and doi:
-            self._rate_limit()
-            try:
-                response = self.session.get(
-                    f"https://doi.org/{doi}",
-                    timeout=self.request_timeout,
-                    allow_redirects=True,
-                )
-            except Exception:
-                response = None
-
-            if response and "ieeexplore.ieee.org" in (response.url or ""):
-                match = re.search(r"/document/(\d+)", response.url)
-                if match:
-                    arnumber = match.group(1)
-            if response and not arnumber:
-                match = re.search(r"/document/(\d+)", response.text[:20000])
-                if match:
-                    arnumber = match.group(1)
-
+        cache = self.__dict__.setdefault("_ieee_info_cache", {})
+        if doi and doi not in cache:
+            cache[doi] = ieee_oa_pdf_urls(self.session, doi, self._api_headers(), self.request_timeout)
+        info = cache.get(doi) or {}
+        arnumber = arnumber or info.get("arnumber") or self._ieee_arnumber_from_doi_redirect(doi)
         if not arnumber:
+            self._last_failure_class = "metadata_api_error"
+            self._last_failure_detail = "IEEE arnumber not found (Crossref, doi.org)"
+            return None
+        openly_available = info.get("cc_license") or (getattr(self, "_paper_meta", {}) or {}).get("is_oa")
+        if info.get("crossref_found") and not openly_available:
+            self._last_failure_class = "publisher_paywalled"
+            self._last_failure_detail = "IEEE article has no open licence (Crossref/OpenAlex)"
             return None
         return f"https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber={arnumber}"
+
+    def _ieee_arnumber_from_doi_redirect(self, doi: Optional[str]) -> Optional[str]:
+        if not doi:
+            return None
+        self._rate_limit()
+        try:
+            response = self.session.get(f"https://doi.org/{doi}", timeout=self.request_timeout, allow_redirects=True)
+        except Exception:
+            return None
+        for text in (response.url or "", (response.text or "")[:20000]):
+            if "ieeexplore.ieee.org" in text or "/document/" in text:
+                match = re.search(r"/document/(\d+)", text)
+                if match:
+                    return match.group(1)
+        return None
 
     def _try_ieee_computer_society_pdf(self, doi: Optional[str]) -> Optional[str]:
         doi_clean = (doi or "").strip()
@@ -1446,6 +2426,9 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         )
 
     def _try_elsevier(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
+        api_url = self._elsevier_api_candidate(doi)
+        if api_url:
+            return api_url
         if url and "sciencedirect.com" in url:
             return super()._try_elsevier(doi, url)
         if not doi:
@@ -1470,14 +2453,17 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         pii = pii_match.group(1)
         return f"https://www.sciencedirect.com/science/article/pii/{pii}/pdfft"
 
-    def _try_mdpi(self, doi: Optional[str], url: Optional[str]) -> Optional[str]:
-        mdpi_res_url = self._mdpi_res_pdf_url(doi)
-        if mdpi_res_url:
-            return mdpi_res_url
-        return super()._try_mdpi(doi, url)
+    def _try_mdpi(self, doi: Optional[str], url: Optional[str]) -> List[str]:
+        # The asset URL is derived from the DOI; if it 404s, fall through to the DOI-based route.
+        return [candidate for candidate in (self._mdpi_res_pdf_url(doi), super()._try_mdpi(doi, url)) if candidate]
 
     def _mdpi_res_pdf_url(self, doi: Optional[str]) -> Optional[str]:
         doi_lower = (doi or "").lower().strip()
+        proceedings = re.match(r"^10\.3390/([a-z]+)(20\d\d)(\d{3})(\d{3,})$", doi_lower)
+        if proceedings and proceedings.group(1) in MDPI_PROCEEDINGS_CODES:
+            slug, volume, article = proceedings.group(1), int(proceedings.group(3)), int(proceedings.group(4))
+            stem = f"{slug}-{volume:02d}-{article:05d}"
+            return f"https://mdpi-res.com/d_attachment/{slug}/{stem}/article_deploy/{stem}.pdf"
         match = re.match(r"10\.3390/([a-z]+)(\d+)$", doi_lower)
         if not match:
             return None
@@ -1490,9 +2476,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             article_text = numeric_suffix[3:]
         else:
             return None
-        journal_slug = {
-            "info": "information",
-        }.get(journal_code, journal_code)
+        journal_slug = MDPI_JOURNAL_SLUGS.get(journal_code, journal_code)
         volume = int(volume_text)
         article_number = int(article_text)
         stem = f"{journal_slug}-{volume:02d}-{article_number:05d}"
@@ -1549,18 +2533,18 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         cache_key = self._semantic_scholar_cache_key(doi, title)
         return bool(cache_key and self.semantic_scholar_cache.get(cache_key))
 
-    def _try_unpaywall(self, doi: Optional[str]) -> Optional[str]:
-        candidates = self._try_unpaywall_pdf_candidates(doi)
-        europe_pmc_candidates = [
-            candidate
-            for candidate in (self._europe_pmc_render_url_from_url(url) for url in candidates)
-            if candidate
-        ]
-        ordered = _dedupe_keep_order(europe_pmc_candidates + candidates)
-        return ordered[0] if ordered else None
+    def _try_unpaywall(self, doi: Optional[str]) -> List[str]:
+        """Every Unpaywall OA location, with PMC/Europe PMC copies mapped to the PMC Cloud bucket."""
+        candidates: List[str] = []
+        for url in self._try_unpaywall_pdf_candidates(doi):
+            if _host_matches(url, CHALLENGE_ONLY_HOSTS):
+                continue
+            candidates.extend(self._rewrite_oa_url(url))
+        return _dedupe_keep_order(candidates) or None
 
     def _try_unpaywall_pdf_candidates(self, doi: Optional[str]) -> List[str]:
         """Return only Unpaywall locations that are direct PDF-looking URLs."""
+        self._unpaywall_landings = []
         if not doi:
             return []
 
@@ -1589,6 +2573,9 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         def add_location(location: Optional[Dict]) -> None:
             if not location:
                 return
+            landing = location.get("url_for_landing_page") or location.get("url")
+            if landing and not _looks_like_pdf_url(landing):
+                self._unpaywall_landings.append((location.get("host_type") or "", landing))
             pdf_url = location.get("url_for_pdf")
             if pdf_url:
                 candidates.append(pdf_url)
@@ -1617,7 +2604,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if self.domain_policy:
             self.domain_policy.register_failure(url, failure_class)
             return
-        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | {"pmc_recaptcha", "metadata_api_429"}:
+        if failure_class not in PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES | DOMAIN_COOLDOWN_FAILURE_CLASSES:
             return
         key = self._cooldown_key(url, failure_class)
         self.domain_failure_cooldowns[key] = self.time_func() + self.domain_cooldown_seconds
@@ -1642,18 +2629,22 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return None
 
     def _download_with_domain_policy(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
-        cooldown_classes = ["pmc_recaptcha"]
+        cooldown_classes = sorted(DOMAIN_COOLDOWN_FAILURE_CLASSES - {"metadata_api_429"})
         if self._is_pdf_endpoint_cooldown_candidate(url):
             cooldown_classes.extend(sorted(PDF_ENDPOINT_COOLDOWN_FAILURE_CLASSES))
         cooldown_failure = self._domain_cooldown_failure(url, cooldown_classes)
         if cooldown_failure:
             self._last_failure_class = "domain_cooldown_skip"
             self._last_failure_detail = f"{self._domain_for_url(url)} cooled down after {cooldown_failure}"
+            getattr(self, "_cooldown_skipped_urls", []).append(url)
             return None
 
         file_path = self._download_pdf(url, title, method, paper_id)
         if not file_path:
             self._register_domain_failure(url, self._last_failure_class)
+            # Transient outcomes (network errors, rate limits) stay eligible for the rescue pass.
+            if self._last_failure_class not in (None, "network_error", "rate_limited", "metadata_api_429"):
+                getattr(self, "_definitive_failed_urls", set()).add(url)
         return file_path
 
     def _load_semantic_scholar_cache(self) -> Dict[str, str]:
@@ -1847,22 +2838,25 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 return value
         return None
 
-    def _try_pmc(self, pmid: Optional[str], doi: Optional[str]) -> Optional[str]:
+    def _try_pmc(self, pmid: Optional[str], doi: Optional[str]) -> List[str]:
+        """PMC copy: the PMC Cloud Service bucket first, the PMC website last.
+
+        NCBI retired the OA web service (oa.fcgi); the cloud bucket is its
+        replacement. The website's PDF links sit behind a browser challenge, so
+        they are only a fallback for articles outside the bucket.
+        """
         pmcid = self._resolve_pmcid(pmid, doi)
         if not pmcid:
-            return None
-
-        oa_pdf = self._try_ncbi_oa_pdf(pmcid)
-        if oa_pdf:
-            return oa_pdf
-        if self._last_failure_class == "pmc_not_open_access":
-            return None
-
+            return []
+        cloud = self._try_pmc_cloud(pmcid)
+        if cloud:
+            return [cloud]
+        candidates = []
         named_pdf = self._try_pmc_named_article_pdf(pmcid)
         if named_pdf:
-            return named_pdf
-
-        return f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/"
+            candidates.append(named_pdf)
+        candidates.append(f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/")
+        return candidates
 
     def _try_ncbi_oa_pdf(self, pmcid: str) -> Optional[str]:
         self._rate_limit()
@@ -2038,14 +3032,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if "html" not in content_type.lower() and b"<html" not in response.content[:1000].lower():
             return None
 
-        verified_article_page = self._is_verified_article_page(
-            response.url,
-            "",
-            response.text[:200000],
-            title or "",
-        )
-        for candidate in extract_static_pdf_urls(response.text[:200000], response.url):
-            if verified_article_page and _is_likely_non_article_pdf_url(candidate):
+        for candidate in extract_static_pdf_urls(response.text[:200000], response.url)[:6]:
+            if _is_likely_non_article_pdf_url(candidate):
                 continue
             if self._verify_pdf_candidate(candidate):
                 return candidate
@@ -2069,7 +3057,9 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
 
         hits = [token for token in expected_tokens if token in candidate_tokens]
         coverage = len(hits) / len(expected_tokens)
-        return coverage >= 0.72 and len(hits) >= min(5, len(expected_tokens))
+        # Reverse coverage stops a short title matching a longer, different preprint.
+        reverse_coverage = len(hits) / len(candidate_tokens)
+        return coverage >= 0.72 and reverse_coverage >= 0.6 and len(hits) >= min(5, len(expected_tokens))
 
     def _preprint_pdf_url_from_result(self, result: Dict) -> Optional[str]:
         preprint_doi = result.get("doi")
@@ -2083,8 +3073,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             server = "medrxiv" if "medrxiv" in source_text else "biorxiv"
             return f"https://www.{server}.org/content/{preprint_doi}.full.pdf"
         if preprint_doi.lower().startswith("10.64898/"):
-            medrxiv_id = preprint_doi.split("/", 1)[-1]
-            return f"https://www.medrxiv.org/content/10.1101/{medrxiv_id}.full.pdf"
+            # medRxiv serves 10.64898 DOIs under their own prefix (rewriting to 10.1101 gives 403).
+            return f"https://www.medrxiv.org/content/{preprint_doi}.full.pdf"
         return None
 
     def _try_biorxiv_medrxiv(self, doi: Optional[str], title: str) -> Optional[str]:
@@ -2135,11 +3125,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             publisher_method = self._get_publisher_method(publisher, doi, direct_url)
             if publisher_method:
                 try:
-                    publisher_url = publisher_method()
+                    publisher_urls = list(self._iter_candidates(publisher_method()))
                 except Exception:
-                    publisher_url = None
-                if publisher_url and not _looks_like_pdf_url(publisher_url):
-                    candidates.append(publisher_url)
+                    publisher_urls = []
+                candidates.extend(url for url in publisher_urls if not _looks_like_pdf_url(url))
 
         if doi:
             candidates.append(f"https://doi.org/{doi}")
@@ -2224,7 +3213,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         direct_url = paper.get("pdf_url") or paper.get("url")
         candidates: List[str] = []
 
-        if direct_url and not _looks_like_pdf_url(direct_url):
+        # Metadata records (PubMed, OpenAlex) are not article pages and must not be printed.
+        if direct_url and not _looks_like_pdf_url(direct_url) and not self._is_metadata_article_source_url(direct_url):
             candidates.append(direct_url)
 
         publisher = self._resolve_publisher(doi, paper.get("journal", "")).get("selected_publisher")
@@ -2232,11 +3222,10 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             publisher_method = self._get_publisher_method(publisher, doi, direct_url)
             if publisher_method:
                 try:
-                    publisher_url = publisher_method()
+                    publisher_urls = list(self._iter_candidates(publisher_method()))
                 except Exception:
-                    publisher_url = None
-                if publisher_url and not _looks_like_pdf_url(publisher_url):
-                    candidates.append(publisher_url)
+                    publisher_urls = []
+                candidates.extend(url for url in publisher_urls if not _looks_like_pdf_url(url))
 
         if doi:
             candidates.append(f"https://doi.org/{doi}")
@@ -2289,39 +3278,149 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         except Exception:
             return ""
 
+    def _extract_pdf_pages(self, content: bytes, max_pages: int = 4, max_chars: int = 30000) -> List[str]:
+        """Text of the first pages, one string per page (NFKC-normalised)."""
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(content))
+            if getattr(reader, "is_encrypted", False):
+                try:
+                    reader.decrypt("")
+                except Exception:
+                    return []
+            pages: List[str] = []
+            for page in reader.pages[:max_pages]:
+                try:
+                    pages.append(unicodedata.normalize("NFKC", page.extract_text() or ""))
+                except Exception:
+                    pages.append("")
+                if sum(len(text) for text in pages) >= max_chars:
+                    break
+            return pages
+        except Exception:
+            return []
+
     def _pdf_title_match_result(self, content: bytes, title: str) -> Tuple[bool, Optional[str]]:
+        pages = self._extract_pdf_pages(content)
+        if getattr(self, "_strict_title_gate", False):
+            return self._strict_title_gate_result(pages, title)
+        matches, detail = self._title_gate(pages, title)
+        if matches:
+            return True, None
+        # Titles declared by the record's own landing page (citation_title, DSpace dc.title,
+        # NVA/DOAJ titles) cover translated or reworded record titles.
+        for alternative in getattr(self, "_alt_titles", []) or []:
+            # Only a translation or a rewording of the record title counts: a landing reached
+            # through a wrong record DOI declares another paper's title (hci-00002).
+            if alternative and alternative.strip().lower() != (title or "").strip().lower() and (
+                _looks_non_english_title(alternative) or _title_overlap(alternative, title) >= 0.5
+            ):
+                alt_matches, _ = self._title_gate(pages, alternative)
+                if alt_matches:
+                    return True, None
+        return False, detail
+
+    def _strict_title_gate_result(self, pages: List[str], title: str) -> Tuple[bool, Optional[str]]:
+        """Gate for files found as *other versions* of a paper (preprint, repository copy):
+        the record's DOI on pages 1-2, or >=80% of its title words there, and never a supplement."""
+        head = "\n".join(pages[:2])
+        if _front_page_is_supplement(head):
+            return False, "supplementary file, not the article"
+        paper_doi = re.sub(r"\s+", "", getattr(self, "_current_paper_doi", "") or "")
+        if len(paper_doi) >= 10 and paper_doi in re.sub(r"\s+", "", head.lower()):
+            return True, None
+        title_tokens = _title_match_tokens(title)
+        if len(title_tokens) < 3:
+            return False, "title too short to verify another version"
+        head_tokens = set(_title_match_tokens(head[:6000]))
+        coverage = sum(token in head_tokens for token in title_tokens) / len(title_tokens)
+        if coverage >= 0.8:
+            return True, None
+        return False, f"other version: title coverage {coverage:.2f} on pages 1-2"
+
+    def _title_gate(self, pages: List[str], title: str) -> Tuple[bool, Optional[str]]:
         title_tokens = _title_match_tokens(title)
         if len(title_tokens) < 2:
             return True, None
 
-        pdf_text = self._extract_pdf_text_sample(content)
-        if not pdf_text.strip():
-            return True, None
+        pdf_text = "\n".join(pages)[:30000]
+        if not pdf_text.strip() or not _title_match_tokens(pdf_text):
+            # Nothing to verify against (scan or image-only PDF): accept only when the
+            # file was fetched by the paper's own identifier.
+            method = getattr(self, "_active_method", "") or ""
+            if method in IDENTIFIER_TRUSTED_METHODS or method.startswith("publisher_"):
+                return True, None
+            return False, "no extractable text to verify the title"
 
         pdf_tokens = set(_title_match_tokens(pdf_text))
-        if not pdf_tokens:
-            return True, None
 
         hits = [token for token in title_tokens if token in pdf_tokens]
         coverage = len(hits) / len(title_tokens)
         required_hits = min(6, len(title_tokens))
         front_text = pdf_text[:1200]
         compact_title = re.sub(r"[^a-z0-9]+", "", (title or "").lower())
-        compact_front = re.sub(r"[^a-z0-9]+", "", front_text.lower())
-        if len(compact_title) >= 24 and compact_title in compact_front:
+        if _front_page_is_supplement(pdf_text) and not _front_page_is_supplement(title):
+            return False, "supplementary file, not the article"
+        # Page 1 may be a repository cover sheet or a sidebar layout, so the title is
+        # looked for at the top of page 1 and of page 2.
+        # 1800 characters: publisher boilerplate (Procedia, journal mastheads) can precede the title.
+        fronts = [page[:1800] for page in pages[:2] if page.strip()] or [front_text]
+        if len(compact_title) >= 24 and any(
+            compact_title in re.sub(r"[^a-z0-9]+", "", front.lower()) for front in fronts
+        ):
             return True, None
-        front_tokens = set(_title_match_tokens(front_text))
-        if len(title_tokens) >= 3 and front_tokens:
-            front_hits = [token for token in title_tokens if token in front_tokens]
-            front_coverage = len(front_hits) / len(title_tokens)
-            front_required_hits = min(5, len(title_tokens))
-            if front_coverage < 0.55 and len(front_hits) < front_required_hits:
-                detail = (
-                    f"front matter title token coverage {front_coverage:.2f} "
-                    f"({len(front_hits)}/{len(title_tokens)})"
+
+        head_text = "\n".join(pages[:2])[:6000] if pages else pdf_text[:3000]
+        paper_doi = re.sub(r"\s+", "", getattr(self, "_current_paper_doi", "") or "")
+        doi_on_head = len(paper_doi) >= 10 and paper_doi in re.sub(r"\s+", "", head_text.lower())
+        if doi_on_head:
+            # The paper's own DOI printed on pages 1-2 identifies it when the title was reworded
+            # at publication; the title must still be recognisable (a wrong DOI in the
+            # record would otherwise pull in a different paper) ...
+            head_tokens = set(_title_match_tokens(head_text))
+            head_coverage = sum(token in head_tokens for token in title_tokens) / len(title_tokens)
+            if len(hits) >= 2 and head_coverage >= 0.35:
+                return True, None
+            # ... unless the paper is not in English, where an English record title cannot match.
+            if not _text_is_english(head_text):
+                return True, None
+
+        front_letters = [ch for ch in front_text if ch.isalpha()]
+        non_latin = front_letters and sum(ord(ch) > 0x24F for ch in front_letters) / len(front_letters) > 0.3
+        if len(title_tokens) >= 3 and not non_latin:
+            # The title's distinctive words must appear at the top of page 1 (or of page 2,
+            # behind a cover sheet, where a stricter bar applies); generic domain words
+            # such as "large language model" count only a quarter.
+            front_ok, best = False, (0.0, 0, 0)
+            for position, front in enumerate(fronts):
+                front_tokens = set(_title_match_tokens(front))
+                if not front_tokens:
+                    continue
+                wcov, distinct_hits, distinct_total = _weighted_coverage(title_tokens, front_tokens, self.generic_title_tokens)
+                best = max(best, (wcov, distinct_hits, distinct_total))
+                needed_hits = min(5, distinct_total) if distinct_total else 0
+                bar = 0.55 if position == 0 else 0.7
+                weighted_ok = wcov >= bar or (distinct_total >= 2 and distinct_hits >= needed_hits)
+                # The plain word rule must hold too, so the gate is never looser than before
+                # topic words were down-weighted.
+                plain_hits = sum(token in front_tokens for token in title_tokens)
+                plain_ok = plain_hits / len(title_tokens) >= bar or plain_hits >= min(5, len(title_tokens))
+                if weighted_ok and plain_ok:
+                    front_ok = True
+                    break
+            # Exact repository records fetched by ID (OSF, Zenodo, PMC bucket, arXiv id, ...)
+            # are the paper even when the deposited version was retitled; for them only the
+            # whole-text coverage below applies.
+            if not front_ok and getattr(self, "_active_method", "") not in RECORD_ID_METHODS:
+                return False, (
+                    f"front matter title token coverage {best[0]:.2f} weighted "
+                    f"({best[1]}/{best[2]} distinctive words)"
                 )
-                return False, detail
-        if coverage >= 0.45 or len(hits) >= required_hits:
+        wcov_all, distinct_all, distinct_total_all = _weighted_coverage(title_tokens, pdf_tokens, self.generic_title_tokens)
+        if wcov_all >= 0.5 or (distinct_total_all and distinct_all >= min(5, distinct_total_all)):
+            return True, None
+        if getattr(self, "_active_method", "") in RECORD_ID_METHODS and (coverage >= 0.45 or len(hits) >= required_hits):
             return True, None
 
         detail = f"title token coverage {coverage:.2f} ({len(hits)}/{len(title_tokens)})"
@@ -2334,6 +3433,13 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         method: str,
         paper_id: str = None,
     ) -> Optional[Path]:
+        self._active_method = method
+        min_pages = getattr(self, "_url_min_pages", {}).get(getattr(self, "_active_download_url", ""), 0)
+        if min_pages and len(self._extract_pdf_pages(content, max_pages=min_pages, max_chars=10**9)) < min_pages:
+            # e.g. Elsevier's API returns a first-page preview for non-entitled articles.
+            self._last_failure_class = "publisher_paywalled"
+            self._last_failure_detail = f"only a {min_pages - 1}-page preview was returned"
+            return None
         matches, detail = self._pdf_title_match_result(content, title)
         if not matches:
             self._last_failure_class = "pdf_title_mismatch"
@@ -2407,6 +3513,12 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         }
 
     def _article_print_pdf_is_acceptable(self, content: bytes, title: str) -> bool:
+        # A printed HTML article always carries text; a textless print is a blank or
+        # canvas-only page, which the title gate would otherwise wave through.
+        if not self._extract_pdf_text_sample(content, max_pages=2, max_chars=2000).strip():
+            self._last_failure_class = "article_print_incomplete"
+            self._last_failure_detail = "printed page has no extractable text"
+            return False
         matches, detail = self._pdf_title_match_result(content, title)
         if not matches:
             self._last_failure_class = "pdf_title_mismatch"
@@ -2487,22 +3599,49 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
     def _download_pdf(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
         """Download without Selenium fallback; parse returned HTML once for a PDF link."""
         self._rate_limit()
+        self._active_download_url = url
+        self._active_method = method
+        honest_headers = {**self._api_headers(), "Accept": "application/pdf,*/*"}
 
+        request_kwargs = {
+            "timeout": self.download_timeout,
+            "allow_redirects": True,
+        }
+        headers = self._pdf_request_headers(url)
+        if headers:
+            request_kwargs["headers"] = headers
+        if self._url_params.get(url):
+            request_kwargs["params"] = self._url_params[url]
+        sent_honest = bool(headers) and headers.get("User-Agent") == honest_headers["User-Agent"]
         try:
-            request_kwargs = {
-                "timeout": self.download_timeout,
-                "allow_redirects": True,
-            }
-            headers = self._pdf_request_headers(url)
-            if headers:
-                request_kwargs["headers"] = headers
             response = self.session.get(url, **request_kwargs)
-        except Exception:
+        except Exception as exc:
+            response = None
+            error = exc
+        if not sent_honest and self._should_retry_with_honest_ua(url, response):
+            # Bot checks that exempt identified clients (Anubis, Fastly client challenge,
+            # AWS WAF), and repositories that refuse spoofed browser UAs: ask once as the
+            # tool we are. Cloudflare managed challenges are never retried.
+            try:
+                retry = self.session.get(url, **{**request_kwargs, "headers": {**(headers or {}), **honest_headers}})
+            except Exception as exc:
+                retry, error = None, exc
+            if retry is not None:
+                if retry.status_code == 200 and (retry.content or b"")[:5] == b"%PDF-":
+                    with _LEARNED_HONEST_LOCK:
+                        _LEARNED_HONEST_HOSTS.add(self._domain_for_url(url))
+                response = retry
+        if response is None:
             self._last_failure_class = "network_error"
+            self._last_failure_detail = f"{type(error).__name__}"
+            getattr(self, "_network_error_urls", []).append(url)
             curl_path = self._download_pdf_with_curl_cffi(url, title, method, paper_id)
             if curl_path:
                 return curl_path
             return None
+        if "content.openalex.org" in url and response.status_code in (401, 402, 403, 429):
+            with _KEYED_ROUTE_LOCK:
+                _KEYED_ROUTE_STATE["openalex_content_disabled"] = True
 
         content_type = response.headers.get("content-type", "")
         first_bytes = response.content[:20]
@@ -2525,9 +3664,20 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             if ios_press_path:
                 return ios_press_path
 
-            for candidate in extract_static_pdf_urls(response.text[:200000], response.url):
+            page_candidates = [
+                candidate
+                for candidate in extract_static_pdf_urls(response.text[:200000], response.url)
+                if not _is_likely_non_article_pdf_url(candidate)
+            ]
+            for candidate in page_candidates[:4]:
                 try:
-                    retry = self.session.get(candidate, timeout=self.download_timeout, allow_redirects=True)
+                    candidate_headers = self._pdf_request_headers(candidate)
+                    retry = self.session.get(
+                        candidate,
+                        timeout=self.download_timeout,
+                        allow_redirects=True,
+                        **({"headers": candidate_headers} if candidate_headers else {}),
+                    )
                 except Exception:
                     continue
                 retry_type = retry.headers.get("content-type", "")
@@ -2545,7 +3695,7 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             self._last_failure_class = failure_class
             self._last_failure_detail = f"HTTP {response.status_code}"
 
-        if failure_class == "pdf_endpoint_cloudflare":
+        if failure_class in ("pdf_endpoint_cloudflare", "access_denied"):
             curl_path = self._download_pdf_with_curl_cffi(url, title, method, paper_id)
             if curl_path:
                 return curl_path
@@ -2672,25 +3822,43 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         if "pmc.ncbi.nlm.nih.gov" in url_lower or "ncbi.nlm.nih.gov/pmc" in url_lower:
             if b"recaptcha" in content_lower or b"challengepage" in content_lower or b"checking your browser" in content_lower:
                 return "pmc_recaptcha"
+            if b"preparing to download" in content_lower or b"pow_challenge" in content_lower:
+                return "pmc_pow_challenge"
 
+        headers = {str(k).lower(): str(v).lower() for k, v in (getattr(response, "headers", None) or {}).items()}
+        # Specific challenge signatures only: the bare word "cloudflare" also appears in
+        # ordinary pages that load cdnjs.cloudflare.com, so it is not a marker.
         cloudflare_markers = (
             b"just a moment",
-            b"cloudflare",
             b"cf-chl",
+            b"_cf_chl_opt",
+            b"challenge-platform",
             b"checking your browser",
+        )
+        is_cloudflare_challenge = headers.get("cf-mitigated") == "challenge" or any(
+            marker in content_lower for marker in cloudflare_markers
         )
         if is_pdf_endpoint and "sciencedirect.com" in url_lower and (
             b"tdm-reservation" in content_lower or b"tdmrep-policy" in content_lower
         ):
             return "pdf_endpoint_tdm_blocked"
-        if is_pdf_endpoint and (
-            b"awswafcookiedomainlist" in content_lower or b"gokuprops" in content_lower
+        if (
+            b"awswafcookiedomainlist" in content_lower
+            or b"gokuprops" in content_lower
+            or headers.get("x-amzn-waf-action") == "challenge"
         ):
-            return "pdf_endpoint_waf"
-        if response.status_code in (401, 403, 429) or any(marker in content_lower for marker in cloudflare_markers):
-            if is_pdf_endpoint:
-                return "pdf_endpoint_cloudflare"
-            return "access_blocked"
+            return "pdf_endpoint_waf" if is_pdf_endpoint else "antibot_challenge"
+        if b"<title>client challenge</title>" in content_lower or b"/_fs-ch-" in content_lower:
+            return "antibot_challenge"
+        if any(marker in content_lower for marker in ANUBIS_MARKERS):
+            return "repository_bot_check"
+        if is_cloudflare_challenge:
+            return "pdf_endpoint_cloudflare" if is_pdf_endpoint else "antibot_challenge"
+        if response.status_code == 429:
+            return "rate_limited"
+        if response.status_code in (401, 403):
+            # A bare 401/403 is a paywall or access rule, not a bot challenge.
+            return "access_denied" if is_pdf_endpoint else "access_blocked"
 
         content_type = response.headers.get("content-type", "").lower()
         if response.status_code == 200 and ("html" in content_type or b"<html" in response.content[:1000].lower()):
@@ -2700,6 +3868,18 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         return None
 
     def _pdf_request_headers(self, url: str) -> Optional[Dict[str, str]]:
+        url_headers = getattr(self, "_url_headers", {}).get(url)
+        honest = (
+            _host_matches(url, HONEST_UA_HOSTS)
+            or self._domain_for_url(url) in _LEARNED_HONEST_HOSTS
+            or url in getattr(self, "_repository_urls", set())
+            or "/server/api/core/bitstreams/" in (url or "")
+        )
+        if honest:
+            return {**self._api_headers(), "Accept": "application/pdf,*/*", **(url_headers or {})}
+        if url_headers:
+            session_headers = getattr(self.session, "headers", {}) or {}
+            return {"User-Agent": session_headers.get("User-Agent", "Mozilla/5.0"), "Accept": "application/pdf,*/*", **url_headers}
         referer = self._ieee_computer_society_referer_for_pdf_url(url)
         if not referer:
             return None
@@ -2736,7 +3916,11 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         url_lower = (url or "").lower()
         return (
             url_lower.startswith(("http://", "https://"))
-            and (_looks_like_pdf_url(url_lower) or "/doi/pdf" in url_lower or "/doi/epdf" in url_lower)
+            and (
+                any(marker in url_lower for marker in CURL_CFFI_PDF_URL_MARKERS)
+                or "/doi/pdf" in url_lower
+                or "/doi/epdf" in url_lower
+            )
         )
 
     def _download_pdf_with_curl_cffi(self, url: str, title: str, method: str, paper_id: str = None) -> Optional[Path]:
@@ -2874,6 +4058,8 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
                 domain_policy=self.domain_policy,
                 semantic_cache_lock=self.semantic_cache_lock,
             )
+            retry_downloader.generic_title_tokens = self.generic_title_tokens
+            retry_downloader._current_paper_doi = getattr(self, "_current_paper_doi", "")
             try:
                 file_path = retry_downloader._download_pdf_with_browser(url, title, method, paper_id)
                 if file_path:

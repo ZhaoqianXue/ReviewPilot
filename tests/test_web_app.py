@@ -26,6 +26,10 @@ def terminal_result(action: str) -> dict:
 
 
 from reviewpilot_core.screening_guidance import confirm as confirm_guidance, save_draft as save_guidance_draft
+from reviewpilot_core.coding_rules import confirm as confirm_rules, save_draft as save_rules_draft
+
+CODING_RULES = {"preamble": "Code what the study itself reports.",
+                "fields": [{"field": "key_findings", "rules": ["Record the study's own findings, not background."]}]}
 
 SCREENING_GUIDANCE = {
     "review_focus": "This review collects evaluations of the stated topic. A record is relevant when its own work reports such an evaluation.",
@@ -462,7 +466,7 @@ class WebAppTests(unittest.TestCase):
 
             config = json.loads((output_root / "model-default-review" / "search_conditions.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(config["model"], "gpt-5.4-mini")
+        self.assertEqual(config["model"], "gpt-6-luna")
 
     def test_create_project_defaults_max_results_per_source_to_ten(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -624,7 +628,7 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(project["id"], "llm-biomedicine-search")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][2], "gpt-5.4-mini")
+        self.assertEqual(calls[0][2], "gpt-6-luna")
         self.assertIn('<reviewpilot-agent-skill name="systematic-review-search-strategy"', calls[0][1])
         expected_query = '("large language model" OR LLM) AND (biomedicine OR biomedical)'
         self.assertEqual(project["title"], "LLM Biomedicine Search")
@@ -1140,6 +1144,9 @@ class WebAppTests(unittest.TestCase):
                         save_criteria(project_dir, criteria_state(project_dir), finalized=True)
                         save_guidance_draft(project_dir, SCREENING_GUIDANCE)
                         confirm_guidance(project_dir)
+                    if action == "run-extraction":
+                        save_rules_draft(project_dir, CODING_RULES)
+                        confirm_rules(project_dir)
                     task_id = web_app.submit_project_action(output_root, "demo", action, llm_query=fake_llm)
                     task = web_app.task_runner.wait(task_id, timeout=2)
                     stages.append(task["result"]["stage"])
@@ -1220,6 +1227,8 @@ class WebAppTests(unittest.TestCase):
                     prompt = kwargs.get("text_prompt", "")
                     if prompt.startswith("Task: screening (screening guidance)"):
                         return json.dumps(SCREENING_GUIDANCE), {}
+                    if prompt.startswith("Task: extraction, step 2 of 2 (coding rules)"):
+                        return json.dumps(CODING_RULES), {}
                     if "Design the concept strategy" in prompt:
                         return (
                             json.dumps(
@@ -1325,6 +1334,10 @@ class WebAppTests(unittest.TestCase):
                             self.assertEqual(build_rp_data(output_root, project_id)["screeningGuidance"]["status"], "draft")
                             confirm_task = web_app.submit_project_action(output_root, project_id, "confirm-screening-guidance", input_data={})
                             self.assertEqual(web_app.task_runner.wait(confirm_task, timeout=5)["status"], "completed")
+                        if action == "run-extraction":
+                            self.assertEqual(build_rp_data(output_root, project_id)["codingRules"]["status"], "draft")
+                            rules_task = web_app.submit_project_action(output_root, project_id, "confirm-coding-rules", input_data={})
+                            self.assertEqual(web_app.task_runner.wait(rules_task, timeout=5)["status"], "completed")
                         task_id = web_app.submit_project_action(output_root, project_id, action, llm_query=fake_llm)
                         task = web_app.task_runner.wait(task_id, timeout=5)
                         self.assertEqual(task["status"], "partial" if action == "download-pdfs" else "completed", task.get("error"))

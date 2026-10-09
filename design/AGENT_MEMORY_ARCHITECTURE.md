@@ -6,7 +6,7 @@ This document is the canonical engineering design for Agent Memory in the Review
 
 **Implementation status:** Implemented and verified on 2026-07-15. The runtime is in `reviewpilot_core/agent_memory.py`, Lead-owned integration is in `agents/lead_agent.py`, the three private product endpoints are in `web_app.py`, the minimal user surface is in `frontend/app.js`, and focused contracts are in `tests/test_agent_memory.py`.
 
-Read it together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which remains authoritative for the one-Lead-plus-six-Sub-Agent roster and workflow; [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md), which remains authoritative for reusable professional methods; and [LEAD_AGENT_UI_UX_BOUNDARY.md](LEAD_AGENT_UI_UX_BOUNDARY.md), which remains authoritative for canvas/chat interaction rules.
+Read it together with [LEAD_AGENT_ARCHITECTURE.md](LEAD_AGENT_ARCHITECTURE.md), which remains authoritative for the roster of one Lead Agent, four Sub Agents, and two tools and workflow; [AGENT_SKILL_ARCHITECTURE.md](AGENT_SKILL_ARCHITECTURE.md), which remains authoritative for reusable professional methods; and [LEAD_AGENT_UI_UX_BOUNDARY.md](LEAD_AGENT_UI_UX_BOUNDARY.md), which remains authoritative for canvas/chat interaction rules.
 
 This is a production-development design. It does not require a research experiment, benchmark, paper claim, provider migration, or another product-decision checkpoint before implementation.
 
@@ -267,10 +267,10 @@ The model never receives raw SQLite rows or arbitrary payload JSON. Each memory 
 | Lead Agent chat | Yes | Stage-relevant items | Through verified promoter only |
 | `SearchConditionAgent` | No | `search_setup` | No |
 | `PromptAgent` relevance path | No | `screening_profile` | No |
-| `CollectionAgent` | No | No | No |
+| `CollectionAgent` (tool) | No | No | No |
 | `FilteringAgent` | No | `screening_profile` selected by Lead | No |
 | `PromptAgent` extraction path | No | `extraction_schema` | No |
-| `DownloadAgent` | No | No | No |
+| `DownloadAgent` (tool) | No | No | No |
 | `ExtractionAgent` | No | `extraction_schema` selected by Lead | No |
 | Lead-owned categorization | No raw transcript | `categorization_profile` | No direct write |
 | Memory promoter | No model context | No retrieval | Yes, after artifact verification |

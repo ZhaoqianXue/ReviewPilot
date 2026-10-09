@@ -7,7 +7,7 @@
 - Confirmed current memory prototypes are unused by the production Web App.
 - Chose a project-bound single-session v1 and a new SQLite-backed cross-project memory service as the implementation baseline.
 - Wrote `design/AGENT_MEMORY_ARCHITECTURE.md` with fixed v1 decisions and a one-turn implementation plan.
-- Cross-linked the memory design from the Lead Agent, Agent Skill, UI/UX, system-overview, and design-index documents.
+- Cross-linked the memory design from the Lead Agent, Agent Skill, UI/UX, and design-index documents.
 - Verified all linked design targets exist, `git diff --check` passes, and the canonical memory design exposes the required runtime components, Settings surface, one-turn plan, and completion gates.
 - Design and execution-planning task is complete. Runtime implementation has not started in this task.
 - User simplified the v1 session requirement. Removed message limits, summary generation, token budgeting, compaction, compaction diagnostics, and compaction tests. Session memory now reads every valid message after an atomic reset boundary.

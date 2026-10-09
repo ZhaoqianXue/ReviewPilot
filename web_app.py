@@ -12,6 +12,7 @@ from html import unescape
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
@@ -327,7 +328,7 @@ async def project_chat(request):
                 apply_setup=lambda setup: update_project_setup(OUTPUT_ROOT, project_id, setup, exclusive=False))
         # Any chat can save messages or edit a draft schema. Keep deletion,
         # configuration changes and workflow tasks from racing that publication.
-        result = task_runner.run_if_idle(project_id, respond)
+        result = await run_in_threadpool(task_runner.run_if_idle, project_id, respond)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except ValueError as exc:
@@ -343,7 +344,7 @@ async def update_project_setup_api(request):
         raise HTTPException(status_code=404)
     try:
         payload = await _optional_json(request) or {}
-        project = update_project_setup(OUTPUT_ROOT, project_id, payload)
+        project = await run_in_threadpool(update_project_setup, OUTPUT_ROOT, project_id, payload)
     except TaskConflictError as exc:
         return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
     except SetupRevisionConflict as exc:
@@ -432,6 +433,10 @@ async def project_export(request):
     artifact_path = export_artifact_path(Path(OUTPUT_ROOT) / project_id, export_key)
     if artifact_path is None:
         raise HTTPException(status_code=404)
+    if export_key == 'prisma':
+        from reviewpilot_core.fulltext_eligibility import prisma_counts
+        return JSONResponse(prisma_counts(Path(OUTPUT_ROOT) / project_id),
+                            headers={'Content-Disposition': 'attachment; filename="prisma_counts.json"'})
     if export_key == 'workflow-decisions':
         from reviewpilot_core import workflow_decisions
         return JSONResponse({'current': workflow_decisions.projection(Path(OUTPUT_ROOT) / project_id),
@@ -448,7 +453,7 @@ async def project_export(request):
 async def create_project_api(request):
     try:
         payload = await _optional_json(request) or {}
-        project = create_project(OUTPUT_ROOT, payload)
+        project = await run_in_threadpool(create_project, OUTPUT_ROOT, payload)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     except Exception as exc:  # provider and network failures would otherwise surface as a bare 500
@@ -503,12 +508,21 @@ def known_project(output_root: Path | str, project_id: str) -> bool:
 
 def create_project(output_root: Path | str, payload: dict) -> dict:
     config = _setup_config(payload)
-    project_id = _unique_project_id(Path(output_root), _slugify(config["project_name"]))
+    root = Path(output_root)
+    root.mkdir(parents=True, exist_ok=True)
+    # Reserve the directory atomically before the agent call: concurrent requests
+    # with the same title must never publish into one another's project.
+    while True:
+        project_id = _unique_project_id(root, _slugify(config["project_name"]))
+        try:
+            (root / project_id).mkdir()
+        except FileExistsError:
+            continue
+        break
     try:
         search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
     except Exception:
-        # The id was unused before this call, so anything under it is this attempt's debris.
-        shutil.rmtree(Path(output_root) / project_id, ignore_errors=True)
+        shutil.rmtree(root / project_id, ignore_errors=True)
         raise
     search_conditions = {**normalize_setup(config), **search_conditions}
     search_conditions["setup_revision"] = setup_revision(search_conditions)
@@ -663,7 +677,7 @@ def _slugify(value: str) -> str:
 def _unique_project_id(output_root: Path, base: str) -> str:
     candidate = base
     suffix = 2
-    while (output_root / candidate).exists():
+    while (output_root / candidate).exists() or (output_root / candidate).is_symlink():
         candidate = f"{base}-{suffix}"
         suffix += 1
     return candidate
@@ -729,7 +743,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     record_review.recover(Path(output_root) / project_id)
     if action == "review-sample":
         return task_runner.submit(project_id, action, lambda: record_review.run_sample(Path(output_root) / project_id, input_data or {}, llm_query=llm_query))
-    supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "generate-screening-guidance", "confirm-screening-guidance", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "generate-screening-guidance", "confirm-screening-guidance", "generate-coding-rules", "confirm-coding-rules", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -745,12 +759,17 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             raise ValueError("Screening criteria changed. Refresh before saving.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
             project_id=project_id, action=action, input_data=input_data).to_dict())
-    if action in {"generate-screening-guidance", "confirm-screening-guidance"}:
+    if action in {"generate-screening-guidance", "confirm-screening-guidance", "generate-coding-rules", "confirm-coding-rules"}:
         if action == "confirm-screening-guidance":
             from reviewpilot_core.screening_guidance import guidance_state
             revision = (input_data or {}).get("revision")
             if revision and revision != guidance_state(project_path)["revision"]:
                 raise ValueError("The review guidance changed. Refresh before confirming.")
+        if action == "confirm-coding-rules":
+            from reviewpilot_core.coding_rules import rules_state
+            revision = (input_data or {}).get("revision")
+            if revision and revision != rules_state(project_path)["revision"]:
+                raise ValueError("The coding rules changed. Refresh before confirming.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
             project_id=project_id, action=action, input_data=input_data).to_dict())
     if action == "preview-extraction":

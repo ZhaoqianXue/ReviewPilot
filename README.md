@@ -2,7 +2,7 @@
 
 ReviewPilot is a multi-agent research assistant for systematic reviews. It helps researchers search for papers, screen them, retrieve full text, extract evidence, and organize the results for analysis.
 
-The work is divided among six specialized Sub Agents. A Lead Agent coordinates their work, checks the result of each stage, and keeps the researcher in control of the review.
+A Lead Agent coordinates four specialized Sub Agents and two tools, checks the result of each stage, and keeps the researcher in control of the review. Steps that need judgment (designing the search, screening, designing the extraction form, extracting evidence) are done by Sub Agents, each an LLM with its own Agent Skill and a validated output format. Steps that must be reproducible (running the database search, retrieving full text) are done by deterministic tools.
 
 ## How a Review Works
 
@@ -16,7 +16,9 @@ ReviewPilot guides the researcher through five steps:
 
 The final project contains the search strategy, collected papers, screening decisions, full-text retrieval report, extracted evidence, and categorized results.
 
-## Lead Agent and Six Sub Agents
+In Search Setup, chat creates the project and can then revise its concepts, sources, limits, and dates. Every reply ends with a summary of what was actually saved: a "Search settings: …" line when the project is created, a list of changes after a revision, or "The search setup was not changed." Databases ReviewPilot cannot search, such as Scopus or Web of Science, are named in the reply rather than silently dropped. A revision that would make existing results stale is kept as a draft for you to review on the canvas.
+
+## Lead Agent, Four Sub Agents, and Two Tools
 
 ### Overall Structure
 
@@ -24,11 +26,13 @@ The final project contains the search strategy, collected papers, screening deci
                          Lead Agent
               Coordinates, assigns, checks, summarizes
                               │
-       ┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-       │          │          │          │          │          │
-     Search      Task       Paper      Paper     Full-Text  Information
-     Setup    Preparation  Collection  Screening  Retrieval  Extraction
-     Agent       Agent       Agent       Agent       Agent       Agent
+       ┌──────────────┬───────┴───────┬──────────────┐
+       │              │               │              │
+  Sub Agents (LLM + Agent Skill)                Tools (deterministic)
+   Search Condition Agent                        Literature Search Tool
+   Screening Agent (FilteringAgent)              PDF Download Tool
+   Prompt Agent
+   Extraction Agent
 ```
 
 ### Lead Agent
@@ -37,43 +41,50 @@ The Lead Agent is responsible for the review as a whole. It:
 
 - Understands the researcher's request.
 - Determines the current stage of the review.
-- Assigns work to the appropriate Sub Agent.
+- Assigns work to the appropriate Sub Agent or tool.
 - Checks each result before the review moves forward.
 - Explains what has been completed and what the researcher can do next.
 - Organizes and presents the final results.
 
-### Six Sub Agents
+### Four Sub Agents
 
-| Agent | Responsibility |
+| Sub Agent | Responsibility |
 |---|---|
-| `SearchConditionAgent` | Turns the research question into keywords, academic sources, date ranges, and other search settings. |
+| `SearchConditionAgent` | Turns the research question into search concepts and their terms, builds the Boolean query, and revises it from chat. |
 | `PromptAgent` | Prepares the instructions used for paper screening and information extraction. |
-| `CollectionAgent` | Collects papers from the selected academic sources. |
 | `FilteringAgent` | Removes duplicates and decides whether each paper matches the review criteria. |
-| `DownloadAgent` | Retrieves PDFs and records papers whose full text could not be obtained. |
 | `ExtractionAgent` | Extracts the required information from each paper using the approved fields. |
 
-### How the Agents Work Together
+### Two Tools
+
+The tools make no model calls, so the same inputs always produce the same actions. Their classes keep the `Agent` suffix in the code for historical reasons.
+
+| Tool | Responsibility |
+|---|---|
+| Literature Search Tool (`CollectionAgent`) | Runs the saved query on PubMed, arXiv, and OpenAlex (titles and abstracts) up to each source's result limit, and records the exact query each source received. Temporary source failures are retried automatically; a source that still fails can be retried on its own from Records by source. |
+| PDF Download Tool (`DownloadAgent`) | Retrieves PDFs and records papers whose full text could not be obtained. |
+
+### How the Sub Agents and Tools Work Together
 
 ```text
 SearchConditionAgent
         ↓
 PromptAgent prepares the screening criteria
         ↓
-CollectionAgent
+Literature Search Tool (CollectionAgent)
         ↓
 FilteringAgent
         ↓
 PromptAgent prepares the extraction requirements
         ↓
-DownloadAgent
+PDF Download Tool (DownloadAgent)
         ↓
 ExtractionAgent
         ↓
 Lead Agent categorizes, summarizes, and presents the results
 ```
 
-`PromptAgent` works at two different stages but remains one Sub Agent. Categorization and analysis are handled by the Lead Agent. ReviewPilot therefore has one Lead Agent and six Sub Agents.
+`PromptAgent` works at two different stages but remains one Sub Agent. Categorization and analysis are handled by the Lead Agent. ReviewPilot therefore has one Lead Agent, four Sub Agents, and two tools.
 
 ## Agent Skills
 
@@ -94,11 +105,11 @@ ReviewPilot keeps project memory on this computer and offers explicit reuse of c
 
 - **Conversation history:** The sidebar keeps three protected Examples separate from ordinary Chats, ordered by recent activity. New Review opens a clean draft; the first submitted topic creates a saved project. Chats can be searched, renamed, and deleted from their `…` menu. Names are stored in `output/<project>/session.json` without changing research configuration. Deleting a chat moves its full directory to `output/.trash/<project>-<token>`; to recover it with the app stopped, move that directory back to `output/<project>` only if the destination is absent. Running workflow tasks block deletion/rename. Per-conversation unsent text is kept in browser session storage, and saved chat/configuration reloads from local files.
 - **Current-project memory:** Full conversation history remains in `output/<project>/chat/messages.jsonl`. Saved project artifacts are authoritative; `memory/confirmed_decisions.json` preserves the last confirmed screening criteria and extraction fields while a new draft is being edited. Current configurations take precedence over earlier chat suggestions or superseded instructions. Chat edits remain drafts; screening criteria and extraction fields are confirmed through their canvas actions. Extraction confirmation is bound to the exact schema content. Reopening the app reads the saved state again without summarizing or trimming chat history.
-- **Explicit configuration reuse:** Open **Settings → Reuse project configuration**, choose a source project and configuration, inspect the complete preview, then select **Import as draft**. Search setup, inclusion/exclusion criteria, extraction fields, and categories are supported. Imported settings must pass their normal review/confirmation steps before execution; they never silently replace confirmed decisions. Changes to either project after preview require a new preview. Importing a schema or categories requires the prerequisite stage and compatible fields in the target project.
+- **Explicit configuration reuse:** Open **Settings → Reuse project configuration**, choose a source project and configuration, inspect the complete preview, then select **Import as draft**. Search setup, inclusion/exclusion criteria, extraction fields, and categories are supported. Imported settings must pass their normal review/confirmation steps before execution; they never silently replace confirmed decisions. An imported search setup appears as a draft on the Search Setup canvas: save it to apply it, or choose **Discard draft** to keep the saved setup. Changes to either project after preview require a new preview. Importing a schema or categories requires the prerequisite stage and compatible fields in the target project.
 
 Automatic cross-project retrieval and promotion are disabled, including for older installations whose Memory toggle was enabled. The legacy SQLite store is retained on disk for compatibility but is not queried by the Lead Agent. Configuration reuse reads confirmed local project artifacts only after the user opens the picker. No embedding service or background memory generation is required.
 
-In Step 2, confirmed criteria are locked. Click **Edit Criteria** to open a draft, edit directly or refine in chat, then **Finalize Criteria** before running screening. Draft edits preserve the previous confirmed decision and mark affected outputs as stale. Imported search setup is saved locally as a draft and must be reviewed and saved in Search Setup before collection.
+In Step 2, the criteria draft starts with one inclusion rule per required concept row of the search setup, with the alternatives in a row joined by "or", and it follows Search Setup changes until the criteria are saved. Confirmed criteria are locked. Click **Edit Criteria** to open a draft, edit directly or refine in chat, then **Finalize Criteria** before running screening. Draft edits preserve the previous confirmed decision and mark affected outputs as stale. An imported or chat-proposed search setup stays a draft until it is saved or discarded in Search Setup, and collection waits until then.
 
 ### Review decisions and evidence
 
@@ -153,7 +164,7 @@ Create a local `config.py` file if one does not already exist:
 ```python
 EMAIL = "your-email@example.com"
 PUBMED_API_KEY = None
-SCOPUS_API_KEY = None
+OPENALEX_API_KEY = None
 MODEL = "gpt-5.4-mini"
 ```
 
@@ -164,7 +175,9 @@ openai_key, sk-your-openai-key
 claude_key, sk-ant-your-anthropic-key
 ```
 
-`PUBMED_API_KEY` is optional. `SCOPUS_API_KEY` is required only when Scopus is selected. At least one supported model-provider key is required for tasks that use a language model.
+`PUBMED_API_KEY` and `OPENALEX_API_KEY` are optional. At least one supported model-provider key is required for tasks that use a language model.
+
+The **Model** field in Search Setup sets the OpenAI model for search-term derivation, project chat, screening (full runs and live samples), and extraction (full runs, previews, and live samples). It defaults to `gpt-5.4-mini`. Schema drafting and categorization keep the defaults in `reviewpilot_core/model_policy.py`. Changing the model marks existing results as needing a rerun.
 
 After starting ReviewPilot, open:
 

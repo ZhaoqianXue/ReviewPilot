@@ -187,6 +187,8 @@ const WORKFLOW_ACTION_META = Object.freeze({
   'finalize-criteria': { step: 'screening', label: 'Finalizing criteria', advances: false },
   'generate-screening-guidance': { step: 'screening', label: 'Drafting review guidance', advances: false },
   'confirm-screening-guidance': { step: 'screening', label: 'Confirming review guidance', advances: false },
+  'generate-coding-rules': { step: 'extraction', label: 'Drafting coding rules', advances: false },
+  'confirm-coding-rules': { step: 'extraction', label: 'Confirming coding rules', advances: false },
   'download-pdfs': { step: 'retrieval', label: 'Full-text retrieval', advances: true },
   'retry-failed-downloads': { step: 'retrieval', label: 'Failed-download recovery', advances: false },
   'generate-schema': { step: 'extraction', label: 'Schema generation', advances: false },
@@ -951,6 +953,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function startNavigation(projectId) {
     stashSetupDraft();
     reviewUI.reset();
+    state.navigationPending = '';
     state.sidebarOpen = false;
     chatSubmission += 1;
     state.preservedChatMessages = [];
@@ -1129,12 +1132,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     );
     try {
       if (action === 'collect' && !payload?.retry_sources) await saveDraftSetup(projectId);
+      if (!isCurrentProject()) return;
       const options = payload
         ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
         : { method: 'POST' };
       const res = await fetch(`/projects/${encodeURIComponent(projectId)}/actions/${action}`, options);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
+        if (!isCurrentProject()) return;
         if (action === 'retry-failed-downloads' && body?.code === 'confirmation_required') {
           const retried = await confirmRetryImpact(
             body,
@@ -1277,11 +1282,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   async function updateProjectSetup(form) {
     const projectId = state.activeProjectId || D.project.id;
     if (!projectId) return;
+    const ownership = projectNavigation.capture(projectId);
     if (form) updateDraftFromForm(form);
-    await saveDraftSetup(projectId);
-    setData(await fetchProjectState(projectId));
-    state.dialog = '';
-    state.setupSavedProjectId = projectId;
+    try {
+      await saveDraftSetup(projectId);
+      if (!projectNavigation.owns(ownership)) return;
+      const data = await fetchProjectState(projectId);
+      if (!projectNavigation.owns(ownership)) return;
+      setData(data);
+      state.dialog = '';
+      state.setupSavedProjectId = projectId;
+    } catch (err) {
+      if (projectNavigation.owns(ownership)) throw err;
+    }
   }
 
   async function discardSetupDraft() {
@@ -1298,6 +1311,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   async function saveDraftSetup(projectId) {
+    const ownership = projectNavigation.capture(projectId);
     const send = async (payload) => fetch(`/projects/${encodeURIComponent(projectId)}/setup`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1310,6 +1324,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       throw new Error(body.detail || `Setup update failed: ${res.status}`);
     }
     let result = await res.json();
+    if (!projectNavigation.owns(ownership)) return;
     if (result.confirmationRequired) {
       result = await confirmSetupImpact(result, draft, window.confirm, async (confirmed) => {
         res = await send(confirmed);
@@ -1321,7 +1336,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       });
       if (result.cancelled) throw new Error('Setup change cancelled.');
     }
-    D.setupRevision = result.setupRevision || D.setupRevision;
+    if (projectNavigation.owns(ownership)) D.setupRevision = result.setupRevision || D.setupRevision;
   }
 
   async function waitForTask(taskId) {
@@ -2313,7 +2328,15 @@ ${reviewUI.dialog()}
       model: 'Model',
     };
     const key = String(name || '').trim();
-    return labels[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+    if (labels[key]) return labels[key];
+    const acronyms = new Set(['ai', 'api', 'doi', 'ehr', 'llm', 'llms', 'ml', 'nlp', 'rct', 'rcts', 'vr', 'ar', 'xr']);
+    const minor = new Set(['a', 'an', 'and', 'as', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs', 'with']);
+    return key.split('_').filter(Boolean).map((word, index) => {
+      const lower = word.toLowerCase();
+      if (acronyms.has(lower)) return lower.endsWith('s') && lower.length > 3 ? `${lower.slice(0, -1).toUpperCase()}s` : lower.toUpperCase();
+      if (index > 0 && minor.has(lower)) return lower;
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    }).join(' ');
   }
 
   function activityMessage(m) {
@@ -2408,7 +2431,7 @@ ${reviewUI.dialog()}
         ${extractionDecisionCard(v)}
         ${v.chatPending ? thinkingBubble() : ''}
       </div>
-      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="Describe your research topic" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.chatBusyLabel ? `Chat resumes when ${esc(v.chatBusyLabel.toLowerCase())} finishes` : (v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...')}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" aria-label="Send message" ${v.chatBusyLabel ? 'disabled' : ''} style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:${v.chatBusyLabel ? '#9aa8b8' : '#1a365d'};color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
+      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic' : 'Reply to ReviewPilot'}" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.chatBusyLabel ? `Chat resumes when ${esc(v.chatBusyLabel.toLowerCase())} finishes` : (v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...')}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" aria-label="Send message" ${v.chatBusyLabel ? 'disabled' : ''} style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:${v.chatBusyLabel ? '#9aa8b8' : '#1a365d'};color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
     </aside>`;
   }
 
@@ -2936,6 +2959,7 @@ ${reviewUI.dialog()}
         const payload = ['save-criteria', 'finalize-criteria'].includes(actionName)
           ? { revision: D.screeningCriteria.revision, ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, (root.querySelector(`[data-criteria="${key}"]`)?.value || '').split('\n').map(line => line.trim()).filter(Boolean)])) }
           : actionName === 'confirm-screening-guidance' ? { revision: D.screeningGuidance?.revision || '' }
+          : actionName === 'confirm-coding-rules' ? { revision: D.codingRules?.revision || '' }
           : (['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null);
         if (actionName === 'categorize' && (!payload.categories || !payload.categories.length)) {
           state.actionError = 'Confirm at least one category before applying categorization.';

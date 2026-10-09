@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 
 from .atomic_files import atomic_write_json, atomic_write_text
+from .model_policy import EXTRACTION_MODEL, FILTERING_MODEL, project_model
 from .project_store import read_json, read_jsonl
 from .workflow_state import load_workflow_state
 from .extraction_schema import load_schema_draft
@@ -214,6 +215,7 @@ def field_detail(project: Path, record_key: str, field_name: str) -> dict:
     papers = [p for p in read_jsonl(project / 'filtered/included_papers.jsonl') if key(p) == record_key]
     paper = unique_record(papers, record_key) if papers else {}
     return {'key': record_key, 'field': field_name, 'type': field['type'], 'description': field.get('description', ''),
+            'options': field.get('enum', field.get('options')) or [],
             'title': row.get('title'), 'value': row.get(field_name, (row.get('extracted_data') or {}).get(field_name)),
             'correction': (row.get('human_fields') or {}).get(field_name),
             'evidence': evidence_for_field(project, row, field_name, paper), 'revision': revision(project)}
@@ -263,6 +265,7 @@ def run_sample(project: Path, payload: dict, *, llm_query=None, pdf_reader=None,
     original_revision = revision(project)
     started = datetime.now(timezone.utc).isoformat()
     results = []
+    config = read_json(project / 'search_conditions.json', {}) or {}
     if mode == 'screening':
         from agents.filtering_agent import FilteringAgent
         from .screening_evidence import evidence_prompt
@@ -273,7 +276,8 @@ def run_sample(project: Path, payload: dict, *, llm_query=None, pdf_reader=None,
         prompt = evidence_prompt(read_json(project / 'prompts/relevance_prompt.json', {}))
         folder = project / 'review/sample_logs'
         folder.mkdir(parents=True, exist_ok=True)
-        kept, excluded = FilteringAgent(project, llm_query=llm_query)._check_relevance([deepcopy(available[k]) for k in keys], prompt, folder)
+        model = project_model(config, FILTERING_MODEL)
+        kept, excluded = FilteringAgent(project, model=model, llm_query=llm_query)._check_relevance([deepcopy(available[k]) for k in keys], prompt, folder)
         for row in kept + excluded:
             results.append({'key': key(row), 'title': row.get('title'), 'decision': 'exclude' if row.get('is_relevant') is False else 'include',
                             'evidence': row.get('screening_evidence') or {}, 'error': row.get('relevance_error') or ''})
@@ -287,9 +291,10 @@ def run_sample(project: Path, payload: dict, *, llm_query=None, pdf_reader=None,
         selected = {k: unique_record(papers, k) for k in keys}
         available = {k: (papers.index(row) + 1, row) for k, row in selected.items()}
         prompt = draft_extraction_prompt(project, load_schema_draft(project))
+        model = project_model(config, EXTRACTION_MODEL)
         for record_key in keys:
             index, paper = available[record_key]
-            result = ExtractionAgent(project, llm_query=llm_query, pdf_reader=pdf_reader, web_search_query=web_search_query).extract_one(
+            result = ExtractionAgent(project, model=model, llm_query=llm_query, pdf_reader=pdf_reader, web_search_query=web_search_query).extract_one(
                 paper=paper, row_number=index, extraction_prompt=prompt, pdf_folder=project / 'pdfs', pdf_files=sorted((project / 'pdfs').glob('*.pdf')))
             results.append({'key': record_key, 'title': result.get('title'), 'source': result.get('extraction_source'),
                             'fields': result.get('extracted_data') or {}, 'evidence': result.get('field_evidence') or {},

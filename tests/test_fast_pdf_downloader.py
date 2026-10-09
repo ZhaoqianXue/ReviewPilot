@@ -6,6 +6,9 @@ import time
 import unittest
 from pathlib import Path
 
+# Unit tests run offline: the batch open-access metadata index would call live APIs.
+os.environ.setdefault("REVIEWPILOT_PDF_OA_INDEX", "0")
+
 
 class FakeResponse:
     def __init__(self, url, content=b"", headers=None, status_code=200, json_data=None):
@@ -841,6 +844,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
                 return None
 
         downloader = TrackingDownloader()
+        downloader.semantic_scholar_cache = {}
 
         success, method, result = downloader.download({
             "paper_id": "P0022",
@@ -858,11 +862,53 @@ class FastPdfDownloaderTests(unittest.TestCase):
             downloader.download_calls,
         )
 
+    def test_ieee_uses_crossref_arnumber_and_licence_for_open_articles(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        downloader.session = FakeSequenceSession([
+            FakeResponse(
+                "https://api.crossref.org/works/10.1109/access.2024.3524588",
+                headers={"content-type": "application/json"},
+                json_data={"message": {
+                    "link": [{"URL": "http://xplorestaging.ieee.org/ielx8/6287639/10820123/10819409.pdf?arnumber=10819409"}],
+                    "license": [{"URL": "https://creativecommons.org/licenses/by/4.0/legalcode"}],
+                }},
+            ),
+        ])
+
+        result = downloader._try_ieee("10.1109/access.2024.3524588", None)
+
+        self.assertEqual(
+            result,
+            "https://ieeexplore.ieee.org/stampPDF/getPDF.jsp?tp=&arnumber=10819409",
+        )
+
+    def test_ieee_subscription_article_is_paywalled_without_requesting_xplore(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        downloader.session = FakeSequenceSession([
+            FakeResponse(
+                "https://api.crossref.org/works/10.1109/tvcg.2025.1234567",
+                headers={"content-type": "application/json"},
+                json_data={"message": {
+                    "link": [{"URL": "http://xplorestaging.ieee.org/ielx8/1/2/11111111.pdf?arnumber=11111111"}],
+                    "license": [{"URL": "https://ieeexplore.ieee.org/Xplorehelp/downloads/license-information/IEEE.html"}],
+                }},
+            ),
+        ])
+
+        self.assertIsNone(downloader._try_ieee("10.1109/tvcg.2025.1234567", None))
+        self.assertEqual(downloader._last_failure_class, "publisher_paywalled")
+        self.assertEqual(len(downloader.session.get_calls), 1)
+
     def test_fast_downloader_extracts_ieee_arnumber_from_non_200_doi_redirect(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
         downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
         downloader.session = FakeSequenceSession([
+            FakeResponse("https://api.crossref.org/works/10.1109/access.2024.3524588", status_code=404),
             FakeResponse(
                 "https://ieeexplore.ieee.org/document/10819409/",
                 content=b"",
@@ -1843,10 +1889,14 @@ class FastPdfDownloaderTests(unittest.TestCase):
             ],
         )
 
-    def test_unpaywall_prefers_europe_pmc_render_for_pmc_pdf_locations(self):
+    def test_unpaywall_returns_every_location_with_pmc_mapped_to_cloud_bucket(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
-        downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        class CloudMappingDownloader(FastCascadePDFDownloader):
+            def _try_pmc_cloud(self, pmcid):
+                return f"https://pmc-oa-opendata.s3.amazonaws.com/{pmcid}.1/{pmcid}.1.pdf"
+
+        downloader = CloudMappingDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
         downloader.session = FakeSequenceSession([
             FakeResponse(
                 "https://api.unpaywall.org/v2/10.1093%2Fbioinformatics%2Fbtae353",
@@ -1858,7 +1908,10 @@ class FastPdfDownloaderTests(unittest.TestCase):
                     "oa_locations": [
                         {
                             "url_for_pdf": "https://pmc.ncbi.nlm.nih.gov/articles/PMC11164829/pdf/btae353.pdf",
-                        }
+                        },
+                        {
+                            "url_for_pdf": "https://jmir.org/api/download?alt_name=mhealth_v13i1e53133_app1.pdf",
+                        },
                     ],
                 },
             )
@@ -1866,7 +1919,10 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         self.assertEqual(
             downloader._try_unpaywall("10.1093/bioinformatics/btae353"),
-            "https://europepmc.org/articles/PMC11164829?pdf=render",
+            [
+                "https://academic.oup.com/bioinformatics/advance-article-pdf/doi/10.1093/bioinformatics/btae353/58064527/btae353.pdf",
+                "https://pmc-oa-opendata.s3.amazonaws.com/PMC11164829.1/PMC11164829.1.pdf",
+            ],
         )
 
     def test_unpaywall_closed_article_sets_publisher_paywalled_failure(self):
@@ -2140,18 +2196,19 @@ class FastPdfDownloaderTests(unittest.TestCase):
 
         downloader = FastCascadePDFDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
 
-        self.assertEqual(
-            downloader._try_mdpi("10.3390/info16100894", None),
-            "https://mdpi-res.com/d_attachment/information/information-16-00894/article_deploy/information-16-00894.pdf",
-        )
-        self.assertEqual(
-            downloader._try_mdpi("10.3390/life16040681", None),
-            "https://mdpi-res.com/d_attachment/life/life-16-00681/article_deploy/life-16-00681.pdf",
-        )
-        self.assertEqual(
-            downloader._try_mdpi("10.3390/multimedia2020006", None),
-            "https://mdpi-res.com/d_attachment/multimedia/multimedia-02-00006/article_deploy/multimedia-02-00006.pdf",
-        )
+        cases = {
+            "10.3390/info16100894": "https://mdpi-res.com/d_attachment/information/information-16-00894/article_deploy/information-16-00894.pdf",
+            "10.3390/life16040681": "https://mdpi-res.com/d_attachment/life/life-16-00681/article_deploy/life-16-00681.pdf",
+            "10.3390/multimedia2020006": "https://mdpi-res.com/d_attachment/multimedia/multimedia-02-00006/article_deploy/multimedia-02-00006.pdf",
+            # DOI journal codes that differ from the site slug, and proceedings DOIs.
+            "10.3390/app14198868": "https://mdpi-res.com/d_attachment/applsci/applsci-14-08868/article_deploy/applsci-14-08868.pdf",
+            "10.3390/s26175638": "https://mdpi-res.com/d_attachment/sensors/sensors-26-05638/article_deploy/sensors-26-05638.pdf",
+            "10.3390/engproc2026141026": "https://mdpi-res.com/d_attachment/engproc/engproc-141-00026/article_deploy/engproc-141-00026.pdf",
+        }
+        for doi, expected in cases.items():
+            self.assertEqual(downloader._mdpi_res_pdf_url(doi), expected)
+            # The asset URL comes first; the DOI-based route stays as a fallback.
+            self.assertEqual(downloader._try_mdpi(doi, None)[0], expected)
 
     def test_techrxiv_doi_template_strips_version_for_pdf_endpoint(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -2223,6 +2280,9 @@ class FastPdfDownloaderTests(unittest.TestCase):
             def _resolve_pmcid(self, pmid, doi):
                 return "PMC12868943"
 
+            def _try_pmc_cloud(self, pmcid):
+                return None
+
             def _fetch_article_html(self, url):
                 self.fetch_urls.append(url)
                 return (
@@ -2238,7 +2298,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         downloader = PmcNamedPdfDownloader()
 
         self.assertEqual(
-            downloader._try_pmc("42248877", "10.4014/jmb.2511.11050"),
+            downloader._try_pmc("42248877", "10.4014/jmb.2511.11050")[0],
             "https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/pdf/jmb-36-e2511050.pdf",
         )
         self.assertEqual(
@@ -2246,70 +2306,60 @@ class FastPdfDownloaderTests(unittest.TestCase):
             ["https://pmc.ncbi.nlm.nih.gov/articles/PMC12868943/"],
         )
 
-    def test_pmc_marks_ncbi_oa_non_open_access_without_hitting_article_page(self):
+    def test_pmc_uses_cloud_bucket_before_challenged_article_page(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
 
-        class PmcNonOpenAccessDownloader(FastCascadePDFDownloader):
+        class PmcCloudDownloader(FastCascadePDFDownloader):
             def __init__(self):
                 super().__init__(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
                 self.fetch_urls = []
 
             def _resolve_pmcid(self, pmid, doi):
-                return "PMC13274367"
+                return "PMC7084290"
 
             def _fetch_article_html(self, url):
                 self.fetch_urls.append(url)
-                raise AssertionError("non-OA PMC records must not hit the recaptcha-prone article page")
+                raise AssertionError("PMC articles in the cloud bucket must not hit the challenged article page")
 
-        downloader = PmcNonOpenAccessDownloader()
-        oa_url = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=PMC13274367"
-        downloader.session = FakeSessionByUrl(
-            get_responses={
-                oa_url: FakeResponse(
-                    oa_url,
-                    content=b"""<?xml version="1.0" encoding="UTF-8"?>
-                    <OA><error code="idIsNotOpenAccess">identifier is not open access</error></OA>""",
-                    headers={"content-type": "text/xml"},
-                ),
-            },
-        )
-
-        self.assertIsNone(downloader._try_pmc("42317858", None))
-        self.assertEqual(downloader._last_failure_class, "pmc_not_open_access")
-        self.assertIn("not open access", downloader._last_failure_detail.lower())
-        self.assertEqual(downloader.fetch_urls, [])
-
-    def test_pmc_prefers_ncbi_oa_pdf_link_when_available(self):
-        from utils.fast_pdf_downloader import FastCascadePDFDownloader
-
-        class PmcOaPdfDownloader(FastCascadePDFDownloader):
-            def _resolve_pmcid(self, pmid, doi):
-                return "PMC12868943"
-
-        downloader = PmcOaPdfDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
-        oa_url = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id=PMC12868943"
-        downloader.session = FakeSessionByUrl(
-            get_responses={
-                oa_url: FakeResponse(
-                    oa_url,
-                    content=b"""<?xml version="1.0" encoding="UTF-8"?>
-                    <OA>
-                      <records>
-                        <record id="PMC12868943">
-                          <link format="tgz" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_package/example.tar.gz"/>
-                          <link format="pdf" href="ftp://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/64/c7/jmb-36-e2511050.PMC12868943.pdf"/>
-                        </record>
-                      </records>
-                    </OA>""",
-                    headers={"content-type": "text/xml"},
-                ),
-            },
-        )
+        downloader = PmcCloudDownloader()
+        listing = "https://pmc-oa-opendata.s3.amazonaws.com/"
+        metadata = "https://pmc-oa-opendata.s3.amazonaws.com/metadata/PMC7084290.1.json"
+        session = FakeSessionByUrl(get_responses={
+            listing: FakeResponse(listing, content=b"<ListBucketResult><Key>metadata/PMC7084290.1.json</Key></ListBucketResult>"),
+            metadata: FakeResponse(metadata, json_data={
+                "pdf_url": "s3://pmc-oa-opendata/PMC7084290.1/PMC7084290.1.pdf?md5=7f9041bb577537688a2fb362b38aba1a",
+            }),
+        })
+        downloader.session = session
 
         self.assertEqual(
-            downloader._try_pmc("42248877", "10.4014/jmb.2511.11050"),
-            "https://ftp.ncbi.nlm.nih.gov/pub/pmc/oa_pdf/64/c7/jmb-36-e2511050.PMC12868943.pdf",
+            downloader._try_pmc("32196810", None),
+            ["https://pmc-oa-opendata.s3.amazonaws.com/PMC7084290.1/PMC7084290.1.pdf"],
         )
+        self.assertEqual(downloader.fetch_urls, [])
+        self.assertEqual(session.get_calls[0][1]["params"]["prefix"], "metadata/PMC7084290.")
+
+    def test_pmc_cloud_missing_record_falls_back_to_article_page(self):
+        from utils.fast_pdf_downloader import FastCascadePDFDownloader
+
+        class PmcNotInCloudDownloader(FastCascadePDFDownloader):
+            def _resolve_pmcid(self, pmid, doi):
+                return "PMC13274367"
+
+            def _try_pmc_named_article_pdf(self, pmcid):
+                return None
+
+        downloader = PmcNotInCloudDownloader(output_dir=Path("/tmp/reviewpilot-test-pdfs"))
+        listing = "https://pmc-oa-opendata.s3.amazonaws.com/"
+        downloader.session = FakeSessionByUrl(get_responses={
+            listing: FakeResponse(listing, content=b"<ListBucketResult></ListBucketResult>"),
+        })
+
+        self.assertEqual(
+            downloader._try_pmc("42317858", None),
+            ["https://pmc.ncbi.nlm.nih.gov/articles/PMC13274367/pdf/"],
+        )
+        self.assertEqual(downloader._last_failure_class, "pmc_not_in_oa_cloud")
 
     def test_ios_press_article_page_posts_download_pdf_form(self):
         from utils.fast_pdf_downloader import FastCascadePDFDownloader
@@ -3615,7 +3665,7 @@ class FastPdfDownloaderTests(unittest.TestCase):
         )
         self.assertEqual(downloader.verified_calls, 1)
 
-    def test_batch_worker_defers_article_print_failure_before_slow_generic_fallbacks(self):
+    def test_batch_worker_keeps_trying_sources_after_deferred_article_print(self):
         from utils.fast_pdf_downloader import DomainConcurrencyPolicy, FastCascadePDFDownloader
 
         class ArticlePrintDeferredDownloader(FastCascadePDFDownloader):
@@ -3631,11 +3681,13 @@ class FastPdfDownloaderTests(unittest.TestCase):
                 if method == "publisher_asco":
                     self._last_failure_class = "article_print_failed"
                     return None
+                if method == "core":
+                    return Path("/tmp/reviewpilot-test-pdfs/core.pdf")
                 return None
 
             def _try_core(self, doi, title):
                 self.core_called = True
-                return None
+                return "https://core.ac.uk/download/pdf/123.pdf"
 
         downloader = ArticlePrintDeferredDownloader()
         success, method, result = downloader.download({
@@ -3645,10 +3697,10 @@ class FastPdfDownloaderTests(unittest.TestCase):
             "journal": "JCO Clinical Cancer Informatics",
         })
 
-        self.assertFalse(success)
-        self.assertEqual(method, "none")
-        self.assertEqual(result, "Article print deferred for isolated batch retry")
-        self.assertFalse(downloader.core_called)
+        # A deferred article print must not end the cascade: later open copies still run.
+        self.assertTrue(downloader.core_called)
+        self.assertTrue(success)
+        self.assertEqual(method, "core")
 
 
 if __name__ == "__main__":
