@@ -171,6 +171,7 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
     if schema != drafted:
         _write_json(paths["draft"], schema)
     config = _read_json(paths["search_conditions"]) or {}
+    previous_schema = (_read_json(paths["architecture_prompt"]) or {}).get("schema")
     system_prompt, extraction_prompt, user_prompt_template = build_extraction_prompts(config, schema)
     paths["extraction_dir"].mkdir(parents=True, exist_ok=True)
     paths["architecture_prompt"].parent.mkdir(parents=True, exist_ok=True)
@@ -202,9 +203,9 @@ def finalize_schema(project_path: Path | str) -> dict[str, Any]:
               "setup_revision": setup_revision(_read_json(project / "search_conditions.json"))}
     _write_json(paths["finalized"], marker)
     remember_confirmed(project, 'extraction_schema')
-    from .coding_rules import invalidate as invalidate_coding_rules
-    # Coding rules were written for the previous schema and leave the instruction until redrafted.
-    invalidate_coding_rules(project)
+    from .coding_rules import keep_or_invalidate
+    # Rules written for this same schema stay; rules written for a different schema leave the instruction.
+    keep_or_invalidate(project, schema_unchanged=previous_schema == schema)
     return {"status": "schema_finalized", "field_count": len(schema["fields"]), "schema": schema}
 
 

@@ -54,6 +54,10 @@ class CodingRulesFlowTests(unittest.TestCase):
             (project / "filtered" / "included_papers.jsonl").write_text(
                 json.dumps({"id": "1", "source": "openalex", "title": "A trial", "pdf_path": "pdfs/a.pdf"}) + "\n")
             self.assertEqual(rules_state(project)["status"], "confirmed")
+            # Finalizing the same schema again keeps the confirmed rules, and keeps them in the instruction.
+            finalize_schema(project)
+            self.assertEqual(rules_state(project)["status"], "confirmed")
+            self.assertIn("Code the design the authors name.", read_json(project / "prompts/extraction_prompt.json", {})["user_prompt_template"])
             save_schema_draft(project, {"fields": [{"name": "design", "type": "Text", "description": "Trial design as named"}]})
             finalize_schema(project)
             self.assertEqual(rules_state(project)["status"], "stale")

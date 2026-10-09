@@ -99,6 +99,21 @@ def confirm(project: Path, payload: dict[str, Any] | None = None) -> dict[str, A
     return rules_state(project)
 
 
+def keep_or_invalidate(project: Path, *, schema_unchanged: bool) -> None:
+    """After the schema is finalized again: keep rules written for the same schema, otherwise invalidate them.
+
+    Finalizing rewrites the extraction prompt, so confirmed rules for an unchanged schema are put back into it.
+    """
+    stored = read_json(project / RULES_FILE, {}) or {}
+    if not schema_unchanged or not stored:
+        invalidate(project)
+        return
+    if stored.get("status") == "confirmed" and stored.get("text"):
+        prompt = read_json(project / PROMPT_FILE, {}) or {}
+        prompt[RULES_KEY] = {"text": stored["text"], "revision": _sha({"preamble": stored.get("preamble"), "fields": stored.get("fields")})}
+        _write_prompt(project, prompt)
+
+
 def invalidate(project: Path) -> None:
     """The schema changed: the rules no longer match and leave the extraction instruction."""
     stored = read_json(project / RULES_FILE, {}) or {}
