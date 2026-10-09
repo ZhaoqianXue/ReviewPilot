@@ -268,6 +268,7 @@ Return ONLY valid JSON:
             reply = ("Screening criteria finalized. The Prompt Agent drafted review guidance from the criteria and the collected records; "
                      "review and confirm it in the canvas before screening." if guidance["status"] in {"draft", "confirmed"} else
                      "Screening criteria finalized, but the review guidance could not be drafted. Generate it again in the canvas before screening.")
+            self._record_guidance_activity(project_path, reply)
             return LeadAgentResult(stage="prompt_relevance", status="completed", reply=reply,
                 data={**saved, "screening_guidance": guidance},
                 artifacts=[str(project_path / "prompts/relevance_prompt.json"), str(project_path / "prompts/screening_guidance.json")])
@@ -277,16 +278,19 @@ Return ONLY valid JSON:
             require_finalized_criteria(project_path)
             guidance = self._draft_screening_guidance(project_path, project_id)
             if guidance["status"] != "draft":
+                self._record_guidance_activity(project_path, "The review guidance could not be drafted. Try again from the canvas.")
                 raise ValueError(f"The review guidance could not be drafted: {guidance['error'] or 'unknown error'}")
-            return LeadAgentResult(stage="prompt_relevance", status="completed",
-                reply="The Prompt Agent drafted new review guidance. Review and confirm it in the canvas before screening.",
+            reply = "The Prompt Agent drafted new review guidance. Review and confirm it in the canvas before screening."
+            self._record_guidance_activity(project_path, reply)
+            return LeadAgentResult(stage="prompt_relevance", status="completed", reply=reply,
                 data={"screening_guidance": guidance}, artifacts=[str(project_path / "prompts/screening_guidance.json")])
 
         if action == "confirm-screening-guidance":
             require_finalized_criteria(project_path)
             guidance = confirm_screening_guidance(project_path, input_data or {})
-            return LeadAgentResult(stage="prompt_relevance", status="completed",
-                reply="Review guidance confirmed. Run screening when ready.",
+            reply = "Review guidance confirmed. Run screening when ready."
+            self._record_guidance_activity(project_path, reply)
+            return LeadAgentResult(stage="prompt_relevance", status="completed", reply=reply,
                 data={"screening_guidance": guidance}, artifacts=[str(project_path / "prompts/relevance_prompt.json")])
 
         if action == "collect":
@@ -619,6 +623,12 @@ Supported commands:
             next_actions=["run_extraction"] if is_schema_finalized(project_path) else ["finalize_schema"],
             data=result,
         )
+
+    def _record_guidance_activity(self, project_path: Path, text: str) -> None:
+        """Show the latest review-guidance step in the Paper Screening activity, like other canvas actions."""
+        append_jsonl(str(project_path / "chat" / "messages.jsonl"), {
+            "step": 2, "role": "a", "text": text, "created_at": datetime.now().isoformat(),
+            "model": LEAD_AGENT_DEV_MODEL, "source": "canvas_action", "stage": "screening_guidance"})
 
     def _draft_screening_guidance(self, project_path: Path, project_id: str) -> dict[str, Any]:
         """Ask the Prompt Agent for review guidance; a failure is recorded so the canvas can offer a retry."""

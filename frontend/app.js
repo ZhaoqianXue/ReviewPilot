@@ -184,7 +184,7 @@ const WORKFLOW_ACTION_META = Object.freeze({
   screen: { step: 'screening', label: 'Paper screening', advances: true },
   'edit-criteria': { step: 'screening', label: 'Opening criteria draft', advances: false },
   'save-criteria': { step: 'screening', label: 'Saving criteria', advances: false },
-  'finalize-criteria': { step: 'screening', label: 'Finalizing criteria', advances: false },
+  'finalize-criteria': { step: 'screening', label: 'Finalizing criteria and drafting guidance', advances: false },
   'generate-screening-guidance': { step: 'screening', label: 'Drafting review guidance', advances: false },
   'confirm-screening-guidance': { step: 'screening', label: 'Confirming review guidance', advances: false },
   'download-pdfs': { step: 'retrieval', label: 'Full-text retrieval', advances: true },
@@ -252,6 +252,44 @@ function extractionSchemaAction(status) {
   return status === 'finalized' ? 'regenerate-schema' : 'generate-schema';
 }
 
+// Review guidance sections in the order the screening instruction carries them; limits match
+// reviewpilot_core/review_guidance.py so an invalid edit is caught before it reaches the server.
+const GUIDANCE_SECTIONS = Object.freeze([
+  { key: 'definitions', label: 'Definitions', hint: 'How the review reads its key terms.', min: 0, max: 4 },
+  { key: 'include_when', label: 'Include when the record reports', hint: 'Kinds of work that count as eligible.', min: 4, max: 12 },
+  { key: 'exclude_when', label: 'Exclude when the record is', hint: 'Kinds of work that fall outside the review.', min: 3, max: 10 },
+  { key: 'tie_breakers', label: 'Tie-breakers', hint: 'How borderline records are decided.', min: 0, max: 4 },
+]);
+
+function guidanceDraftFromGuidance(guidance) {
+  const source = guidance || {};
+  const draft = { review_focus: String(source.review_focus || '') };
+  GUIDANCE_SECTIONS.forEach(({ key }) => { draft[key] = (source[key] || []).map(String); });
+  return draft;
+}
+
+// The confirm payload: the revision, plus only the sections the researcher changed.
+function guidanceConfirmPayload(saved, draft, revision) {
+  const payload = { revision: revision || '' };
+  if (!draft) return { payload, error: '' };
+  const clean = (text) => String(text || '').split(/\s+/).filter(Boolean).join(' ');
+  const current = guidanceDraftFromGuidance(saved);
+  const focus = clean(draft.review_focus);
+  if (!focus) return { payload, error: 'Review focus cannot be empty.' };
+  if (focus !== clean(current.review_focus)) payload.review_focus = focus;
+  for (const section of GUIDANCE_SECTIONS) {
+    const items = (draft[section.key] || []).map(clean).filter(Boolean);
+    if (items.length < section.min || items.length > section.max) {
+      const range = section.min ? `${section.min} to ${section.max}` : `at most ${section.max}`;
+      return { payload, error: `${section.label} needs ${range} items; it has ${items.length}.` };
+    }
+    const seen = new Set(items.map((item) => item.toLowerCase()));
+    if (seen.size !== items.length) return { payload, error: `${section.label} lists the same item twice.` };
+    if (JSON.stringify(items) !== JSON.stringify(current[section.key].map(clean))) payload[section.key] = items;
+  }
+  return { payload, error: '' };
+}
+
 function schemaJsonForDisplay(value) {
   const decode = (item) => {
     if (typeof item === 'string') {
@@ -267,7 +305,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay };
+  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS };
 }
 
 /* ReviewPilot workspace UI.
@@ -340,6 +378,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     memoryPending: false,
     memoryError: '',
     openQueries: {},
+    guidanceDraft: null,
+    guidanceError: '',
+    guidanceOpen: {},
   };
   let chatSubmission = 0;
   let actionTicker = null;
@@ -556,6 +597,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       searchReuseDraft: data.searchReuseDraft || null,
       confirmedDecisions: data.confirmedDecisions || {},
       screeningCriteria: data.screeningCriteria || { inclusion: [], exclusion: [], status: 'draft', revision: '', prompt: '' },
+      screeningGuidance: data.screeningGuidance || { status: 'missing', revision: '', guidance: null, text: '', error: '' },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
       retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
       categorizationSummary: data.categorizationSummary || { papers: 0, groups: 0 },
@@ -1437,6 +1479,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       ? Math.max(0, Math.min(100, Math.round((D.retrievalSummary.retrieved / D.retrievalSummary.total) * 100)))
       : 0;
     if (state.criteriaDraft && (state.criteriaDraft.projectId !== D.project.id || state.criteriaDraft.revision !== D.screeningCriteria.revision)) state.criteriaDraft = null;
+    if (state.guidanceDraft && (state.guidanceDraft.projectId !== D.project.id || state.guidanceDraft.revision !== D.screeningGuidance.revision)) state.guidanceDraft = null;
     const activeAction = step === 'screening' && state.criteriaDraft ? 'finalize-criteria' : (D.quietActions[step] || '');
     const canvasActionPending = !!state.actionPending && state.actionPending === activeAction;
     const workflowRunningStepKey = workflowStepForAction(state.actionPending);
@@ -1527,6 +1570,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       notPreviewTab: state.tab !== 'preview',
       showCanvasAction: !D.isNewProject
         && step !== 'categorize'
+        && !GUIDANCE_PANEL_ACTIONS.includes(activeAction)
         && step !== 'extraction'
         && !!D.quietLabels[step]
         && !retryRecoveryVisible
@@ -1548,6 +1592,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       screeningMetrics: D.screeningMetrics,
       screeningCriteria: D.screeningCriteria,
       criteriaDraft: state.criteriaDraft,
+      screeningGuidance: D.screeningGuidance,
+      guidanceDraft: state.guidanceDraft,
       retrievalSummary: D.retrievalSummary,
       retryRecoveryVisible,
       retryRecoveryRunning,
@@ -1661,6 +1707,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     </div>`;
   };
 
+  // The guidance panel carries its own draft and confirm controls, next to the text being confirmed.
+  const GUIDANCE_PANEL_ACTIONS = ['generate-screening-guidance', 'confirm-screening-guidance'];
+  const primaryButtonStyle = 'border:1px solid #1a365d;background:#1a365d;color:#fffefc;border-radius:9px;padding:8px 13px;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;';
   const buttonStyle = 'border:1px solid #c8d8e8;background:#fffefc;color:#1a365d;border-radius:9px;padding:8px 11px;font:inherit;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;';
 
   function historyGroupsForView(history) {
@@ -1997,7 +2046,8 @@ ${reviewUI.dialog()}
   function canvasActionButton(v) {
     if (!v.showCanvasAction) return '';
     const pendingLabel = v.canvasActionLabel.replace(/^Run\s+/i, '');
-    const label = v.canvasActionPending ? `Running ${pendingLabel.toLowerCase()}...${v.canvasActionElapsedLabel ? ` <span data-elapsed aria-hidden="true">${v.canvasActionElapsedLabel}</span>` : ''}` : v.canvasActionLabel;
+    const runningLabel = v.canvasActionName === 'finalize-criteria' ? 'Finalizing criteria and drafting guidance...' : `Running ${pendingLabel.toLowerCase()}...`;
+    const label = v.canvasActionPending ? `${runningLabel}${v.canvasActionElapsedLabel ? ` <span data-elapsed aria-hidden="true">${v.canvasActionElapsedLabel}</span>` : ''}` : v.canvasActionLabel;
     const actionDisabled = !!state.actionPending;
     const disabled = actionDisabled ? 'disabled' : '';
     const icon = v.canvasActionPending
@@ -2034,6 +2084,7 @@ ${reviewUI.dialog()}
     const screenedCount = (value) => (screeningPending && !value ? '—' : value);
     return `${v.isNewProject ? gate('Paper Screening starts after collection', 'Create the Search Setup first, then run collection before screening records.', 'ph-funnel') : ''}
       ${!v.isNewProject ? screeningCriteriaPanel(v) : ''}
+      ${!v.isNewProject ? screeningGuidancePanel(v) : ''}
       <div style="display:flex;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;margin-bottom:16px;">
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${v.screeningMetrics.identified}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">identified</div></div>
         <div style="flex:1;padding:18px;text-align:center;border-right:1px solid #eef0ee;"><div style="font-family:'IBM Plex Mono',monospace;font-size:28px;color:#1a1a1a;">${screenedCount(v.screeningMetrics.afterDedup)}</div><div style="font-size:11px;color:#8a938b;margin-top:4px;">after de-dup</div></div>
@@ -2059,7 +2110,8 @@ ${reviewUI.dialog()}
   function screeningCriteriaPanel(v) {
     const criteria = v.screeningCriteria;
     const editing = !!v.criteriaDraft || criteria.status !== 'finalized';
-    const draft = v.criteriaDraft || { inclusion: criteria.inclusion.join('\n'), exclusion: criteria.exclusion.join('\n') };
+    // Saved rules arrive HTML-escaped and the textarea escapes again, so decode them once here.
+    const draft = v.criteriaDraft || { inclusion: criteria.inclusion.map(unescapePayloadValue).join('\n'), exclusion: criteria.exclusion.map(unescapePayloadValue).join('\n') };
     const disabled = !editing || v.workflowRunning || v.chatPending ? 'disabled' : '';
     return `<section data-ui="screening-criteria" style="border:1px solid #d8e2f0;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h3 style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Eligibility criteria</h3><span style="font-size:12px;color:#6b746c;">${editing ? 'Draft' : 'Finalized'}</span></div>
@@ -2069,6 +2121,111 @@ ${reviewUI.dialog()}
       <button type="button" data-act="${editing ? 'action' : 'edit-criteria'}" data-action="save-criteria" ${v.workflowRunning || v.chatPending ? 'disabled' : ''} style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer;">${editing ? 'Save Draft' : 'Edit Criteria'}</button>
       ${criteria.prompt ? `<details style="margin-top:12px;font-size:12px;"><summary>View saved screening prompt</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.5;">${esc(criteria.prompt)}</pre></details>` : ''}
     </section>`;
+  }
+
+  function decodeGuidance(guidance) {
+    if (!guidance) return null;
+    return Object.fromEntries(Object.entries(guidance).map(([key, value]) => [key, Array.isArray(value) ? value.map(unescapePayloadValue) : unescapePayloadValue(value)]));
+  }
+
+  function guidanceTextareaRows(text) {
+    return Math.max(2, Math.min(8, Math.ceil(String(text || '').length / 92)));
+  }
+
+  function screeningGuidancePanel(v) {
+    const g = v.screeningGuidance || {};
+    const drafting = ['finalize-criteria', 'generate-screening-guidance'].includes(state.actionPending);
+    if (v.screeningCriteria.status !== 'finalized' && state.actionPending !== 'finalize-criteria') return '';
+    const locked = v.workflowRunning || v.chatPending || D.readOnlyExample ? 'disabled' : '';
+    const confirming = state.actionPending === 'confirm-screening-guidance';
+    const records = Number(g.candidate_count) > 0 ? ` and ${formatCount(Number(g.candidate_count), 'collected record')}` : ' and the collected records';
+    const badge = drafting ? ['Drafting…', '#1a365d', '#eaf0f7']
+      : ({ draft: ['Needs your confirmation', '#7a4b00', '#fff4dc'], confirmed: ['Confirmed', '#245c37', '#eaf6ee'],
+           stale: ['Out of date', '#7a4b00', '#fff4dc'], failed: ['Not drafted', '#8a1f1f', '#fff1f1'],
+           missing: ['Not drafted', '#6b746c', '#f2f4f1'] })[g.status] || ['', '', ''];
+    const draftButton = (label) => `<button type="button" data-act="action" data-action="generate-screening-guidance" ${locked} style="${buttonStyle}"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>${label}</button>`;
+    let body;
+    if (drafting) {
+      body = `<div data-ui="guidance-drafting" role="status" aria-live="polite" style="display:flex;align-items:center;gap:10px;border:1px solid #c8d8e8;background:#f8fbff;border-radius:10px;padding:13px 14px;">
+        <span aria-hidden="true" style="width:15px;height:15px;flex:0 0 15px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
+        <div><div style="font-size:13px;color:#1a365d;">Drafting review guidance…${v.workflowElapsedLabel ? ` <span data-elapsed style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b746c;">${v.workflowElapsedLabel}</span>` : ''}</div><div style="font-size:11.5px;color:#6b746c;margin-top:2px;line-height:1.45;">The Prompt Agent reads the finalized criteria and the collected records. The draft appears here for you to review before screening.</div></div>
+      </div>`;
+    } else if (g.status === 'failed') {
+      body = `<div data-ui="guidance-failed" role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:13px;color:#8a1f1f;">The review guidance could not be drafted.</div>
+        ${g.error ? `<div style="font-size:11.5px;color:#8a1f1f;opacity:.85;margin-top:4px;line-height:1.45;overflow-wrap:anywhere;">${g.error}</div>` : ''}
+        <div style="font-size:11.5px;color:#6b746c;margin:6px 0 10px;">Screening needs confirmed guidance. Try drafting it again.</div>
+        ${draftButton('Draft Guidance')}
+      </div>`;
+    } else if (g.status === 'missing' || !g.guidance) {
+      body = `<div data-ui="guidance-missing" style="border:1px dashed #c8d8e8;background:#f8fbff;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:12.5px;color:#3a4252;line-height:1.5;margin-bottom:10px;">No review guidance yet. Screening needs guidance drafted from the finalized criteria and confirmed by you.</div>
+        ${draftButton('Draft Guidance')}
+      </div>`;
+    } else if (g.status === 'stale') {
+      body = `<div data-ui="guidance-stale" role="status" style="border:1px solid #e5c88f;background:#fffbf2;border-radius:10px;padding:12px 14px;">
+        <div style="font-size:13px;color:#7a4b00;">The criteria or the collection changed after this guidance was drafted.</div>
+        <div style="font-size:11.5px;color:#6b746c;margin:4px 0 10px;line-height:1.45;">Screening cannot use it. Redraft the guidance for the current criteria and records, then confirm it.</div>
+        ${draftButton('Redraft Guidance')}
+      </div>
+      <details style="margin-top:12px;"><summary style="font-size:12px;color:#6b746c;cursor:pointer;">Previous guidance</summary>${guidanceReadView(g.guidance)}</details>`;
+    } else if (v.guidanceDraft) {
+      body = guidanceEditView(v.guidanceDraft, locked, confirming, g.status);
+    } else {
+      const confirmed = g.status === 'confirmed';
+      // Once screening has results the confirmed guidance folds away so the results stay in reach.
+      const openKey = D.project.id || '';
+      const open = state.guidanceOpen[openKey] ?? !(confirmed && D.stageState.screening?.last_valid);
+      const ruleCount = GUIDANCE_SECTIONS.reduce((sum, { key }) => sum + (g.guidance[key] || []).length, 0);
+      body = `${confirmed ? `<details data-ui="guidance-details" data-rendered-open="${open}" ${open ? 'open' : ''}><summary style="font-size:12px;color:#1a365d;cursor:pointer;margin-bottom:8px;">${open ? 'Hide' : 'Show'} the confirmed guidance · review focus and ${formatCount(ruleCount, 'rule')}</summary>${guidanceReadView(g.guidance)}</details>` : guidanceReadView(g.guidance)}
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid #eef0ee;">
+          ${confirmed ? '' : `<button type="button" data-ui="guidance-confirm" data-act="guidance-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? '<span aria-hidden="true" style="width:12px;height:12px;border:2px solid #9bb8d8;border-top-color:#fffefc;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>Confirming…' : '<i class="ph ph-check-circle" aria-hidden="true"></i>Confirm Guidance'}</button>`}
+          <button type="button" data-act="guidance-edit" ${locked} style="${buttonStyle}"><i class="ph ph-pencil-simple" aria-hidden="true"></i>Edit guidance</button>
+          ${draftButton('Redraft')}
+          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Screening uses this guidance.${D.stageState.screening?.last_valid ? ' Editing it marks the screening results out of date.' : ''}` : 'Screening starts after you confirm.'}</span>
+        </div>`;
+    }
+    const intro = g.status === 'confirmed' && !drafting
+      ? `Screening reads this guidance before the criteria for every record. The Prompt Agent drafted it from the finalized criteria${records}.`
+      : `The Prompt Agent drafts this guidance from the finalized criteria${records}. Screening reads it before the criteria for every record, so read it and correct anything that misreads the review before you confirm.`;
+    return `<section data-ui="screening-guidance" style="border:1px solid #d8e2f0;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h3 style="font-family:Newsreader,Georgia,serif;font-size:20px;font-weight:400;margin:0;">Review guidance</h3>${badge[0] ? `<span data-ui="guidance-status" style="font-size:11.5px;color:${badge[1]};background:${badge[2]};border-radius:999px;padding:3px 9px;white-space:nowrap;">${badge[0]}</span>` : ''}</div>
+      <p style="font-size:12px;color:#6b746c;line-height:1.5;margin:8px 0 12px;">${intro}</p>
+      ${state.guidanceError ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px;">${esc(state.guidanceError)}</div>` : ''}
+      ${body}
+    </section>`;
+  }
+
+  function guidanceReadView(guidance) {
+    const item = (text, color) => `<li style="position:relative;padding:5px 0 5px 16px;font-size:12.5px;line-height:1.55;color:#243449;"><span aria-hidden="true" style="position:absolute;left:2px;top:12px;width:6px;height:6px;border-radius:999px;background:${color};"></span>${text}</li>`;
+    const colors = { definitions: '#9bb8d8', include_when: '#4f8a63', exclude_when: '#b5664f', tie_breakers: '#9bb8d8' };
+    const sections = GUIDANCE_SECTIONS.filter(({ key }) => (guidance[key] || []).length).map(({ key, label }) => `<div data-guidance-section="${key}" style="margin-top:12px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:${key === 'include_when' ? '#386847' : key === 'exclude_when' ? '#a54b37' : '#8a938b'};margin-bottom:2px;">${label} · ${guidance[key].length}</div><ul style="list-style:none;margin:0;padding:0;">${guidance[key].map((text) => item(text, colors[key])).join('')}</ul></div>`).join('');
+    return `<div data-ui="guidance-read">
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#8a938b;margin-bottom:4px;">Review focus</div>
+      <p style="margin:0;font-size:13px;line-height:1.6;color:#1a1a1a;background:#f8fbff;border-left:3px solid #c8d8e8;border-radius:0 8px 8px 0;padding:9px 12px;">${guidance.review_focus || ''}</p>
+      ${sections}
+    </div>`;
+  }
+
+  function guidanceEditView(draft, locked, confirming, status) {
+    const area = (key, index, text) => `<textarea id="rp-guidance-${key}-${index}" data-guidance-field="${key}" ${index === null ? '' : `data-guidance-index="${index}"`} ${locked} rows="${guidanceTextareaRows(text)}" aria-label="${key === 'review_focus' ? 'Review focus' : `${GUIDANCE_SECTIONS.find((s) => s.key === key).label} item ${index + 1}`}" style="display:block;box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;font-size:12.5px;line-height:1.5;background:#fffefc;color:#243449;">${esc(text)}</textarea>`;
+    const sections = GUIDANCE_SECTIONS.map(({ key, label, hint, min, max }) => {
+      const items = draft[key] || [];
+      return `<fieldset data-guidance-section="${key}" style="border:none;margin:14px 0 0;padding:0;min-width:0;">
+        <legend style="font-size:12.5px;color:#1a1a1a;padding:0;">${label} <span style="font-size:11px;color:#8a938b;">· ${hint} ${min ? `${min}–${max}` : `Up to ${max}`} items</span></legend>
+        ${items.map((text, index) => `<div style="display:flex;gap:6px;align-items:flex-start;margin-top:6px;">${area(key, index, text)}<button type="button" data-act="guidance-remove" data-group="${key}" data-index="${index}" ${locked} aria-label="Remove ${label} item ${index + 1}" style="border:none;background:transparent;color:#68798c;padding:7px 4px;cursor:pointer;"><i class="ph ph-x" aria-hidden="true"></i></button></div>`).join('')}
+        ${items.length < max ? `<button type="button" data-act="guidance-add" data-group="${key}" ${locked} style="margin-top:6px;min-height:26px;border:1px dashed #cfe0f5;background:#fffefc;color:#1a365d;border-radius:6px;padding:4px 9px;font:inherit;font-size:11.5px;cursor:pointer;">+ Add item</button>` : ''}
+      </fieldset>`;
+    }).join('');
+    return `<div data-ui="guidance-edit">
+      <label style="display:block;font-size:12.5px;color:#1a1a1a;">Review focus<div style="margin-top:6px;">${area('review_focus', null, draft.review_focus)}</div></label>
+      ${sections}
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid #eef0ee;">
+        <button type="button" data-ui="guidance-confirm" data-act="guidance-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? 'Confirming…' : `<i class="ph ph-check-circle" aria-hidden="true"></i>${status === 'confirmed' ? 'Confirm edited guidance' : 'Confirm Guidance'}`}</button>
+        <button type="button" data-act="guidance-cancel" ${locked} style="${buttonStyle}">Discard edits</button>
+        <span style="font-size:11px;color:#68798c;line-height:1.4;">Edits apply only after you confirm. One rule per box.</span>
+      </div>
+    </div>`;
   }
 
   function retrievalCanvas(v) {
@@ -2677,7 +2834,10 @@ ${reviewUI.dialog()}
         if (trigger && !trigger.disabled) trigger.focus({ preventScroll: true });
       } else if (actFocus && (!document.activeElement || document.activeElement === document.body)) {
         const again = root.querySelector(actFocus);
-        if (again && !again.disabled) again.focus({ preventScroll: true });
+        if (again && !again.disabled) {
+          again.focus({ preventScroll: true });
+          if (again.tagName === 'TEXTAREA' && selection[0] != null) again.setSelectionRange(...selection);
+        }
       }
       writeWorkspaceSnapshot();
       if (state.actionPending && !actionTicker) {
@@ -2950,6 +3110,43 @@ ${reviewUI.dialog()}
         postAction(actionName, payload).catch(() => {});
         return;
       }
+      else if (act === 'guidance-edit') {
+        if (state.actionPending) return;
+        state.guidanceDraft = { projectId: D.project.id, revision: D.screeningGuidance.revision,
+          ...guidanceDraftFromGuidance(decodeGuidance(D.screeningGuidance.guidance)) };
+        state.guidanceError = '';
+        state.returnFocus = '#rp-guidance-review_focus-null';
+      }
+      else if (act === 'guidance-cancel') {
+        state.guidanceDraft = null;
+        state.guidanceError = '';
+        state.returnFocus = '[data-act="guidance-edit"]';
+      }
+      else if (act === 'guidance-add' || act === 'guidance-remove') {
+        const key = t.getAttribute('data-group');
+        const items = state.guidanceDraft?.[key];
+        if (!items) return;
+        if (act === 'guidance-add') {
+          items.push('');
+          state.returnFocus = `#rp-guidance-${key}-${items.length - 1}`;
+        } else {
+          items.splice(Number(t.getAttribute('data-index')), 1);
+          state.returnFocus = items.length ? `#rp-guidance-${key}-${Math.min(Number(t.getAttribute('data-index')), items.length - 1)}` : `[data-act="guidance-add"][data-group="${key}"]`;
+        }
+      }
+      else if (act === 'guidance-confirm') {
+        if (state.actionPending) return;
+        const { payload, error } = guidanceConfirmPayload(decodeGuidance(D.screeningGuidance.guidance), state.guidanceDraft, D.screeningGuidance.revision);
+        state.guidanceError = error;
+        if (error) { paint(); return; }
+        state.actionPending = 'confirm-screening-guidance';
+        state.actionStartedAt = Date.now();
+        state.actionOriginStep = state.step;
+        state.actionError = '';
+        paint();
+        postAction('confirm-screening-guidance', payload).catch(() => {});
+        return;
+      }
       else if (act === 'retry-sources') {
         if (state.actionPending || state.chatPending) return;
         const sources = [...(D.collectionRetry?.sources || [])];
@@ -2992,6 +3189,13 @@ ${reviewUI.dialog()}
     // disclosure stays open across repaints, polling refreshes and page reloads.
     root.addEventListener('toggle', (e) => {
       const details = e.target;
+      if (details.matches && details.matches('details[data-ui="guidance-details"]')) {
+        // Rendering an open <details> fires toggle too; only a change from the rendered state is the user's.
+        if (details.getAttribute('data-rendered-open') === String(details.open)) return;
+        state.guidanceOpen[D.project.id || ''] = details.open;
+        paint();
+        return;
+      }
       if (!details.matches || !details.matches('details[data-ui="executed-query"]')) return;
       const key = `${D.project.id || ''}:${details.getAttribute('data-source') || ''}`;
       if (details.open) state.openQueries[key] = true;
@@ -3002,6 +3206,12 @@ ${reviewUI.dialog()}
       if (e.target.type !== 'checkbox' && e.target.tagName !== 'SELECT' && reviewUI.input(e.target,e)) return;
       if (e.target.id === 'rp-concept-terms') { e.target.rows = Math.min(12, Math.max(5, e.target.value.split('\n').length + 1)); return; }
       if (e.target.matches('[data-ui="history-search"]')) { state.historySearch = e.target.value; if (!e.isComposing) paint(); return; }
+      if (e.target.matches('[data-guidance-field]') && state.guidanceDraft) {
+        const key = e.target.getAttribute('data-guidance-field');
+        if (key === 'review_focus') state.guidanceDraft.review_focus = e.target.value;
+        else if (state.guidanceDraft[key]) state.guidanceDraft[key][Number(e.target.getAttribute('data-guidance-index'))] = e.target.value;
+        return;
+      }
       if (e.target.matches('[data-criteria]')) {
         state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision,
           ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, root.querySelector(`[data-criteria="${key}"]`)?.value || '']))};
