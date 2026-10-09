@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Optional, Dict, Tuple, List
 from urllib.parse import quote, urlparse
 
+from reviewpilot_core.model_policy import DOWNLOAD_MODEL
+
 # Optional Selenium imports for Cloudflare bypass
 try:
     from selenium import webdriver
@@ -280,7 +282,7 @@ class CascadePDFDownloader:
 
         # Enable LLM web search as final fallback (optional)
         self.use_web_search = False
-        self.web_search_model = os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
+        self.web_search_model = os.getenv("REVIEWPILOT_LLM_MODEL", DOWNLOAD_MODEL)
 
     def set_llm_query_func(self, func):
         """Set the LLM query function for smart publisher detection."""
@@ -289,7 +291,7 @@ class CascadePDFDownloader:
     def enable_web_search(self, model: str = None):
         """Enable LLM web search as final fallback for failed downloads."""
         self.use_web_search = True
-        self.web_search_model = model or os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
+        self.web_search_model = model or os.getenv("REVIEWPILOT_LLM_MODEL", DOWNLOAD_MODEL)
 
     def _detect_publisher_from_journal(self, journal: str) -> Optional[str]:
         """Detect publisher from journal name using mapping."""
@@ -358,7 +360,7 @@ Return exactly one allowed lowercase label."""
             response, _ = self.llm_query_func(
                 text_prompt=prompt,
                 system_prompt="You classify scholarly paper metadata into a supplied publisher vocabulary.",
-                model=os.getenv("REVIEWPILOT_LLM_MODEL", "gpt-5.4-nano")
+                model=os.getenv("REVIEWPILOT_LLM_MODEL", DOWNLOAD_MODEL)
             )
             publisher = response.strip().lower()
             if publisher in allowed_publishers and publisher != "unknown":

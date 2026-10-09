@@ -133,6 +133,7 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(json.loads(response)["key_findings"], "ok")
         self.assertIn("max_completion_tokens", calls[0])
         self.assertNotIn("max_tokens", calls[0])
+        self.assertNotIn("temperature", calls[0])  # the default gpt-6-luna rejects a custom temperature
 
     def test_extraction_template_with_json_example_does_not_break_formatting(self):
         with tempfile.TemporaryDirectory() as tmp:

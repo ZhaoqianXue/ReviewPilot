@@ -462,7 +462,7 @@ class WebAppTests(unittest.TestCase):
 
             config = json.loads((output_root / "model-default-review" / "search_conditions.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(config["model"], "gpt-5.4-mini")
+        self.assertEqual(config["model"], "gpt-6-luna")
 
     def test_create_project_defaults_max_results_per_source_to_ten(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -605,7 +605,7 @@ class WebAppTests(unittest.TestCase):
                             ],
                         }
                     ),
-                    {"model": "gpt-5.4-mini"},
+                    {"model": "gpt-6-luna"},
                 )
 
             with patch("agents.search_condition_agent.query_llm", fake_llm_query):
@@ -624,7 +624,7 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(project["id"], "llm-biomedicine-search")
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][2], "gpt-5.4-mini")
+        self.assertEqual(calls[0][2], "gpt-6-luna")
         self.assertIn('<reviewpilot-agent-skill name="systematic-review-search-strategy"', calls[0][1])
         expected_query = '("large language model" OR LLM) AND (biomedicine OR biomedical)'
         self.assertEqual(project["title"], "LLM Biomedicine Search")

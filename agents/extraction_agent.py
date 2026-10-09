@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base_agent import BaseAgent
 from reviewpilot_core.extraction_schema import build_extraction_prompts
 from reviewpilot_core.atomic_files import atomic_output_path
-from reviewpilot_core.model_policy import EXTRACTION_MODEL
+from reviewpilot_core.model_policy import EXTRACTION_MODEL, accepts_custom_temperature
 from utils.jsonl_handler import read_jsonl, append_jsonl, save_json
 from utils.human_interaction import print_header, print_summary, show_progress
 
@@ -640,11 +640,12 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.3,
             }
+            if accepts_custom_temperature(self.model):
+                request["temperature"] = 0.3
             if "json" in f"{system_prompt}\n{user_prompt}".lower():
                 request["response_format"] = {"type": "json_object"}
-            if self.model.startswith("gpt-5"):
+            if self.model.startswith(("gpt-5", "gpt-6")):
                 request["max_completion_tokens"] = 4096
             else:
                 request["max_tokens"] = 4096

@@ -154,7 +154,7 @@ Create a local `config.py` file if one does not already exist:
 EMAIL = "your-email@example.com"
 PUBMED_API_KEY = None
 SCOPUS_API_KEY = None
-MODEL = "gpt-5.4-mini"
+MODEL = "gpt-6-luna"
 ```
 
 Create a local `secrets.txt` file and add the model providers you use:

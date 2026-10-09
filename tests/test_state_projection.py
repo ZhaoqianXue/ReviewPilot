@@ -392,7 +392,7 @@ class StateProjectionTests(unittest.TestCase):
 
         self.assertTrue(data["isNewProject"])
         self.assertEqual(data["project"]["title"], "Untitled review")
-        self.assertEqual(data["project"]["model"], "gpt-5.4-mini")
+        self.assertEqual(data["project"]["model"], "gpt-6-luna")
         self.assertEqual(
             [(step["key"], step["label"], step["status"], step["sub"]) for step in data["steps"]],
             [
