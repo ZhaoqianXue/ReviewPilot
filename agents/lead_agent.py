@@ -17,6 +17,12 @@ from agents.collection_agent import collection_recovery
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
 from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
+from reviewpilot_core.screening_guidance import (
+    confirm as confirm_screening_guidance,
+    guidance_state,
+    require_confirmed_guidance,
+    save_failure as save_guidance_failure,
+)
 from reviewpilot_core.atomic_files import atomic_write_json
 from reviewpilot_core.project_store import read_json
 from reviewpilot_core.search_concepts import derived_fields
@@ -251,11 +257,37 @@ Return ONLY valid JSON:
                 current = criteria_state(project_path)
                 payload = {**current, "revision": payload.get("revision")}
             saved = save_criteria(project_path, payload, finalized=action == "finalize-criteria")
-            if action == "finalize-criteria":
-                self._remember_confirmed_configuration(project_path, "screening_profile")
+            if action != "finalize-criteria":
+                return LeadAgentResult(stage="prompt_relevance", status="completed",
+                    reply="Screening criteria saved locally as a draft. Review and finalize before screening.",
+                    data=saved, artifacts=[str(project_path / "prompts/relevance_prompt.json")])
+            self._remember_confirmed_configuration(project_path, "screening_profile")
+            guidance = guidance_state(project_path)
+            if guidance["status"] not in {"draft", "confirmed"}:
+                guidance = self._draft_screening_guidance(project_path, project_id)
+            reply = ("Screening criteria finalized. The Prompt Agent drafted review guidance from the criteria and the collected records; "
+                     "review and confirm it in the canvas before screening." if guidance["status"] in {"draft", "confirmed"} else
+                     "Screening criteria finalized, but the review guidance could not be drafted. Generate it again in the canvas before screening.")
+            return LeadAgentResult(stage="prompt_relevance", status="completed", reply=reply,
+                data={**saved, "screening_guidance": guidance},
+                artifacts=[str(project_path / "prompts/relevance_prompt.json"), str(project_path / "prompts/screening_guidance.json")])
+
+        if action == "generate-screening-guidance":
+            self._require_completed_stage(project_path, action, "collection")
+            require_finalized_criteria(project_path)
+            guidance = self._draft_screening_guidance(project_path, project_id)
+            if guidance["status"] != "draft":
+                raise ValueError(f"The review guidance could not be drafted: {guidance['error'] or 'unknown error'}")
             return LeadAgentResult(stage="prompt_relevance", status="completed",
-                reply="Screening criteria finalized. Run screening when ready." if action == "finalize-criteria" else "Screening criteria saved locally as a draft. Review and finalize before screening.",
-                data=saved, artifacts=[str(project_path / "prompts/relevance_prompt.json")])
+                reply="The Prompt Agent drafted new review guidance. Review and confirm it in the canvas before screening.",
+                data={"screening_guidance": guidance}, artifacts=[str(project_path / "prompts/screening_guidance.json")])
+
+        if action == "confirm-screening-guidance":
+            require_finalized_criteria(project_path)
+            guidance = confirm_screening_guidance(project_path, input_data or {})
+            return LeadAgentResult(stage="prompt_relevance", status="completed",
+                reply="Review guidance confirmed. Run screening when ready.",
+                data={"screening_guidance": guidance}, artifacts=[str(project_path / "prompts/relevance_prompt.json")])
 
         if action == "collect":
             self._verify_stage_artifacts(project_path, "search_conditions")
@@ -268,6 +300,7 @@ Return ONLY valid JSON:
         if action == "screen":
             self._require_completed_stage(project_path, action, "collection")
             require_finalized_criteria(project_path)
+            require_confirmed_guidance(project_path)
             artifacts.append(str(self._ensure_relevance_prompt(project_path, config)))
             result = self._call_workflow_action("screen", project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "filtering"))
@@ -586,6 +619,14 @@ Supported commands:
             next_actions=["run_extraction"] if is_schema_finalized(project_path) else ["finalize_schema"],
             data=result,
         )
+
+    def _draft_screening_guidance(self, project_path: Path, project_id: str) -> dict[str, Any]:
+        """Ask the Prompt Agent for review guidance; a failure is recorded so the canvas can offer a retry."""
+        try:
+            return self._call_workflow_action("generate-screening-guidance", project_id)["guidance"]
+        except Exception as exc:  # recorded for the canvas; the criteria stay finalized
+            logging.getLogger("reviewpilot.lead_agent").warning("Screening guidance draft failed for %s: %s", project_id, exc)
+            return save_guidance_failure(project_path, f"{type(exc).__name__}: {exc}")
 
     def _call_workflow_action(self, action: str, project_id: str, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         # Cross-project configurations enter only through explicit draft imports.

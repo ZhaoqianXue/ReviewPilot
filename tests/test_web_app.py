@@ -24,6 +24,18 @@ def terminal_result(action: str) -> dict:
     }.get(action, {})
 
 
+
+from reviewpilot_core.screening_guidance import confirm as confirm_guidance, save_draft as save_guidance_draft
+
+SCREENING_GUIDANCE = {
+    "review_focus": "This review collects evaluations of the stated topic. A record is relevant when its own work reports such an evaluation.",
+    "definitions": [],
+    "include_when": ["evaluations of the topic in its setting", "studies reporting outcomes of the topic",
+                     "new methods the authors built, even when the abstract does not yet describe the evaluation", "reviews of the topic"],
+    "exclude_when": ["opinion pieces without data", "work outside the review's domain", "studies where the topic is only an example"],
+    "tie_breakers": ["When no abstract is available, judge from the title and keep the record unless the title shows a topic outside the review."],
+}
+
 class WebAppTests(unittest.TestCase):
     def test_preview_endpoint_and_action_use_public_index_without_mutating_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1126,6 +1138,8 @@ class WebAppTests(unittest.TestCase):
                 for action in actions:
                     if action == "screen":
                         save_criteria(project_dir, criteria_state(project_dir), finalized=True)
+                        save_guidance_draft(project_dir, SCREENING_GUIDANCE)
+                        confirm_guidance(project_dir)
                     task_id = web_app.submit_project_action(output_root, "demo", action, llm_query=fake_llm)
                     task = web_app.task_runner.wait(task_id, timeout=2)
                     stages.append(task["result"]["stage"])
@@ -1204,6 +1218,8 @@ class WebAppTests(unittest.TestCase):
 
                 def fake_llm(*args, **kwargs):
                     prompt = kwargs.get("text_prompt", "")
+                    if prompt.startswith("Task: screening (screening guidance)"):
+                        return json.dumps(SCREENING_GUIDANCE), {}
                     if "Design the concept strategy" in prompt:
                         return (
                             json.dumps(
@@ -1304,8 +1320,11 @@ class WebAppTests(unittest.TestCase):
                     stages = []
                     for action in ["collect", "screen", "generate-schema", "finalize-schema", "download-pdfs", "run-extraction", "categorize"]:
                         if action == "screen":
-                            criteria_task = web_app.submit_project_action(output_root, project_id, "finalize-criteria", input_data=criteria_state(output_root / project_id))
+                            criteria_task = web_app.submit_project_action(output_root, project_id, "finalize-criteria", input_data=criteria_state(output_root / project_id), llm_query=fake_llm)
                             self.assertEqual(web_app.task_runner.wait(criteria_task, timeout=5)["status"], "completed")
+                            self.assertEqual(build_rp_data(output_root, project_id)["screeningGuidance"]["status"], "draft")
+                            confirm_task = web_app.submit_project_action(output_root, project_id, "confirm-screening-guidance", input_data={})
+                            self.assertEqual(web_app.task_runner.wait(confirm_task, timeout=5)["status"], "completed")
                         task_id = web_app.submit_project_action(output_root, project_id, action, llm_query=fake_llm)
                         task = web_app.task_runner.wait(task_id, timeout=5)
                         self.assertEqual(task["status"], "partial" if action == "download-pdfs" else "completed", task.get("error"))

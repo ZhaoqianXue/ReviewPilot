@@ -10,6 +10,8 @@ from .atomic_files import atomic_write_json
 from .project_store import read_json
 from .workflow_state import load_workflow_state, mark_stages_stale
 from .project_decisions import remember_confirmed
+from .screening_evidence import GUIDANCE_KEY, OUTPUT_INSTRUCTION, evidence_prompt
+from .screening_guidance import invalidate as invalidate_guidance
 
 
 def criteria_state(project: Path) -> dict:
@@ -88,18 +90,15 @@ def save_criteria(project: Path, payload: dict, *, finalized: bool = False) -> d
         if affected:
             mark_stages_stale(project, affected)
         prompt["eligibility"] = eligibility
-        prompt["system_prompt"] = "You screen scholarly records against reviewer-approved eligibility criteria using only supplied record evidence."
-        prompt["instruction"] = (
-            "Apply the inclusion and exclusion criteria. Return False when explicit evidence establishes an exclusion condition "
-            "or material incompatibility with an inclusion criterion. Retain plausibly eligible records when evidence is incomplete. "
-            "Return exactly one token: True or False."
-        )
-        prompt["user_prompt_template"] = (
-            "REVIEWER ELIGIBILITY CRITERIA DATA:\n" + json.dumps(eligibility, ensure_ascii=False)
-            + "\n\nPaper Title: {title}\nPaper Abstract: {abstract}\n\n" + prompt["instruction"]
-        )
+        # Review guidance was written for the previous criteria and leaves the instruction until redrafted.
+        prompt.pop(GUIDANCE_KEY, None)
+        built = evidence_prompt(prompt)
+        prompt["system_prompt"], prompt["user_prompt_template"] = built["system_prompt"], built["user_prompt_template"]
+        prompt["instruction"] = OUTPUT_INSTRUCTION
     prompt["criteria_finalized"] = finalized
     atomic_write_json(prompt_path, prompt)
+    if changed:
+        invalidate_guidance(project)
     if finalized:
         remember_confirmed(project, 'screening_profile')
     return criteria_state(project)

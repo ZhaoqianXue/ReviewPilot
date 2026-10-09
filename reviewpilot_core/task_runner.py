@@ -10,7 +10,8 @@ from uuid import uuid4
 
 ACTION_LABELS = {
     "collect": "Paper collection", "screen": "Paper screening", "edit-criteria": "Opening the criteria draft",
-    "save-criteria": "Saving the criteria", "finalize-criteria": "Finalizing the criteria",
+    "save-criteria": "Saving the criteria", "finalize-criteria": "Finalizing the criteria and drafting the review guidance",
+    "generate-screening-guidance": "Drafting the review guidance", "confirm-screening-guidance": "Confirming the review guidance",
     "download-pdfs": "Full-text retrieval", "retry-failed-downloads": "Failed-download recovery",
     "generate-schema": "Schema generation", "regenerate-schema": "Schema generation",
     "finalize-schema": "Finalizing the schema", "edit-schema": "Reopening the schema",

@@ -40,8 +40,9 @@ class OrdinaryChatPersistenceTests(unittest.TestCase):
         self.assertEqual(evidence['quote'], 'This paper surveys the landscape')
         self.assertTrue(evidence['quote_verified'])
         included, evidence = parse_screening_response(json.dumps({**base, 'quote': '"The paper reviews urban planning"'}), paper, prompt)
-        self.assertTrue(included)
+        self.assertFalse(included)
         self.assertFalse(evidence['quote_verified'])
+        self.assertTrue(evidence['uncertain'])
 
     def test_chat_settings_override_defaults_only_on_initial_chat_path(self):
         defaults = {'project_name': 'Default', 'platforms': ['pubmed', 'arxiv', 'openalex'], 'max_results': 10, 'source_limits': {'pubmed': 10, 'arxiv': 10, 'openalex': 10}, 'date_range': {'start': '', 'end': '2026-09-12'}}

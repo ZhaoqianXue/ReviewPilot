@@ -53,7 +53,7 @@ class SkillRuntimeTests(unittest.TestCase):
     def test_every_skill_is_methodology_only_and_uses_positive_instruction_style(self):
         registry = SkillRegistry()
         methodology_markers = {
-            "evidence-screening": ("Operationalize criteria", "Represent uncertainty as uncertainty"),
+            "evidence-screening": ("Screening procedure", "Rate how likely the record is to be eligible"),
             "structured-evidence-extraction": ("Design the schema", "source provenance"),
             "evidence-synthesis-and-categorization": ("Build categories", "Check coverage"),
             "review-prompt-design": ("Screening guidance", "Extraction coding rules"),

@@ -200,5 +200,6 @@ class RecordReviewTests(unittest.TestCase):
         self.assertEqual(verified['participants']['page'],2)
         prompt=evidence_prompt({'eligibility':{'exclusion':['Animal-only study']}})
         include,rationale=parse_screening_response(json.dumps({'include':False,'reason':'not human','criterion':'Animal-only study','quote':'invented'}),{'abstract':'42 adults'},prompt)
-        self.assertTrue(include);self.assertTrue(rationale['uncertain'])
+        # The model's exclusion stands; an excerpt that is not in the record flags it for human review.
+        self.assertFalse(include);self.assertTrue(rationale['uncertain']);self.assertFalse(rationale['exclusion_verified'])
         self.assertEqual(rationale['quote'],'')

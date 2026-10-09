@@ -729,7 +729,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     record_review.recover(Path(output_root) / project_id)
     if action == "review-sample":
         return task_runner.submit(project_id, action, lambda: record_review.run_sample(Path(output_root) / project_id, input_data or {}, llm_query=llm_query))
-    supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
+    supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "generate-screening-guidance", "confirm-screening-guidance", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
 
@@ -743,6 +743,14 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             validate_criteria(input_data or {})
         if (input_data or {}).get("revision") != criteria_state(project_path)["revision"]:
             raise ValueError("Screening criteria changed. Refresh before saving.")
+        return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
+            project_id=project_id, action=action, input_data=input_data).to_dict())
+    if action in {"generate-screening-guidance", "confirm-screening-guidance"}:
+        if action == "confirm-screening-guidance":
+            from reviewpilot_core.screening_guidance import guidance_state
+            revision = (input_data or {}).get("revision")
+            if revision and revision != guidance_state(project_path)["revision"]:
+                raise ValueError("The review guidance changed. Refresh before confirming.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
             project_id=project_id, action=action, input_data=input_data).to_dict())
     if action == "preview-extraction":

@@ -226,8 +226,10 @@ class ScreeningGuidanceContract:
         guidance = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_screening_guidance(
             {**config, **(input_data or {}), "criteria": {"inclusion": criteria["inclusion"], "exclusion": criteria["exclusion"]},
              "candidates": candidates})
-        atomic_write_json(project_path / "prompts" / "screening_guidance.json", {**guidance, "status": "draft"}, indent=None)
-        return {"status": "screening_guidance_generated", "guidance": guidance}
+        from .screening_guidance import save_draft
+
+        state = save_draft(project_path, guidance)
+        return {"status": "screening_guidance_generated", "guidance": state}
 
 
 def _paper_text(paper: dict[str, Any]) -> str:

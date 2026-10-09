@@ -312,50 +312,34 @@ class FilteringAgent(BaseAgent):
 
         return unique_papers, list(to_remove)
 
+    SCREENING_WORKERS = 16
+
     def _check_relevance(self, papers: List[Dict], prompt_config: Dict, output_dir: Path) -> Tuple[List[Dict], List[Dict]]:
-        """Check paper relevance using LLM."""
+        """Screen each record with the LLM, several at a time; decisions and the log keep the input order."""
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
         from utils.llm import query_llm
 
         system_prompt = prompt_config.get("system_prompt", "")
         user_template = prompt_config.get("user_prompt_template", "")
-
-        relevant_papers = []
-        irrelevant_papers = []
-
-        # Open log file for real-time writing
+        active_llm_query = self.llm_query or query_llm
         log_file = output_dir / "filtering_log.jsonl"
-
+        progress_lock = threading.Lock()
+        done = [0]
         total = len(papers)
-        for i, paper in enumerate(papers):
-            show_progress(i + 1, total, prefix="  Checking relevance")
 
+        def screen(paper: Dict) -> Dict:
             title = paper.get("title", "")
             raw_abstract = str(paper.get("abstract") or "")
             abstract = raw_abstract if prompt_config.get("review_evidence") else raw_abstract[:1000]
             if len(raw_abstract) > len(abstract):
                 abstract += "\n[Abstract truncated by ReviewPilot after 1000 characters]"
-
-            # Substitute only the two declared record placeholders. The generated
-            # template also contains JSON scope data whose braces are literal data.
-            record_values = {
-                "title": title,
-                "abstract": abstract if abstract else "No abstract available",
-            }
-            user_prompt = re.sub(
-                r"\{(title|abstract)\}",
-                lambda match: record_values[match.group(1)],
-                user_template,
-            )
-
+            # Substitute only the two declared record placeholders. The template also carries
+            # criteria and guidance text whose braces are literal data.
+            record_values = {"title": title, "abstract": abstract if abstract else "No abstract available"}
+            user_prompt = re.sub(r"\{(title|abstract)\}", lambda match: record_values[match.group(1)], user_template)
             try:
-                active_llm_query = self.llm_query or query_llm
-                response, usage = active_llm_query(
-                    text_prompt=user_prompt,
-                    system_prompt=system_prompt,
-                    model=self.model,
-                    provider="openai"
-                )
-
+                response, _usage = active_llm_query(text_prompt=user_prompt, system_prompt=system_prompt, model=self.model, provider="openai")
                 if prompt_config.get("review_evidence"):
                     is_relevant, rationale = parse_screening_response(response, paper, prompt_config)
                     paper["screening_evidence"] = rationale
@@ -364,32 +348,29 @@ class FilteringAgent(BaseAgent):
                     if decision not in {"true", "false"}:
                         raise ValueError("Relevance model response must be exactly True or False")
                     is_relevant = decision == "true"
-
-                # Add relevance info to paper
                 paper["is_relevant"] = is_relevant
                 paper["relevance_response"] = response.strip()
-
-                if is_relevant:
-                    relevant_papers.append(paper)
-                else:
-                    irrelevant_papers.append(paper)
-
-                # Log the result
-                log_entry = {
-                    "paper_id": paper.get("id", ""),
-                    "title": title[:100],
-                    "timestamp": datetime.now().isoformat(),
-                    "action": "kept" if is_relevant else "removed_irrelevant",
-                    "response": response.strip()
-                }
-                append_jsonl(str(log_file), log_entry)
-
+                entry = {"paper_id": paper.get("id", ""), "title": title[:100], "timestamp": datetime.now().isoformat(),
+                         "action": "kept" if is_relevant else "removed_irrelevant", "response": response.strip()}
             except Exception as e:
                 self.log(f"Error checking relevance for {title[:50]}: {e}", "warning")
                 # Keep paper if check fails
                 paper["is_relevant"] = None
                 paper["relevance_error"] = str(e)
-                relevant_papers.append(paper)
+                entry = None
+            with progress_lock:
+                done[0] += 1
+                show_progress(done[0], total, prefix="  Checking relevance")
+            return entry
+
+        workers = max(1, min(self.SCREENING_WORKERS, total))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            entries = list(pool.map(screen, papers))
+        relevant_papers = [paper for paper in papers if paper.get("is_relevant") is not False]
+        irrelevant_papers = [paper for paper in papers if paper.get("is_relevant") is False]
+        for entry in entries:
+            if entry is not None:
+                append_jsonl(str(log_file), entry)
 
         print()  # New line after progress bar
         return relevant_papers, irrelevant_papers

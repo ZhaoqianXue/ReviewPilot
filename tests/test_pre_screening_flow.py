@@ -119,7 +119,7 @@ class ScreeningCriteriaDraftTests(unittest.TestCase):
             self.assertEqual(state["inclusion"], ["Study addresses Large language models.", "Study addresses Sepsis."])
             self.assertEqual(state["prompt"], "")
             saved = save_criteria(project, {**state, "revision": state["revision"]})
-            self.assertIn("REVIEWER ELIGIBILITY CRITERIA DATA", saved["prompt"])
+            self.assertIn("Inclusion criteria (the record must meet all of them):", saved["prompt"])
 
 
 class DateRangeTests(unittest.TestCase):

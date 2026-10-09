@@ -185,6 +185,8 @@ const WORKFLOW_ACTION_META = Object.freeze({
   'edit-criteria': { step: 'screening', label: 'Opening criteria draft', advances: false },
   'save-criteria': { step: 'screening', label: 'Saving criteria', advances: false },
   'finalize-criteria': { step: 'screening', label: 'Finalizing criteria', advances: false },
+  'generate-screening-guidance': { step: 'screening', label: 'Drafting review guidance', advances: false },
+  'confirm-screening-guidance': { step: 'screening', label: 'Confirming review guidance', advances: false },
   'download-pdfs': { step: 'retrieval', label: 'Full-text retrieval', advances: true },
   'retry-failed-downloads': { step: 'retrieval', label: 'Failed-download recovery', advances: false },
   'generate-schema': { step: 'extraction', label: 'Schema generation', advances: false },
@@ -2933,6 +2935,7 @@ ${reviewUI.dialog()}
         const actionName = t.getAttribute('data-action');
         const payload = ['save-criteria', 'finalize-criteria'].includes(actionName)
           ? { revision: D.screeningCriteria.revision, ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, (root.querySelector(`[data-criteria="${key}"]`)?.value || '').split('\n').map(line => line.trim()).filter(Boolean)])) }
+          : actionName === 'confirm-screening-guidance' ? { revision: D.screeningGuidance?.revision || '' }
           : (['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null);
         if (actionName === 'categorize' && (!payload.categories || !payload.categories.length)) {
           state.actionError = 'Confirm at least one category before applying categorization.';

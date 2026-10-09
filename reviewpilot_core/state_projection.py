@@ -14,6 +14,7 @@ from ui_state import project_stage_label, schema_workbench_state
 
 from .extraction_schema import is_schema_finalized, load_schema_draft
 from .screening_criteria import criteria_state
+from .screening_guidance import guidance_state
 from .project_decisions import confirmed_decisions
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
@@ -327,6 +328,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrieved": _retrieved(included, download_report),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
         "screeningCriteria": criteria_state(path),
+        "screeningGuidance": _screening_guidance_view(path),
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
@@ -1164,7 +1166,7 @@ def _quiet_labels(path: Path, workflow_state: dict | None = None) -> dict[str, s
     extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     labels = {
         "search": "Run collection",
-        "screening": "Run screening" if criteria_state(path)["status"] == "finalized" else "Finalize Criteria",
+        "screening": _screening_step(path)[1],
         "retrieval": "Download PDFs",
         "extraction": "Run extraction",
     }
@@ -1173,11 +1175,28 @@ def _quiet_labels(path: Path, workflow_state: dict | None = None) -> dict[str, s
     return labels
 
 
+def _screening_step(path: Path) -> tuple[str, str]:
+    """The next screening-step action: finalize criteria, draft or confirm the review guidance, then screen."""
+    if criteria_state(path)["status"] != "finalized":
+        return "finalize-criteria", "Finalize Criteria"
+    status = guidance_state(path)["status"]
+    if status == "confirmed":
+        return "screen", "Run screening"
+    if status == "draft":
+        return "confirm-screening-guidance", "Confirm Guidance"
+    return "generate-screening-guidance", "Draft Guidance"
+
+
+def _screening_guidance_view(path: Path) -> dict:
+    state = guidance_state(path)
+    return {key: state.get(key) for key in ("status", "revision", "guidance", "text", "error", "generated_at", "confirmed_at", "candidate_count")}
+
+
 def _quiet_actions(path: Path, workflow_state: dict | None = None) -> dict[str, str]:
     extraction_done = (path / "extraction" / "extraction_results.jsonl").exists() and not (workflow_state and workflow_state["stages"]["extraction"]["stale"])
     actions = {
         "search": "collect",
-        "screening": "screen" if criteria_state(path)["status"] == "finalized" else "finalize-criteria",
+        "screening": _screening_step(path)[0],
         "retrieval": "download-pdfs",
         "extraction": "run-extraction",
     }

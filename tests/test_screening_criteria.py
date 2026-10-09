@@ -53,7 +53,8 @@ class ScreeningCriteriaTests(unittest.TestCase):
         self.assertIn('{18+}', captured[0])
         self.assertIn('Mice were treated.', captured[0])
         state = build_rp_data(self.root, 'review')
-        self.assertEqual(state['quietActions']['screening'], 'screen')
+        # Finalized criteria lead to the review guidance step before screening.
+        self.assertEqual(state['quietActions']['screening'], 'generate-screening-guidance')
         self.assertEqual(state['screeningCriteria']['inclusion'], self.payload()['inclusion'])
 
     def test_revision_conflict_preserves_saved_rules(self):
