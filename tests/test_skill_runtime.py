@@ -29,7 +29,7 @@ class SkillRuntimeTests(unittest.TestCase):
         self.assertTrue(all(activation.instructions for activation in activations))
         self.assertEqual(registry.activate("save-search-setup", "SearchConditionAgent").version, "3.0.0")
         self.assertEqual(registry.activate("refine-search-setup", "SearchConditionAgent").name, "systematic-review-search-strategy")
-        self.assertTrue(all(activation.version in {"1.5.0", "2.0.0", "2.1.0", "3.0.0"} for activation in activations))
+        self.assertTrue(all(activation.version in {"1.12.0", "2.0.0", "2.1.0", "3.0.0"} for activation in activations))
         self.assertTrue(all(len(activation.content_hash) == 64 for activation in activations))
 
     def test_search_skill_contains_reusable_methodology_without_product_workflow(self):

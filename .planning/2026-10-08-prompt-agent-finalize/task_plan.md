@@ -138,3 +138,131 @@ PERG test, gpt-6-luna, `perg4/`:
 - Cost: $0.27 per 1,000 records including generation, vs $0.23 for Appendix B.
 - Single generation sample per review; stability across regenerations is not yet measured.
 - App gap: the app's screening prompt uses neither the Appendix A procedure nor the guidance, and nothing in the workflow triggers generate-screening-guidance yet.
+
+## Extraction coding rules round 3 (skill 1.6.0, test-informed)
+Changes:
+- The agent reads full-text sentences per field (`field_excerpts`), as the Extraction Agent reads full text.
+- The skill states that rules settle borderline cases over the description, with the authors' label anchored per option.
+- Restatements are dropped; 8–16 rules in all, at most 4 per field.
+- A misleading-label rule was added, plus a review pass against a coding-rules checklist.
+- The Extraction Agent (Appendix C) is unchanged, so the comparison against D4 stays fair.
+
+Test results (178 papers, `pa-gen3`):
+
+| Arm | P | R | F1 | VC | Words per pathogen |
+|---|---|---|---|---|---|
+| Round 3 | .748 | .816 | .781 | .689 | 490–548 (12–14 rules) |
+| Appendix D | .741 | .841 | .788 | .713 | 327–364 |
+
+Round 3 − Appendix D: P +.007 [−.010, +.023]; R −.025 [−.041, −.011]; F1 −.007 [−.021, +.005]. Not yet better.
+
+Remaining gaps:
+1. model_type: renewal or Hawkes models are still coded Branching when the authors call them renewal or Hawkes models, and R estimation is left empty instead of Other.
+2. interventions: the 4-per-field cap dropped the Other rule for Ebola (interventions_type FN other 16 vs 10).
+3. Behaviour changes and Contact tracing FPs.
+
+## Extraction coding rules round 4 (skill 1.7.0): goal "beat both baselines on all metrics" not met
+Changes:
+- Relocate rather than drop: each restriction names where the other cases go.
+- Every field with an Other option has an Other rule.
+- Fields on the central object are always coded.
+- Up to 6 rules for fields with many options.
+- "Authors' label" means the option's own name.
+
+Test results (`pa-gen4`):
+
+| Arm | P | R | F1 | VC | Interventions F1 | model_type F1 |
+|---|---|---|---|---|---|---|
+| Round 4 | .738 | .822 | .778 | .690 | .595 (best of all arms) | .844 |
+| Single-prompt LLM | .714 | .837 | .771 | .528 | | |
+
+Round 4 − single-prompt: P +.023 [+.005, +.043]; R −.015 [−.030, −.001]; F1 +.007 [−.008, +.021]. AgentSLR is beaten on R/F1/VC; P +.015 [−.005, +.035].
+
+Finding: ReviewPilot's Extraction Agent without any rules already has lower recall than the single-prompt LLM.
+
+| Arm | Recall | Gold-set-but-empty |
+|---|---|---|
+| No rules (3 runs) | .810–.819 | 28–30 |
+| Single-prompt LLM | .837 | 18 |
+| Appendix D | .841 | 20 |
+| Round 4 | .822 | 31 |
+
+- Appendix C's empty-value rule ("empty when the evidence neither states nor necessarily implies a value") and the quote requirement make the agent leave fields empty. Appendix D compensates with routing rules.
+- Generated rules have not offset this: the generator follows the schema descriptions' "Use [] if unreported or unspecified".
+
+## Domain-free skill (user brief: no evaluation-domain examples; beat Appendix B/D on all main metrics; gpt-6-luna only)
+
+| Version | Change | Screening macro F1 | Extraction F1 | Evaluated? |
+|---|---|---|---|---|
+| 1.9.0 | Examples replaced with drug-safety, education and agriculture examples | .727 (B .766, AgentSLR .713) | .767 (D .788, single-prompt .771) | yes |
+| 1.10.0 | Two full worked examples from other domains; peer-review wording fixes | — | — | generation only |
+| 1.11.0 | "Decide first" analysis in the output JSON (setting / outside-setting work; central fields / label families) | — | — | generation only |
+
+1.10.0 and 1.11.0 were not run: their generated text still follows the literal criteria and schema wording.
+- Zika still admits laboratory vector experiments.
+- Ebola still codes renewal-equation and Hawkes models as Branching process.
+- No central fields are identified.
+
+Finding: with gpt-6-luna and only domain-free principles, the generator consistently chooses the literal reading of the confirmed criteria and schema. Rounds 1.5.0–1.8.0 reached Appendix level only with evaluation-domain content in the skill.
+
+## 1.12.0 (domain-free, general levers only; target: every quality metric above single-prompt LLM and AgentSLR; cost excluded by the user)
+Changes:
+- Removed worked examples, the label-override rule, label-family analysis and PERG-isomorphic examples.
+- Added field coverage data, central fields (always coded), and "unreported means the study lacks it".
+- The screening section is 1.9.0 plus neutral wording fixes.
+
+Screening (`perg10`):
+
+| Arm | Macro P | Macro R | Macro F1 | Review share |
+|---|---|---|---|---|
+| 1.12.0 | .697 | .834 | .717 | .325 |
+| AgentSLR | .694 | .833 | .713 | .331 |
+| Single-prompt LLM | .685 | .828 | .696 | .354 |
+
+All point estimates beat both baselines. Differences against AgentSLR are not significant.
+
+Extraction (`pa-gen10`):
+
+| Arm | P | R | F1 | VC |
+|---|---|---|---|---|
+| 1.12.0 | .742 | .823 | .780 | .702 |
+| Single-prompt LLM | .714 | .837 | .771 | .528 |
+| AgentSLR | .723 | .782 | .751 | .449 |
+
+- R is below single-prompt: −.014 [−.032, +.005]. Everything else beats both.
+- vs Appendix D: P +.001, F1 −.008, both n.s.
+- The remaining FN excess (148 vs 136) is mostly interventions_type: Vector/animal control 7 vs 2, Quarantine 12 vs 10. When a specific measure is coded, the general option is dropped.
+
+## 1.13.0 (generated, not yet evaluated)
+Changes:
+- Drafts and merge: 3 independent drafts, then a merge.
+  - Screening: include categories by union; exclude, definitions and tie-breakers by majority.
+  - Coding rules: mapping, Other and nesting rules by union; restricting rules by majority.
+- Review pass after the merge.
+- Nested options are coded together, the general option with the specific one.
+
+Generation outputs (`perg11`, `coding11`; cost about $0.15):
+- Screening guidance: 650–740 words, 10–11 include categories.
+- Coding rules: nesting rule present for Zika and Lassa; model_type central everywhere.
+
+## 1.13.0 and 1.14.0 results; final decision: keep 1.12.0 (user, 2026-10-08)
+1.13.0 (drafts and merge):
+- Screening: macro F1 .728, all metrics ahead of both baselines.
+- Extraction: P .731, R .797, F1 .762. The merge dropped central and default rules for Ebola.
+
+1.14.0 (no merge; completeness stance, default-case rule, nesting, restriction scope):
+- Screening: macro F1 .730, all point estimates ahead.
+- Extraction: P .725, R .805 (single-prompt −.032 [−.054, −.014]), F1 .763.
+
+Lessons:
+- With the Extraction Agent and model fixed and no domain hints, generated rules keep recall near the no-rules level (.80–.82), below single-prompt .837. Appendix C's "empty unless necessarily implied" is the structural cause.
+- Coding-rule generation varies about as much as the gaps being chased; Ebola (79 of 178 papers) dominates.
+- The screening sections of 1.12.0 and 1.14.0 are identical, so the screening difference (.717 vs .730) is generation noise.
+
+Decision: keep 1.12.0.
+- 1.14.0's completeness stance contradicts Appendix C, and its recall is significantly below single-prompt.
+- 1.12.0 has the best extraction (P .742, R .823, F1 .780, VC .702) and is internally consistent.
+- The choice was made after seeing test results, so it is labeled test-informed.
+
+Working tree: SKILL.md = `SKILL.1.12.0.md`; prompt_agent.py is single draft plus review, with field coverage and central fields; skill_runtime is 1.12.0. Not committed.
+Open option: average 2–3 regenerations of 1.12.0 for stable screening numbers (about $1.5 each).

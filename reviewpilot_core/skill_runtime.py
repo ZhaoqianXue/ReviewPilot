@@ -28,7 +28,7 @@ SKILL_VERSIONS = {
     "evidence-screening": "2.0.0",
     "structured-evidence-extraction": "2.0.0",
     "evidence-synthesis-and-categorization": "2.0.0",
-    "review-prompt-design": "1.5.0",
+    "review-prompt-design": "1.12.0",
 }
 
 _START_MARKER = "<reviewpilot-agent-skill"

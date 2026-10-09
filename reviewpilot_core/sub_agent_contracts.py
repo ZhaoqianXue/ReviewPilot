@@ -230,6 +230,19 @@ class ScreeningGuidanceContract:
         return {"status": "screening_guidance_generated", "guidance": guidance}
 
 
+def _paper_text(paper: dict[str, Any]) -> str:
+    """Full text of a retrieved paper, or empty when its PDF is missing or unreadable."""
+    from .evidence_support import read_pdf_pages
+
+    path = Path(str(paper.get("pdf_path") or ""))
+    if not paper.get("pdf_path") or not path.is_file():
+        return ""
+    try:
+        return "\n".join(page["text"] for page in read_pdf_pages(path))
+    except Exception:
+        return ""
+
+
 @dataclass(frozen=True)
 class CodingRulesContract:
     """PromptAgent writes per-field coding rules for the extraction instruction (a draft)."""
@@ -245,7 +258,7 @@ class CodingRulesContract:
 
         project_path = Path(output_root) / project_id
         config = read_json(project_path / "search_conditions.json", {}) or {}
-        papers = read_jsonl(project_path / "filtered" / "included_papers.jsonl")
+        papers = [{**paper, "text": _paper_text(paper)} for paper in read_jsonl(project_path / "filtered" / "included_papers.jsonl")]
         skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
         rules = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_coding_rules(
             {**config, **(input_data or {}), "schema": load_schema_draft(project_path), "papers": papers})

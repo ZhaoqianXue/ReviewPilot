@@ -57,8 +57,8 @@ class PromptAgent(BaseAgent):
         auto-generates the prompt without asking questions.
 
         Otherwise asks user for:
-        1. Primary topic/method (e.g., "LLM-as-a-Judge")
-        2. Domain/context (e.g., "healthcare, clinical, medical")
+        1. Primary topic/method (e.g., "drug-induced liver injury")
+        2. Domain/context (e.g., "outpatient care")
         3. Any synonyms or related terms
         """
         search_terms = search_conditions.get("search_terms", "")
@@ -561,12 +561,18 @@ Output constraints:
 
     def generate_coding_rules(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Write per-field coding rules that the extraction instruction carries."""
-        from reviewpilot_core.review_guidance import record_sample, render_coding_rules, validate_coding_rules
+        from reviewpilot_core.review_guidance import field_coverage, field_excerpts, record_sample, render_coding_rules, validate_coding_rules
 
         schema = input_data.get("schema") or {}
         if not schema.get("fields"):
             raise ValueError("Coding rules need a confirmed extraction schema")
-        sample = record_sample(input_data.get("papers") or [], limit=25, abstract_chars=1200)
+        papers = input_data.get("papers") or []
+        sample = record_sample(papers, limit=25, abstract_chars=600)
+        texts = {" ".join(str(paper.get("title") or "").split()): paper.get("text") or "" for paper in papers}
+        for item in sample:
+            excerpts = field_excerpts(texts.get(item["title"], ""), schema)
+            if excerpts:
+                item["field_excerpts"] = excerpts
         prompt = f"""Task: extraction, step 2 of 2 (coding rules). Follow the skill's "Extraction coding rules" section.
 Write the extraction coding rules for this review.
 
@@ -576,21 +582,31 @@ REVIEW OBJECTIVES DATA:
 CONFIRMED EXTRACTION SCHEMA DATA:
 {json.dumps(schema, ensure_ascii=False)}
 
-SAMPLE PAPERS DATA ({len(sample)} included papers, titles and abstracts):
+SAMPLE PAPERS DATA ({len(sample)} included papers: title, abstract opening, and full-text sentences that speak to each field):
 {json.dumps(sample, ensure_ascii=False)}
 
-Return ONLY a JSON object with this shape:
+FIELD COVERAGE DATA (share of sample papers whose text speaks to each field):
+{json.dumps(field_coverage(sample, schema), ensure_ascii=False)}
+
+Return ONLY a JSON object with this shape; write the analysis first and let the rules follow from it:
 {{
+  "analysis": {{"central_fields": ["schema field that classifies what every included paper has"]}},
   "preamble": "one or two sentences introducing the review's coding conventions",
   "fields": [{{"field": "schema field name", "rules": ["coding rule"]}}]
 }}
 
 Output constraints:
-- List only the fields that need rules, using the schema's field names exactly; each listed field has 1 to 8 rules.
+- List only the fields that need rules, using the schema's field names exactly; each listed field has 1 to 6 rules.
 - Each rule is one plain sentence, without numbering or bullet characters, using option labels exactly as the schema declares them."""
-        payload, usage = self._query_guidance(prompt, lambda data: validate_coding_rules(data, schema))
-        rules = validate_coding_rules(payload, schema)
-        return {**rules, "text": render_coding_rules(rules), "paper_count": len(sample), "model": self.model, "llm_usage": usage}
+        check = lambda data: validate_coding_rules(data, schema)
+        draft, usage = self._query_guidance(prompt, check)
+        review = (f"{prompt}\n\nYOUR DRAFT DATA:\n{json.dumps(check(draft), ensure_ascii=False)}\n\n"
+                  "Review step: check the draft against the skill's coding-rules review checklist, point by point, and return "
+                  "the corrected coding rules as a JSON object with the same shape. Keep what already meets the checklist.")
+        payload, review_usage = self._query_guidance(review, check)
+        rules = check(payload)
+        return {**rules, "text": render_coding_rules(rules), "paper_count": len(sample), "model": self.model,
+                "llm_usage": self._add_usage(usage, review_usage)}
 
     @staticmethod
     def _objectives(input_data: Dict[str, Any]) -> str:

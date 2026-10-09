@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agents.prompt_agent import PromptAgent
 from reviewpilot_core.review_guidance import (
-    EXCLUDE_LEAD, INCLUDE_LEAD, record_sample, render_coding_rules, render_screening_guidance,
+    EXCLUDE_LEAD, INCLUDE_LEAD, field_excerpts, record_sample, render_coding_rules, render_screening_guidance,
     validate_coding_rules, validate_screening_guidance,
 )
 
@@ -76,6 +76,49 @@ class ReviewGuidanceTests(unittest.TestCase):
         self.assertIn('"Ebola outbreak in 2014"', prompts[0][0])
         self.assertTrue(result["text"].startswith("Review focus (from the review protocol):"))
         self.assertEqual(result["candidate_count"], 1)
+
+    def test_field_excerpts_pick_sentences_that_speak_to_each_field(self):
+        schema = {"fields": [
+            {"name": "model_type", "description": "Allowed categories: Compartmental (SEIR compartments); Branching process (offspring distribution)."},
+            {"name": "code_available", "description": "Whether model code is available in a repository or archive."}]}
+        text = ("We fitted a renewal model to case data and estimated the offspring distribution of the branching process. "
+                "The weather was mild during the outbreak period in the northern districts. "
+                "All model code is available in a public repository on GitHub with an archived release.\n"
+                "References\n1. A branching process offspring distribution paper with code in a repository archive.")
+        excerpts = field_excerpts(text * 3, schema)
+        self.assertIn("offspring distribution", excerpts["model_type"][0])
+        self.assertIn("repository", excerpts["code_available"][0])
+        self.assertTrue(all("weather" not in s for s in sum(excerpts.values(), [])))
+
+    def test_coding_rules_read_field_excerpts_and_take_a_review_pass(self):
+        prompts = []
+
+        def fake(*, text_prompt, system_prompt, **_kwargs):
+            prompts.append(text_prompt)
+            return json.dumps(RULES), {"cost_usd": 0.001}
+
+        schema = {"fields": [{**SCHEMA["fields"][0], "description": "Allowed categories: Compartmental (SEIR compartments); Branching process (offspring distribution)."},
+                             SCHEMA["fields"][1]]}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = PromptAgent(Path(tmp), llm_query=fake).generate_coding_rules({
+                "description": "Collate transmission models.", "schema": schema,
+                "papers": [{"title": "A model", "abstract": "We model Ebola.",
+                            "text": "We estimated the offspring distribution of the branching process from SEIR compartments data."}]})
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("field_excerpts", prompts[0])
+        self.assertIn("coding-rules review checklist", prompts[1])
+        self.assertAlmostEqual(result["llm_usage"]["cost_usd"], 0.002)
+        self.assertTrue(result["text"].startswith("REVIEW CODING PROTOCOL"))
+
+    def test_analysis_is_kept_with_the_draft_but_never_rendered(self):
+        guidance = validate_screening_guidance({**GUIDANCE, "analysis": {"setting": "natural populations", "outside_setting_work": ["controlled experiments"]}})
+        self.assertEqual(guidance["analysis"]["outside_setting_work"], ["controlled experiments"])
+        self.assertNotIn("controlled experiments", render_screening_guidance(guidance))
+        rules = validate_coding_rules({**RULES, "analysis": {"central_fields": ["model_type"]}}, SCHEMA)
+        self.assertEqual(rules["analysis"]["central_fields"], ["model_type"])
+        self.assertNotIn("central", render_coding_rules(rules))
+        with self.assertRaises(ValueError):
+            validate_coding_rules({**RULES, "analysis": {"central_fields": ["unknown"]}}, SCHEMA)
 
 
 if __name__ == "__main__":
