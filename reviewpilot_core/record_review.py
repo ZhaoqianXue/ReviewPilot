@@ -86,6 +86,42 @@ def jsonlines(rows) -> str:
     return ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows)
 
 
+def _review_flag(row: dict, evidence: dict, decision: str) -> str:
+    """Why a model decision is listed under Needs review, in the reviewer's terms."""
+    if (row.get('date_assessment') or {}).get('needs_review'):
+        return 'The publication date is incomplete and overlaps a review boundary.'
+    if row.get('is_relevant') is None:
+        return 'No screening decision was saved; the record is retained for review.'
+    if decision == 'exclude' and evidence.get('uncertain') is True:
+        missing = [part for part, ok in (('the excerpt was not found in the title or abstract', evidence.get('quote_verified')),
+                                         ('the cited rule is not one of the confirmed rules', evidence.get('criterion_matched'))) if ok is False]
+        return 'Check this exclusion: ' + (' and '.join(missing) if missing else 'the model marked it uncertain') + '.'
+    if evidence.get('uncertain') is True:
+        return 'The model was uncertain; the record is retained for review.'
+    return ''
+
+
+def approved_rules(project: Path) -> list[dict]:
+    """The rules a screening decision may cite: the saved criteria and the confirmed review guidance, grouped for display."""
+    prompt = read_json(project / 'prompts/relevance_prompt.json', {}) or {}
+    eligibility = prompt.get('eligibility') or {}
+    groups = [(label, eligibility.get(name)) for name, label in (('inclusion', 'Inclusion criteria'), ('exclusion', 'Exclusion criteria'))]
+    groups += [('Criteria', value) for name, value in eligibility.items() if name not in {'inclusion', 'exclusion'}]
+    if prompt.get('screening_guidance'):
+        # Only guidance that reached the screening instruction counts; a withdrawn draft does not.
+        guidance = read_json(project / 'prompts/screening_guidance.json', {}) or {}
+        groups += [('Review guidance · ' + label, guidance.get(name)) for name, label in (
+            ('review_focus', 'review focus'), ('definitions', 'definitions'), ('include_when', 'include when'),
+            ('exclude_when', 'exclude when'), ('tie_breakers', 'tie-breakers'))]
+    result, seen = [], set()
+    for label, values in groups:
+        rules = [str(rule) for rule in (values if isinstance(values, list) else [values] if values else []) if str(rule).strip() and str(rule) not in seen]
+        seen.update(rules)
+        if rules:
+            result.append({'group': label, 'rules': rules})
+    return result
+
+
 def screening_rows(project: Path) -> list[dict]:
     rows = []
     for decision, name in [('include', 'included_papers'), ('exclude', 'excluded_papers')]:
@@ -97,6 +133,8 @@ def screening_rows(project: Path) -> list[dict]:
                          'decision': decision, 'reason': (manual.get('reason') or evidence.get('reason') or '') + (' ' + row['date_assessment']['reason'] if (row.get('date_assessment') or {}).get('needs_review') else ''),
                          'criterion': manual.get('criterion') or evidence.get('criterion') or '',
                          'quote': evidence.get('quote') or '', 'reviewed': bool(manual),
+                         'likelihood': '' if manual else str(evidence.get('likelihood') or ''),
+                         'flag': '' if manual else _review_flag(row, evidence, decision),
                          'uncertain': bool((row.get('date_assessment') or {}).get('needs_review')) or not manual and (evidence.get('uncertain') is True or row.get('is_relevant') is None),
                          'origin': 'human' if manual else 'model', 'raw': row})
     return rows
@@ -122,7 +160,7 @@ def projection(project: Path) -> dict:
     recover(project)
     stages = load_workflow_state(project)['stages']
     return {'revision': revision(project), 'screening': [{k: v for k, v in row.items() if k != 'raw'} for row in screening_rows(project)],
-            'extraction': extraction_rows(project),
+            'extraction': extraction_rows(project), 'rules': approved_rules(project),
             'removed': read_jsonl(project / 'filtered/removed_records.jsonl'),
             'canReviewScreening': not stages['screening']['stale'] and stages['screening']['status'] in {'completed', 'partial'},
             'canReviewExtraction': not stages['extraction']['stale'] and stages['extraction']['status'] in {'completed', 'partial'},
@@ -159,8 +197,7 @@ def save_screening(project: Path, payload: dict) -> None:
     target = matches[0]
     old_decision = target['decision']
     criterion = str(payload.get('criterion') or '').strip()
-    rules = read_json(project / 'prompts/relevance_prompt.json', {}).get('eligibility') or {}
-    available = [str(rule) for values in rules.values() for rule in (values if isinstance(values, list) else [values])]
+    available = [rule for group in approved_rules(project) for rule in group['rules']]
     if not criterion or criterion not in available:
         raise ValueError('Select the approved criterion that supports this decision.')
     old = deepcopy(target['raw'])

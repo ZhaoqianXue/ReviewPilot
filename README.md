@@ -165,7 +165,7 @@ Create a local `config.py` file if one does not already exist:
 EMAIL = "your-email@example.com"
 PUBMED_API_KEY = None
 OPENALEX_API_KEY = None
-MODEL = "gpt-5.4-mini"
+MODEL = "gpt-6-luna"
 ```
 
 Create a local `secrets.txt` file and add the model providers you use:
@@ -177,7 +177,7 @@ claude_key, sk-ant-your-anthropic-key
 
 `PUBMED_API_KEY` and `OPENALEX_API_KEY` are optional. At least one supported model-provider key is required for tasks that use a language model.
 
-The **Model** field in Search Setup sets the OpenAI model for search-term derivation, project chat, screening (full runs and live samples), and extraction (full runs, previews, and live samples). It defaults to `gpt-5.4-mini`. Schema drafting and categorization keep the defaults in `reviewpilot_core/model_policy.py`. Changing the model marks existing results as needing a rerun.
+The **Model** field in Search Setup sets the OpenAI model for search-term derivation, project chat, screening (full runs and live samples), and extraction (full runs, previews, and live samples). It defaults to `gpt-6-luna`. Schema drafting and categorization keep the defaults in `reviewpilot_core/model_policy.py`. Changing the model marks existing results as needing a rerun.
 
 After starting ReviewPilot, open:
 

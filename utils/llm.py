@@ -606,7 +606,7 @@ def find_pdf_url_with_search(
         title: Paper title
         doi: DOI if available
         journal: Journal name if available
-        model: Model to use (default: gpt-4.1-mini)
+        model: Model to use (default: config.MODEL)
 
     Returns:
         PDF URL if found, None otherwise

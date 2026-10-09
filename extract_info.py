@@ -24,7 +24,7 @@ except ImportError:
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-MODEL = "gpt-5.1"
+MODEL = "gpt-6-luna"
 SECRETS_FILE = "secrets.txt"
 PDF_INPUT_FOLDER = "papers-llm-as-judge"
 METADATA_FILE = "llm_as_judge_healthcare_final.xlsx"  # Source for title, doi, authors

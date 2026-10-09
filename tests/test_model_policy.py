@@ -29,7 +29,7 @@ class ModelPolicyTests(unittest.TestCase):
         self.assertEqual(config.MODEL, "gpt-6-luna")
 
     def test_all_lead_and_sub_agent_models_are_centrally_defined(self):
-        self.assertEqual(LEAD_AGENT_PRODUCTION_MODEL, "gpt-5.4")
+        self.assertEqual(LEAD_AGENT_PRODUCTION_MODEL, "gpt-6-luna")
         self.assertEqual(PROMPT_MODEL, "gpt-6-luna")
         self.assertEqual(COLLECTION_MODEL, "gpt-6-luna")
         self.assertEqual(FILTERING_MODEL, "gpt-6-luna")
@@ -37,8 +37,8 @@ class ModelPolicyTests(unittest.TestCase):
         self.assertEqual(EXTRACTION_MODEL, "gpt-6-luna")
         self.assertEqual(CATEGORIZATION_MODEL, "gpt-6-luna")
         self.assertEqual(SUBSCRIBED_PAPER_FALLBACK_MODEL, "gpt-6-luna")
-        self.assertEqual(ESCALATION_MODEL, "gpt-5.4")
-        self.assertEqual(HARD_REASONING_ESCALATION_MODEL, "gpt-5.5")
+        self.assertEqual(ESCALATION_MODEL, "gpt-6-luna")
+        self.assertEqual(HARD_REASONING_ESCALATION_MODEL, "gpt-6-luna")
 
     def test_legacy_llm_sub_agents_default_to_model_policy(self):
         self.assertEqual(FilteringAgent(project_path=".").model, FILTERING_MODEL)

@@ -609,7 +609,7 @@ class WebAppTests(unittest.TestCase):
                             ],
                         }
                     ),
-                    {"model": "gpt-5.4-mini"},
+                    {"model": "gpt-6-luna"},
                 )
 
             with patch("agents.search_condition_agent.query_llm", fake_llm_query):

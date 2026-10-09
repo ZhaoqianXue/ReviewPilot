@@ -1,7 +1,7 @@
 """Model defaults for ReviewPilot agent roles."""
 
 LEAD_AGENT_DEV_MODEL = "gpt-6-luna"
-LEAD_AGENT_PRODUCTION_MODEL = "gpt-5.4"
+LEAD_AGENT_PRODUCTION_MODEL = "gpt-6-luna"
 DEFAULT_MAX_RESULTS_PER_PLATFORM = 10
 SEARCH_CONDITION_MODEL = "gpt-6-luna"
 PROMPT_MODEL = "gpt-6-luna"
@@ -11,8 +11,8 @@ DOWNLOAD_MODEL = "gpt-6-luna"
 EXTRACTION_MODEL = "gpt-6-luna"
 CATEGORIZATION_MODEL = "gpt-6-luna"
 SUBSCRIBED_PAPER_FALLBACK_MODEL = "gpt-6-luna"
-ESCALATION_MODEL = "gpt-5.4"
-HARD_REASONING_ESCALATION_MODEL = "gpt-5.5"
+ESCALATION_MODEL = "gpt-6-luna"
+HARD_REASONING_ESCALATION_MODEL = "gpt-6-luna"
 
 
 def accepts_custom_temperature(model) -> bool:
