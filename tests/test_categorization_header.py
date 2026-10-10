@@ -47,6 +47,52 @@ assert.doesNotMatch(html, /16 papers/);
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_papers_not_assessed_without_full_text_get_their_own_tile_and_note(self):
+        result = run_node(r"""
+const workflow = { done: false, metrics: { papersExtracted: 48, papersInAnalysis: 38, fields: 5 },
+  fullTextExclusions: { total: 3, atFullText: 3, fromWebSources: 0, reasons: [{ label: 'Off topic', count: 3 }] },
+  notAssessed: { noEvidence: 7, eligibilityUndetermined: 0 } };
+let html = context.categorizeCanvas({ isNewProject: false, categorizationWorkflow: workflow, categorizationSummary: { papers: 0, groups: 0 }, catDraft: {} });
+assert.match(html, /grid-template-columns:repeat\(4,/);
+assert.match(html, /Papers in Analysis<\/div><div[^>]*>38<\/div><div[^>]*>of 48 extracted</);
+assert.match(html, /Not Assessed<\/div><div[^>]*>7<\/div><div[^>]*>no full text</);
+assert.match(html, /data-ui="not-assessed-papers"/);
+assert.match(html, /No usable evidence<\/span><span[^>]*>7</);
+assert.doesNotMatch(html, /Eligibility undetermined/);
+html = context.categorizeCanvas({ isNewProject: false, categorizationSummary: { papers: 0, groups: 0 }, catDraft: {},
+  categorizationWorkflow: { ...workflow, metrics: { papersExtracted: 10, papersInAnalysis: 8, fields: 5 },
+    fullTextExclusions: { total: 0, reasons: [] }, notAssessed: { noEvidence: 0, eligibilityUndetermined: 2 } } });
+assert.match(html, /grid-template-columns:repeat\(3,/);
+assert.match(html, /of 10 extracted/);
+assert.match(html, /Eligibility undetermined<\/span><span[^>]*>2</);
+assert.doesNotMatch(html, /Excluded at Eligibility|full-text-exclusions/);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_uncategorized_count_and_not_assessed_cover_only_the_analysis_set(self):
+        import json
+        import tempfile
+        from reviewpilot_core import fulltext_eligibility as fte
+        from reviewpilot_core.atomic_files import atomic_write_json
+        from reviewpilot_core.state_projection import build_rp_data
+        from tests.test_fulltext_eligibility import make_project
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = make_project(root)
+            results = project / "extraction/extraction_results.jsonl"
+            # A web row written before evidence tiers existed: no usable evidence, so out of the analysis set.
+            with results.open("a") as handle:
+                handle.write(json.dumps({"paper_id": "p5", "title": "Paper 5", "extraction_source": "web_search_fallback",
+                                         "extraction_status": "success", fte.FIELD: "", "participants": None,
+                                         "extracted_data": {fte.FIELD: "", "participants": None}}) + "\n")
+            # A mapping written under the old rule still lists Paper 5 without a category.
+            atomic_write_json(project / "categorization/categorization_mapping.json", {
+                "field": "participants", "mode": "multiple", "categories": ["Small"],
+                "mapping": {"Paper 1": ["Small"], "Paper 3": [], "Paper 5": []}})
+            workflow = build_rp_data(root, "study")["categorizationWorkflow"]
+        self.assertEqual(workflow["notAssessed"], {"noEvidence": 1, "eligibilityUndetermined": 0})
+        self.assertEqual(workflow["metrics"]["papersWithoutCategory"], 1)  # Paper 3 only
+
     def test_header_without_exclusions_keeps_two_tiles_and_old_states_still_render(self):
         result = run_node(r"""
 const base = { isNewProject: false, categorizationSummary: { papers: 0, groups: 0 }, catDraft: {} };

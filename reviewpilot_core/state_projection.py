@@ -276,7 +276,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     schema = _unescape_strings(load_schema_draft(path))
     schema_marker = read_json(path / "extraction/schema_finalized.json", {}) or {}
     schema_matches_setup = schema_marker.get("setup_revision") == setup_revision(config) and is_schema_finalized(path)
-    extraction_rows, extraction_failed_items, extraction_summary = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
+    extraction_rows, extraction_failed_items, extraction_summary, analysis_keys = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
     extraction_rows = _unescape_strings(extraction_rows)
     extraction_failed_items = _unescape_strings(extraction_failed_items)
     extraction_results = extraction_rows[:1]
@@ -302,6 +302,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
             schema = {}
         extraction_rows, extraction_results = [], []
         extraction_summary = None
+        analysis_keys = None
     if workflow_state["stages"]["categorization"]["stale"]:
         categorization, categorized_rows = {}, []
         if not _fresh_ready_output(workflow_state["stages"]["categorization"]):
@@ -348,7 +349,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
-        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary),
+        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary, analysis_keys),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"], extraction_summary=extraction_summary),
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "noFullText": _no_full_text(path, extraction_rows, stale=workflow_state["stages"]["extraction"]["stale"]),
@@ -389,15 +390,17 @@ def _retrieval_recovery(path: Path, included: list[dict]) -> dict[str, Any]:
     return projection
 
 
-def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
+def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict, set[str]]:
     """Read extraction output once, bounding retained display and recovery data.
 
-    The analysis summary counts every row, so totals stay exact past the display bound.
+    The analysis summary and the analysis-set keys (titles and ids) cover every row, so totals stay
+    exact past the display bound.
     """
-    from .fulltext_eligibility import FIELD, analysis_summary, field_tiers, value
+    from .fulltext_eligibility import FIELD, analysis_summary, field_tiers, in_analysis, value
     rows: list[dict] = []
     failed_items: list[str] = []
     eligibility: list[dict] = []
+    analysis_keys: set[str] = set()
     try:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -412,12 +415,15 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
                     rows.append(row)
                 if len(failed_items) < 10 and status in {"error", "failed"}:
                     failed_items.append(_safe_failed_item(row))
-                eligibility.append({"extraction_status": row.get("extraction_status"),
-                                    "extraction_source": row.get("extraction_source"), FIELD: value(row),
-                                    "evidence_tiers": field_tiers(row)})
+                compact = {"extraction_status": row.get("extraction_status"),
+                           "extraction_source": row.get("extraction_source"), FIELD: value(row),
+                           "evidence_tiers": field_tiers(row)}
+                eligibility.append(compact)
+                if in_analysis(compact):
+                    analysis_keys.update(str(key) for key in (row.get("title"), row.get("paper_id"), row.get("id")) if key)
     except OSError:
         pass
-    return rows, failed_items, analysis_summary(eligibility)
+    return rows, failed_items, analysis_summary(eligibility), analysis_keys
 
 
 def _unescape_strings(value: Any) -> Any:
@@ -1075,6 +1081,7 @@ def _empty_categorization_workflow() -> dict[str, Any]:
         "done": False,
         "metrics": {"papersExtracted": 0, "papersInAnalysis": 0, "fields": 0, "papersWithoutCategory": 0},
         "fullTextExclusions": {"total": 0, "atFullText": 0, "fromWebSources": 0, "reasons": []},
+        "notAssessed": {"noEvidence": 0, "eligibilityUndetermined": 0},
         "fieldNames": [],
         "recommendedField": "",
         "selectedField": "",
@@ -1095,6 +1102,7 @@ def _categorization_workflow(
     suggestions: dict,
     categorized_rows: list[dict],
     extraction_summary: dict | None = None,
+    analysis_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     from .categorization_analysis import NO_CATEGORY
     from .fulltext_eligibility import analysis_summary, in_analysis
@@ -1112,8 +1120,10 @@ def _categorization_workflow(
     return {
         "done": bool(categorization),
         "metrics": {"papersExtracted": summary["extracted"], "papersInAnalysis": summary["included"], "fields": len(field_names),
-                    "papersWithoutCategory": _uncategorized_paper_count(categorization)},
+                    "papersWithoutCategory": _uncategorized_paper_count(categorization, analysis_keys)},
         "fullTextExclusions": _full_text_exclusions(summary),
+        # Papers without full text that the abstract and web sources could not assess; they stay out of the analysis.
+        "notAssessed": {"noEvidence": summary.get("no_evidence", 0), "eligibilityUndetermined": summary.get("eligibility_undetermined", 0)},
         "fieldNames": field_names,
         "recommendedField": recommended,
         "selectedField": selected,
@@ -1359,10 +1369,17 @@ def _categorized_paper_count(categorization: dict) -> int:
     return 0
 
 
-def _uncategorized_paper_count(categorization: dict) -> int:
-    """Categorized papers that landed in no category: no value in the field, or no category fit."""
+def _uncategorized_paper_count(categorization: dict, analysis_keys: set[str] | None = None) -> int:
+    """Papers in the analysis set that landed in no category: no value in the field, or no category fit.
+
+    A mapping written before the analysis set changed can still list papers that have left it; they are not counted.
+    """
     mapping = categorization.get("mapping") or {}
-    return len(mapping) - _categorized_paper_count(categorization) if isinstance(mapping, dict) else 0
+    if not isinstance(mapping, dict):
+        return 0
+    known_categories = _category_names(categorization)
+    return sum(1 for key, category in mapping.items()
+               if (analysis_keys is None or key in analysis_keys) and not _category_values(category, known_categories))
 
 
 def _category_values(value, known_categories: list[str]) -> list[str]:

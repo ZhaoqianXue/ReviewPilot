@@ -660,6 +660,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       done: false,
       metrics: { papersExtracted: 0, papersInAnalysis: 0, fields: 0, papersWithoutCategory: 0 },
       fullTextExclusions: { total: 0, atFullText: 0, fromWebSources: 0, reasons: [] },
+      notAssessed: { noEvidence: 0, eligibilityUndetermined: 0 },
       fieldNames: [],
       recommendedField: '',
       selectedField: '',
@@ -2538,16 +2539,34 @@ ${reviewUI.dialog()}
       ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${prismaFlowPanel(v.prismaFlow)}`}`;
   }
 
-  // Papers excluded at eligibility, from the PDF or from web sources, are left out of categorization, so the header counts the analysis set.
+  // The header counts the analysis set. Papers excluded at eligibility, from the PDF or from web sources, and papers
+  // without full text that the abstract and web sources could not assess are left out, and each is shown with its count.
   function categorizationMetrics(workflow) {
     const exclusions = workflow.fullTextExclusions || {};
     const excluded = Number(exclusions.total) || 0;
+    const notAssessed = workflow.notAssessed || {};
+    const unassessed = (Number(notAssessed.noEvidence) || 0) + (Number(notAssessed.eligibilityUndetermined) || 0);
+    const leftOut = excluded || unassessed;
     const tile = (label, value, note = '') => `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:13px 14px;min-width:0;"><div style="font-size:10px;color:#8a938b;letter-spacing:-0.01em;">${label}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:20px;color:#1a365d;margin-top:4px;">${value}</div>${note ? `<div style="font-size:11px;color:#8a938b;margin-top:3px;">${note}</div>` : ''}</div>`;
-    return `<div data-ui="categorization-metrics" style="display:grid;grid-template-columns:repeat(${excluded ? 3 : 2},minmax(0,1fr));gap:10px;margin-bottom:${excluded ? 10 : 16}px;">
-      ${tile('Papers in Analysis', papersInAnalysis(workflow), excluded ? `of ${workflow.metrics.papersExtracted} extracted` : '')}
-      ${excluded ? tile('Excluded at Eligibility', excluded) : ''}
-      ${tile('Fields', workflow.metrics.fields)}
-    </div>${excluded ? fullTextExclusionReasons(exclusions) : ''}`;
+    const tiles = [
+      tile('Papers in Analysis', papersInAnalysis(workflow), leftOut ? `of ${workflow.metrics.papersExtracted} extracted` : ''),
+      excluded ? tile('Excluded at Eligibility', excluded) : '',
+      unassessed ? tile('Not Assessed', unassessed, 'no full text') : '',
+      tile('Fields', workflow.metrics.fields),
+    ].filter(Boolean);
+    return `<div data-ui="categorization-metrics" style="display:grid;grid-template-columns:repeat(${tiles.length},minmax(0,1fr));gap:10px;margin-bottom:${leftOut ? 10 : 16}px;">
+      ${tiles.join('')}
+    </div>${excluded ? fullTextExclusionReasons(exclusions) : ''}${unassessed ? notAssessedPapers(notAssessed) : ''}`;
+  }
+
+  function notAssessedPapers(notAssessed) {
+    const rows = [['No usable evidence', notAssessed.noEvidence], ['Eligibility undetermined', notAssessed.eligibilityUndetermined]]
+      .filter(([, count]) => Number(count) > 0);
+    return `<div data-ui="not-assessed-papers" style="border:1px solid #eef0ee;border-radius:10px;padding:10px 12px;margin-bottom:16px;background:#fbfcfa;">
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:8px;">Not assessed without full text</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">${rows.map(([label, count]) => `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;"><span style="color:#3a4252;line-height:1.4;min-width:0;">${label}</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${count}</span></div>`).join('')}</div>
+      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">No full text was retrieved, and neither the abstract nor a confirmed web source settled eligibility, so these papers are not categorized. Supply their PDFs in Full-Text Retrieval and rerun extraction to assess them.</div>
+    </div>`;
   }
 
   function papersInAnalysis(workflow) {
