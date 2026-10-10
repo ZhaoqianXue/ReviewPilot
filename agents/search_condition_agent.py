@@ -17,6 +17,8 @@ the data supplied and the JSON contract returned.
 from __future__ import annotations
 
 import json
+
+from reviewpilot_core.chat_language import reply_language
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -242,7 +244,7 @@ Return ONLY a JSON object with this shape:
 }}
 
 {_FORMAT_RULES}
-{settings}"""
+{settings}Write the reply in {reply_language(description)}. Every other field keeps the wording described above."""
 
     def _refine_prompt(self, current: Dict[str, Any], blocks: List[Dict[str, Any]], message: str, history: list) -> str:
         settings = {key: current.get(key) for key in ("project_name", "platforms", "source_limits", "date_range")}
@@ -271,7 +273,7 @@ Return ONLY a JSON object with this shape:
 }}
 
 Use null for concept_blocks when the message does not change concepts or terms; otherwise return the complete list, preserving every block the message does not ask to change. {_SETTINGS_CONTRACT}
-The reply describes only changes carried by concept_blocks or search_settings.
+The reply describes only changes carried by concept_blocks or search_settings. Write the reply in {reply_language(message)}.
 
 {_FORMAT_RULES}"""
 

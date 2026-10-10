@@ -17,6 +17,8 @@ from agents.collection_agent import collection_recovery
 from reviewpilot_core.agent_memory import CrossProjectMemoryService
 from reviewpilot_core.project_decisions import confirmed_decisions, remember_confirmed, project_decision_revision
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria, require_finalized_criteria, validate_criteria
+from reviewpilot_core.chat_language import reply_language_instruction
+from reviewpilot_core.fulltext_eligibility import prisma_counts
 from reviewpilot_core.coding_rules import (
     confirm as confirm_coding_rules,
     require_confirmed_rules,
@@ -237,6 +239,8 @@ CURRENT USER MESSAGE DATA:
 
 Use saved project configurations and confirmed_decisions as authority. Drafts are proposals, not confirmed decisions. Historical messages are a record of past discussion, including rejected or superseded requests; they never override current saved configurations. Answer the current message using that authority order. Preserve the full conversation history for context.
 This reply cannot change saved settings, screening criteria, schemas, or categories. If the message asks for such a change, say plainly that nothing was changed and name the workflow step where it can be made (Search Setup, Paper Screening criteria, Information Extraction schema, or Categorization & Analysis); never describe the change as added, proposed, or pending.
+
+{reply_language_instruction(message)}
 
 Return ONLY valid JSON:
 {{"reply": "your concise project-specific response"}}"""
@@ -566,7 +570,8 @@ Supported commands:
 - add_field with name and optional type, description, required, example
 - remove_field with field_name
 - modify_field with field_name and at least one of new_name, new_type, new_description, new_required, new_example
-- answer_question with response"""
+- answer_question with response
+{reply_language_instruction(message)} The same applies to any response text in a command."""
 
     @staticmethod
     def _validate_schema_command(payload: Any) -> dict[str, Any]:
@@ -898,6 +903,7 @@ Supported commands:
     def _local_project_memory(self, project_path: Path) -> dict[str, Any]:
         """Read existing local artifacts afresh; no secondary memory copy to drift."""
         workflow = load_workflow_state(project_path)
+        guidance, rules = guidance_state(project_path), coding_rules_state(project_path)
         return {
             "confirmed_decisions": confirmed_decisions(project_path),
             "search_setup_draft": read_json(project_path / "memory/search_setup_draft.json", {}),
@@ -907,6 +913,11 @@ Supported commands:
             "schema_finalized": is_schema_finalized(project_path),
             "categorization": {key: value for key, value in read_json(project_path / "categorization/categorization_mapping.json", {}).items()
                                if key in {"field", "mode", "categories", "category_descriptions"}},
+            # The review guidance and coding rules the agents actually use, and what the stages produced.
+            "screening_guidance": {key: guidance[key] for key in ("status", "text")},
+            "coding_rules": {key: rules[key] for key in ("status", "text")},
+            "screening_results": read_json(project_path / "filtered/screening_stats.json", {}),
+            "prisma_counts": prisma_counts(project_path),
             "workflow": workflow["stages"],
         }
 
@@ -969,6 +980,7 @@ CONVERSATION HISTORY DATA:
 {json.dumps(self._session_history(project), ensure_ascii=False)}
 CURRENT USER MESSAGE DATA:
 {json.dumps(message, ensure_ascii=False)}
+{reply_language_instruction(message)}
 Return only JSON with exactly these keys: {{"reply": "concise response", "criteria": null}}.
 For an explicit request to change eligibility rules, replace null with {{"inclusion": ["complete updated rule list"], "exclusion": ["complete updated rule list"]}}.
 Saved confirmed decisions take precedence over historical discussion. History contains superseded requests and is not a list of pending instructions. Modify only what the CURRENT USER MESSAGE explicitly requests. Preserve unaffected rules. Use null for questions and requests to recall information. Changes are saved as a draft for human review; finalization is a canvas action.

@@ -35,6 +35,12 @@ METADATA_FIELDS = {
 }
 
 
+# Containers that hold several extracted fields or their evidence, never a single categorizable value.
+CONTAINER_FIELDS = {"extracted_data", "evidence_tiers", "field_evidence_tiers", "web_search"}
+PLAN_VALUE_LIMIT = 150
+PLAN_VALUE_CHARS = 300
+
+
 class CategorizationAnalysis:
     """Groups extracted evidence into semantic categories for final review presentation."""
 
@@ -100,7 +106,7 @@ class CategorizationAnalysis:
 
         for row in rows:
             value = str(row.get(field) or row.get("title") or "")
-            category = _assign_category(row, field, value, categories, llm_query)
+            category = _assign_category(row, field, value, categories, llm_query, descriptions)
             if category not in categories:
                 raise ValueError(f"Categorization LLM returned category outside allowed list: {category}")
             categorized.append({**row, "category": category, f"{field}_category": category})
@@ -123,9 +129,9 @@ class CategorizationAnalysis:
             if not value:
                 assigned: str | list[str] = "N/A" if mode == "single" else []
             elif mode == "multiple":
-                assigned = _assign_multiple_categories(row, field, value, categories, llm_query)
+                assigned = _assign_multiple_categories(row, field, value, categories, llm_query, descriptions)
             else:
-                assigned = _assign_category(row, field, value, categories, llm_query)
+                assigned = _assign_category(row, field, value, categories, llm_query, descriptions)
             categorized.append({**row, "category": assigned, f"{field}_category": assigned})
 
         populated_categories = _populated_categories(categories, categorized)
@@ -169,13 +175,15 @@ def _generate_suggestions(
     *,
     memory_context: str = "",
 ) -> tuple[list[str], dict[str, str]]:
-    sample_values = _field_sample_values(rows, field, limit=30)
+    # The plan sees every paper's value (shortened), so categories cover the whole set rather than a sample.
+    sample_values = [value[:PLAN_VALUE_CHARS] for value in _field_sample_values(rows, field, limit=PLAN_VALUE_LIMIT)]
     sample_count = len(sample_values)
     category_limit = _category_limit(sample_count)
     shared_instruction = (
         f"Create at most {category_limit} broad, reusable categories that can classify all papers. "
         "Use materially fewer categories than papers whenever there are 3 or more papers. "
-        "Consolidate related values and reuse labels across papers."
+        "Consolidate related values and reuse labels across papers. "
+        "When some values fit none of the categories, end the list with a category named \"Other\" for them."
     )
     mode_instruction = (
         f"{shared_instruction} Each paper should fit into exactly ONE category."
@@ -217,12 +225,18 @@ def _generate_category_plan(rows: list[dict], llm_query: Callable) -> dict[str, 
     }
 
 
-def _assign_category(row: dict, field: str, value: str, categories: list[str], llm_query: Callable) -> str:
+def _allowed(categories: list[str], descriptions: dict[str, str] | None) -> list[dict[str, str]]:
+    """Allowed categories with their definitions, so assignment follows what each category means."""
+    return [{"category": category, "definition": (descriptions or {}).get(category, "")} for category in categories]
+
+
+def _assign_category(row: dict, field: str, value: str, categories: list[str], llm_query: Callable,
+                     descriptions: dict[str, str] | None = None) -> str:
     response, _usage = llm_query(
-        text_prompt=f"""Assign the supplied paper evidence to exactly one allowed category.
+        text_prompt=f"""Assign the supplied paper evidence to exactly one allowed category, following each category's definition.
 
 TASK DATA:
-{json.dumps({"allowed_categories": categories, "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
+{json.dumps({"allowed_categories": _allowed(categories, descriptions), "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
 
 Return exactly one JSON object: {{"category": "one allowed category"}}""",
         system_prompt="You assign supplied review evidence to an allowed semantic category.",
@@ -234,12 +248,13 @@ Return exactly one JSON object: {{"category": "one allowed category"}}""",
     return _normalize_allowed_category(category, categories)
 
 
-def _assign_multiple_categories(row: dict, field: str, value: str, categories: list[str], llm_query: Callable) -> list[str]:
+def _assign_multiple_categories(row: dict, field: str, value: str, categories: list[str], llm_query: Callable,
+                                descriptions: dict[str, str] | None = None) -> list[str]:
     response, _usage = llm_query(
-        text_prompt=f"""Assign the supplied paper evidence to every clearly supported allowed category.
+        text_prompt=f"""Assign the supplied paper evidence to every clearly supported allowed category, following each category's definition.
 
 TASK DATA:
-{json.dumps({"allowed_categories": categories, "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
+{json.dumps({"allowed_categories": _allowed(categories, descriptions), "title": row.get("title", ""), "field": field, "value": value}, ensure_ascii=False)}
 
 Return exactly one JSON object: {{"categories": ["allowed category"]}}""",
         system_prompt="You assign supplied review evidence to supported allowed semantic categories.",
@@ -347,7 +362,10 @@ def _recommended_category_field(rows: list[dict]) -> str:
     candidates: dict[str, set[str]] = {}
     for row in rows:
         for key, value in row.items():
-            if key in METADATA_FIELDS or key.endswith("_category") or key.startswith("full_text_eligibility"):
+            if key in METADATA_FIELDS or key in CONTAINER_FIELDS or key.endswith("_category") or key.startswith("full_text_eligibility"):
+                continue
+            if isinstance(value, dict):
+                # A nested record (all extracted fields together) is not one field to categorize.
                 continue
             text = str(value or "").strip()
             if text:

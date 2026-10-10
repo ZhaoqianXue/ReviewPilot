@@ -13,15 +13,15 @@ description: Organize extracted review evidence into broad, coherent, human-revi
 
 ## Build categories
 
-1. Induce broad, reusable categories from the supplied evidence.
+1. Induce broad, reusable categories from the values of every paper supplied, not from a few examples.
 2. Make categories materially fewer than papers when the sample permits and reuse labels across records.
 3. Give categories distinct scopes and concise definitions. Merge near-duplicates and remove empty labels.
-4. Use an unresolved route when the category design supports it and the evidence does not support a stronger match.
+4. When some values fit none of the categories, end the list with a category named "Other" for them rather than stretching a category to cover them.
 5. For small samples, prefer a few stable umbrella categories over fragile fine-grained themes.
 
 ## Apply categories
 
-1. Assign labels from the supplied allowed list.
+1. Assign labels from the supplied allowed list, following each category's definition.
 2. Base each assignment on the supplied field value and paper context, not outside knowledge.
 3. In multi-label mode, return only clearly supported labels.
 4. Treat harmless case and whitespace differences as the same allowed label.

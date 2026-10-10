@@ -27,7 +27,7 @@ SKILL_VERSIONS = {
     "systematic-review-search-strategy": "3.0.0",
     "evidence-screening": "3.0.0",
     "structured-evidence-extraction": "3.0.0",
-    "evidence-synthesis-and-categorization": "2.0.0",
+    "evidence-synthesis-and-categorization": "2.1.0",
     "review-prompt-design": "1.12.0",
 }
 

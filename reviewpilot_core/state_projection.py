@@ -101,6 +101,7 @@ EXPORT_ARTIFACTS = {
     "relevance-prompt": ("Relevance prompt", Path("prompts/relevance_prompt.json"), "application/json"),
     "included-papers": ("Included papers", Path("filtered/included_papers.jsonl"), "application/x-ndjson"),
     "download-report": ("Download report", Path("pdfs/download_report.json"), "application/json"),
+    "extraction-prompt": ("Extraction instruction and coding rules", Path("prompts/extraction_prompt.json"), "application/json"),
     "extraction-results": ("Extraction results", Path("extraction/extraction_results.jsonl"), "application/x-ndjson"),
     "categorization-mapping": ("Categorization mapping", Path("categorization/categorization_mapping.json"), "application/json"),
     "categorized-results": ("Categorized results", Path("categorization/categorized_results.jsonl"), "application/x-ndjson"),
@@ -123,7 +124,7 @@ def export_artifact_path(project_path: Path, export_key: str) -> Path | None:
             return None
     export_stage = {
         "relevance-prompt": "collection", "included-papers": "screening", "excluded-papers": "screening", "removed-records": "screening", "download-report": "retrieval",
-        "extraction-results": "extraction", "prisma": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
+        "extraction-prompt": "extraction", "extraction-results": "extraction", "prisma": "extraction", "categorization-mapping": "categorization", "categorized-results": "categorization",
     }.get(export_key)
     if export_stage:
         try:
