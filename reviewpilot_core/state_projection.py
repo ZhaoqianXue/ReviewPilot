@@ -350,6 +350,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
+        "prismaFlow": _prisma_flow(path),
         "extractionPreview": project_preview_projection(path, 0) if included else empty_preview_projection(),
         "schemaJson": schema if isinstance(schema, dict) else {"fields": []},
         "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, workflow_notices=workflow_notices, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
@@ -1210,6 +1211,14 @@ def _paper_mapped_category(categorization: dict, row: dict) -> Any:
         if key and key in mapping:
             return mapping[key]
     return ""
+
+
+def _prisma_flow(path: Path) -> dict[str, Any] | None:
+    """The counts behind the Step 5 PRISMA 2020 flow diagram: the PRISMA export, whenever it can be downloaded."""
+    if export_artifact_path(path, "prisma") is None:
+        return None
+    from .fulltext_eligibility import prisma_counts
+    return prisma_counts(path)
 
 
 def _export_package(path: Path) -> list[dict[str, Any]]:

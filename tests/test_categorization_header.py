@@ -14,7 +14,7 @@ const slice = (from, to) => source.slice(source.indexOf(from), source.indexOf(to
 const context = vm.createContext({
   formatCount, gate: () => 'GATE', emptyHint: (text) => text, evidenceFieldLabel: (name) => name, buttonStyle: '',
   emptyCategorizationWorkflow: () => ({ done: false, metrics: { papersExtracted: 0, fields: 0 } }),
-  categorizationSetupPanel: () => 'SETUP', categorizationAnalysisSummary: () => 'SUMMARY',
+  categorizationSetupPanel: () => 'SETUP', categorizationAnalysisSummary: () => 'SUMMARY', prismaFlowPanel: () => '',
 });
 vm.runInContext(slice('  function categorizeCanvas(v) {', '  function categorizationSetupPanel('), context);
 vm.runInContext(slice('  function uncategorizedNote(', '  function exportPackageSection('), context);

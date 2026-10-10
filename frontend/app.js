@@ -650,6 +650,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       evidenceMatrix: data.evidenceMatrix || [],
       categorizationAnalysis: data.categorizationAnalysis || { field: '', categories: [] },
       exportPackage: data.exportPackage || [],
+      prismaFlow: data.prismaFlow || null,
     };
   }
 
@@ -1669,6 +1670,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       evidenceMatrix: D.evidenceMatrix,
       categorizationAnalysis: D.categorizationAnalysis,
       exportPackage: D.exportPackage,
+      prismaFlow: D.prismaFlow,
       setupDraft: state.setupDraft,
       showSetupDialog: state.dialog === 'setup',
       showConceptDialog: state.dialog === 'concept',
@@ -2518,7 +2520,7 @@ ${reviewUI.dialog()}
         <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${formatCount(papersInAnalysis(workflow), 'paper')} · ${workflow.done ? formatCount(v.categorizationSummary.groups, 'category', 'categories') : formatCount(workflow.metrics.fields, 'field')}</div>
       </div>
       ${categorizationMetrics(workflow)}
-      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}`;
+      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${prismaFlowPanel(v.prismaFlow)}`}`;
   }
 
   // Papers excluded at eligibility, from the PDF or from web sources, are left out of categorization, so the header counts the analysis set.
@@ -2617,10 +2619,151 @@ ${reviewUI.dialog()}
       ${workflow.done ? categoryBriefsPanel(v.categorizationAnalysis) : ''}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
+      ${prismaFlowPanel(v.prismaFlow)}
       ${exportPackageSection(v.exportPackage)}
       <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="edit-categories" style="${buttonStyle};margin-right:8px;">Reopen categorization</button><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
       ${v.catDraft.finalized ? `<div style="margin-top:10px;font-size:12px;color:#1a365d;text-align:right;">Project Complete!</div>` : ''}
     </section>`;
+  }
+
+  // PRISMA 2020 flow (Page et al. 2021), drawn from the PRISMA flow counts export so the diagram and the JSON agree.
+  // Breakdown counts the project does not report yet are left out, never derived here.
+  function prismaFlowPanel(flow) {
+    if (!flow || !flow.screening) return '';
+    const stageLabels = { collection: 'Search Setup', screening: 'Paper Screening', retrieval: 'Full-Text Retrieval', extraction: 'Information Extraction', categorization: 'Categorization & Analysis' };
+    const stale = (flow.stale_stages || []).map((name) => stageLabels[name] || name);
+    const fromWeb = Number(flow.screening.not_retrieved_assessed_from_web_sources) || 0;
+    const download = (format) => `<button data-act="prisma-download" data-format="${format}" style="${buttonStyle}"><i class="ph ph-download-simple" style="font-size:13px;"></i>${format.toUpperCase()}</button>`;
+    return `<section data-ui="prisma-flow" aria-label="PRISMA 2020 flow diagram" style="border-top:1px solid #eef0ee;margin-top:18px;padding-top:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">PRISMA 2020 Flow</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">${download('svg')}${download('png')}</div>
+      </div>
+      ${stale.length ? `<div data-ui="prisma-stale" style="border:1px solid #f0dcc0;background:#fdf8f0;border-radius:9px;padding:9px 11px;margin-bottom:10px;font-size:12px;color:#7a4b12;line-height:1.45;">These counts predate changes to ${stale.join(', ')}. Rerun ${stale.length === 1 ? 'that step' : 'those steps'} to update the flow.</div>` : ''}
+      <div style="border:1px solid #e5e7eb;border-radius:10px;background:#fffefc;padding:10px;overflow-x:auto;">${prismaFlowSvg(flow)}</div>
+      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">Counts match the PRISMA flow counts export.${fromWeb ? ' Papers assessed from abstract or web sources are counted under reports not retrieved, so reports excluded after full-text assessment can be fewer than Excluded at Eligibility above.' : ''}</div>
+    </section>`;
+  }
+
+  function prismaFlowSvg(flow) {
+    const id = flow.identification || {};
+    const sc = flow.screening || {};
+    const inc = flow.included || {};
+    // Non-breaking spaces keep each count on one line when a box wraps its text.
+    const n = (value) => `(n\u00a0=\u00a0${Number(value) || 0})`;
+    const has = (key) => sc[key] !== undefined && sc[key] !== null;
+    const notRetrieved = [
+      ['not_retrieved_assessed_from_web_sources', 'Assessed from abstract or web sources'],
+      ['not_retrieved_eligibility_undetermined', 'Eligibility undetermined'],
+      ['not_retrieved_no_evidence', 'No usable evidence'],
+      ['not_retrieved_not_extracted', 'Not extracted'],
+    ].filter(([key]) => has(key));
+    const includedFromWeb = Number(inc.studies_included_from_web_sources) || 0;
+    const rows = [
+      { phase: 'Identification',
+        left: [['title', `Records identified ${n(id.records_identified)}`], ...Object.entries(id.records_by_source || {}).map(([key, count]) => ['item', `${platformLabel(key)} ${n(count)}`])],
+        right: [['title', 'Records removed before screening'], ['item', `Duplicate records ${n(id.removed_duplicates)}`], ['item', `Outside the date range ${n(id.removed_outside_date_range)}`]] },
+      { phase: 'Screening',
+        left: [['title', `Records screened ${n(sc.records_screened)}`]],
+        right: [['title', `Records excluded ${n(sc.records_excluded)}`], ...(Number(sc.human_overrides) ? [['note', `Decisions changed by a reviewer: ${sc.human_overrides}`]] : [])] },
+      { phase: 'Screening',
+        left: [['title', `Reports sought for retrieval ${n(sc.reports_sought)}`]],
+        right: [['title', `Reports not retrieved ${n(sc.reports_not_retrieved)}`], ...notRetrieved.flatMap(([key, label]) => [['item', `${label} ${n(sc[key])}`],
+          ...(key === 'not_retrieved_assessed_from_web_sources' && has('not_retrieved_excluded_from_web_sources') ? [['sub', `Excluded at eligibility ${n(sc.not_retrieved_excluded_from_web_sources)}`]] : [])])] },
+      { phase: 'Screening',
+        left: [['title', `Reports assessed for eligibility ${n(sc.reports_assessed)}`], ...(Number(sc.reports_not_extracted) ? [['note', `Retrieved but not extracted: ${sc.reports_not_extracted}`]] : [])],
+        right: [['title', `Reports excluded after full-text assessment ${n(sc.reports_excluded)}`],
+          ...Object.entries(sc.reports_excluded_by_reason || {}).map(([reason, count]) => ['item', `${reason.charAt(0).toUpperCase()}${reason.slice(1)} ${n(count)}`]),
+          ...(Number(sc.full_text_corrections) ? [['note', `Eligibility corrected by a reviewer: ${sc.full_text_corrections}`]] : [])] },
+      { phase: 'Included',
+        left: [['title', `Studies included in review ${n((Number(inc.studies_included) || 0) + includedFromWeb)}`],
+          ...(includedFromWeb ? [['item', `Assessed from full text ${n(inc.studies_included)}`], ['item', `Assessed from abstract or web sources ${n(includedFromWeb)}`]] : []),
+          ['item', `Categorized ${n(inc.studies_categorized)}`]],
+        right: null },
+    ];
+    const W = 640, PHASE = 24, LX = 34, LW = 268, RX = 342, RW = 298, PAD = 10, LH = 16, GAP = 28, CHAR = 6.3;
+    const style = { title: 'font-weight="600" fill="#1a365d"', item: 'fill="#3a4252"', sub: 'fill="#6b746c"', note: 'fill="#8a938b" font-style="italic"' };
+    const indent = { title: 0, item: 8, sub: 20, note: 8 };
+    const lay = (spec, width) => (spec || []).flatMap(([kind, text]) => prismaWrap(text, Math.floor((width - PAD * 2 - indent[kind]) / CHAR)).map((line) => ({ kind, line })));
+    const box = (x, y, w, h, lines) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="#ffffff" stroke="#b9c7d8"/>${lines.map((l, i) => `<text x="${x + PAD + indent[l.kind]}" y="${y + PAD + 12 + i * LH}" font-size="12" ${style[l.kind]}>${l.line}</text>`).join('')}`;
+    let y = 0;
+    let body = '';
+    const placed = rows.map((row) => {
+      const left = lay(row.left, LW);
+      const right = row.right ? lay(row.right, RW) : null;
+      const h = PAD * 2 + Math.max(left.length, right ? right.length : 0) * LH;
+      const top = y;
+      body += box(LX, top, LW, h, left);
+      if (right) body += `<line x1="${LX + LW}" y1="${top + h / 2}" x2="${RX - 2}" y2="${top + h / 2}" stroke="#1a365d" marker-end="url(#prisma-arrow)"/>${box(RX, top, RW, h, right)}`;
+      y += h + GAP;
+      return { phase: row.phase, top, h };
+    });
+    placed.slice(0, -1).forEach((row) => {
+      body += `<line x1="${LX + LW / 2}" y1="${row.top + row.h}" x2="${LX + LW / 2}" y2="${row.top + row.h + GAP - 2}" stroke="#1a365d" marker-end="url(#prisma-arrow)"/>`;
+    });
+    const phases = [];
+    placed.forEach((row) => {
+      const last = phases[phases.length - 1];
+      if (last && last.phase === row.phase) last.bottom = row.top + row.h;
+      else phases.push({ phase: row.phase, top: row.top, bottom: row.top + row.h });
+    });
+    const bars = phases.map((p) => `<rect x="0" y="${p.top}" width="${PHASE}" height="${p.bottom - p.top}" rx="5" fill="#eaf0f7"/><text transform="translate(${PHASE / 2 + 4} ${(p.top + p.bottom) / 2}) rotate(-90)" text-anchor="middle" font-size="11" font-weight="600" fill="#1a365d">${p.phase}</text>`).join('');
+    const H = y - GAP;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="PRISMA 2020 flow diagram" font-family="'Hanken Grotesk', system-ui, sans-serif" style="display:block;width:100%;min-width:520px;height:auto;"><defs><marker id="prisma-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#1a365d"/></marker></defs><rect width="${W}" height="${H}" fill="#ffffff"/>${bars}${body}</svg>`;
+  }
+
+  function prismaWrap(text, maxChars) {
+    const lines = [];
+    let line = '';
+    String(text || '').split(/ +/).filter(Boolean).forEach((word) => {
+      if (line && (line.length + 1 + word.length) > maxChars) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = line ? `${line} ${word}` : word;
+      }
+    });
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
+  }
+
+  // The diagram downloads as drawn; the PNG is rasterized at twice the drawing size.
+  function downloadPrismaFlow(format) {
+    const svg = document.querySelector('[data-ui="prisma-flow"] svg');
+    if (!svg) return;
+    const { width, height } = svg.viewBox.baseVal;
+    const copy = svg.cloneNode(true);
+    copy.setAttribute('width', String(width));
+    copy.setAttribute('height', String(height));
+    copy.removeAttribute('style');
+    const markup = new XMLSerializer().serializeToString(copy);
+    const name = `${D.project.id || 'review'}-prisma-flow`;
+    const save = (blob, ext) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${name}.${ext}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+    if (format !== 'png') {
+      save(new Blob([markup], { type: 'image/svg+xml' }), 'svg');
+      return;
+    }
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width * 2;
+      canvas.height = height * 2;
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => blob && save(blob, 'png'), 'image/png');
+    };
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
   }
 
   function uncategorizedNote(count) {
@@ -3279,6 +3422,9 @@ ${reviewUI.dialog()}
       }
       else if (act === 'skip-categorization') {
         saveWorkflowDecision('skip'); return;
+      }
+      else if (act === 'prisma-download') {
+        downloadPrismaFlow(t.getAttribute('data-format') || 'svg'); return;
       }
       else if (act === 'finalize-project') {
         saveWorkflowDecision('finalize'); return;
