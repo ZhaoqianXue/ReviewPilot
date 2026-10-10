@@ -11,9 +11,9 @@ from agents.extraction_agent import ExtractionAgent
 from reviewpilot_core import fulltext_eligibility as fte
 from reviewpilot_core import record_review as review
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
-from reviewpilot_core.categorization_analysis import _successful_rows
+from reviewpilot_core.categorization_analysis import CategorizationAnalysis, _successful_rows
 from reviewpilot_core.extraction_schema import build_extraction_prompts, finalize_schema, save_schema_draft
-from reviewpilot_core.state_projection import _result_overview
+from reviewpilot_core.state_projection import _result_overview, build_rp_data
 from reviewpilot_core.task_runner import TaskRunner
 from reviewpilot_core.workflow_state import initialize_workflow_state, save_workflow_state
 
@@ -174,6 +174,64 @@ class ProjectCountsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         counts = fte.prisma_counts(self.project)['screening']
         self.assertEqual((counts['reports_excluded'], counts['full_text_corrections']), (2, 1))
+
+
+
+class AnalysisHeaderTests(unittest.TestCase):
+    """The Step 5 header, the category counts and the PRISMA export agree once papers are excluded at full text."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.project = make_project(self.root)
+        self.results = self.project / 'extraction/extraction_results.jsonl'
+
+    def rows(self):
+        return [json.loads(line) for line in self.results.read_text().splitlines()]
+
+    def test_summary_matches_prisma_counts_and_the_analysis_rows(self):
+        summary = fte.analysis_summary(self.rows())
+        self.assertEqual(summary, {'extracted': 4, 'included': 2, 'excluded': 2, 'excluded_at_full_text': 1,
+                                   'excluded_from_web_sources': 1, 'reasons': {'Animal-only study': 2}})
+        counts = fte.prisma_counts(self.project)
+        self.assertEqual(summary['excluded_at_full_text'], counts['screening']['reports_excluded'])
+        self.assertEqual(summary['excluded_from_web_sources'], counts['screening']['not_retrieved_excluded_from_web_sources'])
+        self.assertEqual(summary['included'], counts['included']['studies_included'] + counts['included']['studies_included_from_web_sources'])
+        self.assertEqual(summary['included'], len(_successful_rows(self.rows())))
+
+    def test_header_categories_and_prisma_export_agree(self):
+        CategorizationAnalysis(self.project).run({'categorizer_func': lambda row: 'Clinical cohort'})
+        data = build_rp_data(self.root, 'study')
+        workflow = data['categorizationWorkflow']
+        self.assertEqual(workflow['metrics'], {'papersExtracted': 4, 'papersInAnalysis': 2, 'fields': 1, 'papersWithoutCategory': 0})
+        self.assertEqual(workflow['fullTextExclusions'], {'total': 2, 'atFullText': 1, 'fromWebSources': 1,
+                                                          'reasons': [{'label': 'Animal-only study', 'count': 2}]})
+        self.assertEqual(data['categorizationSummary'], {'papers': 2, 'groups': 1})
+        self.assertEqual([(c['name'], c['count']) for c in data['categorizationAnalysis']['categories']], [('Clinical cohort', 2)])
+        self.assertEqual((workflow['fullResults']['total'], len(workflow['fullResults']['rows'])), (2, 2))
+        self.assertEqual(fte.prisma_counts(self.project)['included']['studies_categorized'], 2)
+
+    def test_not_met_reason_reads_as_a_sentence(self):
+        rows = self.rows()
+        rows[0][fte.FIELD] = 'Exclude — not met: Clinical study'
+        atomic_write_jsonl(self.results, rows)
+        reasons = build_rp_data(self.root, 'study')['categorizationWorkflow']['fullTextExclusions']['reasons']
+        self.assertEqual(reasons, [{'label': 'Animal-only study', 'count': 2}, {'label': 'Not met: Clinical study', 'count': 1}])
+
+    def test_single_mode_paper_without_a_value_is_not_counted_as_a_category(self):
+        rows = self.rows()
+        rows[2]['participants'] = None
+        atomic_write_jsonl(self.results, rows)
+        llm = lambda **kwargs: ('{"category": "Small"}', {})
+        CategorizationAnalysis(self.project, llm_query=llm).run({'field': 'participants', 'mode': 'single', 'categories': ['Small', 'Large']})
+        data = build_rp_data(self.root, 'study')
+        workflow = data['categorizationWorkflow']
+        self.assertEqual(data['categorizationSummary'], {'papers': 1, 'groups': 1})
+        self.assertEqual((workflow['metrics']['papersInAnalysis'], workflow['metrics']['papersWithoutCategory']), (2, 1))
+        self.assertEqual([c['name'] for c in data['categorizationAnalysis']['categories']], ['Small'])
+        self.assertEqual(workflow['categorizedDistribution']['values'], [{'label': 'Small', 'count': 1}])
+        self.assertEqual([g['name'] for g in data['groups']], ['Small'])
 
 
 if __name__ == '__main__':

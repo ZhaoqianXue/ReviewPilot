@@ -649,7 +649,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   function emptyCategorizationWorkflow() {
     return {
       done: false,
-      metrics: { papersExtracted: 0, fields: 0 },
+      metrics: { papersExtracted: 0, papersInAnalysis: 0, fields: 0, papersWithoutCategory: 0 },
+      fullTextExclusions: { total: 0, atFullText: 0, fromWebSources: 0, reasons: [] },
       fieldNames: [],
       recommendedField: '',
       selectedField: '',
@@ -2484,17 +2485,42 @@ ${reviewUI.dialog()}
           <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:5px;">Step 5</div>
           <div style="font-family:Newsreader,Georgia,serif;font-size:21px;color:#1a1a1a;line-height:1.15;">Categorization & Analysis</div>
         </div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${workflow.done ? `${formatCount(v.categorizationSummary.papers, 'paper')} · ${formatCount(v.categorizationSummary.groups, 'category', 'categories')}` : `${formatCount(workflow.metrics.papersExtracted, 'paper')} · ${formatCount(workflow.metrics.fields, 'field')}`}</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${formatCount(papersInAnalysis(workflow), 'paper')} · ${workflow.done ? formatCount(v.categorizationSummary.groups, 'category', 'categories') : formatCount(workflow.metrics.fields, 'field')}</div>
       </div>
       ${categorizationMetrics(workflow)}
-      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : categorizationSetupPanel(v, workflow)}`;
+      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}`;
   }
 
+  // Papers excluded at full-text eligibility are left out of categorization, so the header counts the analysis set.
   function categorizationMetrics(workflow) {
-    return `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:16px;">
-      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:13px 14px;"><div style="font-size:10px;color:#8a938b;letter-spacing:-0.01em;">Papers Extracted</div><div style="font-family:'IBM Plex Mono',monospace;font-size:20px;color:#1a365d;margin-top:4px;">${workflow.metrics.papersExtracted}</div></div>
-      <div style="border:1px solid #e5e7eb;border-radius:10px;padding:13px 14px;"><div style="font-size:10px;color:#8a938b;letter-spacing:-0.01em;">Fields</div><div style="font-family:'IBM Plex Mono',monospace;font-size:20px;color:#1a365d;margin-top:4px;">${workflow.metrics.fields}</div></div>
+    const exclusions = workflow.fullTextExclusions || {};
+    const excluded = Number(exclusions.total) || 0;
+    const tile = (label, value, note = '') => `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:13px 14px;min-width:0;"><div style="font-size:10px;color:#8a938b;letter-spacing:-0.01em;">${label}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:20px;color:#1a365d;margin-top:4px;">${value}</div>${note ? `<div style="font-size:11px;color:#8a938b;margin-top:3px;">${note}</div>` : ''}</div>`;
+    return `<div data-ui="categorization-metrics" style="display:grid;grid-template-columns:repeat(${excluded ? 3 : 2},minmax(0,1fr));gap:10px;margin-bottom:${excluded ? 10 : 16}px;">
+      ${tile('Papers in Analysis', papersInAnalysis(workflow), excluded ? `of ${workflow.metrics.papersExtracted} extracted` : '')}
+      ${excluded ? tile('Excluded at Full Text', excluded) : ''}
+      ${tile('Fields', workflow.metrics.fields)}
+    </div>${excluded ? fullTextExclusionReasons(exclusions) : ''}`;
+  }
+
+  function papersInAnalysis(workflow) {
+    return workflow.metrics.papersInAnalysis ?? workflow.metrics.papersExtracted ?? 0;
+  }
+
+  function fullTextExclusionReasons(exclusions) {
+    const fromWeb = Number(exclusions.fromWebSources) || 0;
+    return `<div data-ui="full-text-exclusions" style="border:1px solid #eef0ee;border-radius:10px;padding:10px 12px;margin-bottom:16px;background:#fbfcfa;">
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:8px;">Full-text exclusion reasons</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">${(exclusions.reasons || []).map((reason) => `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;"><span style="color:#3a4252;line-height:1.4;min-width:0;">${reason.label}</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${reason.count}</span></div>`).join('')}</div>
+      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">${fromWeb ? `${formatCount(fromWeb, 'paper')} assessed from web sources because the PDF was not retrieved. ` : ''}Excluded papers are not categorized; they stay in the extraction results and the PRISMA counts.</div>
     </div>`;
+  }
+
+  function noPapersToCategorize() {
+    return `<section data-ui="no-papers-to-categorize" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+      <div style="font-size:12.5px;color:#3a4252;line-height:1.5;">Every extracted paper was excluded at full text, so there is nothing to categorize. To change an exclusion, review that paper's eligibility value in Information Extraction.</div>
+      <div style="border-top:1px solid #eef0ee;margin-top:14px;padding-top:12px;"><button data-act="skip-categorization" style="${buttonStyle}">Skip Categorization</button></div>
+    </section>`;
   }
 
   function categorizationSetupPanel(v, workflow) {
@@ -2557,7 +2583,7 @@ ${reviewUI.dialog()}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin:4px 0 10px;">Analysis Summary</div>
       ${skipped ? `<div style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:10px;padding:11px 12px;margin-bottom:14px;font-size:12.5px;color:#1a365d;">Categorization skipped. You can still review extracted field distributions and full results.</div>` : ''}
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px;">${workflow.analysisDistributions.map((item) => `<details style="border:1px solid #e5e7eb;border-radius:10px;padding:11px 12px;background:#fffefc;"><summary style="cursor:pointer;color:#1a365d;font-size:12.5px;">${evidenceFieldLabel(item.field)} Distribution</summary>${distributionChart(item.values)}</details>`).join('')}</div>
-      ${workflow.done ? `<div style="margin-bottom:16px;"><div style="font-size:12.5px;color:#1a1a1a;margin-bottom:8px;"><strong>${evidenceFieldLabel(workflow.selectedField)} Categories:</strong></div>${distributionChart(workflow.categorizedDistribution.values)}</div>` : ''}
+      ${workflow.done ? `<div style="margin-bottom:16px;"><div style="font-size:12.5px;color:#1a1a1a;margin-bottom:8px;"><strong>${evidenceFieldLabel(workflow.selectedField)} Categories:</strong></div>${distributionChart(workflow.categorizedDistribution.values)}${uncategorizedNote(workflow.metrics.papersWithoutCategory)}</div>` : ''}
       ${workflow.done ? categoryBriefsPanel(v.categorizationAnalysis) : ''}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
@@ -2565,6 +2591,11 @@ ${reviewUI.dialog()}
       <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="edit-categories" style="${buttonStyle};margin-right:8px;">Reopen categorization</button><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
       ${v.catDraft.finalized ? `<div style="margin-top:10px;font-size:12px;color:#1a365d;text-align:right;">Project Complete!</div>` : ''}
     </section>`;
+  }
+
+  function uncategorizedNote(count) {
+    const n = Number(count) || 0;
+    return n ? `<div data-ui="uncategorized-papers" style="font-size:11px;color:#8a938b;margin-top:8px;">${formatCount(n, 'paper')} ${n === 1 ? 'is' : 'are'} in no category: no value for this field, or no category fit.</div>` : '';
   }
 
   function exportPackageSection(exportPackage) {
@@ -2615,7 +2646,8 @@ ${reviewUI.dialog()}
     const columns = (table && table.columns) || [];
     const rows = (table && table.rows) || [];
     if (!columns.length || !rows.length) return emptyHint('No results available');
-    return `<p data-ui="full-results-count" style="font-size:12px;color:#68798c;">All ${formatCount(rows.length, 'result')} · scroll to browse every paper</p><div class="rp-scroll" style="border:1px solid #e5e7eb;border-radius:10px;overflow:auto;max-height:300px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${columns.map((column) => `<th style="text-align:left;padding:8px 10px;background:#f8fbff;color:#9aa39b;font-size:10px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid #eef0ee;white-space:nowrap;">${evidenceFieldLabel(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td style="vertical-align:top;padding:8px 10px;border-bottom:1px solid #f4f6f3;color:#3a4252;line-height:1.4;min-width:120px;">${row[column] || ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+    const total = Math.max(Number(table.total) || 0, rows.length);
+    return `<p data-ui="full-results-count" style="font-size:12px;color:#68798c;">${total > rows.length ? `Showing the first ${rows.length} of ${formatCount(total, 'result')} · export the full results below` : `All ${formatCount(rows.length, 'result')} · scroll to browse every paper`}</p><div class="rp-scroll" style="border:1px solid #e5e7eb;border-radius:10px;overflow:auto;max-height:300px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>${columns.map((column) => `<th style="text-align:left;padding:8px 10px;background:#f8fbff;color:#9aa39b;font-size:10px;letter-spacing:0.05em;text-transform:uppercase;border-bottom:1px solid #eef0ee;white-space:nowrap;">${evidenceFieldLabel(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td style="vertical-align:top;padding:8px 10px;border-bottom:1px solid #f4f6f3;color:#3a4252;line-height:1.4;min-width:120px;">${row[column] || ''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
   }
 
   function evidenceFieldLabel(name) {
@@ -2635,6 +2667,7 @@ ${reviewUI.dialog()}
     };
     const key = String(name || '').trim();
     if (labels[key]) return labels[key];
+    if (key.length > 9 && key.endsWith('_category')) return `${evidenceFieldLabel(key.slice(0, -9))} Category`;
     const acronyms = new Set(['ai', 'api', 'doi', 'ehr', 'llm', 'llms', 'ml', 'nlp', 'rct', 'rcts', 'vr', 'ar', 'xr']);
     const minor = new Set(['a', 'an', 'and', 'as', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs', 'with']);
     return key.split('_').filter(Boolean).map((word, index) => {

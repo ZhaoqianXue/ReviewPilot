@@ -354,6 +354,21 @@ class StateProjectionTests(unittest.TestCase):
             data=build_rp_data(root,"p")
         self.assertEqual(data["workflowNotices"]["extraction"]["failedItems"], ["Late failure"])
 
+    def test_step_five_counts_cover_extraction_rows_past_the_display_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]}); initialize_workflow_state(project)
+            for action in ("collect","screen","download-pdfs"): start_action(project,action); complete_action(project,action,terminal_result(action))
+            rows=[{"title":f"S{i}","extraction_status":"success","extraction_source":"pdf","methods":"Survey",
+                   "full_text_eligibility":"Exclude — Off topic" if i % 50 == 0 else "Include"} for i in range(250)]
+            write_jsonl(project/"extraction"/"extraction_results.jsonl", rows); start_action(project,"run-extraction"); complete_action(project,"run-extraction", {"processed":250,"errors":0})
+            data=build_rp_data(root,"p")
+        workflow=data["categorizationWorkflow"]
+        self.assertEqual((workflow["metrics"]["papersExtracted"], workflow["metrics"]["papersInAnalysis"]), (250, 245))
+        self.assertEqual(workflow["fullTextExclusions"]["reasons"], [{"label":"Off topic","count":5}])
+        self.assertEqual((len(workflow["fullResults"]["rows"]), workflow["fullResults"]["total"]), (196, 245))
+        overview={item["label"]: item["value"] for item in data["resultOverview"]}
+        self.assertEqual((overview["Extracted"], overview["Full-text excluded"], overview["Included in review"]), ("250", "5", "245"))
+
     def test_terminal_rerun_stale_policy_blocks_mismatched_current_and_downstream_exports(self):
         cases = [
             ("collect", "collection", "relevance-prompt", "included-papers", {"total":1,"platform_stats":{"pubmed":1,"arxiv":0},"platform_errors":{"arxiv":"503"}}),
@@ -1079,7 +1094,8 @@ class StateProjectionTests(unittest.TestCase):
             data = build_rp_data(output_root, "prototype-categorization-flow")
 
         workflow = data["categorizationWorkflow"]
-        self.assertEqual(workflow["metrics"], {"papersExtracted": 3, "fields": 2})
+        self.assertEqual(workflow["metrics"], {"papersExtracted": 3, "papersInAnalysis": 3, "fields": 2, "papersWithoutCategory": 0})
+        self.assertEqual(workflow["fullTextExclusions"], {"total": 0, "atFullText": 0, "fromWebSources": 0, "reasons": []})
         self.assertEqual(workflow["fieldNames"], ["methods", "dataset"])
         self.assertEqual(workflow["recommendedField"], "dataset")
         self.assertEqual(workflow["selectedField"], "methods")

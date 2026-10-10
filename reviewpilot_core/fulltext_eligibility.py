@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .project_store import read_json, read_jsonl
 
@@ -102,6 +102,30 @@ def is_excluded(row: dict[str, Any]) -> bool:
             and value(row).startswith(EXCLUDE_PREFIX))
 
 
+def analysis_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Split extracted papers into the analysis set and eligibility exclusions, with reasons.
+
+    "included" is the set Categorization & Analysis uses. Exclusions are counted as
+    prisma_counts reports them: PDF assessments apart from web-fallback ones.
+    """
+    extracted = full_text = web = 0
+    reasons: dict[str, int] = {}
+    for row in rows:
+        if str(row.get("extraction_status") or "success").lower() != "success":
+            continue
+        extracted += 1
+        if not is_excluded(row):
+            continue
+        full_text += assessed(row)
+        web += str(row.get("extraction_source") or "") == "web_search_fallback"
+        reason = value(row).removeprefix(EXCLUDE_PREFIX)
+        reasons[reason] = reasons.get(reason, 0) + 1
+    excluded = sum(reasons.values())
+    return {"extracted": extracted, "included": extracted - excluded, "excluded": excluded,
+            "excluded_at_full_text": full_text, "excluded_from_web_sources": web,
+            "reasons": dict(sorted(reasons.items(), key=lambda item: -item[1]))}
+
+
 def prisma_counts(project: Path) -> dict[str, Any]:
     """PRISMA 2020 flow counts derived from the project's own artifacts."""
     from .workflow_state import load_workflow_state
@@ -116,12 +140,8 @@ def prisma_counts(project: Path) -> dict[str, Any]:
     assessed_rows = [row for row in extraction if assessed(row)]
     web_rows = [row for row in extraction if str(row.get("extraction_status") or "") == "success"
                 and str(row.get("extraction_source") or "") == "web_search_fallback"]
-    web_excluded = sum(1 for row in web_rows if is_excluded(row))
-    reasons: dict[str, int] = {}
-    for row in assessed_rows:
-        if is_excluded(row):
-            reason = value(row).removeprefix(EXCLUDE_PREFIX)
-            reasons[reason] = reasons.get(reason, 0) + 1
+    web_excluded = analysis_summary(web_rows)["excluded"]
+    reasons = analysis_summary(assessed_rows)["reasons"]
     overrides = 0
     for row in included + excluded:
         review = row.get("human_screening") or {}
@@ -149,7 +169,7 @@ def prisma_counts(project: Path) -> dict[str, Any]:
             "reports_assessed": len(assessed_rows),
             "full_text_eligibility_field": any(f.get("name") == FIELD for f in schema.get("fields") or []),
             "reports_excluded": sum(reasons.values()),
-            "reports_excluded_by_reason": dict(sorted(reasons.items(), key=lambda item: -item[1])),
+            "reports_excluded_by_reason": reasons,
             "reports_unmatched_value": sum(1 for row in assessed_rows if row.get(RAW_KEY)),
             "full_text_corrections": sum(1 for row in assessed_rows if FIELD in (row.get("human_fields") or {})),
         },

@@ -736,7 +736,9 @@ class FrontendContractTests(unittest.TestCase):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         categorize_canvas = source[source.index("function categorizeCanvas(v)") : source.index("function activityMessage(m)")]
 
-        self.assertIn("Papers Extracted", categorize_canvas)
+        self.assertIn("Papers in Analysis", categorize_canvas)
+        self.assertIn("Excluded at Full Text", categorize_canvas)
+        self.assertIn("Full-text exclusion reasons", categorize_canvas)
         self.assertIn("Select Field to Categorize", categorize_canvas)
         self.assertIn("Sample Values", categorize_canvas)
         self.assertIn("Categorization Mode", categorize_canvas)

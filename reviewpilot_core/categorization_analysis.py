@@ -37,6 +37,8 @@ METADATA_FIELDS = {
 
 # Containers that hold several extracted fields or their evidence, never a single categorizable value.
 CONTAINER_FIELDS = {"extracted_data", "evidence_tiers", "field_evidence_tiers", "web_search"}
+# Single-category label for a paper with no value in the chosen field; it is not a category.
+NO_CATEGORY = "N/A"
 PLAN_VALUE_LIMIT = 150
 PLAN_VALUE_CHARS = 300
 
@@ -127,7 +129,7 @@ class CategorizationAnalysis:
         for row in rows:
             value = str(row.get(field) or "")
             if not value:
-                assigned: str | list[str] = "N/A" if mode == "single" else []
+                assigned: str | list[str] = NO_CATEGORY if mode == "single" else []
             elif mode == "multiple":
                 assigned = _assign_multiple_categories(row, field, value, categories, llm_query, descriptions)
             else:

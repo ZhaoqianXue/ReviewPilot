@@ -270,7 +270,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     schema = _unescape_strings(load_schema_draft(path))
     schema_marker = read_json(path / "extraction/schema_finalized.json", {}) or {}
     schema_matches_setup = schema_marker.get("setup_revision") == setup_revision(config) and is_schema_finalized(path)
-    extraction_rows, extraction_failed_items = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
+    extraction_rows, extraction_failed_items, extraction_summary = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
     extraction_rows = _unescape_strings(extraction_rows)
     extraction_failed_items = _unescape_strings(extraction_failed_items)
     extraction_results = extraction_rows[:1]
@@ -295,6 +295,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         if not _fresh_ready_output(workflow_state["stages"]["extraction"]) and not schema_matches_setup:
             schema = {}
         extraction_rows, extraction_results = [], []
+        extraction_summary = None
     if workflow_state["stages"]["categorization"]["stale"]:
         categorization, categorized_rows = {}, []
         if not _fresh_ready_output(workflow_state["stages"]["categorization"]):
@@ -341,8 +342,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
-        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows),
-        "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
+        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary),
+        "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"], extraction_summary=extraction_summary),
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
@@ -371,10 +372,15 @@ def _retrieval_recovery(path: Path) -> dict[str, Any]:
         return disabled_retry_projection()
 
 
-def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str]]:
-    """Read extraction output once, bounding retained display and recovery data."""
+def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
+    """Read extraction output once, bounding retained display and recovery data.
+
+    The analysis summary counts every row, so totals stay exact past the display bound.
+    """
+    from .fulltext_eligibility import FIELD, analysis_summary, value
     rows: list[dict] = []
     failed_items: list[str] = []
+    eligibility: list[dict] = []
     try:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -389,11 +395,11 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str]]:
                     rows.append(row)
                 if len(failed_items) < 10 and status in {"error", "failed"}:
                     failed_items.append(_safe_failed_item(row))
-                if len(rows) >= 200 and len(failed_items) >= 10:
-                    break
+                eligibility.append({"extraction_status": row.get("extraction_status"),
+                                    "extraction_source": row.get("extraction_source"), FIELD: value(row)})
     except OSError:
         pass
-    return rows, failed_items
+    return rows, failed_items, analysis_summary(eligibility)
 
 
 def _unescape_strings(value: Any) -> Any:
@@ -790,17 +796,20 @@ def _result_overview(
     categorization: dict,
     *,
     allow_retrieval_fallback: bool = True,
+    extraction_summary: dict | None = None,
 ) -> list[dict[str, str]]:
+    from .fulltext_eligibility import analysis_summary
     retrieval = _retrieval_summary(path, included, download_report, allow_artifact_fallback=allow_retrieval_fallback)
     categorization_summary = _categorization_summary(categorization)
+    summary = extraction_summary or analysis_summary(extraction_rows)
     return [
         {"label": "Identified", "value": str(collected_summary.get("total_papers", 0))},
         {"label": "Screened", "value": str(screening_stats.get("total_screened") or screening_stats.get("included_count") or len(included))},
         {"label": "Included", "value": str(screening_stats.get("included_count") or len(included))},
         {"label": "PDFs retrieved", "value": f"{retrieval['retrieved']} / {retrieval['total']}"},
         {"label": "Subscribed/unavailable", "value": str(retrieval["unavailable"])},
-        {"label": "Extracted", "value": str(len(extraction_rows))},
-        *_full_text_overview(extraction_rows),
+        {"label": "Extracted", "value": str(summary["extracted"])},
+        *_full_text_overview(extraction_rows, summary),
         {"label": "Categorized", "value": str(categorization_summary["papers"])},
         {"label": "Sources", "value": ", ".join(_platform_label(item) for item in config.get("platforms") or []) or "not set"},
         {"label": "Date range", "value": _date_range_label(config.get("date_range") or {})},
@@ -808,14 +817,12 @@ def _result_overview(
     ]
 
 
-def _full_text_overview(extraction_rows: list[dict]) -> list[dict[str, str]]:
-    from .fulltext_eligibility import FIELD, assessed, is_excluded
+def _full_text_overview(extraction_rows: list[dict], summary: dict) -> list[dict[str, str]]:
+    from .fulltext_eligibility import FIELD
     if not any(FIELD in row for row in extraction_rows):
         return []
-    full_text_excluded = sum(1 for row in extraction_rows if assessed(row) and is_excluded(row))
-    included = sum(1 for row in extraction_rows if str(row.get("extraction_status") or "success").lower() == "success" and not is_excluded(row))
-    return [{"label": "Full-text excluded", "value": str(full_text_excluded)},
-            {"label": "Included in review", "value": str(included)}]
+    return [{"label": "Full-text excluded", "value": str(summary["excluded_at_full_text"])},
+            {"label": "Included in review", "value": str(summary["included"])}]
 
 
 def _date_range_label(date_range: dict) -> str:
@@ -1019,7 +1026,8 @@ def _category_evidence(paper: dict, field: str) -> str:
 def _empty_categorization_workflow() -> dict[str, Any]:
     return {
         "done": False,
-        "metrics": {"papersExtracted": 0, "fields": 0},
+        "metrics": {"papersExtracted": 0, "papersInAnalysis": 0, "fields": 0, "papersWithoutCategory": 0},
+        "fullTextExclusions": {"total": 0, "atFullText": 0, "fromWebSources": 0, "reasons": []},
         "fieldNames": [],
         "recommendedField": "",
         "selectedField": "",
@@ -1039,19 +1047,26 @@ def _categorization_workflow(
     categorization: dict,
     suggestions: dict,
     categorized_rows: list[dict],
+    extraction_summary: dict | None = None,
 ) -> dict[str, Any]:
+    from .categorization_analysis import NO_CATEGORY
+    from .fulltext_eligibility import analysis_summary, is_excluded
+    summary = extraction_summary or analysis_summary(extraction_rows)
     field_names = _categorization_field_names(schema, extraction_rows)
     recommended = _recommended_categorization_field(field_names)
     selected = str(categorization.get("field") or suggestions.get("field") or recommended or (field_names[0] if field_names else ""))
     mode = str(categorization.get("mode") or suggestions.get("mode") or "multiple")
-    from .fulltext_eligibility import is_excluded
     eligible_rows = [row for row in extraction_rows if not is_excluded(row)]
     rows_for_analysis = categorized_rows if categorized_rows else eligible_rows
     field_profiles = {field: _field_profile(eligible_rows, field) for field in field_names}
     categorized_field = f"{selected}_category" if selected else ""
+    full_results = _full_results(rows_for_analysis, field_names, categorized_field)
+    full_results["total"] = max(full_results["total"], summary["included"])
     return {
         "done": bool(categorization),
-        "metrics": {"papersExtracted": len(extraction_rows), "fields": len(field_names)},
+        "metrics": {"papersExtracted": summary["extracted"], "papersInAnalysis": summary["included"], "fields": len(field_names),
+                    "papersWithoutCategory": _uncategorized_paper_count(categorization)},
+        "fullTextExclusions": _full_text_exclusions(summary),
         "fieldNames": field_names,
         "recommendedField": recommended,
         "selectedField": selected,
@@ -1062,9 +1077,20 @@ def _categorization_workflow(
         "analysisDistributions": [{"field": field, "values": _distribution(rows_for_analysis, field)} for field in field_names[:5]],
         "categorizedDistribution": {
             "field": categorized_field or "category",
-            "values": _distribution(rows_for_analysis, categorized_field if categorized_field and any(categorized_field in row for row in rows_for_analysis) else "category"),
+            "values": _distribution(rows_for_analysis, categorized_field if categorized_field and any(categorized_field in row for row in rows_for_analysis) else "category",
+                                    skip=frozenset() if NO_CATEGORY in _category_names(categorization) else frozenset({NO_CATEGORY})),
         },
-        "fullResults": _full_results(rows_for_analysis, field_names, categorized_field),
+        "fullResults": full_results,
+    }
+
+
+def _full_text_exclusions(summary: dict) -> dict[str, Any]:
+    """Extracted papers left out of the analysis because their eligibility value names an exclusion."""
+    return {
+        "total": summary["excluded"],
+        "atFullText": summary["excluded_at_full_text"],
+        "fromWebSources": summary["excluded_from_web_sources"],
+        "reasons": [{"label": reason[:1].upper() + reason[1:], "count": count} for reason, count in summary["reasons"].items()],
     }
 
 
@@ -1129,7 +1155,7 @@ def _profile_value(value: Any) -> str:
     return "" if text == "None" else text
 
 
-def _distribution(rows: list[dict], field: str) -> list[dict[str, Any]]:
+def _distribution(rows: list[dict], field: str, *, skip: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
     values: list[str] = []
     for row in rows:
         value = row.get(field)
@@ -1137,7 +1163,7 @@ def _distribution(rows: list[dict], field: str) -> list[dict[str, Any]]:
             values.extend(_profile_value(item) for item in value)
         else:
             values.append(_profile_value(value))
-    return _distribution_from_values([value for value in values if value])
+    return _distribution_from_values([value for value in values if value and value not in skip])
 
 
 def _distribution_from_values(values: list[str]) -> list[dict[str, Any]]:
@@ -1277,11 +1303,18 @@ def _categorized_paper_count(categorization: dict) -> int:
     return 0
 
 
+def _uncategorized_paper_count(categorization: dict) -> int:
+    """Categorized papers that landed in no category: no value in the field, or no category fit."""
+    mapping = categorization.get("mapping") or {}
+    return len(mapping) - _categorized_paper_count(categorization) if isinstance(mapping, dict) else 0
+
+
 def _category_values(value, known_categories: list[str]) -> list[str]:
+    from .categorization_analysis import NO_CATEGORY
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     text = str(value or "").strip()
-    if not text:
+    if not text or (text == NO_CATEGORY and text not in known_categories):
         return []
     if text in known_categories:
         return [text]
