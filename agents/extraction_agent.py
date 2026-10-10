@@ -674,13 +674,16 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
                 request["temperature"] = 0.3
             if "json" in f"{system_prompt}\n{user_prompt}".lower():
                 request["response_format"] = {"type": "json_object"}
-            if self.model.startswith(("gpt-5", "gpt-6")):
-                request["max_completion_tokens"] = 4096
-            else:
+            # Reasoning models (gpt-5/gpt-6) spend completion tokens on reasoning before any text,
+            # so a fixed cap can leave the answer empty; they run uncapped like every other agent call.
+            if not self.model.startswith(("gpt-5", "gpt-6")):
                 request["max_tokens"] = 4096
             response = self.client.chat.completions.create(**request)
 
-            extracted = response.choices[0].message.content
+            choice = response.choices[0]
+            extracted = choice.message.content
+            if choice.finish_reason == "length":
+                raise ValueError("Extraction model ran out of output tokens before finishing its answer")
 
             # Estimate cost (rough approximation)
             input_tokens = response.usage.prompt_tokens if response.usage else 0

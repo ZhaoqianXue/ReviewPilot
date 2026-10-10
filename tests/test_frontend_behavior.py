@@ -109,6 +109,19 @@ assert.doesNotMatch(html, /data-action="retry-failed/);
         result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_retrieval_banner_leaves_failed_titles_to_the_recovery_panel(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { workflowOutcomeBanner, workflowNoticeForStep } = require('./frontend/app.js');
+const notices = { retrieval: { status:'partial', succeeded:20, failed:6, failedItems:['Paper C'], retryable:true, nextAction:'Information Extraction' } };
+const listed = workflowOutcomeBanner(workflowNoticeForStep(notices, 'retrieval', true));
+assert.match(listed, /20 completed/); assert.doesNotMatch(listed, /Paper C/); assert.match(listed, /retryable below/);
+assert.match(workflowOutcomeBanner(workflowNoticeForStep(notices, 'retrieval', false)), /Paper C/);
+assert.equal(workflowNoticeForStep(notices, 'extraction', true), null);
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_failed_outcome_banner_and_progress_show_blocked_stage_without_next_action(self):
         script = r"""
 const assert = require('node:assert/strict');

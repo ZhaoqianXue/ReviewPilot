@@ -106,6 +106,7 @@ function normalizeRetrievalRecovery(value) {
       retryId: item.retryId,
       label: typeof item.label === 'string' && item.label ? item.label : 'Untitled paper',
       failureClass: typeof item.failureClass === 'string' && item.failureClass ? item.failureClass : 'Retrieval failed',
+      links: Array.isArray(item.links) ? item.links.filter((link) => link && /^https?:\/\//.test(String(link.url || ''))) : [],
     }))
     : [];
   const reportRevision = typeof value?.reportRevision === 'string' ? value.reportRevision : '';
@@ -216,6 +217,12 @@ function autoAdvanceStepForTask({ action, taskStatus, originStep, visibleStep, s
   return originIndex >= 0 ? (steps[originIndex + 1]?.key || '') : '';
 }
 
+function workflowNoticeForStep(notices, step, recoveryListed) {
+  const notice = notices[({search:'collection',screening:'screening',retrieval:'retrieval',extraction:'extraction',categorize:'categorization'})[step]] || null;
+  // The Failed downloads panel lists each paper with its links; repeating every title in the banner only buries it.
+  return notice && step === 'retrieval' && recoveryListed ? { ...notice, failedItems: [] } : notice;
+}
+
 function workflowOutcomeBanner(notice) {
   if (!notice || !['partial', 'failed'].includes(notice.status)) return '';
   const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -224,8 +231,8 @@ function workflowOutcomeBanner(notice) {
   }
   const failedItems = (notice.failedItems || []).map(escapeText).join(', ');
   const recovery = notice.recovery ? escapeText(notice.recovery) : (notice.status === 'failed'
-    ? 'This stage is blocked. Failed items remain retryable in the recovery step.'
-    : (notice.retryable ? 'Failed items remain retryable in the recovery step.' : 'Review the failed items before continuing.'));
+    ? `This stage is blocked. Failed items remain retryable${failedItems ? ' in the recovery step' : ' below'}.`
+    : (notice.retryable ? `Failed items remain retryable${failedItems ? ' in the recovery step' : ' below'}.` : 'Review the failed items before continuing.'));
   const next = notice.nextAction ? ` Next action: ${escapeText(notice.nextAction)}.` : '';
   const kind = notice.status === 'partial' ? 'warning' : 'error';
   const colors = kind === 'warning' ? 'border-color:#f1d39b;background:#fff8e8;color:#7a4b00;' : 'border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;';
@@ -339,7 +346,7 @@ function schemaJsonForDisplay(value) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS, codingRulesDraftFromRules, codingRulesConfirmPayload };
+  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, workflowNoticeForStep, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS, codingRulesDraftFromRules, codingRulesConfirmPayload };
 }
 
 /* ReviewPilot workspace UI.
@@ -1604,6 +1611,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       savedConceptBlocks: rawConceptBlocks(D.setup?.concept_blocks),
       groups: D.groups,
       retrieved: D.retrieved,
+      retrievalPreviewKey: state.retrievalPreviewKey,
       extractionPreview: D.extractionPreview,
       schemaJson: D.schemaJson,
       schemaJsonOpen: state.schemaJsonOpen,
@@ -1640,7 +1648,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       stepJustAdvanced: Date.now() < state.stepTransitionUntil,
       historyGroups: historyGroupsForView(D.history),
       actionError: state.actionError,
-      workflowNotice: D.workflowNotices[({search:'collection',screening:'screening',retrieval:'retrieval',extraction:'extraction',categorize:'categorization'})[step]] || null,
+      workflowNotice: workflowNoticeForStep(D.workflowNotices, step, retryRecoveryVisible),
       screeningMetrics: D.screeningMetrics,
       screeningCriteria: D.screeningCriteria,
       criteriaDraft: state.criteriaDraft,
@@ -1923,6 +1931,7 @@ ${reviewUI.dialog()}
         ${v.isExtraction ? extractionCanvas(v) : ''}
         ${v.isCategorize ? categorizeCanvas(v) : ''}
         ${canvasActionButton(v)}
+        ${v.isRetrieval ? retrievedList(v) : ''}
       </div>
     </div>
   </main>
@@ -2306,8 +2315,29 @@ ${reviewUI.dialog()}
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Unavailable</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unavailable}</span></div>
         </div>
       </div>
-      ${retrievalRecoveryPanel(v)}
-      <div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">${v.retrievalSummary.retrieved > 0 ? 'Recently retrieved' : 'Included papers queued for retrieval'}</div>${v.retrieved.map((r) => `<div style="display:flex;align-items:center;gap:11px;padding:8px 0;border-bottom:1px solid #f4f6f3;"><i class="ph ph-file-text" style="font-size:16px;color:#1a365d;"></i><div style="flex:1;min-width:0;"><div style="font-size:12.5px;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${r.t}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9aa39b;">${r.v}</div></div><i class="ph-fill ph-check-circle" style="font-size:15px;color:#1a365d;"></i></div>`).join('') || emptyHint('No included papers queued yet')}</div>`;
+      ${retrievalRecoveryPanel(v)}`;
+  }
+
+  function paperLinkChips(links) {
+    // Link fields arrive escaped with the rest of D (escapeData), so they are inserted as is.
+    return (links || []).map((link) => `<a href="${link.url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:#1a365d;text-decoration:none;border:1px solid #d8e2f0;border-radius:999px;padding:1px 8px;background:#fffefc;white-space:nowrap;">${link.label}<i class="ph ph-arrow-up-right" aria-hidden="true" style="font-size:10px;"></i></a>`).join('');
+  }
+
+  function retrievedList(v) {
+    const retrieved = v.retrievalSummary.retrieved > 0;
+    const heading = retrieved ? `Retrieved PDFs · ${v.retrieved.length}` : 'Included papers queued for retrieval';
+    const rows = v.retrieved.map((r) => {
+      const open = retrieved && r.pdfKey && v.retrievalPreviewKey === r.pdfKey;
+      const pdfUrl = r.pdfKey ? `/projects/${encodeURIComponent(D.project.id)}/pdfs/${encodeURIComponent(r.pdfKey)}` : '';
+      const preview = retrieved && pdfUrl
+        ? `<button type="button" data-act="pdf-preview" data-pdf-key="${r.pdfKey}" aria-expanded="${open ? 'true' : 'false'}" style="display:inline-flex;align-items:center;gap:4px;font:inherit;font-size:10.5px;color:#fffefc;background:#1a365d;border:1px solid #1a365d;border-radius:999px;padding:1px 9px;cursor:pointer;white-space:nowrap;"><i class="ph ph-${open ? 'eye-slash' : 'eye'}" aria-hidden="true" style="font-size:11px;"></i>${open ? 'Hide preview' : 'Preview PDF'}</button>`
+        : '';
+      return `<div data-ui="retrieved-paper" style="padding:9px 0;border-bottom:1px solid #f4f6f3;">
+        <div style="display:flex;align-items:flex-start;gap:11px;"><i class="ph ph-file-text" style="font-size:16px;color:#1a365d;margin-top:1px;"></i><div style="flex:1;min-width:0;"><div style="font-size:12.5px;color:#1a1a1a;line-height:1.35;overflow-wrap:anywhere;">${r.t}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9aa39b;margin-top:2px;">${r.v}</div>${preview || (r.links || []).length ? `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">${preview}${paperLinkChips(r.links)}</div>` : ''}</div>${retrieved ? '<i class="ph-fill ph-check-circle" style="font-size:15px;color:#1a365d;"></i>' : ''}</div>
+        ${open ? `<div data-ui="pdf-preview" style="margin:10px 0 2px 27px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#f6f7f5;"><iframe src="${pdfUrl}" title="PDF preview: ${r.t}" style="display:block;width:100%;height:640px;border:0;"></iframe><div style="display:flex;justify-content:flex-end;padding:6px 10px;border-top:1px solid #e5e7eb;background:#fffefc;"><a href="${pdfUrl}" target="_blank" rel="noopener noreferrer" style="font-size:11px;color:#1a365d;">Open in new tab</a></div></div>` : ''}
+      </div>`;
+    }).join('');
+    return `<div data-ui="retrieved-list" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:6px;">${heading}</div>${rows || emptyHint('No included papers queued yet')}</div>`;
   }
 
   function retrievalRecoveryPanel(v) {
@@ -2322,7 +2352,7 @@ ${reviewUI.dialog()}
       const failure = String(item.failureClass || 'Retrieval failed').replace(/[_-]+/g, ' ');
       return `<label for="rp-retry-${index}" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid #eef0ee;cursor:pointer;min-width:0;">
         <input id="rp-retry-${index}" type="checkbox" data-act="retry-toggle" data-retry-index="${index}" ${item.selected ? 'checked' : ''} style="margin-top:3px;accent-color:#1a365d;flex:0 0 auto;">
-        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;text-transform:capitalize;">${failure}</span></span>
+        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;text-transform:capitalize;">${failure}</span>${(item.links || []).length ? `<span style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">${paperLinkChips(item.links)}</span>` : ''}</span>
       </label>`;
     }).join('');
     const disabled = v.retrySelectedCount === 0 ? 'disabled' : '';
@@ -3086,7 +3116,7 @@ ${reviewUI.dialog()}
       }
       const act = t.getAttribute('data-act');
       if (act.startsWith('review-')) { reviewUI.click(act,t); return; }
-      if (D.readOnlyExample && !['step','tab','open-preview','preview-nav','schema-json','close-schema-json','new-project','project','session-menu','session-rename','session-delete','session-cancel','open-memory','close-dialog','reuse-select','reuse-preview','open-help','toggle-sidebar'].includes(act)) return;
+      if (D.readOnlyExample && !['step','tab','open-preview','preview-nav','schema-json','close-schema-json','new-project','project','session-menu','session-rename','session-delete','session-cancel','open-memory','close-dialog','reuse-select','reuse-preview','open-help','toggle-sidebar','pdf-preview'].includes(act)) return;
       if (!act.startsWith('session-')) state.sessionMenu = '';
 
       if (act === 'toggle-sidebar') { state.sidebarOpen = !state.sidebarOpen; }
@@ -3252,6 +3282,10 @@ ${reviewUI.dialog()}
       }
       else if (act === 'finalize-project') {
         saveWorkflowDecision('finalize'); return;
+      }
+      else if (act === 'pdf-preview') {
+        const pdfKey = t.getAttribute('data-pdf-key') || '';
+        state.retrievalPreviewKey = state.retrievalPreviewKey === pdfKey ? '' : pdfKey;
       }
       else if (act === 'retry-toggle') {
         if (state.actionPending) return;

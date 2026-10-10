@@ -17,6 +17,9 @@ from .screening_criteria import criteria_state
 from .screening_guidance import guidance_state
 from .coding_rules import rules_state as coding_rules_state
 from .project_decisions import confirmed_decisions
+from .evidence_support import local_pdf
+from .paper_links import paper_links
+from .record_review import key as record_key
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
@@ -306,7 +309,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     extraction_stage = workflow_state["stages"]["extraction"]
     schema_finalized = (not extraction_stage["stale"] or _fresh_ready_output(extraction_stage) or schema_matches_setup) and is_schema_finalized(path)
     platform_stats = _platform_stats(path, config, collected_summary, allow_artifact_fallback=not workflow_state["stages"]["collection"]["stale"])
-    retrieval_recovery = disabled_retry_projection() if setup_update_pending or retry_update_pending else _retrieval_recovery(path)
+    retrieval_recovery = disabled_retry_projection() if setup_update_pending or retry_update_pending else _retrieval_recovery(path, included)
 
     return {
         "isNewProject": False,
@@ -334,7 +337,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "collectionRetry": _collection_retry(path, workflow_state),
         "keywords": _keywords(config),
         "groups": _groups(categorization),
-        "retrieved": _retrieved(included, download_report),
+        "retrieved": _retrieved(path, included, download_report),
         "screeningMetrics": _screening_metrics(collected_summary, filtering_stats, screening_stats, included),
         "screeningCriteria": criteria_state(path),
         "screeningGuidance": _screening_guidance_view(path),
@@ -365,11 +368,20 @@ def _format_mtime(path: Path) -> str:
         return datetime.now().strftime("%b %d, %Y")
 
 
-def _retrieval_recovery(path: Path) -> dict[str, Any]:
+def _retrieval_recovery(path: Path, included: list[dict]) -> dict[str, Any]:
     try:
-        return current_retry_snapshot(path).to_projection()
+        projection = current_retry_snapshot(path).to_projection()
     except (OSError, TypeError, ValueError):
         return disabled_retry_projection()
+    by_id = {}
+    for paper in included:
+        try:
+            by_id[stable_retry_id(paper)] = paper
+        except (TypeError, ValueError):
+            continue
+    for item in projection["items"]:
+        item["links"] = paper_links(by_id.get(item["retryId"]) or {})
+    return projection
 
 
 def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
@@ -722,7 +734,7 @@ def _preview_paper(row: dict, included: list[dict]) -> dict:
     }
 
 
-def _retrieved(included: list[dict], download_report: dict) -> list[dict]:
+def _retrieved(path: Path, included: list[dict], download_report: dict) -> list[dict]:
     downloaded = download_report.get("downloaded")
     if isinstance(downloaded, list):
         downloaded_ids = set()
@@ -743,11 +755,13 @@ def _retrieved(included: list[dict], download_report: dict) -> list[dict]:
         success = download_report.get("success")
         papers = included[:success] if type(success) is int and success >= 0 else included
     rows = []
-    for index, paper in enumerate(papers[:8], start=1):
+    for index, paper in enumerate(papers, start=1):
         title = paper.get("title") or f"Paper {index}"
         source = paper.get("source") or paper.get("platform") or "paper"
         year = paper.get("year") or paper.get("publication_year") or ""
-        rows.append({"t": str(title), "v": f"{source}{f' · {year}' if year else ''}"})
+        has_pdf = local_pdf(path, {}, paper) is not None
+        rows.append({"t": str(title), "v": f"{source}{f' · {year}' if year else ''}", "links": paper_links(paper),
+                     "pdfKey": record_key(paper) if has_pdf else ""})
     return rows
 
 

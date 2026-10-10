@@ -257,6 +257,20 @@ async def review_records_api(request):
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
 
+async def project_pdf(request):
+    """An included paper's retrieved PDF, shown inline for the Full-Text Retrieval preview."""
+    project_id = request.path_params["project_id"]
+    if not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(404)
+    project = Path(OUTPUT_ROOT) / project_id
+    wanted = request.path_params["pdf_key"]
+    papers = [row for row in read_jsonl(project / "filtered/included_papers.jsonl") if record_review.key(row) == wanted]
+    path = local_pdf(project, {}, papers[0]) if len(papers) == 1 else None
+    if path is None:
+        raise HTTPException(404)
+    return FileResponse(path, media_type="application/pdf", content_disposition_type="inline", filename=path.name)
+
+
 async def extraction_preview(request):
     project_id = request.path_params["project_id"]
     if not known_project(OUTPUT_ROOT, project_id):
@@ -489,6 +503,7 @@ def create_app() -> Starlette:
             Route("/projects/{project_id}/review", review_records_api, methods=["GET"]),
             Route("/projects/{project_id}/review/{operation}", review_records_api, methods=["GET", "PATCH"]),
             Route("/projects/{project_id}/extraction-preview/{paper_index:int}", extraction_preview, methods=["GET"]),
+            Route("/projects/{project_id}/pdfs/{pdf_key}", project_pdf, methods=["GET"]),
             Route("/projects/{project_id}/exports/{export_key}", project_export, methods=["GET"]),
             Route("/projects/{project_id}/chat", project_chat, methods=["POST"]),
             Route("/projects/{project_id}/setup", update_project_setup_api, methods=["PUT"]),

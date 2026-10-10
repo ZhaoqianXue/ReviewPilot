@@ -272,6 +272,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("function canvasActionButton", source)
         self.assertIn("${canvasActionButton(v)}", render_main)
 
+    def test_retrieved_list_is_not_escaped_twice_and_stays_below_the_stage_action(self):
+        source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+        render_main = source[source.index('<main class="rp-main"') : source.index("${assistantPanel(v)}")]
+        listing = source[source.index("function paperLinkChips(links)") : source.index("function retrievalRecoveryPanel(v)")]
+
+        # D is escaped once by escapeData; escaping again shows &#39; in titles.
+        self.assertNotIn("esc(", listing)
+        # Every included paper is listed, so the list follows the stage's action button instead of burying it.
+        self.assertLess(render_main.index("${canvasActionButton(v)}"), render_main.index("retrievedList(v)"))
+
     def test_stage_activity_renders_as_conversation_messages_not_fixed_panel(self):
         source = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
         assistant_panel = source[source.index("function assistantPanel") : source.index("function setupDialog")]

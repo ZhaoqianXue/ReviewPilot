@@ -112,7 +112,7 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(agent._usage_cost({"input_tokens": 5, "output_tokens": 5, "cost_usd": 0.42}), 0.42)
         self.assertAlmostEqual(agent._usage_cost({"total_tokens": 1_000_000}), input_rate)
 
-    def test_direct_openai_extraction_uses_max_completion_tokens_for_gpt5_models(self):
+    def test_direct_openai_extraction_leaves_reasoning_models_uncapped(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
             calls = []
@@ -122,6 +122,7 @@ class ExtractionAgentTests(unittest.TestCase):
 
             class FakeChoice:
                 message = FakeMessage()
+                finish_reason = "stop"
 
             class FakeUsage:
                 prompt_tokens = 10
@@ -138,9 +139,15 @@ class ExtractionAgentTests(unittest.TestCase):
             agent = ExtractionAgent(project_dir)
             agent.client = FakeClient()
             response, _cost = agent._extract_with_llm("paper", "Return JSON.", "Return JSON for {paper_text}")
+            # Reasoning tokens used up the budget before any answer text: say so instead of a JSON error.
+            FakeMessage.content = ""
+            FakeChoice.finish_reason = "length"
+            with self.assertRaisesRegex(ValueError, "ran out of output tokens"):
+                agent._extract_with_llm("paper", "Return JSON.", "Return JSON for {paper_text}")
 
         self.assertEqual(json.loads(response)["key_findings"], "ok")
-        self.assertIn("max_completion_tokens", calls[0])
+        # A completion cap is shared with reasoning tokens; 4096 left gpt-6-luna with an empty answer.
+        self.assertNotIn("max_completion_tokens", calls[0])
         self.assertNotIn("max_tokens", calls[0])
         self.assertNotIn("temperature", calls[0])  # the default gpt-6-luna rejects a custom temperature
 
