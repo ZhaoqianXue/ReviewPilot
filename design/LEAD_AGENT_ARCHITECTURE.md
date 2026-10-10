@@ -136,15 +136,16 @@ The subscribed-paper fallback flow is:
 ```text
 DownloadAgent
   -> marks paper as unavailable/subscribed in download_report.json and included_papers.jsonl
-LeadAgent
-  -> detects unavailable papers before extraction
-ExtractionAgent
-  -> uses the existing extraction schema
-  -> calls OpenAI Responses API with the hosted web_search tool
-  -> returns structured extraction with source URLs and confidence fields
-LeadAgent
-  -> verifies citations/sources exist
-  -> marks extraction_source = "web_search_fallback"
+LeadAgent (when extraction starts, after any PDFs the user supplied)
+  -> counts papers still without full text and shows papers x per-paper cost estimate (information, no switch)
+  -> decides whether the web step runs: skipped, with a notice, when the model has no web-search tool
+ExtractionAgent (same extraction schema and coding rules as full text)
+  -> 1. abstract in the record -> values with a quote found in the abstract, tier "abstract"
+  -> 2. web_search tool, only for fields still open -> each value needs source URL + verbatim page quote
+        code fetches the page and checks source type, paper identity and quote (reviewpilot_core/web_evidence.py)
+        accepted values -> tier "web", needs_human_check
+  -> 3. everything else -> tier "not_available", nothing guessed
+  -> marks extraction_source = "web_search_fallback"; per-field tiers in field_evidence and evidence_tiers
 ```
 
 Use OpenAI's Responses API hosted web search tool for this path. For new API integrations, use `{"type": "web_search"}` rather than legacy `web_search_preview`. When a search must happen, set `tool_choice` to `"required"` or to a specific web-search tool choice; with `"auto"`, the model may choose not to search.
@@ -203,7 +204,7 @@ response = client.responses.parse(
 extracted = response.output_parsed
 ```
 
-This fallback must never pretend to be full-text extraction. It must set `extraction_source` to `web_search_fallback`, store searched/cited URLs, and mark unsupported fields as empty or low confidence. The web-search context window is limited to 128k even when the underlying model context window is larger, so this path should be used for targeted evidence gathering, not full-paper reconstruction.
+This path never presents abstract or web values as full-text evidence. It sets `extraction_source` to `web_search_fallback`, stores each field's evidence tier (`full_text` / `abstract` / `web` / `not_available`) in `field_evidence`, keeps the source URL and page quote of every accepted web value, and leaves unsupported fields empty as `not_available`. Allowed web sources are the publisher landing page, trial registries, PMC / Europe PMC, preprint servers and the paper's own supplementary material; code rejects citing works, reviews, news, blogs, social media and shadow libraries. The web-search context window is limited to 128k even when the underlying model context window is larger, so this path should be used for targeted evidence gathering, not full-paper reconstruction.
 
 ## Internal Seven-Stage Evidence Pipeline
 | Stage | Owner | Primary Input | Primary Artifact |

@@ -154,11 +154,13 @@ class BugAuditTests(unittest.TestCase):
             extraction_prompt={'system_prompt':'Extract', 'user_prompt_template':'{paper_text}'})
         self.assertEqual(legacy['paper_id'], 'p1')
         self.assertEqual(legacy['extraction_source'], 'pdf')
-        fallback, _ = agent._extract_with_web_search_fallback(paper=paper, row_number=1,
-            extraction_prompt={}, web_search_query=lambda **kw: (json.dumps({
+        fallback, _ = agent._extract_without_full_text(paper={**paper, 'abstract': ''}, row_number=1,
+            extraction_prompt={'schema': {'fields': [{'name': 'methods', 'type': 'Text'}]}},
+            web_search_query=lambda **kw: (json.dumps({
                 'paper_id':'wrong', 'extraction_source':'pdf', 'source_urls':['https://example.org/paper']}), {}))
         self.assertEqual(fallback['paper_id'], 'p1')
         self.assertEqual(fallback['extraction_source'], 'web_search_fallback')
+        self.assertEqual(fallback['source_urls'], [])
 
     def test_preview_never_borrows_another_papers_result_by_position_or_id(self):
         from reviewpilot_core.extraction_preview import _formal_row

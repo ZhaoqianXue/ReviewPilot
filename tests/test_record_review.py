@@ -111,7 +111,10 @@ class RecordReviewTests(unittest.TestCase):
         evidence = evidence_for_field(self.project, row, 'x')
         self.assertEqual(evidence['status'], 'not_confirmable')
         self.assertEqual(evidence['quote'], '')
-        self.assertEqual(evidence['sourceUrls'], ['https://example.org/paper'])
+        # A row-level link does not back any one value: only a field's own confirmed page is shown.
+        self.assertEqual(evidence['sourceUrls'], [])
+        self.assertEqual(evidence['tier'], 'not_available')
+        self.assertIsNone(evidence['page'])
 
     def test_field_quote_uses_actual_page_and_correction_preserves_original(self):
         record_key=review.key({'id':'p1'})

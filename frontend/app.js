@@ -648,6 +648,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       categorizationWorkflow: data.categorizationWorkflow || emptyCategorizationWorkflow(),
       resultOverview: data.resultOverview || [],
       evidenceMatrix: data.evidenceMatrix || [],
+      noFullText: data.noFullText || { papers: 0, model: '', webSearch: false, perPaperUsd: 0, totalUsd: 0, notice: '', fieldTiers: {} },
       categorizationAnalysis: data.categorizationAnalysis || { field: '', categories: [] },
       exportPackage: data.exportPackage || [],
       prismaFlow: data.prismaFlow || null,
@@ -1668,6 +1669,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       catDraft: state.catDraft,
       resultOverview: D.resultOverview,
       evidenceMatrix: D.evidenceMatrix,
+      noFullText: D.noFullText,
       categorizationAnalysis: D.categorizationAnalysis,
       exportPackage: D.exportPackage,
       prismaFlow: D.prismaFlow,
@@ -2381,6 +2383,7 @@ ${reviewUI.dialog()}
       </div>
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
       ${!v.isNewProject ? codingRulesPanel(v) : ''}
+      ${wb.status === 'finalized' && !v.isNewProject ? noFullTextNotice(v.noFullText) : ''}
       ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;">${D.codingRules.status === 'confirmed' ? `<button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale && D.stageState.extraction?.last_valid ? 'Rerun extraction with this schema' : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button>` : ''}<button data-act="schema-json" style="${buttonStyle}">Schema JSON</button></div>` : ''}
       ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}
       ${!v.isNewProject ? reviewUI.extraction() : ''}`;
@@ -2482,6 +2485,18 @@ ${reviewUI.dialog()}
         <button type="button" data-act="rules-cancel" ${locked} style="${buttonStyle}">Discard edits</button>
         <span style="font-size:11px;color:#68798c;line-height:1.4;">Edits apply only after you confirm. One rule per box.</span>
       </div>
+    </div>`;
+  }
+
+  // Papers still without full text: the estimate is shown before running and is information, not a switch.
+  function noFullTextNotice(n) {
+    if (!n || !n.papers) return '';
+    const tiers = n.fieldTiers || {};
+    const counted = ['full_text', 'abstract', 'web', 'not_available'].some((tier) => tiers[tier]);
+    const labels = { full_text: 'Full text', abstract: 'Abstract', web: 'Web source (needs human check)', not_available: 'Not available' };
+    return `<div data-ui="no-full-text-notice" role="note" style="margin:12px 0 0;border:1px solid #f1d39b;background:#fff8e8;color:#5c3d00;border-radius:9px;padding:10px 12px;font-size:12px;line-height:1.5;">
+      <strong>Papers without full text</strong> · ${n.notice}
+      ${counted ? `<div data-ui="evidence-tier-counts" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${Object.keys(labels).map((tier) => `<span style="border:1px solid #e8d3a7;background:#fffdf7;border-radius:999px;padding:2px 8px;">${labels[tier]}: ${tiers[tier] || 0} fields</span>`).join('')}</div>` : ''}
     </div>`;
   }
 

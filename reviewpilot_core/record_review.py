@@ -13,7 +13,7 @@ from .model_policy import EXTRACTION_MODEL, FILTERING_MODEL, project_model
 from .project_store import read_json, read_jsonl
 from .workflow_state import load_workflow_state
 from .extraction_schema import load_schema_draft
-from .evidence_support import evidence_for_field, normalized_text, local_pdf
+from .evidence_support import evidence_for_field, field_tier, normalized_text, local_pdf
 
 _REVIEW_LOCK = RLock()
 PENDING = 'review/pending.json'
@@ -148,7 +148,7 @@ def extraction_rows(project: Path) -> list[dict]:
         for field in schema.get('fields', []):
             name = field['name']
             value = row.get(name, (row.get('extracted_data') or {}).get(name))
-            fields.append({'name': name, 'type': field['type'], 'value': value,
+            fields.append({'name': name, 'type': field['type'], 'value': value, 'tier': field_tier(row, name),
                            'reviewed': name in (row.get('human_fields') or {})})
         result.append({'key': key(row), 'title': row.get('title') or 'Untitled paper',
                        'source': row.get('extraction_source') or 'unknown', 'fields': fields,

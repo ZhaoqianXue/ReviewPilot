@@ -93,6 +93,44 @@ def assessed(row: dict[str, Any]) -> bool:
             and str(row.get("extraction_source") or "pdf") == "pdf")
 
 
+# Where a successful paper without a PDF stands. Only the first class is assessed for eligibility.
+ASSESSED_FROM_WEB = "assessed_from_web_sources"
+ELIGIBILITY_UNDETERMINED = "eligibility_undetermined"
+NO_EVIDENCE = "no_evidence"
+
+
+def field_tiers(row: dict[str, Any]) -> dict[str, str]:
+    """Evidence tier of each extracted field; rows written before tiers existed derive it from their source."""
+    from .evidence_support import field_tier
+    tiers = row.get("evidence_tiers")
+    if isinstance(tiers, dict) and tiers:
+        return {str(name): str(tier) for name, tier in tiers.items()}
+    names = [name for name in (row.get("extracted_data") or {}) if name != RAW_KEY]
+    return {name: field_tier(row, name) for name in names}
+
+
+def no_full_text_class(row: dict[str, Any]) -> str | None:
+    """Class of a successful row not extracted from a PDF; None for PDF assessments and failed rows.
+
+    This includes papers whose downloaded PDF went unused and that were extracted from the
+    abstract or web sources instead: they had no usable full text.
+
+    assessed_from_web_sources: eligibility comes from the abstract or a web source (or the
+    schema has no eligibility field and some field has evidence). eligibility_undetermined:
+    other fields have evidence but eligibility is not available. no_evidence: every field is
+    not available, which includes rows written before tiers existed.
+    """
+    from .evidence_support import NOT_AVAILABLE
+    if str(row.get("extraction_status") or "success").lower() != "success" or assessed(row):
+        return None
+    tiers = field_tiers(row)
+    if not tiers or all(tier == NOT_AVAILABLE for tier in tiers.values()):
+        return NO_EVIDENCE
+    if tiers.get(FIELD) == NOT_AVAILABLE:
+        return ELIGIBILITY_UNDETERMINED
+    return ASSESSED_FROM_WEB
+
+
 def is_excluded(row: dict[str, Any]) -> bool:
     """Excluded from synthesis: an extracted paper whose eligibility value names an exclusion.
 
@@ -102,28 +140,59 @@ def is_excluded(row: dict[str, Any]) -> bool:
             and value(row).startswith(EXCLUDE_PREFIX))
 
 
-def analysis_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """Split extracted papers into the analysis set and eligibility exclusions, with reasons.
+def in_analysis(row: dict[str, Any]) -> bool:
+    """The one rule for the analysis set: an extracted, eligible paper whose eligibility was assessed.
 
-    "included" is the set Categorization & Analysis uses. Exclusions are counted as
-    prisma_counts reports them: PDF assessments apart from web-fallback ones.
+    Papers without a PDF count only when eligibility came from the abstract or a web source;
+    those without evidence, or without an eligibility judgement, stay out.
     """
-    extracted = full_text = web = 0
+    return (str(row.get("extraction_status") or "success").lower() == "success" and not is_excluded(row)
+            and (assessed(row) or no_full_text_class(row) == ASSESSED_FROM_WEB))
+
+
+def analysis_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Split extracted papers into the analysis set, eligibility exclusions and unassessed papers.
+
+    "included" is the set Categorization & Analysis uses (in_analysis). Exclusions are
+    counted as prisma_counts reports them: PDF assessments apart from abstract or web ones.
+    extracted = included + excluded + eligibility_undetermined + no_evidence.
+    """
+    extracted = included = full_text = web = no_evidence = undetermined = 0
     reasons: dict[str, int] = {}
     for row in rows:
         if str(row.get("extraction_status") or "success").lower() != "success":
             continue
         extracted += 1
-        if not is_excluded(row):
+        cls = no_full_text_class(row)
+        if cls == NO_EVIDENCE:
+            no_evidence += 1
             continue
-        full_text += assessed(row)
-        web += str(row.get("extraction_source") or "") == "web_search_fallback"
+        if cls == ELIGIBILITY_UNDETERMINED:
+            undetermined += 1
+            continue
+        if not is_excluded(row):
+            included += 1
+            continue
+        full_text += cls is None
+        web += cls == ASSESSED_FROM_WEB
         reason = value(row).removeprefix(EXCLUDE_PREFIX)
         reasons[reason] = reasons.get(reason, 0) + 1
-    excluded = sum(reasons.values())
-    return {"extracted": extracted, "included": extracted - excluded, "excluded": excluded,
+    return {"extracted": extracted, "included": included, "excluded": sum(reasons.values()),
             "excluded_at_full_text": full_text, "excluded_from_web_sources": web,
+            "no_evidence": no_evidence, "eligibility_undetermined": undetermined,
             "reasons": dict(sorted(reasons.items(), key=lambda item: -item[1]))}
+
+
+def _tier_counts(extraction: list[dict[str, Any]]) -> dict[str, int]:
+    from .evidence_support import EVIDENCE_TIERS
+    counts = {tier: 0 for tier in EVIDENCE_TIERS}
+    for row in extraction:
+        if str(row.get("extraction_status") or "success").lower() != "success":
+            continue
+        for tier in field_tiers(row).values():
+            if tier in counts:
+                counts[tier] += 1
+    return counts
 
 
 def prisma_counts(project: Path) -> dict[str, Any]:
@@ -138,15 +207,20 @@ def prisma_counts(project: Path) -> dict[str, Any]:
     extraction = read_jsonl(project / "extraction" / "extraction_results.jsonl")
     schema = read_json(project / "extraction" / "extraction_schema.json", {}) or {}
     assessed_rows = [row for row in extraction if assessed(row)]
-    web_rows = [row for row in extraction if str(row.get("extraction_status") or "") == "success"
-                and str(row.get("extraction_source") or "") == "web_search_fallback"]
+    classes = [no_full_text_class(row) for row in extraction]
+    web_rows = [row for row, cls in zip(extraction, classes) if cls == ASSESSED_FROM_WEB]
+    undetermined = classes.count(ELIGIBILITY_UNDETERMINED)
+    no_evidence = classes.count(NO_EVIDENCE)
     web_excluded = analysis_summary(web_rows)["excluded"]
     reasons = analysis_summary(assessed_rows)["reasons"]
     overrides = 0
     for row in included + excluded:
         review = row.get("human_screening") or {}
         overrides += bool(review) and review.get("original_decision") != review.get("decision")
-    with_pdf = sum(1 for row in extraction if row.get("pdf_file"))
+    # Each paper counts once: assessed from its PDF, PDF obtained but its extraction failed, or no usable full text.
+    not_extracted = sum(1 for row in extraction if row.get("pdf_file")
+                        and str(row.get("extraction_status") or "success").lower() != "success")
+    not_retrieved = len(included) - len(assessed_rows) - not_extracted
     categorized = read_jsonl(project / "categorization" / "categorized_results.jsonl")
     stages = load_workflow_state(project)["stages"]
     return {
@@ -162,10 +236,17 @@ def prisma_counts(project: Path) -> dict[str, Any]:
             "records_excluded": len(excluded),
             "human_overrides": overrides,
             "reports_sought": len(included),
-            "reports_not_retrieved": len(included) - with_pdf,
+            # reports_sought = reports_assessed + reports_not_extracted + reports_not_retrieved.
+            # reports_not_retrieved means no usable full text, including a downloaded PDF that went unused.
+            # The four not_retrieved_* classes are disjoint and add up to reports_not_retrieved;
+            # "assessed from web sources" includes papers whose eligibility came from the abstract.
+            "reports_not_retrieved": not_retrieved,
             "not_retrieved_assessed_from_web_sources": len(web_rows),
             "not_retrieved_excluded_from_web_sources": web_excluded,
-            "reports_not_extracted": with_pdf - len(assessed_rows),
+            "not_retrieved_eligibility_undetermined": undetermined,
+            "not_retrieved_no_evidence": no_evidence,
+            "not_retrieved_not_extracted": not_retrieved - len(web_rows) - undetermined - no_evidence,
+            "reports_not_extracted": not_extracted,
             "reports_assessed": len(assessed_rows),
             "full_text_eligibility_field": any(f.get("name") == FIELD for f in schema.get("fields") or []),
             "reports_excluded": sum(reasons.values()),
@@ -173,9 +254,12 @@ def prisma_counts(project: Path) -> dict[str, Any]:
             "reports_unmatched_value": sum(1 for row in assessed_rows if row.get(RAW_KEY)),
             "full_text_corrections": sum(1 for row in assessed_rows if FIELD in (row.get("human_fields") or {})),
         },
+        # Values from abstracts and web sources are counted apart from full-text values.
+        "field_evidence_tiers": _tier_counts(extraction),
         "included": {
             "studies_included": len(assessed_rows) - sum(reasons.values()),
             "studies_included_from_web_sources": len(web_rows) - web_excluded,
-            "studies_categorized": len({str(row.get("paper_id") or row.get("title")) for row in categorized}),
+            # Only categorized papers still in the analysis set; results written under older rules may hold others.
+            "studies_categorized": len({str(row.get("paper_id") or row.get("title")) for row in categorized if in_analysis(row)}),
         },
     }

@@ -44,7 +44,8 @@ def make_project(root, name='study', finalized=True):
         row(2, EXCLUDE_ANIMAL),
         row(3, ''),
         {'paper_id': 'p4', 'title': 'Paper 4', 'extraction_source': 'web_search_fallback', 'extraction_status': 'success',
-         fte.FIELD: EXCLUDE_ANIMAL, 'extracted_data': {fte.FIELD: EXCLUDE_ANIMAL, 'participants': None}, 'participants': None},
+         fte.FIELD: EXCLUDE_ANIMAL, 'extracted_data': {fte.FIELD: EXCLUDE_ANIMAL, 'participants': None}, 'participants': None,
+         'evidence_tiers': {fte.FIELD: 'web', 'participants': 'not_available'}},
     ])
     (p / 'pdfs').mkdir()
     for i in (1, 2, 3):
@@ -193,7 +194,8 @@ class AnalysisHeaderTests(unittest.TestCase):
     def test_summary_matches_prisma_counts_and_the_analysis_rows(self):
         summary = fte.analysis_summary(self.rows())
         self.assertEqual(summary, {'extracted': 4, 'included': 2, 'excluded': 2, 'excluded_at_full_text': 1,
-                                   'excluded_from_web_sources': 1, 'reasons': {'Animal-only study': 2}})
+                                   'excluded_from_web_sources': 1, 'no_evidence': 0, 'eligibility_undetermined': 0,
+                                   'reasons': {'Animal-only study': 2}})
         counts = fte.prisma_counts(self.project)
         self.assertEqual(summary['excluded_at_full_text'], counts['screening']['reports_excluded'])
         self.assertEqual(summary['excluded_from_web_sources'], counts['screening']['not_retrieved_excluded_from_web_sources'])

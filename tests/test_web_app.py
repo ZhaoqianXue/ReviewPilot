@@ -1273,6 +1273,22 @@ class WebAppTests(unittest.TestCase):
                     if "Assign the supplied paper evidence" in prompt:
                         category = "Implementation" if "barriers" in prompt else "Clinical Support"
                         return (json.dumps({"category": category}), {"total_tokens": 10})
+                    if "PAPER EVIDENCE DATA" in prompt and "ABSTRACT:\nDeployment barriers" in prompt:
+                        # The paywalled paper has no PDF: the abstract supports eligibility and one field,
+                        # so the paper stays in the analysis set.
+                        return (
+                            json.dumps(
+                                {
+                                    "full_text_eligibility": "Include",
+                                    "key_findings": "deployment barriers for biomedical LLMs",
+                                    "limitations": "",
+                                    "application_area": "",
+                                    "_field_evidence": {"full_text_eligibility": [{"quote": "Deployment barriers for biomedical LLMs."}],
+                                                        "key_findings": [{"quote": "Deployment barriers for biomedical LLMs."}]},
+                                }
+                            ),
+                            {"total_tokens": 20},
+                        )
                     if "PAPER EVIDENCE DATA" in prompt:
                         return (
                             json.dumps(
@@ -1288,19 +1304,27 @@ class WebAppTests(unittest.TestCase):
                         return (json.dumps({"reply": "Action completed."}), {"total_tokens": 8})
                     return ("true", {"total_tokens": 5})
 
-                def fake_web_search(self, paper, extraction_prompt):
+                def fake_web_search(_agent, paper, extraction_prompt):
+                    requested = [f["name"] for f in extraction_prompt["schema"]["fields"]]
+                    self.assertNotIn("key_findings", requested)  # the abstract already supports it
+                    self.assertIn("limitations", requested)
                     return (
                         json.dumps(
                             {
-                                "key_findings": "deployment barriers for biomedical LLMs",
-                                "limitations": "publisher page only",
+                                "limitations": "Single-site deployment study",
                                 "application_area": "implementation",
-                                "source_urls": ["https://pubmed.ncbi.nlm.nih.gov/123"],
-                                "confidence": "medium",
+                                "_field_evidence": {
+                                    "limitations": [{"url": "https://doi.org/10.1000/closed", "quote": "This was a single-site deployment study."}],
+                                    "application_area": [{"url": "https://pubmed.ncbi.nlm.nih.gov/123", "quote": "Implementation of biomedical LLMs."}],
+                                },
                             }
                         ),
                         {"total_tokens": 25},
                     )
+
+                def fake_fetch_page(url):
+                    return {"url": "https://publisher.example/article/closed", "text": "Paywalled LLM Paper. This was a single-site deployment study.",
+                            "declared_dois": ["10.1000/closed"], "declared_titles": ["Paywalled LLM Paper"]}
 
                 import sys
 
@@ -1314,7 +1338,9 @@ class WebAppTests(unittest.TestCase):
                     "utils.llm.query_llm", side_effect=fake_llm
                 ), patch("utils.fast_pdf_downloader.FastCascadePDFDownloader", FakeFastDownloader), patch.object(
                     ExtractionAgent, "_read_pdf", lambda self, path: "This paper reports clinical triage support."
-                ), patch.object(ExtractionAgent, "_query_web_search_extraction", fake_web_search):
+                ), patch.object(ExtractionAgent, "_query_web_search_extraction", fake_web_search), patch(
+                    "reviewpilot_core.web_evidence.fetch_page", fake_fetch_page
+                ):
                     response = client.post(
                         "/projects",
                         json={
@@ -1358,7 +1384,9 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(state["categorizationSummary"]["groups"], 2)
         self.assertEqual(state["retrievalSummary"]["unavailable"], 1)
         self.assertEqual(state["evidenceMatrix"][1]["extractionSource"], "web_search_fallback")
-        self.assertEqual(state["evidenceMatrix"][1]["sourceUrls"], ["https://pubmed.ncbi.nlm.nih.gov/123"])
+        # Only the confirmed publisher page backs a stored value; the PubMed link is not an allowed source.
+        self.assertEqual(state["evidenceMatrix"][1]["sourceUrls"], ["https://doi.org/10.1000/closed"])
+        self.assertEqual(state["noFullText"]["fieldTiers"], {"full_text": 4, "abstract": 2, "web": 1, "not_available": 1})
         self.assertTrue(all(item["exists"] for item in state["exportPackage"]))
 
 

@@ -45,6 +45,7 @@ from reviewpilot_core.extraction_schema import (
     schema_paths,
 )
 from reviewpilot_core.model_policy import LEAD_AGENT_DEV_MODEL
+from reviewpilot_core import no_full_text
 from reviewpilot_core.safe_text import contains_absolute_path
 from reviewpilot_core.sub_agent_contracts import default_sub_agent_contracts
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
@@ -397,7 +398,7 @@ Return ONLY valid JSON:
                 raise ValueError("Action 'run-extraction' requires finalized extraction schema")
             require_confirmed_rules(project_path)
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
-            result = self._call_workflow_action("run-extraction", project_id)
+            result = self._run_extraction(project_path, project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
             return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")
 
@@ -415,7 +416,7 @@ Return ONLY valid JSON:
                 self._record_coding_rules_activity(project_path, self._coding_rules_reply(rules))
                 return LeadAgentResult(stage="prompt_extraction", status="completed", reply=self._coding_rules_reply(rules),
                     data={"coding_rules": rules}, artifacts=artifacts + [str(project_path / "extraction/coding_rules.json")])
-            result = self._call_workflow_action("run-extraction", project_id)
+            result = self._run_extraction(project_path, project_id)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
             return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")
 
@@ -724,6 +725,18 @@ Supported commands:
             logging.getLogger("reviewpilot.lead_agent").warning("Screening guidance draft failed for %s: %s", project_id, exc)
             return save_guidance_failure(project_path, f"{type(exc).__name__}: {exc}")
 
+    def _run_extraction(self, project_path: Path, project_id: str) -> dict[str, Any]:
+        """Run extraction; papers still without full text go through abstract and web extraction.
+
+        The plan is read when extraction starts, so PDFs the user supplied after retrieval
+        count as full text. The Lead Agent decides whether the web step runs: it is skipped,
+        and the user told so, when the project's model has no web-search tool.
+        """
+        plan = no_full_text.plan(project_path)
+        input_data = {"web_search": plan["web_search"]} if plan["papers"] else None
+        result = self._call_workflow_action("run-extraction", project_id, input_data=input_data)
+        return {**result, "no_full_text_plan": plan} if plan["papers"] else result
+
     def _call_workflow_action(self, action: str, project_id: str, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         # Cross-project configurations enter only through explicit draft imports.
         enriched_input = {key: value for key, value in (input_data or {}).items() if key != "memory_context"}
@@ -895,7 +908,16 @@ Supported commands:
             download_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
             fallback_candidates = result.get("web_search_fallback_candidates") or download_stats.get("web_search_fallback_candidates")
             if count("failed") and fallback_candidates:
-                reply += " ExtractionAgent will use web-search fallback for eligible unavailable papers."
+                reply += (" Papers still without full text when extraction runs will be extracted from their abstracts"
+                          " and allowed web sources; you can still supply their PDFs first.")
+        if stage == "extraction" and isinstance(result.get("no_full_text_plan"), dict):
+            plan = result["no_full_text_plan"]
+            papers = int(plan.get("papers") or 0)
+            reply += (f" {papers} {'paper' if papers == 1 else 'papers'} without full text"
+                      f" {'was' if papers == 1 else 'were'} extracted from the abstract"
+                      + (" and allowed web sources; web values are marked for human check." if plan.get("web_search") else
+                         f" only: {plan.get('model')} has no web-search tool, so the web step was skipped.")
+                      + " Fields neither source supports are recorded as not available.")
         if stage == "categorization":
             reply += " No next canvas action is required."
         return reply

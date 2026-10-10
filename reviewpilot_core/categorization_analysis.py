@@ -32,6 +32,8 @@ METADATA_FIELDS = {
     "error_message",
     "source_urls",
     "confidence",
+    "evidence_tiers",
+    "web_search",
 }
 
 
@@ -378,8 +380,8 @@ def _recommended_category_field(rows: list[dict]) -> str:
 
 
 def _successful_rows(rows: list[dict]) -> list[dict]:
-    from .fulltext_eligibility import is_excluded
-    return [row for row in rows if str(row.get("extraction_status") or "success").lower() == "success" and not is_excluded(row)]
+    from .fulltext_eligibility import in_analysis
+    return [row for row in rows if in_analysis(row)]
 
 
 def _category_mode(payload: dict[str, Any]) -> str:

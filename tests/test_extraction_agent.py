@@ -9,6 +9,12 @@ from reviewpilot_core.model_policy import EXTRACTION_MODEL
 from reviewpilot_core.project_store import read_json, read_jsonl
 
 
+WEB_PROMPT = {"system_prompt": "Extract.", "user_prompt_template": "{paper_text}",
+              "schema": {"fields": [{"name": "methods", "type": "Text"}]}}
+PMC_PAGE = {"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/", "declared_dois": ["10.1000/a"],
+            "text": "Paper A on remote triage. Methods were reported as public evidence."}
+
+
 class ExtractionAgentTests(unittest.TestCase):
     def test_extract_one_uses_production_pdf_path_without_writing_formal_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -41,16 +47,20 @@ class ExtractionAgentTests(unittest.TestCase):
     def test_extract_one_supports_production_web_search_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
-            paper = {"id": "p1", "title": "Paper A", "web_search_fallback_pending": True, "pdf_downloaded": False}
+            paper = {"id": "p1", "title": "Paper A on remote triage", "doi": "10.1000/a", "web_search_fallback_pending": True, "pdf_downloaded": False}
             agent = ExtractionAgent(
                 project_dir,
-                web_search_query=lambda **kwargs: ({"methods": "Public evidence", "source_urls": ["https://example.test/a"]}, {}),
+                web_search_query=lambda **kwargs: ({"methods": "Public evidence", "_field_evidence": {"methods": [
+                    {"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/", "quote": "Methods were reported as public evidence."}]}}, {}),
+                page_fetcher=lambda url: PMC_PAGE,
             )
-            row = agent.extract_one(paper=paper, row_number=1, extraction_prompt={}, pdf_folder=project_dir / "pdfs", pdf_files=[])
+            row = agent.extract_one(paper=paper, row_number=1, extraction_prompt=WEB_PROMPT, pdf_folder=project_dir / "pdfs", pdf_files=[])
 
         self.assertEqual(row["extraction_status"], "success")
         self.assertEqual(row["extraction_source"], "web_search_fallback")
         self.assertEqual(row["methods"], "Public evidence")
+        self.assertEqual(row["field_evidence"]["methods"]["tier"], "web")
+        self.assertEqual(row["field_evidence"]["methods"]["source_url"], "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/")
 
     def test_one_shot_writer_failure_rolls_back_pdf_and_web_results(self):
         for source in ("pdf", "web"):
@@ -183,7 +193,7 @@ class ExtractionAgentTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "id": "closed",
-                                "title": "Closed PDF",
+                                "title": "Closed PDF on deployment",
                                 "pdf_downloaded": False,
                                 "retrieval_status": "subscribed_unavailable",
                                 "web_search_fallback_pending": True,
@@ -217,17 +227,20 @@ class ExtractionAgentTests(unittest.TestCase):
                 return (
                     {
                         "key_findings": "Public abstract reports clinical deployment barriers",
-                        "source_urls": ["https://pubmed.ncbi.nlm.nih.gov/123"],
-                        "confidence": "medium",
+                        "_field_evidence": {"key_findings": [{"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9/",
+                                                              "quote": "The record reports clinical deployment barriers."}]},
                     },
                     {"total_tokens": 20},
                 )
 
+            pmc_page = {"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC9/", "declared_titles": ["Closed PDF on deployment"],
+                        "text": "Closed PDF on deployment. The record reports clinical deployment barriers."}
             result = ExtractionAgent(
                 project_dir,
                 llm_query=fake_llm_query,
                 pdf_reader=fake_reader,
                 web_search_query=fake_web_search_query,
+                page_fetcher=lambda url: pmc_page,
             ).run(
                 {
                     "filtered_file": str(included_file),
@@ -239,7 +252,7 @@ class ExtractionAgentTests(unittest.TestCase):
             stats = read_json(project_dir / "extraction" / "extraction_stats.json")
 
         self.assertEqual(calls[0][2], EXTRACTION_MODEL)
-        self.assertEqual(web_search_calls[0][0]["title"], "Closed PDF")
+        self.assertEqual(web_search_calls[0][0]["title"], "Closed PDF on deployment")
         self.assertEqual(web_search_calls[0][2], EXTRACTION_MODEL)
         self.assertIn("20 percent accuracy", calls[0][0])
         self.assertEqual(result["status"], "extraction_done")
@@ -249,11 +262,12 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(rows[0]["title"], "Open PDF")
         self.assertEqual(rows[0]["extraction_source"], "pdf")
         self.assertEqual(rows[0]["key_findings"], "20 percent accuracy gain")
-        self.assertEqual(rows[1]["title"], "Closed PDF")
+        self.assertEqual(rows[1]["title"], "Closed PDF on deployment")
         self.assertEqual(rows[1]["extraction_source"], "web_search_fallback")
         self.assertEqual(rows[1]["extraction_status"], "success")
-        self.assertEqual(rows[1]["source_urls"], ["https://pubmed.ncbi.nlm.nih.gov/123"])
-        self.assertEqual(rows[1]["confidence"], "medium")
+        self.assertEqual(rows[1]["source_urls"], ["https://pmc.ncbi.nlm.nih.gov/articles/PMC9/"])
+        self.assertEqual(rows[0]["evidence_tiers"], {"key_findings": "full_text"})
+        self.assertEqual(rows[1]["evidence_tiers"], {"key_findings": "web"})
         self.assertEqual(rows[1]["key_findings"], "Public abstract reports clinical deployment barriers")
         self.assertEqual(stats["processed"], 2)
         self.assertEqual(stats["web_search_fallback"], 1)
@@ -314,8 +328,9 @@ class ExtractionAgentTests(unittest.TestCase):
                 json.dumps(
                     {
                         "id": "closed",
-                        "title": "Closed PDF",
+                        "title": "Closed PDF about triage models",
                         "doi": "10.1000/example",
+                        "url": "https://journal.example.org/article/closed",
                         "pdf_downloaded": False,
                         "retrieval_status": "subscribed_unavailable",
                         "web_search_fallback_pending": True,
@@ -326,6 +341,7 @@ class ExtractionAgentTests(unittest.TestCase):
             )
             extraction_prompt = {
                 "prompt_type": "extraction",
+                "system_prompt": "Extract structured paper data.",
                 "schema": {"fields": [{"name": "key_findings", "description": "Findings"}]},
             }
             response_calls = []
@@ -338,8 +354,8 @@ class ExtractionAgentTests(unittest.TestCase):
                 output_text = json.dumps(
                     {
                         "key_findings": "Found through web search",
-                        "source_urls": ["https://example.org/paper"],
-                        "confidence": "low",
+                        "_field_evidence": {"key_findings": [{"url": "https://journal.example.org/article/closed",
+                                                              "quote": "Triage accuracy was found through web search."}]},
                     }
                 )
                 usage = FakeUsage()
@@ -352,8 +368,10 @@ class ExtractionAgentTests(unittest.TestCase):
             class FakeClient:
                 responses = FakeResponses()
 
-            agent = ExtractionAgent(project_dir)
+            agent = ExtractionAgent(project_dir, page_fetcher=lambda url: {
+                "url": url, "declared_dois": ["10.1000/example"], "text": "Triage accuracy was found through web search."})
             agent.client = FakeClient()
+            agent.skill_augment = lambda prompt: prompt + "\n[skill]"
             result = agent.run(
                 {
                     "filtered_file": str(included_file),
@@ -364,13 +382,20 @@ class ExtractionAgentTests(unittest.TestCase):
             rows = read_jsonl(project_dir / "extraction" / "extraction_results.jsonl")
 
         self.assertEqual(result["web_search_fallback"], 1)
-        self.assertEqual(response_calls[0]["tools"][0]["type"], "web_search")
-        self.assertIn("allowed_domains", response_calls[0]["tools"][0]["filters"])
-        self.assertNotIn("blocked_domains", response_calls[0]["tools"][0]["filters"])
+        tool = response_calls[0]["tools"][0]
+        self.assertEqual(tool["type"], "web_search")
+        self.assertIn("journal.example.org", tool["filters"]["allowed_domains"])
+        self.assertIn("clinicaltrials.gov", tool["filters"]["allowed_domains"])
+        self.assertLessEqual(len(tool["filters"]["allowed_domains"]), 20)
+        self.assertNotIn("blocked_domains", tool["filters"])
         self.assertEqual(response_calls[0]["tool_choice"], "required")
         self.assertIn("web_search_call.action.sources", response_calls[0]["include"])
+        system = response_calls[0]["input"][0]["content"]
+        self.assertIn("url (the web page the value comes from) and quote", system)
+        self.assertTrue(system.endswith("[skill]"))
         self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
-        self.assertEqual(rows[0]["source_urls"], ["https://example.org/paper"])
+        self.assertEqual(rows[0]["source_urls"], ["https://journal.example.org/article/closed"])
+        self.assertEqual(rows[0]["field_evidence"]["key_findings"]["source_type"], "publisher_landing_page")
 
     def test_run_does_not_eagerly_initialize_client_for_overridden_web_search_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -399,12 +424,14 @@ class ExtractionAgentTests(unittest.TestCase):
                 json.dumps(
                     {
                         "key_findings": "Recovered without credentials",
-                        "source_urls": ["https://example.org/fallback-only"],
-                        "confidence": "medium",
+                        "_field_evidence": {"key_findings": [{"url": "https://arxiv.org/abs/2401.00001",
+                                                              "quote": "The findings were recovered without credentials."}]},
                     }
                 ),
                 {"total_tokens": 4},
             )
+            agent.page_fetcher = lambda url: {"url": url, "declared_titles": ["Fallback Only Paper"],
+                                              "text": "Fallback Only Paper. The findings were recovered without credentials."}
 
             def fail_client_initialization():
                 raise AssertionError("fallback override must not initialize the OpenAI client")
@@ -425,7 +452,7 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
         self.assertEqual(rows[0]["key_findings"], "Recovered without credentials")
 
-    def test_web_search_fallback_uses_paper_metadata_url_when_response_has_no_sources(self):
+    def test_web_value_without_source_is_not_backfilled_from_metadata_url(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
             (project_dir / "filtered").mkdir(parents=True)
@@ -449,7 +476,10 @@ class ExtractionAgentTests(unittest.TestCase):
             def source_less_web_search_query(*, paper, extraction_prompt, model):
                 return json.dumps({"key_findings": "Found but source field omitted"}), {"input_tokens": 10, "output_tokens": 5}
 
-            result = ExtractionAgent(project_dir, web_search_query=source_less_web_search_query).run(
+            def no_fetch(url):
+                raise AssertionError("a value without a source URL needs no page fetch")
+
+            result = ExtractionAgent(project_dir, web_search_query=source_less_web_search_query, page_fetcher=no_fetch).run(
                 {
                     "filtered_file": str(included_file),
                     "download_folder": str(project_dir / "pdfs"),
@@ -460,14 +490,14 @@ class ExtractionAgentTests(unittest.TestCase):
 
         self.assertEqual(result["processed"], 1)
         self.assertEqual(result["errors"], 0)
-        self.assertEqual(result["web_search_fallback"], 1)
         self.assertEqual(result["pending_web_search_fallback"], 0)
         self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
-        self.assertEqual(rows[0]["extraction_status"], "success")
-        self.assertEqual(rows[0]["source_urls"], ["https://pubmed.ncbi.nlm.nih.gov/123", "https://doi.org/10.1000/example"])
-        self.assertEqual(rows[0]["confidence"], "low")
+        self.assertEqual(rows[0]["key_findings"], "")
+        self.assertEqual(rows[0]["source_urls"], [])
+        self.assertEqual(rows[0]["field_evidence"]["key_findings"]["tier"], "not_available")
+        self.assertEqual(rows[0]["field_evidence"]["key_findings"]["rejected_sources"][0]["reason"], "missing_evidence")
 
-    def test_failed_web_search_fallback_still_writes_source_and_confidence_fields(self):
+    def test_failed_web_search_keeps_the_paper_retryable_without_guessing(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
             (project_dir / "filtered").mkdir(parents=True)
@@ -498,13 +528,16 @@ class ExtractionAgentTests(unittest.TestCase):
             )
             rows = read_jsonl(project_dir / "extraction" / "extraction_results.jsonl")
 
-        self.assertEqual(result["processed"], 0)
-        self.assertEqual(result["errors"], 1)
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["errors"], 0)
         self.assertEqual(result["pending_web_search_fallback"], 1)
+        self.assertEqual(result["no_full_text"]["web_search_failed"], 1)
         self.assertEqual(rows[0]["extraction_source"], "web_search_fallback")
+        self.assertEqual(rows[0]["web_search"], {"status": "failed", "error": "search unavailable"})
+        self.assertEqual(rows[0]["key_findings"], "")
         self.assertEqual(rows[0]["source_urls"], [])
-        self.assertEqual(rows[0]["confidence"], "low")
         self.assertTrue(rows[0]["web_search_fallback_pending"])
+
 
 
 if __name__ == "__main__":

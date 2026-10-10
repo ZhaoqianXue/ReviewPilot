@@ -14,3 +14,11 @@ def block_live_llm_calls(monkeypatch):
         raise RuntimeError(f"Test attempted a live {provider} LLM call; patch the LLM query instead.")
 
     monkeypatch.setattr("utils.llm.load_api_key", refuse)
+
+
+@pytest.fixture(autouse=True)
+def block_live_page_fetches(monkeypatch):
+    def refuse(url: str):
+        raise RuntimeError(f"Test attempted a live page fetch of {url}; inject a page_fetcher instead.")
+
+    monkeypatch.setattr("reviewpilot_core.web_evidence.fetch_page", refuse)

@@ -4,7 +4,12 @@ Extracts information from downloaded PDFs using LLM prompts.
 Outputs results in JSONL format with real-time writing.
 """
 
-from reviewpilot_core.evidence_support import FIELD_EVIDENCE_INSTRUCTION, verify_field_evidence
+from reviewpilot_core import evidence_support, fulltext_eligibility, web_evidence
+from reviewpilot_core.evidence_support import (
+    ABSTRACT, FIELD_EVIDENCE_INSTRUCTION, FULL_TEXT, NOT_AVAILABLE, WEB, WEB_FIELD_EVIDENCE_INSTRUCTION, verify_field_evidence,
+)
+from reviewpilot_core.field_values import coerce_value, validate_value
+from reviewpilot_core.no_full_text import lacks_full_text
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
@@ -17,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base_agent import BaseAgent
 from reviewpilot_core.extraction_schema import build_extraction_prompts
 from reviewpilot_core.atomic_files import atomic_output_path
-from reviewpilot_core.model_policy import EXTRACTION_MODEL, accepts_custom_temperature
+from reviewpilot_core.model_policy import EXTRACTION_MODEL, WEB_SEARCH_CALL_USD, accepts_custom_temperature, supports_web_search
 from utils.jsonl_handler import read_jsonl, append_jsonl, save_json
 from utils.human_interaction import print_header, print_summary, show_progress
 
@@ -27,6 +32,28 @@ try:
 except ImportError:
     PDF_SUPPORT = False
     print("Warning: pypdf not installed. PDF extraction disabled.")
+
+# Rules for papers without full text live in these prompts, not in the extraction Skill, so the
+# Skill text that full-text extraction uses stays as validated.
+ABSTRACT_ONLY_NOTE = (
+    "The supplied evidence is the paper's title and abstract; the full text is not available. Apply the same schema, "
+    "category definitions and coding rules as for full text. Populate a field only when the abstract states its value or "
+    "the value necessarily follows from what the abstract describes, and quote the abstract sentence that establishes it. "
+    "Leave every other field empty: silence in an abstract says nothing about what the full text reports, and a field is "
+    "left empty rather than inferred from the study topic, the venue or similar studies."
+)
+WEB_EVIDENCE_RULES = (
+    "The full text of this paper is not available and the abstract left the requested fields open. Use web search to find "
+    "them only on pages about this paper itself: its publisher landing page, a trial registry entry for the study, its PMC "
+    "or Europe PMC record, a preprint of the same work, or its own supplementary material. Before using a page, confirm that "
+    "it presents this paper, by its DOI or title, as its own subject; works that cite or review the paper, news stories, blogs, "
+    "social media and unauthorised copies describe it second-hand and are left out. Report each value at the strength the page "
+    "states, and leave a field empty rather than inferring it from the study topic, the venue or similar studies."
+)
+
+
+def _has_value(value: Any) -> bool:
+    return value not in (None, "", [], {})
 
 
 class ExtractionAgent(BaseAgent):
@@ -38,19 +65,25 @@ class ExtractionAgent(BaseAgent):
 
     EXTRACTION_WORKERS = 8
 
-    def __init__(self, project_path: Path, model: str = EXTRACTION_MODEL, llm_query=None, pdf_reader=None, web_search_query=None):
+    def __init__(self, project_path: Path, model: str = EXTRACTION_MODEL, llm_query=None, pdf_reader=None, web_search_query=None,
+                 page_fetcher=None, skill_augment=None):
         """
         Initialize the extraction agent.
 
         Args:
             project_path: Path to the project directory
             model: LLM model to use for extraction
+            web_search_query: replaces the provider web-search call for papers without full text
+            page_fetcher: replaces fetching a cited web page for its deterministic checks
+            skill_augment: adds the extraction Skill to the web-search system prompt
         """
         super().__init__(project_path, "extraction")
         self.model = model
         self.llm_query = llm_query
         self.pdf_reader = pdf_reader
         self.web_search_query = web_search_query
+        self.page_fetcher = page_fetcher
+        self.skill_augment = skill_augment
         self.client = None
 
     def _init_client(self):
@@ -95,6 +128,10 @@ class ExtractionAgent(BaseAgent):
         active_pdf_reader = input_data.get("pdf_reader") or self.pdf_reader
         active_llm_query = input_data.get("llm_query") or self.llm_query
         active_web_search_query = input_data.get("web_search_query") or self.web_search_query
+        # The Lead Agent decides whether the web step runs; without its decision the model's capability does.
+        web_search = input_data.get("web_search")
+        if web_search is None:
+            web_search = active_web_search_query is not None or supports_web_search(self.model)
 
         if not PDF_SUPPORT and active_pdf_reader is None:
             raise ImportError("pypdf is required for PDF extraction. Install with: pip install pypdf")
@@ -122,11 +159,10 @@ class ExtractionAgent(BaseAgent):
 
         pdf_files = sorted(pdf_folder.glob("*.pdf"))
         print(f"  Found {len(pdf_files)} PDFs to process\n")
-        needs_pdf_llm_client = active_llm_query is None and any(
-            not (paper.get("web_search_fallback_pending") and not paper.get("pdf_downloaded"))
-            for paper in papers
+        needs_llm_client = active_llm_query is None and any(
+            not lacks_full_text(paper) or str(paper.get("abstract") or "").strip() for paper in papers
         )
-        if needs_pdf_llm_client:
+        if needs_llm_client:
             self._init_client()
 
         # Get prompts
@@ -151,6 +187,8 @@ class ExtractionAgent(BaseAgent):
         errors = 0
         pending_web_search_fallback = 0
         web_search_fallback = 0
+        tier_counts = {tier: 0 for tier in evidence_support.EVIDENCE_TIERS}
+        web_search_failed = 0
         total_cost = 0.0
 
         from concurrent.futures import ThreadPoolExecutor
@@ -171,6 +209,7 @@ class ExtractionAgent(BaseAgent):
                 llm_query=active_llm_query,
                 pdf_reader=active_pdf_reader,
                 web_search_query=active_web_search_query,
+                web_search=web_search,
             )
             with progress_lock:
                 done[0] += 1
@@ -186,12 +225,15 @@ class ExtractionAgent(BaseAgent):
                 if result["extraction_status"] == "success":
                     processed += 1
                     total_cost += float(result.get("extraction_cost_usd") or 0)
+                    for tier in (result.get("evidence_tiers") or {}).values():
+                        tier_counts[tier] = tier_counts.get(tier, 0) + 1
                     if result.get("extraction_source") == "web_search_fallback":
                         web_search_fallback += 1
+                        web_search_failed += (result.get("web_search") or {}).get("status") == "failed"
                 else:
                     errors += 1
-                    if paper_meta.get("web_search_fallback_pending") and not paper_meta.get("pdf_downloaded"):
-                        pending_web_search_fallback += 1
+                if lacks_full_text(paper_meta) and (result["extraction_status"] != "success" or result.get("web_search_fallback_pending")):
+                    pending_web_search_fallback += 1
 
         print()  # New line after progress
 
@@ -203,6 +245,13 @@ class ExtractionAgent(BaseAgent):
             "errors": errors,
             "web_search_fallback": web_search_fallback,
             "pending_web_search_fallback": pending_web_search_fallback,
+            "no_full_text": {
+                "papers": sum(1 for paper in papers if lacks_full_text(paper)),
+                "web_search": "enabled" if web_search else "skipped",
+                "web_search_skipped_reason": "" if web_search else f"{self.model} has no web-search tool; abstract extraction ran alone.",
+                "web_search_failed": web_search_failed,
+            },
+            "field_evidence_tiers": tier_counts,
             "total_cost_usd": total_cost,
             "model": self.model,
             "output_file": str(output_file)
@@ -231,6 +280,8 @@ class ExtractionAgent(BaseAgent):
             "errors": errors,
             "web_search_fallback": web_search_fallback,
             "pending_web_search_fallback": pending_web_search_fallback,
+            "no_full_text": stats["no_full_text"],
+            "field_evidence_tiers": tier_counts,
             "total_cost": total_cost,
             "stats": stats
         }
@@ -255,23 +306,31 @@ class ExtractionAgent(BaseAgent):
         llm_query=None,
         pdf_reader=None,
         web_search_query=None,
+        web_search: bool | None = None,
     ) -> Dict[str, Any]:
         """Extract one paper without writing formal extraction artifacts."""
         active_llm_query = llm_query or self.llm_query
         active_pdf_reader = pdf_reader or self.pdf_reader
         active_web_search_query = web_search_query or self.web_search_query
-        if paper.get("web_search_fallback_pending") and not paper.get("pdf_downloaded"):
+        if lacks_full_text(paper):
+            if web_search is None:
+                web_search = active_web_search_query is not None or supports_web_search(self.model)
             try:
-                result, _cost = self._extract_with_web_search_fallback(
+                if active_llm_query is None and self.client is None and str(paper.get("abstract") or "").strip():
+                    self._init_client()
+                result, _cost = self._extract_without_full_text(
                     paper=paper,
                     row_number=row_number,
                     extraction_prompt=extraction_prompt,
+                    llm_query=active_llm_query,
                     web_search_query=active_web_search_query,
+                    web_search=web_search,
+                    page_fetcher=self.page_fetcher,
                 )
                 return result
             except Exception as exc:
-                self.log(f"Web-search fallback failed for row {row_number}: {exc}", "error")
-                return self._web_search_error_record(paper, row_number, str(exc))
+                self.log(f"Extraction without full text failed for row {row_number}: {exc}", "error")
+                return self._no_full_text_error_record(paper, row_number, str(exc))
 
         pdf_file = self._pdf_for_paper(row_number, paper, Path(pdf_folder), pdf_files)
         if pdf_file is None:
@@ -292,7 +351,8 @@ class ExtractionAgent(BaseAgent):
             extracted, cost = self._extract_with_llm(text, system_prompt, user_template, active_llm_query)
             extracted_data = self._parse_extracted_data(extracted)
             supplied_evidence = extracted_data.pop("_field_evidence", {})
-            field_evidence = verify_field_evidence(supplied_evidence, (extraction_prompt.get("schema") or {}).get("fields", []), self._sanitize_text_for_utf8(text)[:400000])
+            schema_fields = (extraction_prompt.get("schema") or {}).get("fields", [])
+            field_evidence = verify_field_evidence(supplied_evidence, schema_fields, self._sanitize_text_for_utf8(text)[:400000], tier=FULL_TEXT)
             extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, set())
             return {
                 **extracted_data,
@@ -306,6 +366,7 @@ class ExtractionAgent(BaseAgent):
                 "extraction_cost_usd": cost,
                 "extracted_data": extracted_data,
                 "field_evidence": field_evidence,
+                "evidence_tiers": {name: FULL_TEXT for name in field_evidence},
                 "extraction_source": "pdf",
                 "extraction_status": "success",
             }
@@ -324,34 +385,115 @@ class ExtractionAgent(BaseAgent):
                 return pdf_file
         return None
 
-    def _extract_with_web_search_fallback(
+    def _extract_without_full_text(
         self,
         *,
         paper: Dict[str, Any],
         row_number: int,
         extraction_prompt: Dict[str, Any],
+        llm_query=None,
         web_search_query=None,
+        web_search: bool | None = None,
+        page_fetcher=None,
     ) -> tuple[Dict[str, Any], float]:
-        if web_search_query is not None:
-            response, usage = web_search_query(
-                paper=paper,
-                extraction_prompt=extraction_prompt,
-                model=self.model,
-            )
-        else:
-            response, usage = self._query_web_search_extraction(paper, extraction_prompt)
+        """Extract a paper that has no full text: abstract first, then web sources for what is still missing.
 
-        extracted_data = self._parse_extracted_data(response)
-        extracted_data.pop("_field_evidence", None)  # Web snippets are not independently verified PDF evidence.
-        extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, {"source_urls", "sources", "confidence"})
-        source_urls = self._normalize_source_urls(extracted_data.get("source_urls") or extracted_data.get("sources") or [])
-        if not source_urls:
-            source_urls = self._metadata_source_urls(paper)
-        if not source_urls:
-            raise ValueError("web_search fallback response missing source_urls")
-        extracted_data["source_urls"] = source_urls
-        extracted_data["confidence"] = str(extracted_data.get("confidence") or "low")
-        cost = self._usage_cost(usage)
+        Every field ends with one evidence tier. Abstract values need a quote found in the
+        record's abstract; web values need a source URL of an allowed type, a page confirmed
+        to be this paper, and a quote found on that page. Code applies these checks; any
+        value that fails them is stored as not available rather than guessed.
+        """
+        fields = [field for field in (extraction_prompt.get("schema") or {}).get("fields") or [] if isinstance(field, dict)]
+        if not fields:
+            raise ValueError("Extraction without full text requires a finalized extraction schema")
+        names = [field["name"] for field in fields]
+        values: Dict[str, Any] = {}
+        evidence: Dict[str, Dict[str, Any]] = {}
+        auxiliary: Dict[str, Any] = {}
+        cost = 0.0
+
+        rejected: Dict[str, List[Dict[str, str]]] = {}
+
+        # Step 1: the abstract already in the record, with the same schema and coding rules as full text.
+        # Fields are checked one by one: a missing field is empty, an off-type one is not available.
+        abstract = self._sanitize_text_for_utf8(paper.get("abstract")).strip()
+        if abstract:
+            record_text = f"TITLE: {self._sanitize_text_for_utf8(paper.get('title')).strip()}\n\nABSTRACT:\n{abstract}"
+            system_prompt = f"{extraction_prompt.get('system_prompt')}\n{FIELD_EVIDENCE_INSTRUCTION}\n{ABSTRACT_ONLY_NOTE}"
+            extracted, step_cost = self._extract_with_llm(record_text, system_prompt, extraction_prompt.get("user_prompt_template"), llm_query)
+            cost += step_cost
+            data = self._parse_extracted_data(extracted)
+            supplied = data.pop("_field_evidence", {})
+            verified = verify_field_evidence(supplied, fields, record_text, tier=ABSTRACT)
+            for field in fields:
+                name = field["name"]
+                value, problem, unmatched = self._checked_value(field, data.get(name))
+                if problem:
+                    rejected.setdefault(name, []).append({"url": "", "source": "abstract", "reason": "value_type", "detail": problem})
+                    continue
+                if _has_value(value) and verified[name]["status"] == "located":
+                    values[name] = value
+                    evidence[name] = {**verified[name], "source": "record_abstract"}
+                    if unmatched is not None:
+                        auxiliary[fulltext_eligibility.RAW_KEY] = unmatched
+
+        # Step 2: web sources, only for fields the abstract left open.
+        missing = [field for field in fields if field["name"] not in values]
+        if not missing:
+            web = {"status": "not_needed"}
+        elif web_search is False:
+            web = {"status": "skipped", "reason": f"{self.model} has no web-search tool; fields the abstract leaves open are not available."}
+        else:
+            try:
+                sub_prompt = {**extraction_prompt, "schema": {**(extraction_prompt.get("schema") or {}), "fields": missing}}
+                if web_search_query is not None:
+                    response, usage = web_search_query(paper=paper, extraction_prompt=sub_prompt, model=self.model)
+                else:
+                    response, usage = self._query_web_search_extraction(paper, sub_prompt)
+                data = self._parse_extracted_data(response)
+            except Exception as exc:
+                self.log(f"Web search failed for row {row_number}: {exc}", "warning")
+                web = {"status": "failed", "error": self._sanitize_text_for_utf8(exc)[:300]}
+            else:
+                cost += self._usage_cost(usage)
+                supplied = data.pop("_field_evidence", {})
+                supplied = supplied if isinstance(supplied, dict) else {}
+                fetcher = page_fetcher or (lambda url: web_evidence.fetch_page(url))
+                pages: Dict[str, Any] = {}
+                for field in missing:
+                    name = field["name"]
+                    value, problem, _unmatched = self._checked_value(field, data.get(name))
+                    if problem:
+                        rejected.setdefault(name, []).append({"url": "", "source": "web", "reason": "value_type", "detail": problem})
+                        continue
+                    if not _has_value(value):
+                        continue
+                    entries = supplied.get(name)
+                    entries = [entry for entry in (entries if isinstance(entries, list) else [entries]) if isinstance(entry, dict)]
+                    if not entries:
+                        rejected.setdefault(name, []).append({"url": "", "reason": "missing_evidence", "detail": "No source URL and quote were given."})
+                    for entry in entries[:5]:
+                        try:
+                            accepted = web_evidence.accept_web_evidence(entry, paper, fetcher, pages)
+                        except web_evidence.RejectedSource as exc:
+                            rejected.setdefault(name, []).append({"url": evidence_support.safe_url(entry.get("url") or entry.get("source_url")),
+                                                                  "reason": exc.reason, "detail": exc.detail})
+                            continue
+                        values[name] = value
+                        evidence[name] = {**accepted, "tier": WEB}
+                        break
+                web = {"status": "completed", "fields_searched": [field["name"] for field in missing]}
+
+        # Step 3: everything else stays empty and says why.
+        for name in names:
+            if name not in values:
+                values[name] = ""
+                evidence[name] = {"tier": NOT_AVAILABLE, "quote": "", "page": None, "status": "not_available",
+                                  "verification": "no_full_text"}
+                if rejected.get(name):
+                    evidence[name]["rejected_sources"] = rejected[name][:5]
+        extracted_data = {**{name: values[name] for name in names}, **auxiliary}
+        source_urls = list(dict.fromkeys(item["source_url"] for item in evidence.values() if item.get("tier") == WEB))
         return {
             **extracted_data,
             "paper_id": paper.get("id", "unknown"),
@@ -363,131 +505,95 @@ class ExtractionAgent(BaseAgent):
             "extraction_model": self.model,
             "extraction_cost_usd": cost,
             "extracted_data": extracted_data,
+            "field_evidence": evidence,
+            "evidence_tiers": {name: evidence[name]["tier"] for name in names},
             "extraction_source": "web_search_fallback",
             "extraction_status": "success",
+            "source_urls": source_urls,
+            "web_search": web,
             "pdf_failure_class": paper.get("pdf_failure_class", ""),
             "retrieval_status": paper.get("retrieval_status", ""),
-            "web_search_fallback_pending": False,
+            # A failed web step stays retryable; the abstract values are kept meanwhile.
+            "web_search_fallback_pending": web["status"] == "failed",
         }, cost
 
-    def _metadata_source_urls(self, paper: Dict[str, Any]) -> list[str]:
-        urls: list[str] = []
-        for value in (paper.get("url"), paper.get("landing_page_url"), paper.get("pdf_url")):
-            text = str(value or "").strip()
-            if text and text not in urls:
-                urls.append(text)
-        doi = str(paper.get("doi") or "").strip()
-        if doi:
-            doi_url = doi if doi.startswith(("http://", "https://")) else f"https://doi.org/{doi}"
-            if doi_url not in urls:
-                urls.append(doi_url)
-        return urls
+    def _checked_value(self, field: Dict[str, Any], value: Any) -> tuple[Any, str, Any]:
+        """(value, problem, unmatched eligibility value) for one field of an abstract or web response.
+
+        The same coercion as full-text extraction; a value still off its declared type or options
+        comes back with a problem and costs only this field, never the whole paper.
+        """
+        unmatched = None
+        if not _has_value(value):
+            return "", "", None
+        if field["name"] == fulltext_eligibility.FIELD and isinstance(field.get("enum"), list):
+            value, unmatched = fulltext_eligibility.normalize_value(value, field["enum"])
+            if unmatched is not None:
+                return "", f"{field['name']} must use the declared options", None
+        try:
+            value = coerce_value(field, value)
+            validate_value(field, value)
+        except ValueError as exc:
+            return "", str(exc), None
+        return value, "", unmatched
 
     def _query_web_search_extraction(self, paper: Dict[str, Any], extraction_prompt: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         if self.client is None:
             self._init_client()
+        system_prompt = (
+            f"{extraction_prompt.get('system_prompt', '')}\n\n{WEB_EVIDENCE_RULES}\n"
+            "Return one JSON object containing only the requested schema fields you found, plus _field_evidence.\n"
+            f"{WEB_FIELD_EVIDENCE_INSTRUCTION}"
+        )
+        if self.skill_augment is not None:
+            system_prompt = self.skill_augment(system_prompt)
         response = self.client.responses.create(
             model=self.model,
-            tools=[
-                {
-                    "type": "web_search",
-                    "filters": {
-                        "allowed_domains": [
-                            "pubmed.ncbi.nlm.nih.gov",
-                            "pmc.ncbi.nlm.nih.gov",
-                            "arxiv.org",
-                            "openalex.org",
-                            "semanticscholar.org",
-                            "acm.org",
-                            "ieee.org",
-                            "springer.com",
-                            "nature.com",
-                            "sciencedirect.com",
-                            "wiley.com",
-                        ],
-                    },
-                }
-            ],
+            tools=[{"type": "web_search", "filters": {"allowed_domains": self._web_search_domains(paper)}}],
             tool_choice="required",
             include=["web_search_call.action.sources"],
             input=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"{extraction_prompt.get('system_prompt', '')}\n\n"
-                        "Extract only information supported by cited web sources. "
-                        "Return one JSON object containing the declared schema fields and confidence. "
-                        "Use an empty value for an unsupported schema field."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": self._web_search_fallback_prompt(paper, extraction_prompt),
-                },
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": self._web_search_fallback_prompt(paper, extraction_prompt)},
             ],
         )
         output_text = str(getattr(response, "output_text", "") or "").strip()
         if not output_text:
             raise ValueError("Responses API web_search returned no output_text")
-        payload = self._parse_extracted_data(output_text)
-        if "source_urls" not in payload:
-            source_urls = self._source_urls_from_response(response)
-            if source_urls:
-                payload["source_urls"] = source_urls
-        usage = self._usage_dict(getattr(response, "usage", None))
-        return json.dumps(payload, ensure_ascii=False), usage
+        usage = {**self._usage_dict(getattr(response, "usage", None)), "web_search_calls": self._web_search_call_count(response)}
+        return output_text, usage
+
+    def _web_search_domains(self, paper: Dict[str, Any]) -> list[str]:
+        # The search tool accepts a short allow-list; code re-checks every page it cites.
+        # This paper's own publisher and registries come first, so the cap never drops them.
+        domains = web_evidence.doi_hosts(paper.get("doi")) + sorted(web_evidence.paper_hosts(paper))
+        domains += [web_evidence._host(url) for url in web_evidence.candidate_pages(paper) if "doi.org" not in url]
+        domains += ["pmc.ncbi.nlm.nih.gov", "europepmc.org", "clinicaltrials.gov", "isrctn.com", "trialsearch.who.int",
+                    "medrxiv.org", "biorxiv.org", "arxiv.org", "researchsquare.com", "ssrn.com",
+                    "sciencedirect.com", "link.springer.com", "onlinelibrary.wiley.com", "nature.com", "tandfonline.com",
+                    "journals.sagepub.com", "ieeexplore.ieee.org", "journals.lww.com", "academic.oup.com", "jamanetwork.com"]
+        return list(dict.fromkeys(domain for domain in domains if domain))[:20]
 
     def _web_search_fallback_prompt(self, paper: Dict[str, Any], extraction_prompt: Dict[str, Any]) -> str:
         schema = extraction_prompt.get("schema") or {"fields": extraction_prompt.get("fields") or []}
-        return f"""Use web search to extract schema fields for this subscribed/paywalled paper.
+        doi = web_evidence.normalize_doi(paper.get("doi"))
+        title = str(paper.get("title") or "").strip()
+        queries = [query for query in (doi and f'"{doi}"', title and f'"{title}"') if query]
+        registries = [identifier for identifier, _url in web_evidence.registry_ids(paper.get("abstract"))]
+        return f"""PAPER RECORD DATA:
+{json.dumps({key: paper.get(key) for key in ("title", "authors", "year", "doi", "journal", "url", "source")}, ensure_ascii=False, indent=2)}
 
-Paper metadata:
-{json.dumps({key: paper.get(key) for key in ("title", "authors", "year", "doi", "url", "abstract", "source")}, ensure_ascii=False, indent=2)}
+PAGES THAT BELONG TO THIS PAPER (open these first):
+{json.dumps(web_evidence.candidate_pages(paper), ensure_ascii=False, indent=2)}
 
-Extraction schema:
+SEARCH QUERIES THAT IDENTIFY THIS PAPER:
+{json.dumps(queries + registries, ensure_ascii=False)}
+
+REQUESTED SCHEMA FIELDS (the abstract did not state these):
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
-Return ONLY valid JSON with:
-- every supported schema field by its field name
-- confidence: "high", "medium", or "low" for the response as a whole
-
-Treat this as web fallback evidence rather than full-text extraction. Use empty strings for unsupported fields."""
-
-    def _normalize_source_urls(self, value: Any) -> list[str]:
-        if isinstance(value, str):
-            candidates = [value]
-        elif isinstance(value, list):
-            candidates = value
-        else:
-            candidates = []
-        urls = []
-        for item in candidates:
-            text = str(item.get("url") if isinstance(item, dict) else item).strip()
-            if text and text not in urls:
-                urls.append(text)
-        return urls
-
-    def _source_urls_from_response(self, response: Any) -> list[str]:
-        urls: list[str] = []
-
-        def visit(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, item in value.items():
-                    if key in {"url", "uri"} and isinstance(item, str) and item.startswith(("http://", "https://")):
-                        if item not in urls:
-                            urls.append(item)
-                    else:
-                        visit(item)
-            elif isinstance(value, list):
-                for item in value:
-                    visit(item)
-            elif hasattr(value, "model_dump"):
-                visit(value.model_dump())
-            elif hasattr(value, "__dict__"):
-                visit(vars(value))
-
-        visit(getattr(response, "output", None))
-        return urls
+Open the pages above, then search with the queries above. Use a page only when it is this paper's own page: the article landing page reached through its DOI, its trial registry entry, its PMC or Europe PMC record, a preprint of the same work, or its supplementary material. Article landing pages and registry entries often state registration, funding, data or code availability, study setting, design, participants and declarations; read the whole page, including its declarations and article information sections.
+Return ONLY valid JSON with each requested field you found by its field name and _field_evidence giving url and quote for each of them; return {{}} when no such page states any requested field."""
 
     def _usage_dict(self, usage: Any) -> Dict[str, Any]:
         if usage is None:
@@ -499,6 +605,11 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
             "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
         }
+
+    def _web_search_call_count(self, response: Any) -> int:
+        # Each search the tool ran is billed per call on top of tokens.
+        return sum(1 for item in getattr(response, "output", None) or []
+                   if (item.get("type") if isinstance(item, dict) else getattr(item, "type", "")) == "web_search_call")
 
     def _usage_cost(self, usage: Any) -> float:
         """Cost at the extraction model's listed price; a usage report that already carries its cost is taken as is."""
@@ -512,9 +623,10 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
         if not (input_tokens or output_tokens):
             # Only a total is known; price it all as input, the larger share for full-text extraction.
             input_tokens = int(data.get("total_tokens") or 0)
-        return calculate_cost(input_tokens, output_tokens, self.model)
+        # Each search the web-search tool ran is billed per call on top of its tokens.
+        return calculate_cost(input_tokens, output_tokens, self.model) + int(data.get("web_search_calls") or 0) * WEB_SEARCH_CALL_USD
 
-    def _web_search_error_record(self, paper: Dict[str, Any], row_number: int, message: str) -> Dict[str, Any]:
+    def _no_full_text_error_record(self, paper: Dict[str, Any], row_number: int, message: str) -> Dict[str, Any]:
         return {
             "paper_id": paper.get("id", "unknown"),
             "source": paper.get("source", "unknown"),
@@ -527,7 +639,6 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             "pdf_failure_class": paper.get("pdf_failure_class", ""),
             "retrieval_status": paper.get("retrieval_status", ""),
             "source_urls": [],
-            "confidence": "low",
             "web_search_fallback_pending": True,
         }
 
@@ -577,7 +688,6 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             return data
         from reviewpilot_core.extraction_schema import validate_schema
         validate_schema(schema)
-        from reviewpilot_core import fulltext_eligibility
         if fulltext_eligibility.FIELD in expected and fulltext_eligibility.FIELD not in data:
             # An omitted eligibility judgement keeps the paper, as an empty one does, and is counted as unclear.
             data[fulltext_eligibility.FIELD] = ""

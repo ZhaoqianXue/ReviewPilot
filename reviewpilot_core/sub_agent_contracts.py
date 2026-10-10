@@ -18,7 +18,7 @@ from agents.search_condition_agent import SearchConditionAgent
 from .atomic_files import atomic_write_json, atomic_write_jsonl, atomic_write_text
 from .categorization_analysis import CategorizationAnalysis
 from .project_store import count_jsonl, read_json, read_jsonl
-from .skill_runtime import bind_skill_llm_query
+from .skill_runtime import SkillRegistry, bind_skill_llm_query
 from .workflow_state import structured_action_outcome
 from .model_policy import (
     CATEGORIZATION_MODEL,
@@ -535,15 +535,22 @@ class ExtractionAgentContract:
     def run(self, output_root: Path | str, project_id: str, llm_query=None, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
         project_path = Path(output_root) / project_id
         extraction_prompt = read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {}
+        requested = input_data or {}
         input_data = {
             "filtered_file": str(project_path / "filtered" / "included_papers.jsonl"),
             "download_folder": str(project_path / "pdfs"),
             "extraction_prompt": extraction_prompt,
             "download_report": read_json(project_path / "pdfs" / "download_report.json", {}) or {},
         }
+        if isinstance(requested.get("web_search"), bool):
+            # The Lead Agent's decision for papers without full text: run or skip the web step.
+            input_data["web_search"] = requested["web_search"]
         model = project_model(read_json(project_path / "search_conditions.json", {}) or {}, self.model)
         skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=model)
-        result = self.agent_cls(project_path, model=model, llm_query=skill_query).run(input_data)
+        agent = self.agent_cls(project_path, model=model, llm_query=skill_query)
+        # The web-search call bypasses the bound LLM query, so it receives the same Skill here.
+        agent.skill_augment = SkillRegistry().activate(self.action, self.agent_name).augment
+        result = agent.run(input_data)
         return {**self._normalize_result(project_path, result), "model": model}
 
     def _normalize_result(self, project_path: Path, result: dict[str, Any]) -> dict[str, Any]:

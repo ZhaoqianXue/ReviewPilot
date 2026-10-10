@@ -930,7 +930,7 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(seen_prompts, [])
         self.assertEqual(result.status, "failed")
         self.assertIn("blocked", result.reply)
-        self.assertIn("ExtractionAgent will use web-search fallback", result.reply)
+        self.assertIn("extracted from their abstracts and allowed web sources", result.reply)
 
     def test_stage_reply_uses_deterministic_next_canvas_action_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1241,7 +1241,7 @@ class LeadAgentTests(unittest.TestCase):
                     "failed": 1,
                     "stats": {"web_search_fallback_candidates": [{"title": "A"}]},
                 },
-                "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. ExtractionAgent will use web-search fallback for eligible unavailable papers.",
+                "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. Papers still without full text when extraction runs will be extracted from their abstracts and allowed web sources; you can still supply their PDFs first.",
             ),
             (
                 "extraction",

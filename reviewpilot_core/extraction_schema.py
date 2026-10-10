@@ -15,7 +15,7 @@ from .project_decisions import remember_confirmed, revision
 RESERVED_FIELDS = frozenset('paper_id id source title authors year doi url pdf_file pdf_path row_number '
     'extracted_at extraction_model extraction_cost_usd extracted_data field_evidence extraction_source '
     'extraction_status source_urls error_message human_fields collection_record_id confidence '
-    'pdf_failure_class retrieval_status web_search_fallback_pending'.split())
+    'pdf_failure_class retrieval_status web_search_fallback_pending evidence_tiers web_search'.split())
 
 
 def validate_schema(schema):

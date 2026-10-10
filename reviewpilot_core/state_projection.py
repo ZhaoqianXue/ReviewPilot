@@ -17,7 +17,7 @@ from .screening_criteria import criteria_state
 from .screening_guidance import guidance_state
 from .coding_rules import rules_state as coding_rules_state
 from .project_decisions import confirmed_decisions
-from .evidence_support import local_pdf
+from .evidence_support import EVIDENCE_TIERS, local_pdf
 from .paper_links import paper_links
 from .record_review import key as record_key
 from .extraction_preview import empty_preview_projection, project_preview_projection
@@ -91,6 +91,8 @@ METADATA_FIELDS = {
     "pdf_failure_class",
     "retrieval_status",
     "web_search_fallback_pending",
+    "evidence_tiers",
+    "web_search",
     "url",
     "abstract",
 }
@@ -230,6 +232,7 @@ def build_new_project_data(output_root: Path | str) -> dict:
         "categorizationWorkflow": _empty_categorization_workflow(),
         "resultOverview": [],
         "evidenceMatrix": [],
+        "noFullText": _empty_no_full_text(),
         "categorizationAnalysis": {"field": "", "categories": []},
         "exportPackage": [],
         "extractionPreview": empty_preview_projection(),
@@ -348,6 +351,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"], extraction_summary=extraction_summary),
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
+        "noFullText": _no_full_text(path, extraction_rows, stale=workflow_state["stages"]["extraction"]["stale"]),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
         "prismaFlow": _prisma_flow(path),
@@ -390,7 +394,7 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
 
     The analysis summary counts every row, so totals stay exact past the display bound.
     """
-    from .fulltext_eligibility import FIELD, analysis_summary, value
+    from .fulltext_eligibility import FIELD, analysis_summary, field_tiers, value
     rows: list[dict] = []
     failed_items: list[str] = []
     eligibility: list[dict] = []
@@ -409,7 +413,8 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict]:
                 if len(failed_items) < 10 and status in {"error", "failed"}:
                     failed_items.append(_safe_failed_item(row))
                 eligibility.append({"extraction_status": row.get("extraction_status"),
-                                    "extraction_source": row.get("extraction_source"), FIELD: value(row)})
+                                    "extraction_source": row.get("extraction_source"), FIELD: value(row),
+                                    "evidence_tiers": field_tiers(row)})
     except OSError:
         pass
     return rows, failed_items, analysis_summary(eligibility)
@@ -832,6 +837,31 @@ def _result_overview(
     ]
 
 
+def _empty_no_full_text() -> dict[str, Any]:
+    return {"papers": 0, "model": "", "webSearch": False, "perPaperUsd": 0.0, "totalUsd": 0.0, "notice": "",
+            "fieldTiers": {tier: 0 for tier in EVIDENCE_TIERS}}
+
+
+def _no_full_text(path: Path, extraction_rows: list[dict], *, stale: bool) -> dict[str, Any]:
+    """Shown before extraction runs: papers still without full text and the estimated cost of their extraction."""
+    from .no_full_text import plan
+    try:
+        current = plan(path)
+    except (OSError, ValueError):
+        return _empty_no_full_text()
+    tiers = {tier: 0 for tier in EVIDENCE_TIERS}
+    if not stale:
+        for row in extraction_rows:
+            if str(row.get("extraction_status") or "success").lower() != "success":
+                continue
+            for value in (row.get("evidence_tiers") or {}).values():
+                if value in tiers:
+                    tiers[value] += 1
+    return {"papers": current["papers"], "model": current["model"], "webSearch": current["web_search"],
+            "perPaperUsd": current["per_paper_usd"], "totalUsd": current["total_usd"], "notice": current["notice"],
+            "fieldTiers": tiers}
+
+
 def _full_text_overview(extraction_rows: list[dict], summary: dict) -> list[dict[str, str]]:
     from .fulltext_eligibility import FIELD
     if not any(FIELD in row for row in extraction_rows):
@@ -969,6 +999,8 @@ def _is_display_metadata_key(value: Any) -> bool:
         "pdf_failure_class",
         "retrieval_status",
         "web_search_fallback_pending",
+        "evidence_tiers",
+        "web_search",
     }
 
 
@@ -1065,13 +1097,13 @@ def _categorization_workflow(
     extraction_summary: dict | None = None,
 ) -> dict[str, Any]:
     from .categorization_analysis import NO_CATEGORY
-    from .fulltext_eligibility import analysis_summary, is_excluded
+    from .fulltext_eligibility import analysis_summary, in_analysis
     summary = extraction_summary or analysis_summary(extraction_rows)
     field_names = _categorization_field_names(schema, extraction_rows)
     recommended = _recommended_categorization_field(field_names)
     selected = str(categorization.get("field") or suggestions.get("field") or recommended or (field_names[0] if field_names else ""))
     mode = str(categorization.get("mode") or suggestions.get("mode") or "multiple")
-    eligible_rows = [row for row in extraction_rows if not is_excluded(row)]
+    eligible_rows = [row for row in extraction_rows if in_analysis(row)]
     rows_for_analysis = categorized_rows if categorized_rows else eligible_rows
     field_profiles = {field: _field_profile(eligible_rows, field) for field in field_names}
     categorized_field = f"{selected}_category" if selected else ""
