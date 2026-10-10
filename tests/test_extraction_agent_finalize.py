@@ -10,7 +10,7 @@ from reviewpilot_core.coding_rules import confirm, require_confirmed_rules, rule
 from reviewpilot_core.extraction_schema import build_extraction_prompts, finalize_schema, save_schema_draft
 from reviewpilot_core.project_store import read_json
 from reviewpilot_core.state_projection import _extraction_step
-from reviewpilot_core.workflow_state import initialize_workflow_state
+from reviewpilot_core.workflow_state import initialize_workflow_state, load_workflow_state, save_workflow_state
 
 RULES = {"preamble": "Code what the study itself reports.",
          "fields": [{"field": "design", "rules": ["Cluster-randomized only when the authors randomize whole schools."]}]}
@@ -63,6 +63,47 @@ class CodingRulesFlowTests(unittest.TestCase):
             self.assertEqual(rules_state(project)["status"], "stale")
             self.assertNotIn("Code the design", read_json(project / "prompts/extraction_prompt.json", {})["user_prompt_template"])
             self.assertEqual(_extraction_step(project)[0], "generate-coding-rules")
+
+
+class ConfirmStalenessTests(unittest.TestCase):
+    def test_confirming_rules_before_any_extraction_run_does_not_ask_for_a_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = _project(Path(tmp))
+            # Drafting and finalizing the schema count as extraction-stage attempts without producing results.
+            state = load_workflow_state(project)
+            state["stages"]["extraction"].update(status="ready", attempt=2)
+            save_workflow_state(project, state)
+            save_draft(project, RULES)
+            confirm(project)
+            self.assertFalse(load_workflow_state(project)["stages"]["extraction"]["stale"])
+            # After a real run, different rules make the results out of date.
+            state = load_workflow_state(project)
+            extraction = state["stages"]["extraction"]
+            extraction.update(status="completed", attempt=3, last_valid={"status": "completed", "attempt": 3,
+                                                                          "updated_at": extraction["updated_at"], "counts": {}})
+            save_workflow_state(project, state)
+            confirm(project, {"revision": rules_state(project)["revision"],
+                              "fields": [{"field": "design", "rules": ["Code the design the authors name."]}]})
+            self.assertTrue(load_workflow_state(project)["stages"]["extraction"]["stale"])
+
+
+class ValueCoercionTests(unittest.TestCase):
+    def test_unambiguous_type_slips_are_coerced_and_other_values_still_fail(self):
+        schema = {"fields": [
+            {"name": "adaptation", "type": "Text (list)", "options": ["Prompting only", "Fine-tuning", "Other"]},
+            {"name": "participant_count", "type": "Integer"},
+            {"name": "setting", "type": "Text"},
+        ]}
+        agent = ExtractionAgent(Path(tempfile.mkdtemp()))
+        data = agent._validate_schema_data({"adaptation": "prompting ONLY; Fine-tuning", "participant_count": "1,024",
+                                            "setting": ["Lab", "Clinic"]}, {"schema": schema}, set())
+        self.assertEqual(data, {"adaptation": ["Prompting only", "Fine-tuning"], "participant_count": 1024, "setting": "Lab; Clinic"})
+        self.assertEqual(agent._validate_schema_data({"adaptation": "", "participant_count": 12.0, "setting": ""},
+                                                     {"schema": schema}, set())["participant_count"], 12)
+        with self.assertRaises(ValueError):  # a value outside the options is not silently remapped
+            agent._validate_schema_data({"adaptation": ["Prompting"], "participant_count": "", "setting": ""}, {"schema": schema}, set())
+        with self.assertRaises(ValueError):
+            agent._validate_schema_data({"adaptation": [], "participant_count": "about 20", "setting": ""}, {"schema": schema}, set())
 
 
 class ParallelExtractionTests(unittest.TestCase):

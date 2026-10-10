@@ -18,7 +18,7 @@ from .atomic_files import atomic_write_json
 from .project_store import read_json
 from .review_guidance import SCREENING_KEYS, render_screening_guidance, validate_screening_guidance
 from .screening_evidence import GUIDANCE_KEY, evidence_prompt
-from .workflow_state import load_workflow_state, mark_stages_stale
+from .workflow_state import has_run_output, load_workflow_state, mark_stages_stale
 
 GUIDANCE_FILE = "prompts/screening_guidance.json"
 RELEVANCE_FILE = "prompts/relevance_prompt.json"
@@ -86,7 +86,7 @@ def confirm(project: Path, payload: dict[str, Any] | None = None) -> dict[str, A
         # Like a criteria change, different guidance makes earlier screening and its downstream results stale.
         stages = load_workflow_state(project)["stages"]
         affected = [name for name in ("screening", "retrieval", "extraction", "categorization")
-                    if stages[name]["last_valid"] is not None or stages[name]["attempt"] > 0]
+                    if has_run_output(stages[name])]
         if affected:
             mark_stages_stale(project, affected)
     atomic_write_json(project / GUIDANCE_FILE, record)

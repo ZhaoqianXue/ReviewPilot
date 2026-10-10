@@ -591,8 +591,10 @@ Treat this as web fallback evidence rather than full-text extraction. Use empty 
             if unexpected:
                 details.append(f"unexpected fields: {', '.join(sorted(unexpected))}")
             raise ValueError("Extraction model response violates schema: " + "; ".join(details))
-        from reviewpilot_core.field_values import validate_value
+        from reviewpilot_core.field_values import coerce_value, validate_value
         for field in schema.get('fields') or []:
+            # A list given as one string or a number given as text must not fail the whole paper.
+            data[field['name']] = coerce_value(field, data[field['name']])
             if field['name'] == fulltext_eligibility.FIELD and isinstance(field.get('enum'), list):
                 # One stray dash or capital must not fail the whole paper; keep what could not be mapped.
                 data[field['name']], unmatched = fulltext_eligibility.normalize_value(data[field['name']], field['enum'])

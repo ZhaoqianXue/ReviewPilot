@@ -359,6 +359,11 @@ def _stale_material_outputs(state: dict[str, Any], stage_name: str, *, include_c
             stage["stale"] = True
 
 
+def has_run_output(stage: dict[str, Any]) -> bool:
+    """The stage ran and left results. Drafting or finalizing a schema leaves extraction ready without results."""
+    return stage["last_valid"] is not None or stage["status"] in {"completed", "partial", "failed"}
+
+
 def _has_material_output(stage: dict[str, Any]) -> bool:
     return (
         stage["last_valid"] is not None

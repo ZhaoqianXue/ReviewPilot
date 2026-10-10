@@ -264,10 +264,10 @@ def save_field(project: Path, payload: dict) -> None:
     reason = str(payload.get('reason') or '').strip()
     if not reason or 'value' not in payload:
         raise ValueError('A corrected value and a review reason are required.')
-    value = payload['value']
-    from .field_values import validate_value
+    from .field_values import coerce_value, validate_value
     field = next(f for f in load_schema_draft(project)['fields'] if f['name'] == payload['field'])
-    validate_value(field, value)
+    # Corrections follow the same value contract as model output, including its type coercions.
+    value = validate_value(field, coerce_value(field, payload['value']))
     quote = str(payload.get('quote') or '').strip()
     evidence = detail['evidence']
     page = next((p for p in evidence['pages'] if quote and normalized_text(quote) in normalized_text(p['text'])), None)

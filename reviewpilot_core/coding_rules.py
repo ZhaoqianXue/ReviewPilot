@@ -17,7 +17,7 @@ from typing import Any
 from .atomic_files import atomic_write_json
 from .project_store import read_json, read_jsonl
 from .review_guidance import render_coding_rules, validate_coding_rules
-from .workflow_state import load_workflow_state, mark_stages_stale
+from .workflow_state import has_run_output, load_workflow_state, mark_stages_stale
 
 RULES_FILE = "extraction/coding_rules.json"
 PROMPT_FILE = "prompts/extraction_prompt.json"
@@ -90,7 +90,7 @@ def confirm(project: Path, payload: dict[str, Any] | None = None) -> dict[str, A
         # Different rules make earlier extraction and categorization stale, as a schema change does.
         stages = load_workflow_state(project)["stages"]
         affected = [name for name in ("extraction", "categorization")
-                    if stages[name]["last_valid"] is not None or stages[name]["attempt"] > 0]
+                    if has_run_output(stages[name])]
         if affected:
             mark_stages_stale(project, affected)
     atomic_write_json(project / RULES_FILE, record)

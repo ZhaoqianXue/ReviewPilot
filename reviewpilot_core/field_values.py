@@ -4,6 +4,7 @@ None and the empty string mean not reported, including for required fields.
 """
 import math
 import json
+import re
 
 
 def kind(field):
@@ -37,4 +38,41 @@ def validate_value(field, value):
     if isinstance(value,list) and isinstance(field.get('items'),dict):
         for v in value:
             validate_value({**field['items'], 'name':field.get('name','')+' item'}, v)
+    return value
+
+
+def _norm(text):
+    text = text.replace('–', '-').replace('—', '-').replace('“', '"').replace('”', '"').replace('’', "'")
+    return re.sub(r'\s+', ' ', text).strip().lower()
+
+
+def coerce_value(field, value):
+    """Bring a model value to the field's declared type when the intended value is unambiguous.
+
+    A list field given one string becomes a list split at semicolons or line breaks, a whole-number string in a
+    number field becomes a number, and an option written with different case or spacing becomes the declared
+    option. A value that names something else is left for validate_value to reject.
+    """
+    if value is None or value == '':
+        return value
+    k = kind(field)
+    if k in {'array', 'text_array'} and isinstance(value, str):
+        value = [part.strip() for part in re.split(r'[;\n]', value) if part.strip()]
+    elif k == 'string' and isinstance(value, list) and all(isinstance(v, str) for v in value):
+        value = '; '.join(v.strip() for v in value if v.strip())
+    elif k in {'integer', 'number'} and isinstance(value, str):
+        text = value.strip().replace(',', '')
+        if re.fullmatch(r'-?\d+', text):
+            value = int(text)
+        elif k == 'number' and re.fullmatch(r'-?\d*\.\d+', text):
+            value = float(text)
+    elif k == 'integer' and type(value) is float and value.is_integer():
+        value = int(value)
+    elif k == 'boolean' and isinstance(value, str) and value.strip().lower() in {'true', 'false'}:
+        value = value.strip().lower() == 'true'
+    options = field.get('enum', field.get('options'))
+    if isinstance(options, list):
+        declared = {_norm(option): option for option in options if isinstance(option, str)}
+        pick = lambda v: declared.get(_norm(v), v) if isinstance(v, str) else v
+        value = [pick(v) for v in value] if isinstance(value, list) else pick(value)
     return value

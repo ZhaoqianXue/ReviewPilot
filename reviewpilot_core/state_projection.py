@@ -1189,11 +1189,12 @@ def _full_results(rows: list[dict], field_names: list[str], categorized_field: s
     return {"columns": columns, "rows": normalized_rows, "total": len(normalized_rows)}
 
 
-def _paper_mapped_category(categorization: dict, row: dict) -> str:
+def _paper_mapped_category(categorization: dict, row: dict) -> Any:
+    """The paper's mapped category: a name in single mode, a list of names in multiple mode."""
     mapping = categorization.get("mapping") or {}
     for key in (row.get("title"), row.get("paper_id"), row.get("id")):
         if key and key in mapping:
-            return str(mapping[key])
+            return mapping[key]
     return ""
 
 
@@ -1318,12 +1319,15 @@ def _category_values(value, known_categories: list[str]) -> list[str]:
         return []
     if text in known_categories:
         return [text]
+    parts = [part.strip() for part in re.split(r"[;|]", text) if part.strip()]
+    exact = [part for part in parts if part in known_categories]
+    if exact:
+        return exact
+    # Free text that names categories keeps the most specific names, so "Other" does not match inside
+    # "Other named model families".
     matched = [category for category in known_categories if category and category in text]
-    if matched:
-        return matched
-    if ";" in text or "|" in text:
-        return [part.strip() for part in re.split(r"[;|]", text) if part.strip()]
-    return [text]
+    matched = [category for category in matched if not any(category != other and category in other for other in matched)]
+    return matched or parts or [text]
 
 
 def _messages(

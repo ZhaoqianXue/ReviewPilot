@@ -148,7 +148,7 @@ class ParityFixTests(unittest.TestCase):
             self.assertEqual((result['openAccess'],result['viaInstitution'],result['unknownAccess']),expected)
 
     def test_model_and_manual_values_follow_identical_contracts(self):
-        cases=[('integer',42,'42'),('Number',1.5,True),('Text','result',3),('Long text','result',{}),('Text (list)',['a'],[1]),('list',['a'],{}),('bool',False,'false'),('Select','A','B')]
+        cases=[('integer',42,'about 42'),('Number',1.5,True),('Text','result',3),('Long text','result',{}),('Text (list)',['a'],[1]),('list',['a'],{}),('bool',False,'no'),('Select','A','B')]
         agent=ExtractionAgent(self.project)
         for kind,valid,invalid in cases:
             field={'name':'participants','type':kind, **({'enum':['A','C']} if kind=='Select' else {})}
@@ -163,6 +163,12 @@ class ParityFixTests(unittest.TestCase):
                     else:
                         with self.assertRaises(ValueError):agent._validate_schema_data({'participants':value},prompt,set())
                         with self.assertRaises(ValueError):record_review.save_field(self.project,payload)
+        # An unambiguous slip such as a number written as text is coerced the same way on both paths.
+        field={'name':'participants','type':'integer'}
+        atomic_write_json(self.project/'extraction/extraction_schema.json',{'fields':[field]})
+        self.assertEqual(agent._validate_schema_data({'participants':'42'},{'schema':{'fields':[field]}},set())['participants'],42)
+        record_review.save_field(self.project,{'key':record_review.key({'id':'p1'}),'field':'participants','value':'42','reason':'Reviewed','revision':record_review.revision(self.project)})
+        self.assertEqual(json.loads((self.project/'extraction/extraction_results.jsonl').read_text().splitlines()[0])['participants'],42)
         with self.assertRaises(ValueError):validate_value({'type':'list','items':{'type':'integer'}},['bad'])
         with self.assertRaises(ValueError):validate_value({'type':'Number'},float('nan'))
 

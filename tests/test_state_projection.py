@@ -1149,6 +1149,31 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(briefs[0]["papers"][0]["title"], "Paper A")
         self.assertEqual(briefs[1]["papers"][0]["evidence"], "Benchmarked in clinical workflow simulation")
 
+    def test_category_briefs_do_not_match_a_category_inside_a_longer_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            project_dir = output_root / "nested-names"
+            write_json(project_dir / "search_conditions.json", {"project_name": "nested-names"})
+            write_json(project_dir / "categorization" / "categorization_mapping.json", {
+                "field": "llm_models", "mode": "multiple",
+                "categories": ["OpenAI models", "Other named model families", "Other"],
+                "mapping": {"Paper A": ["OpenAI models", "Other named model families"], "Paper B": ["Other"], "Paper C": []},
+            })
+            write_jsonl(project_dir / "categorization" / "categorized_results.jsonl", [
+                {"paper_id": "a", "title": "Paper A", "llm_models": ["GPT-4", "Llama 2"]},
+                {"paper_id": "b", "title": "Paper B", "llm_models": ["an LLM"]},
+                {"paper_id": "c", "title": "Paper C", "llm_models": []},
+            ])
+            data = build_rp_data(output_root, "nested-names")
+        briefs = {brief["name"]: brief for brief in data["categorizationAnalysis"]["categories"]}
+        self.assertEqual({name: brief["count"] for name, brief in briefs.items()},
+                         {"OpenAI models": 1, "Other named model families": 1, "Other": 1})
+        self.assertEqual([paper["title"] for paper in briefs["Other"]["papers"]], ["Paper B"])
+        from reviewpilot_core.state_projection import _category_values
+        names = ["Other named model families", "Other"]
+        self.assertEqual(_category_values("Other named model families", names), ["Other named model families"])
+        self.assertEqual(_category_values("Other named model families; Other", names), ["Other named model families", "Other"])
+
     def test_final_result_workspace_formats_nested_evidence_as_readable_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
