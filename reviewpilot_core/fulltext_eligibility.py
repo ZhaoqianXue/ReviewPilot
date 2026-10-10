@@ -22,7 +22,9 @@ MISSING = "(not returned by the model)"
 DESCRIPTION = (
     "Full-text eligibility against the reviewer-approved criteria. Choose \"Include\" unless the full text "
     "establishes that the study meets an exclusion criterion or does not meet an inclusion criterion; then "
-    "choose that criterion. Quote the deciding passage."
+    "choose that criterion. Quote the deciding passage. The supplied full text may be a preprint or author version "
+    "of the published record; a version notice such as \"not certified by peer review\" does not establish that the record "
+    "fails a publication-type or peer-review criterion. Judge such criteria by what the study is."
 )
 
 
