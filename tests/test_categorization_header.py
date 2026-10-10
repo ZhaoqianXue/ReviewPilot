@@ -37,7 +37,7 @@ let html = context.categorizeCanvas(view);
 assert.match(html, /17 papers · 11 fields/);
 assert.match(html, /grid-template-columns:repeat\(3,/);
 assert.match(html, /Papers in Analysis<\/div><div[^>]*>17<\/div><div[^>]*>of 20 extracted</);
-assert.match(html, /Excluded at Full Text<\/div><div[^>]*>3</);
+assert.match(html, /Excluded at Eligibility<\/div><div[^>]*>3</);
 assert.match(html, /Not an LLM screening study\.<\/span><span[^>]*>2</);
 assert.match(html, /Not met: Systematic reviews\.<\/span><span[^>]*>1</);
 assert.match(html, /1 paper assessed from web sources/);
@@ -53,7 +53,7 @@ const base = { isNewProject: false, categorizationSummary: { papers: 0, groups: 
 let html = context.categorizeCanvas({ ...base, categorizationWorkflow: { done: false,
   metrics: { papersExtracted: 5, papersInAnalysis: 5, fields: 2 }, fullTextExclusions: { total: 0, reasons: [] } } });
 assert.match(html, /grid-template-columns:repeat\(2,/);
-assert.doesNotMatch(html, /Excluded at Full Text|full-text-exclusions|extracted/);
+assert.doesNotMatch(html, /Excluded at Eligibility|full-text-exclusions|extracted/);
 html = context.categorizeCanvas({ ...base, categorizationWorkflow: { done: false, metrics: { papersExtracted: 4, fields: 2 } } });
 assert.match(html, /4 papers · 2 fields/);
 assert.match(html, /Papers in Analysis<\/div><div[^>]*>4</);

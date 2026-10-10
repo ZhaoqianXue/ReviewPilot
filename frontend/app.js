@@ -2491,14 +2491,14 @@ ${reviewUI.dialog()}
       ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}`;
   }
 
-  // Papers excluded at full-text eligibility are left out of categorization, so the header counts the analysis set.
+  // Papers excluded at eligibility, from the PDF or from web sources, are left out of categorization, so the header counts the analysis set.
   function categorizationMetrics(workflow) {
     const exclusions = workflow.fullTextExclusions || {};
     const excluded = Number(exclusions.total) || 0;
     const tile = (label, value, note = '') => `<div style="border:1px solid #e5e7eb;border-radius:10px;padding:13px 14px;min-width:0;"><div style="font-size:10px;color:#8a938b;letter-spacing:-0.01em;">${label}</div><div style="font-family:'IBM Plex Mono',monospace;font-size:20px;color:#1a365d;margin-top:4px;">${value}</div>${note ? `<div style="font-size:11px;color:#8a938b;margin-top:3px;">${note}</div>` : ''}</div>`;
     return `<div data-ui="categorization-metrics" style="display:grid;grid-template-columns:repeat(${excluded ? 3 : 2},minmax(0,1fr));gap:10px;margin-bottom:${excluded ? 10 : 16}px;">
       ${tile('Papers in Analysis', papersInAnalysis(workflow), excluded ? `of ${workflow.metrics.papersExtracted} extracted` : '')}
-      ${excluded ? tile('Excluded at Full Text', excluded) : ''}
+      ${excluded ? tile('Excluded at Eligibility', excluded) : ''}
       ${tile('Fields', workflow.metrics.fields)}
     </div>${excluded ? fullTextExclusionReasons(exclusions) : ''}`;
   }
@@ -2510,7 +2510,7 @@ ${reviewUI.dialog()}
   function fullTextExclusionReasons(exclusions) {
     const fromWeb = Number(exclusions.fromWebSources) || 0;
     return `<div data-ui="full-text-exclusions" style="border:1px solid #eef0ee;border-radius:10px;padding:10px 12px;margin-bottom:16px;background:#fbfcfa;">
-      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:8px;">Full-text exclusion reasons</div>
+      <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:8px;">Eligibility exclusion reasons</div>
       <div style="display:flex;flex-direction:column;gap:6px;">${(exclusions.reasons || []).map((reason) => `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12px;"><span style="color:#3a4252;line-height:1.4;min-width:0;">${reason.label}</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${reason.count}</span></div>`).join('')}</div>
       <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">${fromWeb ? `${formatCount(fromWeb, 'paper')} assessed from web sources because the PDF was not retrieved. ` : ''}Excluded papers are not categorized; they stay in the extraction results and the PRISMA counts.</div>
     </div>`;
@@ -2518,7 +2518,7 @@ ${reviewUI.dialog()}
 
   function noPapersToCategorize() {
     return `<section data-ui="no-papers-to-categorize" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
-      <div style="font-size:12.5px;color:#3a4252;line-height:1.5;">Every extracted paper was excluded at full text, so there is nothing to categorize. To change an exclusion, review that paper's eligibility value in Information Extraction.</div>
+      <div style="font-size:12.5px;color:#3a4252;line-height:1.5;">Every extracted paper was excluded at eligibility, so there is nothing to categorize. To change an exclusion, review that paper's eligibility value in Information Extraction.</div>
       <div style="border-top:1px solid #eef0ee;margin-top:14px;padding-top:12px;"><button data-act="skip-categorization" style="${buttonStyle}">Skip Categorization</button></div>
     </section>`;
   }
