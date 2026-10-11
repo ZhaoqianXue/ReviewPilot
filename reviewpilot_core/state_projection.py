@@ -23,7 +23,7 @@ from .record_review import key as record_key
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from .project_store import count_jsonl, iter_project_dirs, project_dir, read_json, read_jsonl
-from .retrieval_retry import current_retry_snapshot, disabled_retry_projection, stable_retry_id
+from .retrieval_retry import current_retry_snapshot, disabled_retry_projection, is_user_provided, stable_retry_id
 from .safe_text import contains_absolute_path, safe_display_text
 from .setup_revision import read_consistent_setup, reconcile_setup_transaction, setup_revision
 from .workflow_state import STAGE_NAMES, load_workflow_state, new_workflow_state, reconcile_orphaned_running
@@ -775,7 +775,8 @@ def _retrieved(path: Path, included: list[dict], download_report: dict) -> list[
         source = paper.get("source") or paper.get("platform") or "paper"
         year = paper.get("year") or paper.get("publication_year") or ""
         has_pdf = local_pdf(path, {}, paper) is not None
-        rows.append({"t": str(title), "v": f"{source}{f' · {year}' if year else ''}", "links": paper_links(paper),
+        origin = {"user_download": " · provided by you", "other_version": " · other version"}.get(paper.get("pdf_method"), "")
+        rows.append({"t": str(title), "v": f"{source}{f' · {year}' if year else ''}{origin}", "links": paper_links(paper),
                      "pdfKey": record_key(paper) if has_pdf else ""})
     return rows
 
@@ -811,9 +812,12 @@ def _retrieval_summary(path: Path, included: list[dict], download_report: dict, 
     successes = [r for r in successes if isinstance(r, dict)] if isinstance(successes, list) else []
     oa = sum(1 for row in successes if row.get('access_method') == 'open_access')
     institution = sum(1 for row in successes if row.get('access_method') == 'institution')
-    oa = min(oa, retrieved)
-    institution = min(institution, retrieved - oa)
-    return {"retrieved": retrieved, "total": total, "openAccess": oa, "viaInstitution": institution, "unknownAccess": max(0, retrieved - oa - institution), "unavailable": unavailable}
+    provided = min(sum(1 for row in successes if is_user_provided(row)), retrieved)
+    oa = min(oa, retrieved - provided)
+    institution = min(institution, retrieved - provided - oa)
+    return {"retrieved": retrieved, "total": total, "openAccess": oa, "viaInstitution": institution,
+            "unknownAccess": max(0, retrieved - provided - oa - institution), "providedByUser": provided,
+            "obtainedAutomatically": retrieved - provided, "unavailable": unavailable}
 
 
 def _categorization_summary(categorization: dict) -> dict:

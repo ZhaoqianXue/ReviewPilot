@@ -40,6 +40,10 @@ The frontend calls:
 - `POST /projects/{project_id}/actions/{action}` to run workflow stages.
 - `GET /tasks/{task_id}` to poll background task status; a running task also reports `progress` (items done of total), shown in the running banner.
 - `GET /projects/{project_id}/exports/run-report` for the run report: processing time, LLM calls and cost per stage, and human corrections, computed from `logs/run_ledger.jsonl` (every workflow action, chat turn and LLM call is recorded there).
+- `POST /projects/{project_id}/manual-retrieval/awaiting` (`{retry_id, awaiting}`) when a missing paper's link is opened; while a paper waits, the backend watches the download folder for new PDFs.
+- `POST /projects/{project_id}/manual-retrieval/files?name=…[&retry_id=…]` with the raw PDF as the body to add a file the user provides (matched to a paper, or assigned to `retry_id`).
+- `POST` / `DELETE /projects/{project_id}/manual-retrieval/pending/{pending_id}` to use a waiting file for the chosen paper (`{retry_id}`) or ignore it.
+- `GET` / `PUT /settings/retrieval` for the application-level download folder, folder watching and library link.
 
 Errors return JSON with a `detail` field carrying the reason, which the workspace shows to the user.
 

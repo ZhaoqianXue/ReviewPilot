@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
 from reviewpilot_core import run_ledger
+from reviewpilot_core.retrieval_retry import USER_DOWNLOAD_METHOD, USER_PROVIDED_FIELDS, provenance_counts
 from utils.human_interaction import print_header, print_summary
 from utils.jsonl_handler import read_jsonl, save_json, write_jsonl
 
@@ -73,9 +74,11 @@ class DownloadAgent(BaseAgent):
             enable_browser_fallback=bool(input_data.get("enable_browser_fallback", True)),
         )
 
+        # A PDF the user provided is final: a full re-run keeps it and does not search again.
+        user_provided_ids = {id(paper) for paper in papers if self._has_user_provided_pdf(paper)}
         try:
             download_result = downloader.download_batch(
-                papers,
+                [paper for paper in papers if id(paper) not in user_provided_ids],
                 progress_callback=input_data.get("progress_callback") or (lambda done, total, _title: run_ledger.report_progress(done, total)),
                 progress_file=input_data.get("progress_file"),
             )
@@ -138,7 +141,11 @@ class DownloadAgent(BaseAgent):
                 paper["retrieval_status"] = "downloaded"
                 paper.pop("web_search_fallback_pending", None)
                 paper.pop("pdf_failure_class", None)
-                downloaded.append({"title": paper.get("title", ""), "path": str(row_pdf)})
+                entry = {"title": paper.get("title", ""), "path": str(row_pdf)}
+                if paper.get("pdf_method") == USER_DOWNLOAD_METHOD:
+                    entry.update(method=USER_DOWNLOAD_METHOD, pdf_method=USER_DOWNLOAD_METHOD)
+                    entry.update({key: paper[key] for key in USER_PROVIDED_FIELDS if key in paper})
+                downloaded.append(entry)
                 continue
 
             failure = failed_by_key.get(self._paper_key(paper), {})
@@ -185,10 +192,16 @@ class DownloadAgent(BaseAgent):
             "subscribed_papers": subscribed_papers,
             "unavailable_papers": unavailable_papers,
             "web_search_fallback_candidates": fallback_candidates,
+            **provenance_counts(downloaded),
             "output_dir": str(output_dir),
             "download_engine": str(stats.get("download_engine") or "FastCascadePDFDownloader"),
         }
         return report, papers
+
+    def _has_user_provided_pdf(self, paper: Dict[str, Any]) -> bool:
+        path = Path(str(paper.get("pdf_path") or ""))
+        return (paper.get("pdf_downloaded") is True and paper.get("pdf_method") == USER_DOWNLOAD_METHOD
+                and path.is_file() and self._is_valid_pdf(path))
 
     def _pdf_for_paper(self, row_number: int, paper: Dict[str, Any], pdf_files: List[Path]) -> Path | None:
         if paper.get("pdf_downloaded") and paper.get("pdf_path") and Path(str(paper["pdf_path"])).exists():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
@@ -58,7 +59,9 @@ from reviewpilot_core.configuration_reuse import configuration_options, preview_
 from reviewpilot_core.screening_criteria import require_finalized_criteria, validate_criteria, criteria_state
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, restore_downstream_freshness, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
-from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
+from reviewpilot_core import manual_retrieval
+from reviewpilot_core.manual_retrieval import ManualRetrievalError
+from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RetryRequestError, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
 from reviewpilot_core.retrieval_retry_transaction import abandon_retry_transaction, abort_retry_transaction, apply_retry_transaction, begin_retry_transaction, publish_retry_transaction_pdfs, reconcile_retry_transaction, record_retry_transaction_target, retry_target_is_committed, run_retry_transaction_staging
 
 
@@ -98,6 +101,11 @@ def build_project_state(output_root: Path | str, project_id: str) -> dict:
     state["readOnlyExample"] = is_example(Path(output_root), project_id)
     state["exampleOrigin"] = read_json(project_path / "example_origin.json", None)
     state["activeTask"] = active_task
+    state["manualRetrieval"] = manual_retrieval.projection(
+        project_path, output_root, enabled=state["retrievalRecovery"]["canRetry"] and not retry_is_active)
+    if state["manualRetrieval"]["awaiting"] and Path(output_root) == Path(OUTPUT_ROOT):
+        # Resume watching after a restart while a clicked paper still waits for its download.
+        download_watcher.watch(project_id)
     return state
 
 
@@ -481,6 +489,152 @@ async def create_project_api(request):
     return JSONResponse(project, status_code=201, headers={"Location": "/workspace"})
 
 
+async def retrieval_settings_api(request):
+    """Application-level settings for the manual retrieval handoff (download folder, watching, library link)."""
+    if request.method == "PUT":
+        try:
+            payload = await _optional_json(request)
+            await run_in_threadpool(manual_retrieval.save_settings, OUTPUT_ROOT, payload)
+        except ValueError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+    return JSONResponse(manual_retrieval.settings_projection(OUTPUT_ROOT))
+
+
+async def manual_retrieval_api(request):
+    """Canvas actions for papers the downloader could not obtain: link clicks, files, decisions."""
+    project_id = request.path_params["project_id"]
+    if not known_project(OUTPUT_ROOT, project_id):
+        raise HTTPException(status_code=404)
+    project = Path(OUTPUT_ROOT) / project_id
+    operation = request.path_params.get("operation")
+    pending_id = request.path_params.get("pending_id")
+
+    async def payload_object() -> dict:
+        try:
+            return await _optional_json(request) or {}
+        except ValueError as exc:
+            raise ManualRetrievalError(str(exc)) from exc
+
+    try:
+        require_mutable(Path(OUTPUT_ROOT), project_id)
+        if pending_id is not None:
+            if request.method == "DELETE":
+                await run_in_threadpool(manual_retrieval.remove_pending, project, pending_id)
+                result = {"outcome": "dismissed"}
+            else:
+                payload = await payload_object()
+                result = await run_in_threadpool(_assign_pending_file, project_id, pending_id, payload.get("retry_id"))
+        elif operation == "awaiting":
+            payload = await payload_object()
+            retry_id, awaiting = payload.get("retry_id"), payload.get("awaiting", True)
+            if not isinstance(retry_id, str) or not isinstance(awaiting, bool):
+                raise ManualRetrievalError("Name the paper whose link was opened.")
+            watching = manual_retrieval.load_settings(OUTPUT_ROOT)["watch_enabled"]
+            if watching or not awaiting:
+                await run_in_threadpool(manual_retrieval.mark_awaiting, project, retry_id, awaiting)
+            if watching and awaiting:
+                download_watcher.watch(project_id)
+            result = {"outcome": "awaiting" if watching and awaiting else "not_watching"}
+        elif operation == "files":
+            content = await request.body()
+            if len(content) > manual_retrieval.MAX_PDF_BYTES:
+                raise ManualRetrievalError("The file is larger than 200 MB.")
+            name = Path(str(request.query_params.get("name") or "file.pdf")).name[:200] or "file.pdf"
+            retry_id = request.query_params.get("retry_id") or None
+            result = await run_in_threadpool(_receive_user_file, project_id, content, name, retry_id)
+        else:
+            raise HTTPException(status_code=404)
+    except TaskConflictError as exc:
+        return JSONResponse({"detail": str(exc), "active_task": exc.task}, status_code=409)
+    except ManualRetrievalError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    except RetryRequestError as exc:
+        return JSONResponse({"detail": "The retrieval results changed. Refresh and try again.", "code": exc.code}, status_code=409)
+    except ValueError as exc:
+        if str(exc).startswith("This example"):
+            return JSONResponse({"detail": str(exc)}, status_code=403)
+        return JSONResponse({"detail": "ReviewPilot could not add the file; nothing was changed. Refresh and try again."}, status_code=409)
+    return JSONResponse({"result": result, "state": build_project_state(OUTPUT_ROOT, project_id)})
+
+
+def import_user_pdf(output_root: Path | str, project_id: str, retry_id: str, content: bytes, *,
+                    source: str, basis: str, file_name: str) -> dict:
+    """Import a PDF the user provided for one paper through the retrieval-retry transaction."""
+    project = Path(output_root) / project_id
+    require_mutable(Path(output_root), project_id)
+    if not manual_retrieval.is_pdf(content):
+        raise ManualRetrievalError(f"{file_name} is not a PDF file.")
+    evidence = manual_retrieval.match_evidence(basis, file_name)
+    run_download = manual_retrieval.staged_import(content, source=source, evidence=evidence)
+
+    def transact():
+        reconcile_setup_transaction(project)
+        reconcile_retry_transaction(project)
+        preparation = manual_retrieval.prepare_import(project, retry_id)
+        before_ledger = load_workflow_state(project)
+        staging_name = f".retrieval_retry_staging_{secrets.token_hex(16)}"
+        handle = begin_retry_transaction(project, preparation, staging_name, project / staging_name)
+        result = _execute_retry_transaction(project, preparation, handle, before_ledger, run_download)
+        label = preparation.items[0].label
+        manual_retrieval.record_import(project, retry_id, label=label, source=source, basis=basis,
+                                       file_name=Path(file_name).name, sha256=hashlib.sha256(content).hexdigest())
+        return {**result, "label": label}
+
+    return task_runner.run_if_idle(project_id, transact, action="import-user-pdf")
+
+
+def _receive_user_file(project_id: str, content: bytes, name: str, retry_id: str | None) -> dict:
+    """Match an uploaded file (or take the user's assignment) and import it, or keep it for a decision."""
+    project = Path(OUTPUT_ROOT) / project_id
+    if not manual_retrieval.is_pdf(content):
+        raise ManualRetrievalError(f"{name} is not a PDF file.")
+    digest = hashlib.sha256(content).hexdigest()
+    already = manual_retrieval.imported_hashes(project).get(digest)
+    if already is not None:
+        return {"outcome": "duplicate", "label": already, "message": f"{name} was already added for “{already}”."}
+    if retry_id:
+        imported = import_user_pdf(OUTPUT_ROOT, project_id, retry_id, content, source="manual_assignment",
+                                   basis="user_choice", file_name=name)
+        return {"outcome": "imported", "label": imported["label"], "message": f"{name} added for “{imported['label']}”."}
+    candidates = manual_retrieval.candidates_for(project)
+    if not candidates:
+        raise ManualRetrievalError("Every paper already has its full text.")
+    titles = [row.get("title") for row in read_jsonl(project / "filtered" / "included_papers.jsonl")]
+    outcome = manual_retrieval.match_pdf(content, candidates, titles)
+    if outcome.status == "matched":
+        imported = import_user_pdf(OUTPUT_ROOT, project_id, outcome.retry_id, content, source="upload",
+                                   basis=outcome.basis, file_name=name)
+        return {"outcome": "imported", "label": imported["label"], "message": f"{name} added for “{imported['label']}”."}
+    stored = manual_retrieval.store_in_inbox(project, content)
+    manual_retrieval.add_pending(project, {"source": "upload", "file_name": name, "stored": stored, "sha256": digest,
+                                           "size": len(content), "reason": outcome.status, "candidates": outcome.candidates})
+    return {"outcome": "pending", "message": f"{name}: {manual_retrieval.PENDING_REASONS[outcome.status]}"}
+
+
+def _assign_pending_file(project_id: str, pending_id: str, retry_id) -> dict:
+    """The user's choice of paper for a file that did not match on its own; the choice is final."""
+    project = Path(OUTPUT_ROOT) / project_id
+    if not isinstance(retry_id, str) or not retry_id:
+        raise ManualRetrievalError("Choose the paper this file belongs to.")
+    entry = manual_retrieval.pending_entry(project, pending_id)
+    content = manual_retrieval.pending_file(project, entry).read_bytes()
+    source = entry.get("source") if entry.get("source") in {"upload", "download_watch"} else "upload"
+    name = str(entry.get("file_name") or "file.pdf")
+    imported = import_user_pdf(OUTPUT_ROOT, project_id, retry_id, content, source=source, basis="user_choice", file_name=name)
+    manual_retrieval.remove_pending(project, pending_id)
+    return {"outcome": "imported", "label": imported["label"], "message": f"{name} added for “{imported['label']}”."}
+
+
+def _watch_import(project_id: str, retry_id: str, content: bytes, source: str, basis: str, file_name: str) -> dict:
+    return import_user_pdf(OUTPUT_ROOT, project_id, retry_id, content, source=source, basis=basis, file_name=file_name)
+
+
+download_watcher = manual_retrieval.DownloadWatcher(
+    lambda: Path(OUTPUT_ROOT), _watch_import,
+    busy=lambda project_id: task_runner.active_for_project(project_id) is not None,
+)
+
+
 async def http_error(_request, exc: HTTPException) -> JSONResponse:
     # The workspace reads `detail` from error bodies; plain text would hide the reason.
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
@@ -502,6 +656,9 @@ def create_app() -> Starlette:
             Route("/projects/{project_id}/configuration-reuse/{operation}", project_configuration_reuse, methods=["POST"]),
             Route("/memory/settings", memory_settings, methods=["GET", "PUT"]),
             Route("/memory", clear_memory, methods=["DELETE"]),
+            Route("/settings/retrieval", retrieval_settings_api, methods=["GET", "PUT"]),
+            Route("/projects/{project_id}/manual-retrieval/pending/{pending_id}", manual_retrieval_api, methods=["POST", "DELETE"]),
+            Route("/projects/{project_id}/manual-retrieval/{operation}", manual_retrieval_api, methods=["POST"]),
             Route("/projects/new", new_project_page, methods=["GET"]),
             Route("/projects/{project_id}", project_page, methods=["GET"]),
             Route("/projects/{project_id}/state", project_state, methods=["GET"]),
@@ -907,6 +1064,57 @@ def _retry_target_ledger(before_ledger: dict, success: int, failed: int) -> dict
         )
 
 
+def _execute_retry_transaction(project: Path, preparation, handle, before_ledger: dict, run_download) -> dict:
+    """Stage a retry subset with ``run_download``, then publish and apply it as one transaction."""
+    plan = None
+    target_ledger = None
+    apply_started = False
+    try:
+        outcome = run_retry_transaction_staging(project, preparation, run_download)
+        merged = merge_staged_retry_facts(preparation, outcome)
+        plan = prepare_retry_publication(project, preparation, outcome, merged)
+        counts = merged.counts
+        target_ledger = _retry_target_ledger(before_ledger, counts["succeeded"], counts["failed"])
+        record_retry_transaction_target(project, plan, target_ledger)
+        publish_retry_transaction_pdfs(project)
+        result = {
+            "stage": "retrieval",
+            "status": merged.status,
+            "data": {
+                "success": counts["succeeded"],
+                "failed": counts["failed"],
+                "retried": len(preparation.selected_ids),
+                "recovered": len(outcome.successful_pdfs),
+            },
+        }
+        apply_started = True
+        try:
+            apply_retry_transaction(project, handle.transaction_id)
+        except Exception:
+            abandon_retry_transaction(project, handle.transaction_id)
+            try:
+                reconcile_retry_transaction(project)
+            except ValueError:
+                pass
+            if plan is not None and target_ledger is not None and retry_target_is_committed(project, plan, target_ledger):
+                return result
+            raise
+        return result
+    except Exception:
+        if not apply_started:
+            try:
+                abort_retry_transaction(project, handle.transaction_id)
+            except ValueError:
+                abandon_retry_transaction(project, handle.transaction_id)
+                try:
+                    reconcile_retry_transaction(project)
+                except ValueError:
+                    pass
+        raise
+    finally:
+        abandon_retry_transaction(project, handle.transaction_id)
+
+
 def _submit_retry_action(output_root: Path | str, project_id: str, input_data: dict | None, llm_query=None) -> str:
     project = Path(output_root) / project_id
     context: dict = {}
@@ -926,63 +1134,12 @@ def _submit_retry_action(output_root: Path | str, project_id: str, input_data: d
             abort_retry_transaction(project, handle.transaction_id)
 
     def run_action():
-        preparation = context["preparation"]
-        handle = context["handle"]
-        plan = None
-        target_ledger = None
-        apply_started = False
-        try:
-            outcome = run_retry_transaction_staging(
-                project,
-                preparation,
-                lambda root, retry_project_id: WorkflowActionAdapter().run(
-                    "download-pdfs", root, retry_project_id, llm_query=llm_query
-                ),
-            )
-            merged = merge_staged_retry_facts(preparation, outcome)
-            plan = prepare_retry_publication(project, preparation, outcome, merged)
-            counts = merged.counts
-            target_ledger = _retry_target_ledger(
-                context["before_ledger"], counts["succeeded"], counts["failed"]
-            )
-            record_retry_transaction_target(project, plan, target_ledger)
-            publish_retry_transaction_pdfs(project)
-            result = {
-                "stage": "retrieval",
-                "status": merged.status,
-                "data": {
-                    "success": counts["succeeded"],
-                    "failed": counts["failed"],
-                    "retried": len(preparation.selected_ids),
-                    "recovered": len(outcome.successful_pdfs),
-                },
-            }
-            apply_started = True
-            try:
-                apply_retry_transaction(project, handle.transaction_id)
-            except Exception:
-                abandon_retry_transaction(project, handle.transaction_id)
-                try:
-                    reconcile_retry_transaction(project)
-                except ValueError:
-                    pass
-                if plan is not None and target_ledger is not None and retry_target_is_committed(project, plan, target_ledger):
-                    return result
-                raise
-            return result
-        except Exception:
-            if not apply_started:
-                try:
-                    abort_retry_transaction(project, handle.transaction_id)
-                except ValueError:
-                    abandon_retry_transaction(project, handle.transaction_id)
-                    try:
-                        reconcile_retry_transaction(project)
-                    except ValueError:
-                        pass
-            raise
-        finally:
-            abandon_retry_transaction(project, handle.transaction_id)
+        return _execute_retry_transaction(
+            project, context["preparation"], context["handle"], context["before_ledger"],
+            lambda root, retry_project_id: WorkflowActionAdapter().run(
+                "download-pdfs", root, retry_project_id, llm_query=llm_query
+            ),
+        )
 
     return task_runner.submit(
         project_id,

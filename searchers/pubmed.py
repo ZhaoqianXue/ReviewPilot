@@ -227,6 +227,9 @@ class PubMedSearcher:
                     if id_elem.get("IdType") == "doi":
                         doi = id_elem.text or ""
                         break
+                # PMC id of this article (not of its references), for a PMC link when the PDF must be fetched by hand
+                pmcid = next((id_elem.text or "" for id_elem in article.findall("./PubmedData/ArticleIdList/ArticleId")
+                              if id_elem.get("IdType") == "pmc"), "")
 
                 articles.append({
                     "source": "pubmed",
@@ -238,7 +241,8 @@ class PubMedSearcher:
                     "year": year,
                     "publication_date": publication_date,
                     "doi": doi,
-                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                    **({"pmcid": pmcid.strip()} if pmcid.strip() else {}),
                 })
             except Exception as e:
                 print(f"Error parsing article: {e}")

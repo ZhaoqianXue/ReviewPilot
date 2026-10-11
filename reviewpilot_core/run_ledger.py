@@ -117,16 +117,19 @@ def submit_in_context(pool, fn, *args, **kwargs):
 
 
 def human_corrections(project: Path | str) -> dict[str, int]:
-    """Decisions and values a person changed, read from the records themselves."""
+    """Decisions and values a person changed, and PDFs a person supplied, read from the records themselves."""
     project = Path(project)
     records = read_jsonl(project / "filtered" / "included_papers.jsonl") + read_jsonl(project / "filtered" / "excluded_papers.jsonl")
     reviews = [row.get("human_screening") or {} for row in records]
     fields = [entry for row in read_jsonl(project / "extraction" / "extraction_results.jsonl")
               for entry in (row.get("human_fields") or {}).values() if isinstance(entry, dict)]
     changed = [entry for entry in fields if "value" not in entry or entry.get("value") != entry.get("original_value")]
+    from .retrieval_retry import USER_DOWNLOAD_METHOD
+    included = read_jsonl(project / "filtered" / "included_papers.jsonl")
     return {"screening_reviewed": sum(1 for review in reviews if review),
             "screening_overridden": sum(1 for review in reviews if review and review.get("original_decision") != review.get("decision")),
-            "extraction_fields_reviewed": len(fields), "extraction_fields_corrected": len(changed)}
+            "extraction_fields_reviewed": len(fields), "extraction_fields_corrected": len(changed),
+            "pdfs_provided": sum(1 for row in included if row.get("pdf_method") == USER_DOWNLOAD_METHOD)}
 
 
 def summary(project: Path | str) -> dict[str, Any]:

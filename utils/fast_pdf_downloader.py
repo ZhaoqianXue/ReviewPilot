@@ -4221,3 +4221,45 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
         self._browser_context = None
         self._browser = None
         self._playwright = None
+
+
+class UserFileIdentityGate(FastCascadePDFDownloader):
+    """The downloader's identity gate, without network state, for PDFs a user provides.
+
+    ``_pdf_title_match_result`` runs unchanged. A user's file was not fetched through the
+    paper's own identifier, so the gate never accepts a file without extractable text.
+    Page text is parsed once per file and reused across candidate papers.
+    """
+
+    def __init__(self, generic_title_tokens: Optional[Iterable[str]] = None):  # noqa: D107 - no network setup
+        self.generic_title_tokens = set(generic_title_tokens or GENERIC_TITLE_TOKENS)
+        self._current_paper_doi = ""
+        self._active_method = "user_download"
+        self._alt_titles = []
+        self._strict_title_gate = False
+        self._page_cache: Dict[Tuple[str, int, int], List[str]] = {}
+
+    def for_paper(self, doi: Optional[str]) -> "UserFileIdentityGate":
+        self._current_paper_doi = normalize_doi(doi)
+        return self
+
+    def _extract_pdf_pages(self, content: bytes, max_pages: int = 4, max_chars: int = 30000) -> List[str]:
+        import hashlib
+
+        key = (hashlib.sha256(content).hexdigest(), max_pages, max_chars)
+        if key not in self._page_cache:
+            self._page_cache[key] = super()._extract_pdf_pages(content, max_pages=max_pages, max_chars=max_chars)
+        return self._page_cache[key]
+
+    def close(self) -> None:
+        return None
+
+
+def title_match_tokens(value: str) -> List[str]:
+    """The title words the identity gate compares (public alias for callers outside the downloader)."""
+    return _title_match_tokens(value)
+
+
+def front_page_is_supplement(text: str) -> bool:
+    """Whether page 1 opens like a supplementary file (public alias of the gate's check)."""
+    return _front_page_is_supplement(text)

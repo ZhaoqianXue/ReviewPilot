@@ -21,6 +21,9 @@ from .workflow_state import load_workflow_state, structured_action_outcome
 
 
 _IDENTITY_FIELDS = ("id", "doi", "url", "title")
+# Provenance of a PDF the user provided (manual retrieval handoff).
+USER_PROVIDED_FIELDS = ("pdf_source", "pdf_match_evidence")
+USER_DOWNLOAD_METHOD = "user_download"
 
 
 def stable_retry_id(row: dict[str, Any]) -> str:
@@ -730,6 +733,7 @@ def merge_staged_retry_facts(preparation: RetryPreparation, staged_outcome: Stag
     report["subscribed_papers"] = deepcopy([row for row in merged_failures if _merged_failure_status(row) == "subscribed_unavailable"])
     report["unavailable_papers"] = deepcopy([row for row in merged_failures if _merged_failure_status(row) == "unavailable"])
     report["web_search_fallback_candidates"] = deepcopy(merged_failures)
+    report.update(provenance_counts(downloaded))
     if len(report["downloaded"]) != report["success"] or len(report["failed_papers"]) != report["failed"]:
         raise ValueError("Merged retry report counts are inconsistent")
     status, counts = structured_action_outcome("retry-failed-downloads", {"success": success_count, "failed": failed_count})
@@ -849,7 +853,19 @@ def _validate_detail_provenance(row: dict[str, Any], detail: dict[str, Any]) -> 
 _MERGED_REPORT_FIELDS = {
     "success", "failed", "downloaded", "failed_papers", "pdf_count", "attempted",
     "subscribed_papers", "unavailable_papers", "web_search_fallback_candidates",
+    "obtained_automatically", "provided_by_user",
 }
+
+
+def is_user_provided(detail: Any) -> bool:
+    """Whether a downloaded-report row or included paper holds a PDF the user provided."""
+    return isinstance(detail, Mapping) and USER_DOWNLOAD_METHOD in (detail.get("method"), detail.get("pdf_method"))
+
+
+def provenance_counts(downloaded: list[Any]) -> dict[str, int]:
+    """Report counts that keep automatic retrieval and user-provided PDFs apart."""
+    provided = sum(1 for detail in downloaded if is_user_provided(detail))
+    return {"obtained_automatically": len(downloaded) - provided, "provided_by_user": provided}
 
 
 def _exact_json(first: Any, second: Any) -> bool:
@@ -960,6 +976,9 @@ def _validate_merged_retry_delta(
     }
     if any(not _exact_json(report.get(key), value) for key, value in classifications.items()):
         raise ValueError("Retry report classification is invalid")
+    for key, expected in provenance_counts(downloaded).items():
+        if key in report and (type(report[key]) is not int or report[key] != expected):
+            raise ValueError("Retry provenance count is invalid")
 
 
 def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dict[str, Any]:
@@ -971,7 +990,7 @@ def _clean_selected_row(source: dict[str, Any], destination: Path | None) -> dic
             row.pop(key, None)
         row.update(pdf_downloaded=True, pdf_path=str(destination), retrieval_status="downloaded")
     else:
-        for key in ("path", "pdf_path", "pdf_method"):
+        for key in ("path", "pdf_path", "pdf_method", *USER_PROVIDED_FIELDS):
             row.pop(key, None)
         row["pdf_downloaded"] = False
     return row
@@ -990,7 +1009,7 @@ def _clean_selected_failure_detail(source: dict[str, Any]) -> dict[str, Any]:
     detail = deepcopy(source)
     for key in _REPORT_SECONDARY_DIAGNOSTICS:
         detail.pop(key, None)
-    for key in ("path", "pdf_path", "pdf_method"):
+    for key in ("path", "pdf_path", "pdf_method", *USER_PROVIDED_FIELDS):
         detail.pop(key, None)
     detail["pdf_downloaded"] = False
     return detail
@@ -1016,6 +1035,7 @@ def _contains_text(value: Any, needle: str) -> bool:
 
 _STAGING_PROJECT_ID = "retry"
 _DERIVED_RETRY_FIELDS = {
+    *USER_PROVIDED_FIELDS,
     "pdf_downloaded",
     "pdf_path",
     "pdf_method",

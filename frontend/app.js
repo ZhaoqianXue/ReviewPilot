@@ -100,6 +100,22 @@ function sourceLimitProblem(label, value) {
   return /^[0-9]+$/.test(text) && Number(text) >= 1 ? '' : `Max results for ${label} must be a whole number of at least 1.`;
 }
 
+function normalizeManualRetrieval(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const list = (items) => (Array.isArray(items) ? items.filter((item) => item && typeof item === 'object') : []);
+  const settings = source.settings && typeof source.settings === 'object' ? source.settings : {};
+  return {
+    enabled: source.enabled === true,
+    awaiting: source.awaiting === true,
+    items: list(source.items).map((item) => ({ ...item, links: list(item.links) })),
+    pending: list(source.pending).map((item) => ({ ...item, suggested: list(item.suggested), options: list(item.options) })),
+    recent: list(source.recent),
+    counts: { automatic: Number(source.counts?.automatic) || 0, user: Number(source.counts?.user) || 0 },
+    settings: { downloadFolder: settings.downloadFolder || '~/Downloads', watchEnabled: settings.watchEnabled !== false,
+      libraryResolver: settings.libraryResolver || '', folderAvailable: settings.folderAvailable !== false },
+  };
+}
+
 function normalizeRetrievalRecovery(value) {
   const items = Array.isArray(value?.items)
     ? value.items.filter((item) => item && typeof item.retryId === 'string' && item.retryId).map((item) => ({
@@ -644,6 +660,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       codingRules: data.codingRules || { status: 'missing', revision: '', rules: null, text: '', error: '' },
       retrievalSummary: data.retrievalSummary || { retrieved: 0, total: 0, openAccess: 0, viaInstitution: 0, unavailable: 0 },
       retrievalRecovery: normalizeRetrievalRecovery(data.retrievalRecovery),
+      manualRetrieval: normalizeManualRetrieval(data.manualRetrieval),
       categorizationSummary: data.categorizationSummary || { papers: 0, groups: 0 },
       categorizationWorkflow: data.categorizationWorkflow || emptyCategorizationWorkflow(),
       resultOverview: data.resultOverview || [],
@@ -962,8 +979,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       delete state.setupDrafts[D.project.id];
       if (stashed.revision === D.setupRevision && !D.searchReuseDraft) state.setupDraft = { ...state.setupDraft, ...stashed.draft };
     }
-    if (!sameProject) state.chatFailure = null;
+    if (!sameProject) { state.chatFailure = null; state.manualNotice = null; }
     state.catDraft = categorizationDraftFromData(D);
+    scheduleManualPoll();
     state.chatInputFocus = false;
     state.quickStartOpen = false;
   }
@@ -1341,6 +1359,119 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     setData(data, false, { preserveView: true });
   }
 
+  async function manualRetrievalRequest(path, payload, method = 'POST') {
+    const projectId = D.project.id;
+    if (!projectId) return;
+    const ownership = projectNavigation.capture(projectId);
+    const quiet = path === 'awaiting';
+    if (!quiet) { state.manualBusy = true; state.manualNotice = null; paintWorkspace(); }
+    try {
+      const res = await fetch(`/projects/${encodeURIComponent(projectId)}/manual-retrieval/${path}`, {
+        method, headers: payload ? {'Content-Type': 'application/json'} : {}, body: payload ? JSON.stringify(payload) : undefined,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!projectNavigation.owns(ownership)) return;
+      if (!res.ok) throw new Error(body.detail || 'ReviewPilot could not update the missing PDFs.');
+      applyManualRetrievalState(body.state);
+      if (body.result?.message) state.manualNotice = { error: false, lines: [body.result.message] };
+    } catch (err) {
+      if (projectNavigation.owns(ownership)) state.manualNotice = { error: true, lines: [err.message || String(err)] };
+    } finally {
+      if (!quiet) state.manualBusy = false;
+      if (projectNavigation.owns(ownership)) { scheduleManualPoll(); paintWorkspace(); }
+    }
+  }
+
+  async function uploadManualFiles(files, retryId) {
+    const projectId = D.project.id;
+    if (!projectId || state.manualBusy || state.actionPending || D.readOnlyExample) return;
+    const ownership = projectNavigation.capture(projectId);
+    state.manualBusy = true;
+    state.manualNotice = null;
+    paintWorkspace();
+    const lines = [];
+    let failed = false;
+    for (const file of files) {
+      const query = `name=${encodeURIComponent(file.name)}${retryId ? `&retry_id=${encodeURIComponent(retryId)}` : ''}`;
+      try {
+        const res = await fetch(`/projects/${encodeURIComponent(projectId)}/manual-retrieval/files?${query}`, {
+          method: 'POST', headers: {'Content-Type': 'application/pdf'}, body: file,
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!projectNavigation.owns(ownership)) return;
+        if (!res.ok) { failed = true; lines.push(`${file.name}: ${body.detail || 'could not be added.'}`); continue; }
+        lines.push(body.result?.message || `${file.name} added.`);
+        applyManualRetrievalState(body.state);
+      } catch (err) {
+        failed = true;
+        lines.push(`${file.name}: ${err.message || String(err)}`);
+      }
+    }
+    if (!projectNavigation.owns(ownership)) return;
+    state.manualBusy = false;
+    state.manualNotice = { error: failed && lines.length === 1, lines };
+    paintWorkspace();
+  }
+
+  function applyManualRetrievalState(data) {
+    if (!data || !D.project.id || data.project?.id !== D.project.id) return;
+    // Only retrieval facts change here; unsaved drafts elsewhere in the workspace are kept.
+    const next = normalizeData(escapeData(data));
+    ['manualRetrieval', 'retrievalSummary', 'retrievalRecovery', 'retrieved', 'steps', 'stageState', 'workflowNotices',
+      'resultOverview', 'quietLabels', 'quietActions', 'activityByStep'].forEach((key) => { D[key] = next[key]; });
+    state.retrySelection = reconcileRetrySelection(state.retrySelection, D.retrievalRecovery);
+  }
+
+  var manualPollTimer = null;
+  function scheduleManualPoll() {
+    if (manualPollTimer || !D.manualRetrieval.awaiting) return;
+    manualPollTimer = setInterval(() => {
+      if (!D.manualRetrieval.awaiting) { clearInterval(manualPollTimer); manualPollTimer = null; return; }
+      refreshManualRetrieval();
+    }, 2500);
+  }
+
+  async function refreshManualRetrieval() {
+    const projectId = D.project.id;
+    if (!projectId || state.manualBusy || state.actionPending || state.chatPending) return;
+    const ownership = projectNavigation.capture(projectId);
+    try {
+      const data = await fetchProjectState(projectId);
+      if (!projectNavigation.owns(ownership)) return;
+      const before = JSON.stringify([D.manualRetrieval, D.retrievalSummary]);
+      applyManualRetrievalState(data);
+      const choosing = document.activeElement?.matches?.('[data-manual-choice]');
+      if (before !== JSON.stringify([D.manualRetrieval, D.retrievalSummary]) && !choosing) paintWorkspace();
+    } catch (err) { /* the next poll tries again */ }
+  }
+
+  async function loadRetrievalSettings() {
+    state.retrievalSettings = { ...(state.retrievalSettings || {}), pending: true, error: '', saved: false };
+    try {
+      const res = await fetch('/settings/retrieval');
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || 'Could not load settings.');
+      state.retrievalSettings = { ...body, pending: false, error: '', saved: false };
+    } catch (err) {
+      state.retrievalSettings = { ...(state.retrievalSettings || {}), pending: false, error: err.message || String(err) };
+    }
+  }
+
+  async function saveRetrievalSettings(payload) {
+    state.retrievalSettings = { ...(state.retrievalSettings || {}), ...{ downloadFolder: payload.download_folder, watchEnabled: payload.watch_enabled, libraryResolver: payload.library_resolver }, pending: true, error: '', saved: false };
+    paintWorkspace();
+    try {
+      const res = await fetch('/settings/retrieval', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.detail || 'Could not save settings.');
+      state.retrievalSettings = { ...body, pending: false, error: '', saved: true };
+      if (D.project.id) refreshManualRetrieval();
+    } catch (err) {
+      state.retrievalSettings = { ...state.retrievalSettings, pending: false, error: err.message || String(err) };
+    }
+    paintWorkspace();
+  }
+
   async function loadReuseOptions() {
     const projectId = D.project.id;
     state.reuseTarget = projectId;
@@ -1683,6 +1814,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       retryRecoveryRunning,
       retryRecoveryItems,
       retrySelectedCount: retrySelectedIds.length,
+      manualRetrieval: D.manualRetrieval,
+      manualBusy: !!state.manualBusy,
+      manualNotice: state.manualNotice,
+      manualDropActive: !!state.manualDropActive,
+      retrievalSettings: state.retrievalSettings,
       retrievalDashOffset: (144.5 - ((144.5 * retrievalPct) / 100)).toFixed(1),
       categorizationSummary: D.categorizationSummary,
       categorizationWorkflow: D.categorizationWorkflow,
@@ -2336,11 +2472,13 @@ ${reviewUI.dialog()}
           <div style="height:1px;background:#f2f4f1;"></div>
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Access provenance unknown</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unknownAccess ?? v.retrievalSummary.retrieved}</span></div>
           ${v.retrievalSummary.viaInstitution > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12.5px;"><span>Verified institutional retrieval</span><span>${v.retrievalSummary.viaInstitution}</span></div>` : ''}
+          ${v.retrievalSummary.providedByUser > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Provided by you</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.providedByUser}</span></div>` : ''}
           <div style="height:1px;background:#f2f4f1;"></div>
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Unavailable</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unavailable}</span></div>
         </div>
       </div>
-      ${retrievalRecoveryPanel(v)}`;
+      ${retrievalRecoveryPanel(v)}
+      ${manualRetrievalPanel(v)}`;
   }
 
   function paperLinkChips(links) {
@@ -2393,11 +2531,13 @@ ${reviewUI.dialog()}
         <div><div style="font-size:13px;color:#1a365d;">Retrying failed downloads…</div><div style="font-size:11.5px;color:#6b746c;margin-top:2px;">Existing successful PDFs are preserved.</div></div>
       </div>`;
     }
+    const plainReasons = Object.fromEntries(v.manualRetrieval.items.map((item) => [item.retryId, item.reason]));
     const items = v.retryRecoveryItems.map((item, index) => {
-      const failure = retrievalFailureLabel(item.failureClass);
+      // The manual-retrieval panel's plain reason comes from the backend; the label table covers the rest.
+      const failure = plainReasons[item.retryId] || retrievalFailureLabel(item.failureClass);
       return `<label for="rp-retry-${index}" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid #eef0ee;cursor:pointer;min-width:0;">
         <input id="rp-retry-${index}" type="checkbox" data-act="retry-toggle" data-retry-index="${index}" ${item.selected ? 'checked' : ''} style="margin-top:3px;accent-color:#1a365d;flex:0 0 auto;">
-        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;">${esc(failure)}</span>${(item.links || []).length ? `<span style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">${paperLinkChips(item.links)}</span>` : ''}</span>
+        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;">${failure}</span>${!v.manualRetrieval.enabled && (item.links || []).length ? `<span style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">${paperLinkChips(item.links)}</span>` : ''}</span>
       </label>`;
     }).join('');
     const disabled = v.retrySelectedCount === 0 ? 'disabled' : '';
@@ -2410,6 +2550,62 @@ ${reviewUI.dialog()}
         <button type="button" data-act="retry-submit" ${disabled} style="${buttonStyle}${disabled ? ';opacity:.5;cursor:not-allowed;' : ''}"><i class="ph ph-arrow-clockwise" style="font-size:13px;"></i>Retry ${v.retrySelectedCount} failed download${v.retrySelectedCount === 1 ? '' : 's'}</button>
       </div>
     </fieldset>`;
+  }
+
+  function manualRetrievalPanel(v) {
+    const mr = v.manualRetrieval;
+    if (!mr.enabled && !mr.pending.length && !mr.recent.length && !v.manualNotice) return '';
+    const busy = v.manualBusy || !!state.actionPending;
+    const disabled = busy || D.readOnlyExample ? 'disabled' : '';
+    const small = 'font-size:11.5px;color:#6b746c;line-height:1.45;';
+    const linkStyle = 'color:#1a365d;font-size:11.5px;text-decoration:underline;text-underline-offset:2px;';
+    const pickStyle = `${buttonStyle};position:relative;padding:5px 9px;font-size:11.5px;${busy || D.readOnlyExample ? 'opacity:.5;cursor:not-allowed;' : ''}`;
+    const settings = mr.settings;
+    const watchHint = settings.watchEnabled
+      ? `Open a paper with one of its links and save the PDF. ReviewPilot watches <span style="font-family:'IBM Plex Mono',monospace;">${settings.downloadFolder}</span> and adds the file when it arrives.${settings.folderAvailable ? '' : ' <span style="color:#8a1f1f;">That folder cannot be read; change it in Settings.</span>'}`
+      : 'Open a paper with one of its links, save the PDF, then drop it below. Download-folder watching is off in Settings.';
+    const items = mr.items.map((item, index) => `<li data-ui="manual-item" style="padding:10px 0;border-top:1px solid #f0ebe0;list-style:none;min-width:0;">
+        <div style="font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</div>
+        <div style="${small}margin-top:2px;">${item.reason}</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px;">
+          ${item.links.map((link) => `<a href="${link.url}" target="_blank" rel="noopener noreferrer" data-act="manual-link" data-manual-index="${index}" style="${linkStyle}">${link.label}</a>`).join('')}
+          <label style="${pickStyle};margin-left:auto;" title="Use a PDF you already have for this paper"><input type="file" accept="application/pdf,.pdf" data-manual-file="${index}" ${disabled} style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;"><i class="ph ph-file-arrow-up" style="font-size:13px;"></i>Use a file…</label>
+        </div>
+        ${item.awaitingSince ? `<div role="status" style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:11.5px;color:#1a365d;"><span aria-hidden="true" style="width:11px;height:11px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .9s linear infinite;"></span>Waiting for the download (link opened ${item.awaitingSince})<button type="button" data-act="manual-stop-wait" data-manual-index="${index}" style="border:none;background:none;color:#6b746c;font:inherit;font-size:11.5px;text-decoration:underline;cursor:pointer;padding:0;">Stop waiting</button></div>` : ''}
+      </li>`).join('');
+    const pending = mr.pending.map((entry, index) => {
+      const suggestedIds = new Set(entry.suggested.map((item) => item.retryId));
+      const options = [...entry.suggested.map((item) => ({ retryId: item.retryId, label: `${item.label}${item.basis ? ` (${item.basis})` : ''}` })),
+        ...entry.options.filter((item) => !suggestedIds.has(item.retryId))];
+      return `<li data-ui="manual-pending" style="padding:10px 0;border-top:1px solid #e3e9f1;list-style:none;min-width:0;">
+        <div style="font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;"><i class="ph ph-file-pdf" style="font-size:13px;color:#1a365d;"></i> ${entry.fileName} <span style="${small}">· ${entry.sourceLabel}</span></div>
+        <div style="${small}margin-top:2px;">${entry.reason}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;">
+          <label for="rp-manual-choice-${index}" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Paper for ${entry.fileName}</label>
+          <select id="rp-manual-choice-${index}" data-manual-choice="${index}" ${disabled} style="flex:1 1 260px;min-width:0;max-width:100%;border:1px solid #d8ddd6;border-radius:8px;padding:6px 8px;font:inherit;font-size:12px;background:#fffefc;color:#1a1a1a;">
+            ${entry.suggested.length ? '' : '<option value="">Choose the paper…</option>'}${options.map((option) => `<option value="${option.retryId}">${option.label}</option>`).join('')}
+          </select>
+          <button type="button" data-act="manual-assign" data-manual-index="${index}" ${disabled} style="${pickStyle}">Use for this paper</button>
+          <button type="button" data-act="manual-dismiss" data-manual-index="${index}" ${disabled} style="border:none;background:none;color:#6b746c;font:inherit;font-size:11.5px;text-decoration:underline;cursor:pointer;">Ignore file</button>
+        </div>
+      </li>`;
+    }).join('');
+    const recent = mr.recent.map((item) => `<li style="list-style:none;display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:12px;color:#1a1a1a;min-width:0;"><i class="ph-fill ph-check-circle" style="font-size:14px;color:#1a365d;margin-top:1px;"></i><span style="min-width:0;overflow-wrap:anywhere;">${item.label}<span style="display:block;${small}">${[item.fileName, item.source, item.basis ? `matched by ${item.basis}` : ''].filter(Boolean).join(' · ')}</span></span></li>`).join('');
+    const notice = v.manualNotice ? `<div role="status" aria-live="polite" data-ui="manual-notice" style="font-size:12px;color:${v.manualNotice.error ? '#8a1f1f' : '#1a365d'};background:${v.manualNotice.error ? '#fdf3f2' : '#f8fbff'};border:1px solid ${v.manualNotice.error ? '#f0c9c4' : '#c8d8e8'};border-radius:8px;padding:8px 10px;margin:10px 0 0;">${v.manualNotice.lines.map(esc).join('<br>')}</div>` : '';
+    return `<section data-ui="manual-retrieval" aria-labelledby="rp-manual-title" style="border:1px solid #e5c88f;background:#fffdf8;border-radius:12px;padding:13px 16px 15px;margin:0 0 16px;min-width:0;">
+      <h3 id="rp-manual-title" style="margin:0;font-size:13px;color:#7a4b00;font-weight:500;">${mr.enabled ? `Get the ${mr.items.length === 1 ? 'missing PDF' : `${mr.items.length} missing PDFs`} yourself` : 'PDFs you provided'}</h3>
+      ${mr.enabled ? `<p style="${small}margin:4px 0 2px;">${watchHint} If the site shows the PDF in the browser, use its Download PDF button.</p>
+      <ul data-ui="manual-items" style="margin:6px 0 0;padding:0;">${items}</ul>
+      <label data-ui="manual-dropzone" style="position:relative;display:flex;flex-direction:column;align-items:center;gap:4px;border:1.5px dashed ${v.manualDropActive ? '#1a365d' : '#c8d8e8'};background:${v.manualDropActive ? '#eef4fb' : '#f8fbff'};border-radius:10px;padding:14px;margin-top:10px;text-align:center;cursor:${busy ? 'progress' : 'pointer'};">
+        <input type="file" accept="application/pdf,.pdf" multiple data-manual-file="any" ${disabled} style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;">
+        <i class="ph ph-tray-arrow-down" style="font-size:20px;color:#1a365d;"></i>
+        <span style="font-size:12.5px;color:#1a365d;">${busy && v.manualBusy ? 'Checking files…' : 'Drop PDFs here or choose files'}</span>
+        <span style="${small}">Files are matched to papers by their DOI or title and stay on this computer.</span>
+      </label>` : ''}
+      ${notice}
+      ${pending ? `<div style="margin-top:12px;"><div style="font-size:12px;color:#1a365d;">Files waiting for your decision</div><ul data-ui="manual-pending-list" style="margin:4px 0 0;padding:0;">${pending}</ul></div>` : ''}
+      ${recent ? `<div style="margin-top:12px;"><div style="font-size:12px;color:#1a365d;">Added from your files</div><ul data-ui="manual-recent" style="margin:4px 0 0;padding:0;">${recent}</ul></div>` : ''}
+    </section>`;
   }
 
   function extractionCanvas(v) {
@@ -2749,7 +2945,7 @@ ${reviewUI.dialog()}
           <tbody>${rows}<tr style="font-weight:600;"><td style="${cell}">Total</td><td style="${num}">${duration(total.run_seconds)}</td><td style="${num}">${total.llm_calls || 0}</td><td style="${num}">${usd(total.cost_usd)}</td></tr></tbody>
         </table>
       </div>
-      <div style="font-size:12px;color:#1a1a1a;line-height:1.5;margin-top:10px;">Human corrections: ${formatCount(hc.screening_overridden || 0, 'screening decision')} changed (of ${hc.screening_reviewed || 0} reviewed); ${formatCount(hc.extraction_fields_corrected || 0, 'extracted value')} changed (of ${hc.extraction_fields_reviewed || 0} reviewed).</div>
+      <div style="font-size:12px;color:#1a1a1a;line-height:1.5;margin-top:10px;">Human corrections: ${formatCount(hc.screening_overridden || 0, 'screening decision')} changed (of ${hc.screening_reviewed || 0} reviewed); ${formatCount(hc.extraction_fields_corrected || 0, 'extracted value')} changed (of ${hc.extraction_fields_reviewed || 0} reviewed)${hc.pdfs_provided ? `; ${formatCount(hc.pdfs_provided, 'PDF')} provided by you` : ''}.</div>
       <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:6px;">Processing time is how long ReviewPilot worked on each stage; your own reading and review time is not included. Cost is estimated from token usage at the model's list price. Download the Run report below for start and end times and token counts.</div>
     </section>`;
   }
@@ -3106,7 +3302,9 @@ ${reviewUI.dialog()}
     const preview = v.reusePreview;
     return `<div style="position:fixed;inset:0;background:rgba(26,54,93,.12);display:flex;align-items:center;justify-content:center;z-index:90;">
       <section role="dialog" aria-modal="true" aria-labelledby="rp-memory-title" style="width:min(640px,calc(100vw - 32px));max-height:85vh;overflow:auto;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;padding:20px;">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 id="rp-memory-title" tabindex="-1" style="font-family:Newsreader,Georgia,serif;font-weight:400;margin:0;">Reuse project configuration</h2><button type="button" data-act="close-dialog" aria-label="Close configuration reuse" style="${reuseButtonStyle}">Close</button></div>
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;"><h2 id="rp-memory-title" tabindex="-1" style="font-family:Newsreader,Georgia,serif;font-weight:400;margin:0;">Settings</h2><button type="button" data-act="close-dialog" aria-label="Close settings" style="${reuseButtonStyle}">Close</button></div>
+        ${retrievalSettingsSection(v.retrievalSettings, reuseButtonStyle)}
+        <h3 style="font-size:15px;font-weight:500;color:#1a365d;margin:18px 0 0;">Reuse project configuration</h3>
         <p style="font-size:13px;color:#6b746c;line-height:1.5;">Confirmed decisions and full conversation history are saved locally. Other projects are used only when you select a configuration below and import it as a draft.</p>
         ${v.memoryError ? `<p role="alert" style="color:#8a1f1f;">${esc(v.memoryError)}</p>` : ''}
         ${v.isNewProject ? '<p>Open or create a project to import a configuration.</p>' : ''}
@@ -3114,6 +3312,25 @@ ${reviewUI.dialog()}
         ${v.memoryPending ? '<p role="status">Loading configuration…</p>' : ''}
         ${preview ? `<h3 style="font-size:16px;">${esc(preview.source_title)} · ${esc(preview.label)}</h3>${configurationPreview(preview.configuration)}<p style="font-size:12px;">Importing replaces this section's editable draft. Your last confirmed decisions are preserved. Review the imported draft before confirming it for this project.</p><div style="display:flex;gap:10px;"><button type="button" data-act="apply-reuse" style="${reuseButtonStyle}" ${disabled}>Import as draft</button><button type="button" data-act="reuse-back" style="${reuseButtonStyle}" ${disabled}>Choose another configuration</button></div>` : `<div style="display:grid;gap:8px;">${v.reuseOptions.map((option, index) => `<button type="button" data-act="preview-reuse" data-index="${index}" ${disabled} style="padding:12px;text-align:left;border:1px solid #d8e2f0;border-radius:8px;background:#fff;"><strong>${esc(option.source_title)}</strong><br><span>${esc(option.label)}</span></button>`).join('')}</div>${!v.memoryPending && !v.isNewProject && !v.reuseOptions.length ? '<p>No confirmed configurations are available from other projects yet.</p>' : ''}`}
       </section></div>`;
+  }
+
+  function retrievalSettingsSection(settings, buttonCss) {
+    const current = settings || { pending: true };
+    const field = 'width:100%;box-sizing:border-box;border:1px solid #d8e2f0;border-radius:8px;padding:7px 9px;font:inherit;font-size:12.5px;background:#fff;color:#1a1a1a;';
+    const label = 'display:block;font-size:12px;color:#1a365d;margin:10px 0 4px;';
+    const help = 'font-size:11.5px;color:#6b746c;line-height:1.45;margin:3px 0 0;';
+    return `<section data-ui="retrieval-settings" aria-labelledby="rp-retrieval-settings-title" style="border-top:1px solid #eef0ee;margin-top:12px;padding-top:4px;">
+      <h3 id="rp-retrieval-settings-title" style="font-size:15px;font-weight:500;color:#1a365d;margin:10px 0 0;">Full-text retrieval</h3>
+      <p style="${help}">For papers ReviewPilot cannot download, you open them yourself and ReviewPilot picks up the saved PDF. PDFs are read only on this computer.</p>
+      <label style="${label}" for="rp-download-folder">Download folder</label>
+      <input id="rp-download-folder" name="download_folder" value="${esc(unescapePayloadValue(current.downloadFolder || '~/Downloads'))}" style="${field}" ${current.pending ? 'disabled' : ''}>
+      ${current.folderAvailable === false ? `<p style="${help}color:#8a1f1f;">This folder cannot be read.</p>` : ''}
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#1a1a1a;margin:10px 0 0;"><input type="checkbox" name="watch_enabled" aria-label="Watch the download folder after I open a paper's link" ${current.watchEnabled !== false ? 'checked' : ''} ${current.pending ? 'disabled' : ''} style="margin-top:3px;accent-color:#1a365d;"><span>Watch the download folder after I open a paper's link<span style="display:block;${help}">Only PDFs saved after the click are read, and only while a paper is waiting for its download.</span></span></label>
+      <label style="${label}" for="rp-library-resolver">Library link (optional)</label>
+      <input id="rp-library-resolver" name="library_resolver" placeholder="https://resolver.library.edu/openurl or https://login.ezproxy.edu/login?url=" value="${esc(unescapePayloadValue(current.libraryResolver || ''))}" style="${field}" ${current.pending ? 'disabled' : ''}>
+      <p style="${help}">Your library's OpenURL resolver or EZproxy prefix adds an “Open with my library” link. Sign in on the library's own page; ReviewPilot never asks for or stores library credentials.</p>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px;"><button type="button" data-act="save-retrieval-settings" style="${buttonCss}" ${current.pending ? 'disabled' : ''}>Save retrieval settings</button>${current.saved ? '<span role="status" style="font-size:12px;color:#1a365d;">Saved.</span>' : ''}${current.error ? `<span role="alert" style="font-size:12px;color:#8a1f1f;">${esc(current.error)}</span>` : ''}</div>
+    </section>`;
   }
 
   function confirmedDecisionPreview(decisions) {
@@ -3473,6 +3690,7 @@ ${reviewUI.dialog()}
         state.memoryPending = true;
         state.memoryError = '';
         paint();
+        loadRetrievalSettings().then(paint);
         loadReuseOptions().catch((err) => { state.memoryError = err.message || String(err); }).finally(() => {
           state.memoryPending = false;
           paint();
@@ -3569,6 +3787,39 @@ ${reviewUI.dialog()}
           reportRevision: D.retrievalRecovery.reportRevision,
           selectedIds: [],
         };
+      }
+      else if (act === 'manual-link') {
+        // The link opens in a new tab as usual; the paper then waits for its download.
+        const item = D.manualRetrieval.items[Number(t.getAttribute('data-manual-index'))];
+        if (item && !D.readOnlyExample) manualRetrievalRequest('awaiting', { retry_id: item.retryId, awaiting: true }).catch(() => {});
+        return;
+      }
+      else if (act === 'manual-stop-wait') {
+        const item = D.manualRetrieval.items[Number(t.getAttribute('data-manual-index'))];
+        if (item) manualRetrievalRequest('awaiting', { retry_id: item.retryId, awaiting: false }).catch(() => {});
+        return;
+      }
+      else if (act === 'manual-assign' || act === 'manual-dismiss') {
+        if (state.manualBusy || state.actionPending) return;
+        const index = Number(t.getAttribute('data-manual-index'));
+        const entry = D.manualRetrieval.pending[index];
+        if (!entry) return;
+        const retryId = root.querySelector(`[data-manual-choice="${index}"]`)?.value || '';
+        if (act === 'manual-assign' && !retryId) { state.manualNotice = { error: true, lines: ['Choose the paper this file belongs to.'] }; paint(); return; }
+        manualRetrievalRequest(`pending/${encodeURIComponent(entry.id)}`, act === 'manual-assign' ? { retry_id: retryId } : null, act === 'manual-dismiss' ? 'DELETE' : 'POST')
+          .catch(() => {});
+        return;
+      }
+      else if (act === 'save-retrieval-settings') {
+        const form = root.querySelector('[data-ui="retrieval-settings"]');
+        if (!form || state.retrievalSettings?.pending) return;
+        const payload = {
+          download_folder: form.querySelector('[name="download_folder"]').value,
+          watch_enabled: form.querySelector('[name="watch_enabled"]').checked,
+          library_resolver: form.querySelector('[name="library_resolver"]').value,
+        };
+        saveRetrievalSettings(payload);
+        return;
       }
       else if (act === 'retry-submit') {
         if (state.actionPending) return;
@@ -3792,6 +4043,14 @@ ${reviewUI.dialog()}
 
     root.addEventListener('change', (e) => {
       if (reviewUI.input(e.target,e)) return;
+      const manualFile = e.target.getAttribute('data-manual-file');
+      if (manualFile) {
+        const files = [...(e.target.files || [])];
+        const item = manualFile === 'any' ? null : D.manualRetrieval.items[Number(manualFile)];
+        e.target.value = '';
+        if (files.length) uploadManualFiles(files, item ? item.retryId : '');
+        return;
+      }
       const sourceLimit = e.target.getAttribute('data-source-limit');
       if (sourceLimit) {
         updateSourceLimit(sourceLimit, e.target.value);
@@ -3871,6 +4130,30 @@ ${reviewUI.dialog()}
         .catch((err) => { state.actionError = requestErrorMessage(err); })
         .finally(() => { state.setupSaving = false; paint(); });
     });
+
+    const dropZone = (event) => event.target.closest && event.target.closest('[data-ui="manual-dropzone"]');
+    const carriesFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+    root.addEventListener('dragover', (e) => {
+      if (!carriesFiles(e)) return;
+      e.preventDefault();
+      const active = !!dropZone(e) && D.manualRetrieval.enabled;
+      if (e.dataTransfer) e.dataTransfer.dropEffect = active ? 'copy' : 'none';
+      if (active !== state.manualDropActive) { state.manualDropActive = active; paint(); }
+    });
+    root.addEventListener('dragleave', (e) => {
+      if (state.manualDropActive && dropZone(e) && !dropZone({ target: e.relatedTarget || document.body })) { state.manualDropActive = false; paint(); }
+    });
+    root.addEventListener('drop', (e) => {
+      if (!carriesFiles(e)) return;
+      // A PDF dropped anywhere else must not replace the workspace with the file.
+      e.preventDefault();
+      const inZone = !!dropZone(e);
+      state.manualDropActive = false;
+      const files = [...(e.dataTransfer?.files || [])];
+      if (inZone && D.manualRetrieval.enabled && files.length) uploadManualFiles(files, '');
+      else paint();
+    });
+    window.addEventListener('focus', () => { if (D.manualRetrieval.awaiting) refreshManualRetrieval(); });
 
     window.addEventListener('popstate', () => {
       const match = window.location.pathname.match(/^\/projects\/([^/]+)$/);

@@ -219,6 +219,8 @@ class OpenAlexSearcher:
                 "publication_date": result.get("publication_date", ""),
                 "doi": doi,
                 "url": result.get("id", ""),
+                **({"landing_page_url": primary_location["landing_page_url"]}
+                   if isinstance(primary_location.get("landing_page_url"), str) and primary_location["landing_page_url"].startswith("http") else {}),
                 "citations": result.get("cited_by_count", 0),
                 "open_access": result.get("open_access", {}).get("is_oa", False)
             }

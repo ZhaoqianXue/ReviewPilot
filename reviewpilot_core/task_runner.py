@@ -19,6 +19,7 @@ ACTION_LABELS = {
     "run-extraction": "Information extraction", "finalize-and-run-extraction": "Information extraction",
     "preview-extraction": "An extraction preview", "suggest-categories": "Category generation",
     "categorize": "Categorization", "review-sample": "A live sample run",
+    "import-user-pdf": "Adding a PDF you provided",
 }
 
 
@@ -104,7 +105,7 @@ class TaskRunner:
             task = self._active_for_project_unlocked(project_id)
             return dict(task) if task else None
 
-    def run_if_idle(self, project_id: str, func):
+    def run_if_idle(self, project_id: str, func, *, action: str = "update-setup"):
         """Run a short project mutation while excluding task submission."""
         with self._registry_lock:
             active = self._active_for_project_unlocked(project_id)
@@ -113,7 +114,7 @@ class TaskRunner:
             if active is not None:
                 raise TaskConflictError(active)
             now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
-            mutation = {"task_id": f"setup-{uuid4().hex}", "project_id": project_id, "action": "update-setup", "status": "running", "created_at": now, "updated_at": now}
+            mutation = {"task_id": f"setup-{uuid4().hex}", "project_id": project_id, "action": action, "status": "running", "created_at": now, "updated_at": now}
             self._mutations[project_id] = mutation
         try:
             return func()

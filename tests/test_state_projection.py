@@ -753,7 +753,7 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(data["steps"][1]["sub"], "4 / 12")
         self.assertEqual(data["steps"][2]["sub"], "3 / 4")
         self.assertEqual(data["screeningMetrics"], {"identified": 12, "afterDedup": 10, "included": 4})
-        self.assertEqual(data["retrievalSummary"], {"retrieved": 3, "total": 4, "openAccess": 0, "viaInstitution": 0, "unknownAccess": 3, "unavailable": 1})
+        self.assertEqual(data["retrievalSummary"], {"retrieved": 3, "total": 4, "openAccess": 0, "viaInstitution": 0, "unknownAccess": 3, "providedByUser": 0, "obtainedAutomatically": 3, "unavailable": 1})
         self.assertEqual(data["setup"]["source_limits"], {"pubmed": 10, "openalex": 25})
         self.assertIn("Welcome to **ReviewPilot**!", data["messages"][0]["text"])
         self.assertEqual(data["messages"][1]["text"], "Survey retrieval augmented generation in medicine")

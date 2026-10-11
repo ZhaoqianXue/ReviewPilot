@@ -93,7 +93,7 @@ class RunLedgerTests(unittest.TestCase):
             project = Path(tmp)
             (project / "filtered").mkdir()
             (project / "extraction").mkdir()
-            included = [{"id": "a", "human_screening": {"decision": "include", "original_decision": "exclude"}},
+            included = [{"id": "a", "pdf_method": "user_download", "human_screening": {"decision": "include", "original_decision": "exclude"}},
                         {"id": "b", "human_screening": {"decision": "include", "original_decision": "include"}}, {"id": "c"}]
             (project / "filtered" / "included_papers.jsonl").write_text("\n".join(json.dumps(row) for row in included))
             rows = [{"human_fields": {"study_method": {"original_value": ["Survey"], "value": ["Survey", "Interview or think-aloud"]},
@@ -101,7 +101,7 @@ class RunLedgerTests(unittest.TestCase):
             (project / "extraction" / "extraction_results.jsonl").write_text(json.dumps(rows[0]))
             corrections = run_ledger.human_corrections(project)
         self.assertEqual(corrections, {"screening_reviewed": 2, "screening_overridden": 1,
-                                       "extraction_fields_reviewed": 2, "extraction_fields_corrected": 1})
+                                       "extraction_fields_reviewed": 2, "extraction_fields_corrected": 1, "pdfs_provided": 1})
 
 
     def test_panel_lists_recorded_stages_with_totals_and_corrections(self):
