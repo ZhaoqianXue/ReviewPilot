@@ -66,6 +66,32 @@ def materially_changes_dependencies(old: dict[str, Any], new: dict[str, Any]) ->
     return any(left[key] != right[key] for key in _DEPENDENCY_FIELDS)
 
 
+def _collection_plan(config: dict[str, Any]) -> dict[str, Any]:
+    """What a collection run sends to the sources: the query (built from the concepts when present), sources, limits and dates."""
+    from agents.collection_agent import collection_plan
+    from .search_concepts import build_boolean_query, validate_concept_blocks
+    setup = normalize_setup(config)
+    query = setup["search_terms"]
+    if setup.get("concept_blocks"):
+        try:
+            query = build_boolean_query(validate_concept_blocks(setup["concept_blocks"]))
+        except ValueError:
+            pass
+    return collection_plan({**setup, "search_terms": query})
+
+
+def setup_impacts(project_path: Path | str, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+    """Stages whose results a setup change makes stale. Collected records stay valid while the
+    sources would receive the same query, limits and dates, e.g. when only the model or wording changes."""
+    if not materially_changes_dependencies(old, new):
+        return []
+    stages = affected_stages(project_path)
+    regenerates_concepts = normalize_setup(new)["derive_search_terms"]  # the new query is only known after the agent runs
+    if "collection" in stages and not regenerates_concepts and _collection_plan(old) == _collection_plan(new):
+        stages = [name for name in stages if name != "collection"]
+    return stages
+
+
 def affected_stages(project_path: Path | str) -> list[str]:
     state = load_workflow_state(project_path)
     return [name for name in STAGE_NAMES if _stage_has_material_output(state["stages"][name])]

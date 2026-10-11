@@ -76,10 +76,13 @@ class FinalizeStopsAtCodingRulesTests(unittest.TestCase):
                 stage.update(status="completed", attempt=1, last_valid={"status": "completed", "attempt": 1, "updated_at": stage["updated_at"], "counts": {}})
             from reviewpilot_core.workflow_state import save_workflow_state
             save_workflow_state(project, ledger)
+            start_action(project, "generate-schema")
+            complete_action(project, "generate-schema", {"field_count": 6})
             start_action(project, "finalize-and-run-extraction")
             complete_action(project, "finalize-and-run-extraction", {"coding_rules": {"status": "draft"}})
             stage = load_workflow_state(project)["stages"]["extraction"]
-            self.assertEqual((stage["status"], stage["error"]), ("ready", None))
+            # Extraction never ran, so a drafted schema and rules leave nothing to rerun.
+            self.assertEqual((stage["status"], stage["error"], stage["stale"]), ("ready", None, False))
             start_action(project, "finalize-and-run-extraction")
             complete_action(project, "finalize-and-run-extraction", {"processed": 1, "errors": 0})
             self.assertEqual(load_workflow_state(project)["stages"]["extraction"]["status"], "completed")

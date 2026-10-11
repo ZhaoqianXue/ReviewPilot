@@ -70,7 +70,7 @@ class SetupRevisionTests(unittest.TestCase):
             artifact = project / "collected" / "summary.json"
             artifact.parent.mkdir()
             artifact.write_text('{"total_papers":2,"platform_stats":{"pubmed":2}}', encoding="utf-8")
-            proposed = {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10}
+            proposed = {"project_name": "Demo", "description": "Changed", "search_terms": "Changed query", "platforms": ["pubmed"], "max_results": 10}
             preview = web_app.update_project_setup(root, "demo", proposed)
             self.assertTrue(preview["confirmationRequired"])
             self.assertEqual(preview["expectedRevision"], setup_revision(old))
@@ -81,6 +81,17 @@ class SetupRevisionTests(unittest.TestCase):
             self.assertNotEqual(confirmed["setupRevision"], preview["expectedRevision"])
             self.assertTrue(load_workflow_state(project)["stages"]["collection"]["stale"])
             self.assertTrue(artifact.exists())
+
+    def test_model_or_question_wording_change_keeps_the_collected_records(self):
+        # Collection sends only the query, sources, limits and dates; a change that keeps them leaves its records valid.
+        for change in ({"model": "gpt-6-luna"}, {"description": "Reworded question"}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project, current = self._project(root)
+                saved = web_app.update_project_setup(root, "demo", {**current, **change})
+                self.assertFalse(saved["confirmationRequired"])
+                self.assertFalse(load_workflow_state(project)["stages"]["collection"]["stale"])
+                self.assertEqual(json.loads((project / "search_conditions.json").read_text())[next(iter(change))], next(iter(change.values())))
 
     def test_noop_does_not_require_confirmation_or_advance_revision(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,8 +120,8 @@ class SetupRevisionTests(unittest.TestCase):
             root = Path(tmp); project, old = self._project(root)
             artifact = project / "collected" / "summary.json"; artifact.parent.mkdir(); artifact.write_text('{"total_papers":2,"platform_stats":{"pubmed":2}}')
             prompt = project / "prompts" / "relevance_prompt.json"; prompt.parent.mkdir(); prompt.write_text('{}')
-            preview = web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10})
-            web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": preview["expectedRevision"]}})
+            preview = web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Changed query", "platforms": ["pubmed"], "max_results": 10})
+            web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Changed query", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": preview["expectedRevision"]}})
             self.assertTrue(artifact.exists())
             self.assertIsNone(export_artifact_path(project, "relevance-prompt"))
             projected = build_rp_data(root, "demo")
@@ -333,7 +344,7 @@ class SetupRevisionTests(unittest.TestCase):
                 raise RuntimeError("post-write failure")
             with patch.object(web_app, "mark_stages_stale", side_effect=fail_after_ledger_write), patch.object(web_app, "mark_setup_transaction_aborting", side_effect=OSError("abort marker failed")), patch.object(web_app, "atomic_write_json", side_effect=fail_rollback):
                 with self.assertRaisesRegex(OSError, "rollback failed"):
-                    web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Question", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
+                    web_app.update_project_setup(root, "demo", {"project_name": "Demo", "description": "Changed", "search_terms": "Changed query", "primary_topic": "Demo", "platforms": ["pubmed"], "max_results": 10, "confirmation": {"expected_revision": setup_revision(current)}})
             marker = project / ".setup_update_pending.json"
             self.assertNotIn(project.resolve(), setup_revision_module._ACTIVE_TRANSACTIONS)
             self.assertEqual(json.loads(marker.read_text())["phase"], "abort")

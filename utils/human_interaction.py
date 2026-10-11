@@ -337,6 +337,8 @@ def show_progress(current: int, total: int, prefix: str = "Progress", width: int
         prefix: Text prefix
         width: Width of the progress bar
     """
+    from reviewpilot_core.run_ledger import report_progress
+    report_progress(current, total)  # shown in the web app's running banner
     if total == 0:
         percent = 100
     else:

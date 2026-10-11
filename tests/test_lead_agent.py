@@ -356,8 +356,7 @@ class LeadAgentTests(unittest.TestCase):
             draft = json.loads((project_dir / "extraction" / "extraction_schema_draft.json").read_text(encoding="utf-8"))
 
         self.assertEqual([field["name"] for field in draft["fields"]], ["methods", "country"])
-        self.assertIn("Added field: country", result.reply)
-        self.assertIn("Removed field: comparators", result.reply)
+        self.assertIn("Extraction schema updated: removed 1 field (comparators); added 1 field (country). The draft now has 2 fields.", result.reply)
         self.assertIn("Could not remove field not_a_field", result.reply)
 
     def test_extraction_schema_chat_answers_step_four_questions_without_mutating_schema(self):

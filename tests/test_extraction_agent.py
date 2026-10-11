@@ -44,6 +44,25 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertFalse((project_dir / "extraction" / "extraction_results.jsonl").exists())
         self.assertFalse((project_dir / "extraction" / "extraction_stats.json").exists())
 
+    def test_evidence_written_as_flat_field_keys_does_not_fail_the_paper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            pdf_path = project_dir / "pdfs" / "row1_paper.pdf"
+            pdf_path.parent.mkdir(parents=True)
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            paper = {"id": "p1", "title": "Paper A", "source": "pubmed", "pdf_path": str(pdf_path), "pdf_downloaded": True}
+            prompt = {"system_prompt": "Return JSON.", "user_prompt_template": "Extract:\n{paper_text}",
+                      "schema": {"fields": [{"name": "study_method", "type": "Text (list)"}, {"name": "participant_count", "type": "Integer"}]}}
+            answer = {"study_method": ["Survey"], "participant_count": 12,
+                      "study_method_field_evidence": {"quote": "We surveyed 12 nurses."}, "participant_count_field_evidence": "We surveyed 12 nurses."}
+            agent = ExtractionAgent(project_dir, llm_query=lambda **kwargs: (json.dumps(answer), {"total_tokens": 1}),
+                                    pdf_reader=lambda path: "Methods. We surveyed 12 nurses.")
+            row = agent.extract_one(paper=paper, row_number=1, extraction_prompt=prompt, pdf_folder=project_dir / "pdfs", pdf_files=[pdf_path])
+        self.assertEqual(row["extraction_status"], "success")
+        self.assertEqual((row["study_method"], row["participant_count"]), (["Survey"], 12))
+        self.assertEqual(row["field_evidence"]["participant_count"]["quote"], "We surveyed 12 nurses.")
+        self.assertNotIn("study_method_field_evidence", row)
+
     def test_extract_one_supports_production_web_search_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"
@@ -272,6 +291,42 @@ class ExtractionAgentTests(unittest.TestCase):
         self.assertEqual(stats["processed"], 2)
         self.assertEqual(stats["web_search_fallback"], 1)
         self.assertEqual(stats["pending_web_search_fallback"], 0)
+
+    def test_retry_failed_only_reextracts_failures_and_keeps_successful_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            (project_dir / "pdfs").mkdir(parents=True)
+            papers = []
+            for name in ("alpha", "beta", "gamma"):
+                pdf = project_dir / "pdfs" / f"{name}.pdf"
+                pdf.write_bytes(b"%PDF-1.4\n")
+                papers.append({"id": name, "source": "arxiv", "title": f"Paper {name}", "pdf_downloaded": True, "pdf_path": str(pdf)})
+            included = project_dir / "included.jsonl"
+            included.write_text("\n".join(json.dumps(paper) for paper in papers) + "\n", encoding="utf-8")
+            prompt = {"system_prompt": "Extract.", "user_prompt_template": "{paper_text}", "schema": {"fields": [{"name": "methods", "type": "Text"}]}}
+            calls = []
+
+            def query(answer_for_beta):
+                def llm(*, text_prompt, **_kwargs):
+                    calls.append(text_prompt)
+                    return (answer_for_beta if "beta" in text_prompt else json.dumps({"methods": "Survey"}), {})
+                return llm
+
+            run = lambda llm, retry: ExtractionAgent(project_dir, llm_query=llm, pdf_reader=lambda path: f"text of {Path(path).stem}").run(
+                {"filtered_file": str(included), "download_folder": str(project_dir / "pdfs"), "extraction_prompt": prompt, "retry_failed_only": retry})
+            first = run(query("not json"), False)
+            before = read_jsonl(project_dir / "extraction" / "extraction_results.jsonl")
+            calls.clear()
+            second = run(query(json.dumps({"methods": "Interview"})), True)
+            after = read_jsonl(project_dir / "extraction" / "extraction_results.jsonl")
+
+        self.assertEqual((first["processed"], first["errors"]), (2, 1))
+        self.assertEqual(len(calls), 1)  # only the failed paper was sent again
+        self.assertEqual((second["processed"], second["errors"]), (3, 0))
+        self.assertEqual([row["title"] for row in after], ["Paper alpha", "Paper beta", "Paper gamma"])
+        self.assertEqual(after[0], before[0])
+        self.assertEqual(after[2], before[2])
+        self.assertEqual(after[1]["methods"], "Interview")
 
     def test_run_sanitizes_pdf_text_with_illegal_unicode_before_llm_call(self):
         with tempfile.TemporaryDirectory() as tmp:

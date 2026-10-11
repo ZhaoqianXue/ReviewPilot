@@ -22,6 +22,16 @@ ACTION_LABELS = {
 }
 
 
+def _timed(project_path, action: str, func):
+    """Record the action's run time and the LLM calls it makes in the project's run ledger."""
+    from . import run_ledger
+
+    def run():
+        with run_ledger.activate(project_path, action):
+            return func()
+    return run
+
+
 class TaskConflictError(RuntimeError):
     def __init__(self, task: dict):
         self.task = dict(task)
@@ -41,7 +51,9 @@ class TaskRunner:
         self._mutations: dict[str, dict] = {}
         self._registry_lock = Lock()
 
-    def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None, metadata: dict | None = None) -> str:
+    def submit(self, project_id: str, action: str, func, *, prepare=None, rollback=None, metadata: dict | None = None, project_path=None) -> str:
+        if project_path is not None:
+            func = _timed(project_path, action, func)
         with self._registry_lock:
             active_task = self._active_for_project_unlocked(project_id)
             if active_task is None:

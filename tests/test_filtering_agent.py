@@ -122,6 +122,26 @@ class FilteringAgentTests(unittest.TestCase):
         self.assertIsNone(rows[0]["is_relevant"])
         self.assertIn("Abstract truncated by ReviewPilot", seen["prompt"])
 
+    def test_incomplete_dates_need_review_only_when_the_source_did_not_filter_by_date(self):
+        bounds = {"start": "2023-01-01", "end": "2026-10-01"}
+        for coverage, collected_range, expected in [({"pubmed": "source_native"}, bounds, False),
+                                                    ({}, bounds, True),
+                                                    ({"pubmed": "source_native"}, {"start": "2023-01-01", "end": "2026-12-31"}, True)]:
+            with self.subTest(coverage=coverage, collected_range=collected_range), tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                collected_dir = project_dir / "collected"
+                collected_dir.mkdir(parents=True)
+                (collected_dir / "pubmed.jsonl").write_text(
+                    json.dumps({"id": "1", "source": "pubmed", "title": "An issue dated October", "abstract": "A", "publication_date": "2026-10"}) + "\n",
+                    encoding="utf-8")
+                (collected_dir / "summary.json").write_text(json.dumps(
+                    {"platform_stats": {"pubmed": 1}, "date_range": collected_range, "coverage": {"date_filter": coverage}}), encoding="utf-8")
+                FilteringAgent(project_dir, llm_query=lambda **_kw: ("true", {})).run(
+                    {"collected_folder": str(collected_dir), "date_range": bounds, "auto_approve": True,
+                     "relevance_prompt": {"system_prompt": "Return true or false.", "user_prompt_template": "{title}"}})
+                row = read_jsonl(project_dir / "filtered" / "included_papers.jsonl")[0]
+            self.assertEqual(row["date_assessment"]["needs_review"], expected)
+
     def test_collection_rerun_excludes_removed_source_artifacts_from_screening(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

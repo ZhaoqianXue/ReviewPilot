@@ -91,7 +91,12 @@ class SearchChatChangeTests(unittest.TestCase):
         result = self.refine({"reply": "Done.", "concept_blocks": added, "search_settings": {"max_results": {"arxiv": 5}}})
         self.assertEqual(result["config"]["platforms"], ["pubmed", "openalex", "arxiv"])
         self.assertEqual(result["config"]["source_limits"], {"pubmed": 10, "openalex": 10, "arxiv": 5})
-        self.assertEqual(result["changes"], ['added required concept "Chatbots"', "added source arXiv", "set arXiv to 5 results"])
+        self.assertEqual(result["changes"], ['added "Chatbots" as an alternative to "Large language models"', "added source arXiv", "set arXiv to 5 results"])
+
+    def test_a_block_in_a_new_row_is_a_required_concept(self):
+        added = BLOCKS + [{"label": "Emergency care", "role": "context", "eligibility_group": "setting", "required_for_eligibility": True, "query_terms": ["emergency"]}]
+        result = self.refine({"reply": "Done.", "concept_blocks": added, "search_settings": {}})
+        self.assertEqual(result["changes"], ['added required concept "Emergency care"'])
 
     def test_a_reordered_source_list_is_not_a_change(self):
         result = self.refine({"reply": "Kept.", "concept_blocks": None, "search_settings": {"platforms": ["openalex", "pubmed"]}})

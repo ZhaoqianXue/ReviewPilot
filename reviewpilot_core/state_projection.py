@@ -112,6 +112,8 @@ EXPORT_ARTIFACTS = {
     "categorized-results": ("Categorized results", Path("categorization/categorized_results.jsonl"), "application/x-ndjson"),
     # Computed on request from the project files; extraction results gate availability.
     "prisma": ("PRISMA flow counts", Path("extraction/extraction_results.jsonl"), "application/json"),
+    # Computed on request from the run ledger: time, LLM calls and cost per stage, and human corrections.
+    "run-report": ("Run report", Path("logs/run_ledger.jsonl"), "application/json"),
 }
 
 
@@ -356,6 +358,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
         "exportPackage": _export_package(path),
         "prismaFlow": _prisma_flow(path),
+        "runReport": _run_report(path),
         "extractionPreview": project_preview_projection(path, 0) if included else empty_preview_projection(),
         "schemaJson": schema if isinstance(schema, dict) else {"fields": []},
         "messages": _messages(path, config, collected_summary, screening_stats, included, download_report, fields, extraction_results, categorization, workflow_notices=workflow_notices, extraction_stale=workflow_state["stages"]["extraction"]["stale"], extraction_status=workflow_state["stages"]["extraction"]["status"]),
@@ -795,7 +798,13 @@ def _retrieval_summary(path: Path, included: list[dict], download_report: dict, 
     retrieved = _download_success(path, download_report, allow_artifact_fallback=allow_artifact_fallback)
     total = len(included)
     failed = download_report.get("failed")
-    unavailable = int(failed) if isinstance(failed, int) else max(total - retrieved, 0)
+    if isinstance(failed, int):
+        unavailable = failed
+    elif download_report or retrieved:
+        unavailable = max(total - retrieved, 0)
+    else:
+        unavailable = 0  # retrieval has not run yet, so nothing is known to be unavailable
+    unavailable = int(unavailable)
     # Classify only explicitly reported access paths. A downloadable PDF alone
     # does not establish an OA license or institutional authentication.
     successes = download_report.get('downloaded') or []
@@ -1263,6 +1272,12 @@ def _prisma_flow(path: Path) -> dict[str, Any] | None:
     return prisma_counts(path)
 
 
+def _run_report(path: Path) -> dict[str, Any] | None:
+    """Time, LLM spend and human corrections per stage, from the run ledger; None before anything was recorded."""
+    from .run_ledger import summary
+    return summary(path) if (path / "logs" / "run_ledger.jsonl").is_file() else None
+
+
 def _export_package(path: Path) -> list[dict[str, Any]]:
     project_id = quote(path.name, safe="")
     return [
@@ -1273,7 +1288,7 @@ def _export_package(path: Path) -> list[dict[str, Any]]:
             "exists": export_artifact_path(path, key) is not None,
         }
         for key, (label, _relative_path, _media_type) in EXPORT_ARTIFACTS.items()
-        if key not in {"review-changes", "excluded-papers", "removed-records", "workflow-decisions"} or (path / _relative_path).exists()
+        if key not in {"review-changes", "excluded-papers", "removed-records", "workflow-decisions", "run-report"} or (path / _relative_path).exists()
     ]
 
 
@@ -1444,7 +1459,8 @@ def _messages(
     elif extraction_results or (not extraction_stale and (path / "extraction" / "extraction_results.jsonl").exists()):
         messages.append({"step": 5, "role": "a", "text": "Extraction is complete. Choose a field to categorize for final analysis."})
     messages.extend(_stored_chat_messages(path))
-    return _dedupe_messages(messages)
+    # The conversation is grouped by step, so stage outcomes must not precede earlier steps' chat; the sort is stable within a step.
+    return _dedupe_messages(sorted(messages, key=lambda message: int(message.get("step") or 1)))
 
 
 def _workflow_outcome_messages(notices: dict[str, dict[str, Any]]) -> list[dict]:

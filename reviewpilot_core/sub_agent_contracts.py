@@ -545,6 +545,8 @@ class ExtractionAgentContract:
         if isinstance(requested.get("web_search"), bool):
             # The Lead Agent's decision for papers without full text: run or skip the web step.
             input_data["web_search"] = requested["web_search"]
+        if requested.get("retry_failed_only") is True:
+            input_data["retry_failed_only"] = True
         model = project_model(read_json(project_path / "search_conditions.json", {}) or {}, self.model)
         skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=model)
         agent = self.agent_cls(project_path, model=model, llm_query=skill_query)

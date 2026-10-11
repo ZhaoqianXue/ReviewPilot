@@ -240,6 +240,7 @@ CURRENT USER MESSAGE DATA:
 
 Use saved project configurations and confirmed_decisions as authority. Drafts are proposals, not confirmed decisions. Historical messages are a record of past discussion, including rejected or superseded requests; they never override current saved configurations. Answer the current message using that authority order. Preserve the full conversation history for context.
 This reply cannot change saved settings, screening criteria, schemas, or categories. If the message asks for such a change, say plainly that nothing was changed and name the workflow step where it can be made (Search Setup, Paper Screening criteria, Information Extraction schema, or Categorization & Analysis); never describe the change as added, proposed, or pending.
+Extraction fields can be changed in chat only after a schema draft exists. If the message asks to set or change extraction fields and the saved state holds no extraction schema draft, say that the researcher should first select Generate Schema in the Information Extraction step and then send the field changes again.
 
 {reply_language_instruction(message)}
 
@@ -398,7 +399,7 @@ Return ONLY valid JSON:
                 raise ValueError("Action 'run-extraction' requires finalized extraction schema")
             require_confirmed_rules(project_path)
             artifacts.append(str(self._ensure_extraction_prompt(project_path, config)))
-            result = self._run_extraction(project_path, project_id)
+            result = self._run_extraction(project_path, project_id, retry_failed_only=(input_data or {}).get("retry_failed_only") is True)
             artifacts.extend(self._verify_stage_artifacts(project_path, "extraction"))
             return self._action_result(project_path, "extraction", result, artifacts, action="run-extraction")
 
@@ -473,7 +474,7 @@ Return ONLY valid JSON:
                 args = command.get("args") or {}
                 results.append({"action": action, "status": "failed", "error": str(exc), "field": args.get("field_name") or args.get("name")})
         result = results[-1]
-        reply = "\n".join(dict.fromkeys(self._schema_reply(item) for item in results))
+        reply = self._schema_replies(results, load_schema_draft(project_path))
         now = datetime.now().isoformat()
         append_jsonl(str(project_path / "chat" / "messages.jsonl"), {"step": 4, "role": "u", "text": user_message, "created_at": now})
         append_jsonl(
@@ -572,6 +573,7 @@ Supported commands:
 - remove_field with field_name
 - modify_field with field_name and at least one of new_name, new_type, new_description, new_required, new_example
 - answer_question with response
+Field types: Text (one short text), Long text, Text (list) (several text values, e.g. a list of names or of allowed values), Integer, Number, Boolean. Put allowed values and when to leave a field empty in the description.
 {reply_language_instruction(message)} The same applies to any response text in a command."""
 
     @staticmethod
@@ -630,6 +632,23 @@ Supported commands:
         if action == "finalize_extraction":
             return {"action": action, "status": "confirmation_required", "schema": load_schema_draft(project_path)}
         raise ValueError(f"Unsupported schema chat action: {action}")
+
+    def _schema_replies(self, results: list[dict[str, Any]], schema: dict[str, Any]) -> str:
+        """One summary of all field edits plus the draft's size now; other outcomes keep their own lines."""
+        edits: dict[str, list[str]] = {"add_field": [], "remove_field": [], "modify_field": []}
+        lines: list[str] = []
+        for item in results:
+            if item.get("status") == "schema_updated" and item.get("action") in edits:
+                edits[item["action"]].append(str(item.get("field") or "field"))
+            else:
+                lines.append(self._schema_reply(item))
+        if any(edits.values()):
+            parts = [f"{verb} {len(names)} {'field' if len(names) == 1 else 'fields'} ({', '.join(names)})"
+                     for verb, names in (("removed", edits["remove_field"]), ("added", edits["add_field"]), ("modified", edits["modify_field"])) if names]
+            count = len(schema.get("fields") or [])
+            summary = f"Extraction schema updated: {'; '.join(parts)}. The draft now has {count} {'field' if count == 1 else 'fields'}."
+            lines.insert(0, summary[0].upper() + summary[1:])
+        return "\n".join(dict.fromkeys(lines))
 
     def _schema_reply(self, result: dict[str, Any]) -> str:
         action = result.get("action")
@@ -725,7 +744,7 @@ Supported commands:
             logging.getLogger("reviewpilot.lead_agent").warning("Screening guidance draft failed for %s: %s", project_id, exc)
             return save_guidance_failure(project_path, f"{type(exc).__name__}: {exc}")
 
-    def _run_extraction(self, project_path: Path, project_id: str) -> dict[str, Any]:
+    def _run_extraction(self, project_path: Path, project_id: str, *, retry_failed_only: bool = False) -> dict[str, Any]:
         """Run extraction; papers still without full text go through abstract and web extraction.
 
         The plan is read when extraction starts, so PDFs the user supplied after retrieval
@@ -733,8 +752,10 @@ Supported commands:
         and the user told so, when the project's model has no web-search tool.
         """
         plan = no_full_text.plan(project_path)
-        input_data = {"web_search": plan["web_search"]} if plan["papers"] else None
-        result = self._call_workflow_action("run-extraction", project_id, input_data=input_data)
+        input_data = {"web_search": plan["web_search"]} if plan["papers"] else {}
+        if retry_failed_only:
+            input_data["retry_failed_only"] = True
+        result = self._call_workflow_action("run-extraction", project_id, input_data=input_data or None)
         return {**result, "no_full_text_plan": plan} if plan["papers"] else result
 
     def _call_workflow_action(self, action: str, project_id: str, input_data: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -537,6 +537,8 @@ def query_llm(
     usage_info['cost_usd'] = cost
     usage_info['model'] = model
 
+    from reviewpilot_core.run_ledger import record_llm_call
+    record_llm_call(model, usage_info)
     return response_text, usage_info
 
 

@@ -652,6 +652,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       categorizationAnalysis: data.categorizationAnalysis || { field: '', categories: [] },
       exportPackage: data.exportPackage || [],
       prismaFlow: data.prismaFlow || null,
+      runReport: data.runReport || null,
     };
   }
 
@@ -900,6 +901,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
 
   function syncActionState(activeTask) {
     const startedAt = Date.parse(activeTask?.created_at || '');
+    if ((activeTask?.action || '') !== state.actionPending) state.taskProgress = null;
     state.actionPending = activeTask?.action || '';
     state.actionStartedAt = activeTask ? (Number.isNaN(startedAt) ? Date.now() : startedAt) : 0;
   }
@@ -1162,6 +1164,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const outcome = await resolveTaskAndRefresh(waitForActiveTaskOnce(taskId, key), projectId, fetchProjectState);
       if (!ownsTask()) return;
       if (!outcome.error && ['save-criteria', 'finalize-criteria'].includes(monitoredAction)) state.criteriaDraft = null;
+      if (!outcome.error && monitoredAction === 'save-criteria') {
+        // Saving keeps the panel unchanged, so confirm it briefly next to the button.
+        const savedAt = Date.now();
+        state.criteriaSavedAt = savedAt;
+        setTimeout(() => { if (state.criteriaSavedAt === savedAt) { state.criteriaSavedAt = 0; paintWorkspace(); } }, 4000);
+      }
       const visibleStepBeforeRefresh = state.step;
       setData(outcome.data, false, { preserveView: true });
       if (monitoredAction === 'preview-extraction') {
@@ -1432,12 +1440,23 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       const res = await fetch(`/tasks/${encodeURIComponent(taskId)}`);
       if (!res.ok) throw new Error(`Task lookup failed: ${res.status}`);
       const task = await res.json();
+      showTaskProgress(task.status === 'running' ? task.progress : null);
       if (['completed', 'partial'].includes(task.status)) return task;
       if (task.status === 'failed' && task.result) return task;
       if (task.status === 'failed') throw new Error(task.error || 'Task failed');
       await new Promise((resolve) => setTimeout(resolve, TASK_POLL_INTERVAL_MS));
     }
     throw new Error('Task did not finish within 30 minutes. Refresh the project before retrying.');
+  }
+
+  // Items done so far ("41 of 49"), reported by the running task; updated in place so a poll never repaints the canvas.
+  function taskProgressText(progress) {
+    return progress && progress.total ? ` · ${progress.done} of ${progress.total} done` : '';
+  }
+
+  function showTaskProgress(progress) {
+    state.taskProgress = progress || null;
+    document.querySelectorAll('[data-task-progress]').forEach((el) => { el.textContent = taskProgressText(state.taskProgress); });
   }
 
   function appendMessage(role, text) {
@@ -1674,6 +1693,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       categorizationAnalysis: D.categorizationAnalysis,
       exportPackage: D.exportPackage,
       prismaFlow: D.prismaFlow,
+      runReport: D.runReport,
       setupDraft: state.setupDraft,
       showSetupDialog: state.dialog === 'setup',
       showConceptDialog: state.dialog === 'concept',
@@ -2130,7 +2150,7 @@ ${reviewUI.dialog()}
     if (!v.workflowRunning) return '';
     return `<section data-ui="workflow-running-banner" role="status" aria-live="polite" style="position:relative;overflow:hidden;border:1px solid #b9cde3;background:#f5f9fe;border-radius:12px;padding:13px 15px;margin-bottom:14px;display:flex;align-items:center;gap:12px;box-shadow:0 6px 18px rgba(26,54,93,.06);">
       <span class="rp-motion" aria-hidden="true" style="width:20px;height:20px;flex:0 0 20px;border:2px solid #c8d8e8;border-top-color:#1a365d;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>
-      <div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a365d;font-weight:500;">ReviewPilot is working on ${v.workflowRunningActionLabel}</div><div style="font-size:11.5px;color:#6b746c;margin-top:3px;line-height:1.4;">${v.workflowRunningStepLabel}${v.workflowElapsedLabel ? `<span aria-hidden="true"> · <span data-elapsed>${v.workflowElapsedLabel}</span> elapsed</span>` : ''} · This workspace will update automatically when the task finishes.</div></div>
+      <div style="min-width:0;flex:1;"><div style="font-size:13.5px;color:#1a365d;font-weight:500;">ReviewPilot is working on ${v.workflowRunningActionLabel}</div><div style="font-size:11.5px;color:#6b746c;margin-top:3px;line-height:1.4;">${v.workflowRunningStepLabel}${v.workflowElapsedLabel ? `<span aria-hidden="true"> · <span data-elapsed>${v.workflowElapsedLabel}</span> elapsed</span>` : ''}<span data-task-progress>${taskProgressText(state.taskProgress)}</span> · This workspace will update automatically when the task finishes.</div></div>
       <div aria-hidden="true" style="position:absolute;left:0;right:0;bottom:0;height:3px;background:#e6eef8;overflow:hidden;"><span class="rp-motion" style="display:block;width:38%;height:100%;background:linear-gradient(90deg,transparent,#6f96bf,transparent);animation:rp-progress-sweep 1.35s ease-in-out infinite;"></span></div>
     </section>`;
   }
@@ -2186,7 +2206,7 @@ ${reviewUI.dialog()}
       <p style="font-size:12px;color:#6b746c;line-height:1.5;">Review inclusion and exclusion rules below, or refine them in chat. Enter one rule per line, then finalize before screening. Changes are saved locally.</p>
       ${['inclusion', 'exclusion'].map(key => `<label style="display:block;font-size:13px;margin-top:12px;">${key === 'inclusion' ? 'Inclusion Criteria' : 'Exclusion Criteria'}<textarea data-criteria="${key}" ${disabled} rows="4" style="display:block;box-sizing:border-box;width:100%;margin-top:6px;padding:10px;border:1px solid #d8e2f0;border-radius:8px;resize:vertical;font:inherit;line-height:1.5;background:#fffefc;color:#243449;">${esc(draft[key])}</textarea></label>`).join('')}
       <p style="font-size:11.5px;color:#6b746c;">Plausibly eligible records with incomplete evidence are retained for later review.</p>
-      <button type="button" data-act="${editing ? 'action' : 'edit-criteria'}" data-action="save-criteria" ${v.workflowRunning || v.chatPending ? 'disabled' : ''} style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer;">${editing ? 'Save Draft' : 'Edit Criteria'}</button>
+      <button type="button" data-act="${editing ? 'action' : 'edit-criteria'}" data-action="save-criteria" ${v.workflowRunning || v.chatPending ? 'disabled' : ''} style="border:1px solid #d8e2f0;background:#fffefc;border-radius:8px;padding:8px 12px;font:inherit;font-size:12px;cursor:pointer;">${editing ? 'Save Draft' : 'Edit Criteria'}</button>${editing && state.criteriaSavedAt ? `<span data-ui="criteria-saved" role="status" style="margin-left:10px;font-size:12px;color:#2f6b45;"><i class="ph ph-check" style="margin-right:4px;"></i>Draft saved</span>` : ''}
       ${criteria.prompt ? `<details style="margin-top:12px;font-size:12px;"><summary>View saved screening prompt</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.5;">${esc(criteria.prompt)}</pre></details>` : ''}
     </section>`;
   }
@@ -2261,7 +2281,7 @@ ${reviewUI.dialog()}
           ${confirmed ? '' : `<button type="button" data-ui="guidance-confirm" data-act="guidance-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? '<span aria-hidden="true" style="width:12px;height:12px;border:2px solid #9bb8d8;border-top-color:#fffefc;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>Confirming…' : '<i class="ph ph-check-circle" aria-hidden="true"></i>Confirm Guidance'}</button>`}
           <button type="button" data-act="guidance-edit" ${locked} style="${buttonStyle}"><i class="ph ph-pencil-simple" aria-hidden="true"></i>Edit guidance</button>
           ${draftButton('Redraft')}
-          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Screening uses this guidance.${D.stageState.screening?.last_valid ? ' Editing it marks the screening results out of date.' : ''}` : 'Screening starts after you confirm.'}</span>
+          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Screening uses this guidance.${D.stageState.screening?.last_valid ? ' Editing it marks the screening results out of date.' : ''}` : 'After you confirm, select Run screening to start.'}</span>
         </div>`;
     }
     const intro = g.status === 'confirmed' && !drafting
@@ -2345,6 +2365,26 @@ ${reviewUI.dialog()}
     return `<div data-ui="retrieved-list" style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;"><div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:6px;">${heading}</div>${rows || emptyHint('No included papers queued yet')}</div>`;
   }
 
+  // Plain words for the downloader's failure classes (utils/fast_pdf_downloader.py); unknown classes are shown humanized.
+  const RETRIEVAL_FAILURE_LABELS = {
+    publisher_paywalled: 'Behind the publisher’s paywall', article_print_paywalled: 'Behind the publisher’s paywall',
+    access_denied: 'The publisher refused access', pmc_not_open_access: 'Not open access in PubMed Central',
+    pmc_not_in_oa_cloud: 'Not in the PubMed Central open-access collection', no_downloadable_pdf: 'No downloadable PDF found',
+    pdf_title_mismatch: 'A PDF was found, but it is a different paper', suspect_title_mismatch: 'A PDF was found, but it may be a different paper',
+    wrong_publisher_detection: 'A PDF was found, but it is a different paper', confirmation_selection_mismatch: 'A PDF was found, but it is a different paper',
+    article_print_failed: 'The article page could not be saved as a PDF', article_print_incomplete: 'The saved article page was incomplete',
+    download_failed: 'The download did not complete', network_error: 'Network error; retrying may work', method_exception: 'The download did not complete',
+    metadata_api_error: 'The paper’s metadata service did not respond; retrying may work', domain_cooldown_skip: 'Skipped to avoid overloading the publisher; retrying may work',
+    metered_budget_exhausted: 'Skipped: the publisher’s download limit for this run was reached',
+  };
+
+  function retrievalFailureLabel(failureClass) {
+    const key = String(failureClass || '').trim();
+    if (RETRIEVAL_FAILURE_LABELS[key]) return RETRIEVAL_FAILURE_LABELS[key];
+    const words = key.replace(/[_-]+/g, ' ').trim();
+    return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Retrieval failed';
+  }
+
   function retrievalRecoveryPanel(v) {
     if (!v.retryRecoveryVisible) return '';
     if (v.retryRecoveryRunning) {
@@ -2354,10 +2394,10 @@ ${reviewUI.dialog()}
       </div>`;
     }
     const items = v.retryRecoveryItems.map((item, index) => {
-      const failure = String(item.failureClass || 'Retrieval failed').replace(/[_-]+/g, ' ');
+      const failure = retrievalFailureLabel(item.failureClass);
       return `<label for="rp-retry-${index}" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid #eef0ee;cursor:pointer;min-width:0;">
         <input id="rp-retry-${index}" type="checkbox" data-act="retry-toggle" data-retry-index="${index}" ${item.selected ? 'checked' : ''} style="margin-top:3px;accent-color:#1a365d;flex:0 0 auto;">
-        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;text-transform:capitalize;">${failure}</span>${(item.links || []).length ? `<span style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">${paperLinkChips(item.links)}</span>` : ''}</span>
+        <span style="min-width:0;line-height:1.35;"><span style="display:block;font-size:12.5px;color:#1a1a1a;overflow-wrap:anywhere;">${item.label}</span><span style="display:block;font-size:10.5px;color:#8a938b;margin-top:2px;">${esc(failure)}</span>${(item.links || []).length ? `<span style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;">${paperLinkChips(item.links)}</span>` : ''}</span>
       </label>`;
     }).join('');
     const disabled = v.retrySelectedCount === 0 ? 'disabled' : '';
@@ -2377,6 +2417,9 @@ ${reviewUI.dialog()}
     const pending = !!state.actionPending;
     const schemaAction = extractionSchemaAction(wb.status);
     const schemaLabel = wb.status === 'missing' ? 'Generate Schema' : 'Regenerate';
+    // Failed papers of current results are retried alone; stale results are rerun in full.
+    const extractionStage = D.stageState.extraction || {};
+    const retryFailedExtraction = !extractionStage.stale && ['failed', 'partial'].includes(extractionStage.status) && Number(extractionStage.counts?.failed) > 0;
     return `<div role="tablist" aria-label="Information extraction views" style="display:flex;align-items:center;gap:4px;border-bottom:1px solid #eef0ee;margin-bottom:2px;">
         <button type="button" role="tab" aria-selected=${v.isFieldsTab ? '"true"' : '"false"'} data-act="tab" data-tab="fields" style="border:none;background:none;font:inherit;font-size:13px;color:${v.isFieldsTab ? '#1a365d' : '#6b746c'};padding:9px 12px;border-bottom:${v.isFieldsTab ? '2px solid #1a365d' : '2px solid transparent'};margin-bottom:-1px;cursor:pointer;">Schema fields <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9aa39b;">${v.allFields.length}</span></button>
         <button type="button" role="tab" aria-selected=${v.isPreviewTab ? '"true"' : '"false"'} data-act="tab" data-tab="preview" style="border:none;background:none;font:inherit;font-size:13px;color:${v.isPreviewTab ? '#1a365d' : '#6b746c'};padding:9px 12px;border-bottom:${v.isPreviewTab ? '2px solid #1a365d' : '2px solid transparent'};margin-bottom:-1px;cursor:pointer;">Preview on paper</button>
@@ -2385,7 +2428,7 @@ ${reviewUI.dialog()}
       ${v.isNewProject ? gate('Information Extraction waits for full texts', 'Create setup, screen papers, and retrieve PDFs before defining extraction fields.', 'ph-table') : ''}
       ${!v.isNewProject ? codingRulesPanel(v) : ''}
       ${wb.status === 'finalized' && !v.isNewProject ? noFullTextNotice(v.noFullText) : ''}
-      ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;">${D.codingRules.status === 'confirmed' ? `<button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale && D.stageState.extraction?.last_valid ? 'Rerun extraction with this schema' : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button>` : ''}<button data-act="schema-json" style="${buttonStyle}">Schema JSON</button></div>` : ''}
+      ${wb.status === 'finalized' && !v.isNewProject ? `<div style="display:flex;gap:8px;margin:12px 0;">${D.codingRules.status === 'confirmed' ? `<button data-act="action" data-action="run-extraction" ${pending || state.chatPending || D.readOnlyExample || D.stageState.retrieval?.stale || !['completed','partial'].includes(D.stageState.retrieval?.status) ? 'disabled' : ''} ${retryFailedExtraction ? 'data-retry-failed' : ''} style="${buttonStyle}">${pending ? 'Extraction running…' : D.stageState.extraction?.stale && D.stageState.extraction?.last_valid ? 'Rerun extraction with this schema' : retryFailedExtraction ? `Retry ${formatCount(Number(D.stageState.extraction?.counts?.failed) || 0, 'failed paper')}` : ['failed','partial'].includes(D.stageState.extraction?.status) ? 'Retry extraction with this schema' : 'Run Extraction'}</button>` : ''}<button data-act="schema-json" style="${buttonStyle}">Schema JSON</button>${retryFailedExtraction && D.codingRules.status === 'confirmed' ? '<span style="align-self:center;font-size:11px;color:#68798c;">Successful papers keep their results; only the failed ones are extracted again.</span>' : ''}</div>` : ''}
       ${v.isFieldsTab ? fieldsTable(v) : previewTable(v)}
       ${!v.isNewProject ? reviewUI.extraction() : ''}`;
   }
@@ -2441,7 +2484,7 @@ ${reviewUI.dialog()}
           ${confirmed ? '' : `<button type="button" data-ui="rules-confirm" data-act="rules-confirm" ${locked} style="${primaryButtonStyle}">${confirming ? '<span aria-hidden="true" style="width:12px;height:12px;border:2px solid #9bb8d8;border-top-color:#fffefc;border-radius:999px;display:inline-block;animation:rp-action-spin .7s linear infinite;"></span>Confirming…' : '<i class="ph ph-check-circle" aria-hidden="true"></i>Confirm Coding Rules'}</button>`}
           <button type="button" data-act="rules-edit" ${locked} style="${buttonStyle}"><i class="ph ph-pencil-simple" aria-hidden="true"></i>Edit rules</button>
           ${draftButton('Redraft')}
-          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Extraction uses these rules.${D.stageState.extraction?.last_valid ? ' Editing them marks the extraction results out of date.' : ''}` : 'Extraction runs after you confirm.'}</span>
+          <span style="font-size:11px;color:#68798c;line-height:1.4;">${confirmed ? `Extraction uses these rules.${D.stageState.extraction?.last_valid ? ' Editing them marks the extraction results out of date.' : ''}` : 'After you confirm, select Run Extraction to start.'}</span>
         </div>`;
     }
     const intro = r.status === 'confirmed' && !drafting
@@ -2536,7 +2579,7 @@ ${reviewUI.dialog()}
         <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${formatCount(papersInAnalysis(workflow), 'paper')} · ${workflow.done ? formatCount(v.categorizationSummary.groups, 'category', 'categories') : formatCount(workflow.metrics.fields, 'field')}</div>
       </div>
       ${categorizationMetrics(workflow)}
-      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${prismaFlowPanel(v.prismaFlow)}`}`;
+      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${prismaFlowPanel(v.prismaFlow)}${runReportPanel(v.runReport)}`}`;
   }
 
   // The header counts the analysis set. Papers excluded at eligibility, from the PDF or from web sources, and papers
@@ -2654,6 +2697,7 @@ ${reviewUI.dialog()}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
       ${prismaFlowPanel(v.prismaFlow)}
+      ${runReportPanel(v.runReport)}
       ${exportPackageSection(v.exportPackage)}
       <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="edit-categories" style="${buttonStyle};margin-right:8px;">Reopen categorization</button><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
       ${v.catDraft.finalized ? `<div style="margin-top:10px;font-size:12px;color:#1a365d;text-align:right;">Project Complete!</div>` : ''}
@@ -2676,6 +2720,37 @@ ${reviewUI.dialog()}
       ${stale.length ? `<div data-ui="prisma-stale" style="border:1px solid #f0dcc0;background:#fdf8f0;border-radius:9px;padding:9px 11px;margin-bottom:10px;font-size:12px;color:#7a4b12;line-height:1.45;">These counts predate changes to ${stale.join(', ')}. Rerun ${stale.length === 1 ? 'that step' : 'those steps'} to update the flow.</div>` : ''}
       <div style="border:1px solid #e5e7eb;border-radius:10px;background:#fffefc;padding:10px;overflow-x:auto;">${prismaFlowSvg(flow)}</div>
       <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">Counts match the PRISMA flow counts export.${fromWeb ? ' Papers assessed from abstract or web sources are counted under reports not retrieved, so reports excluded after full-text assessment can be fewer than Excluded at Eligibility above.' : ''}</div>
+    </section>`;
+  }
+
+  // Time, LLM spend and human corrections per stage, from the project's run ledger (the Run report export).
+  // Project data arrives HTML-escaped, so its strings are inserted as they are.
+  function runReportPanel(report) {
+    if (!report || !report.recorded) return '';
+    const duration = (seconds) => {
+      const total = Math.round(Number(seconds) || 0);
+      return total >= 3600 ? `${Math.floor(total / 3600)} h ${Math.round((total % 3600) / 60)} min` : total >= 60 ? `${Math.floor(total / 60)} min ${total % 60} s` : `${total} s`;
+    };
+    const usd = (value) => { const amount = Number(value) || 0; return amount ? `$${amount.toFixed(amount < 1 ? 4 : 2)}` : '$0'; };
+    const cell = 'padding:7px 9px;border-top:1px solid #eef0ee;';
+    const num = `${cell}text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;`;
+    const rows = Object.values(report.stages || {}).filter((stage) => stage.actions || stage.llm_calls)
+      .map((stage) => `<tr><td style="${cell}">${stage.label}</td><td style="${num}">${duration(stage.run_seconds)}</td><td style="${num}">${stage.llm_calls + (stage.web_searches || 0)}</td><td style="${num}">${usd(stage.cost_usd)}</td></tr>`).join('');
+    const total = report.total || {};
+    const hc = report.human_corrections || {};
+    return `<section data-ui="run-report" aria-label="Run report" style="border-top:1px solid #eef0ee;margin-top:18px;padding-top:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">Run Report</div>
+        <div style="font-size:11px;color:#8a938b;">${(report.models || []).join(', ')}</div>
+      </div>
+      <div style="border:1px solid #e5e7eb;border-radius:10px;background:#fffefc;overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;color:#1a1a1a;">
+          <thead><tr style="color:#6b746c;font-size:11px;"><th style="padding:7px 9px;text-align:left;font-weight:500;">Stage</th><th style="padding:7px 9px;text-align:right;font-weight:500;">Processing time</th><th style="padding:7px 9px;text-align:right;font-weight:500;">LLM calls</th><th style="padding:7px 9px;text-align:right;font-weight:500;">Cost</th></tr></thead>
+          <tbody>${rows}<tr style="font-weight:600;"><td style="${cell}">Total</td><td style="${num}">${duration(total.run_seconds)}</td><td style="${num}">${total.llm_calls || 0}</td><td style="${num}">${usd(total.cost_usd)}</td></tr></tbody>
+        </table>
+      </div>
+      <div style="font-size:12px;color:#1a1a1a;line-height:1.5;margin-top:10px;">Human corrections: ${formatCount(hc.screening_overridden || 0, 'screening decision')} changed (of ${hc.screening_reviewed || 0} reviewed); ${formatCount(hc.extraction_fields_corrected || 0, 'extracted value')} changed (of ${hc.extraction_fields_reviewed || 0} reviewed).</div>
+      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:6px;">Processing time is how long ReviewPilot worked on each stage; your own reading and review time is not included. Cost is estimated from token usage at the model's list price. Download the Run report below for start and end times and token counts.</div>
     </section>`;
   }
 
@@ -2951,8 +3026,9 @@ ${reviewUI.dialog()}
 
   function extractionDecisionCard(v) {
     const wb = v.schemaWorkbench || { status: 'missing' };
-    if (!v.isExtraction || wb.status !== 'draft') return '';
-    const pending = !!state.actionPending;
+    // A running action (finalizing, drafting coding rules, regenerating) has already answered or replaced the question.
+    if (!v.isExtraction || wb.status !== 'draft' || state.actionPending) return '';
+    const pending = false;
     const disabled = pending ? 'disabled aria-busy="true"' : '';
     return `<section data-ui="extraction-decision-card" style="border:1px solid #d8e2f0;background:#f8fbff;border-radius:12px;padding:14px;margin-top:2px;">
       <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:#6b746c;margin-bottom:7px;">Decision needed</div>
@@ -3517,6 +3593,7 @@ ${reviewUI.dialog()}
           ? { revision: D.screeningCriteria.revision, ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, (root.querySelector(`[data-criteria="${key}"]`)?.value || '').split('\n').map(line => line.trim()).filter(Boolean)])) }
           : actionName === 'confirm-screening-guidance' ? { revision: D.screeningGuidance?.revision || '' }
           : actionName === 'confirm-coding-rules' ? { revision: D.codingRules?.revision || '' }
+          : actionName === 'run-extraction' && t.hasAttribute('data-retry-failed') ? { retry_failed_only: true }
           : (['suggest-categories', 'categorize'].includes(actionName) ? categorizationActionPayload() : null);
         if (actionName === 'categorize' && (!payload.categories || !payload.categories.length)) {
           state.actionError = 'Confirm at least one category before applying categorization.';

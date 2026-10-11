@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
+from reviewpilot_core import run_ledger
 from utils.human_interaction import print_header, print_summary
 from utils.jsonl_handler import read_jsonl, save_json, write_jsonl
 
@@ -75,7 +76,7 @@ class DownloadAgent(BaseAgent):
         try:
             download_result = downloader.download_batch(
                 papers,
-                progress_callback=input_data.get("progress_callback"),
+                progress_callback=input_data.get("progress_callback") or (lambda done, total, _title: run_ledger.report_progress(done, total)),
                 progress_file=input_data.get("progress_file"),
             )
         finally:

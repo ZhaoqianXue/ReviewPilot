@@ -32,7 +32,9 @@ def resolve_range(value):
     return {'start': start, 'end': end}
 
 
-def assess(paper, bounds):
+def assess(paper, bounds, *, source_filtered=False):
+    """source_filtered: the source applied these bounds in its own search, using the full date it holds,
+    so an incomplete date here that overlaps a boundary was already judged within range."""
     bounds = resolve_range(bounds)
     raw = next((str(paper[k]).strip() for k in ('publication_date', 'published', 'date', 'year') if paper.get(k)), '')
     match = re.match(r'^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?(?:$|T|\s)', raw)
@@ -48,6 +50,9 @@ def assess(paper, bounds):
         return {'excluded': False, 'needs_review': True, 'precision': 'unknown', 'reason': 'Publication date is missing or invalid; retained for date review.', 'bounds': bounds}
     excluded = high < bounds['start'] or low > bounds['end']
     uncertain = not excluded and (low < bounds['start'] or high > bounds['end'])
+    if uncertain and source_filtered:
+        return {'excluded': False, 'needs_review': False, 'precision': 'month' if month else 'year', 'earliest': low, 'latest': high,
+                'bounds': bounds, 'reason': "Incomplete publication date; the source's own date filter placed it within the review range."}
     return {'excluded': excluded, 'needs_review': uncertain, 'precision': 'day' if day else 'month' if month else 'year',
             'earliest': low, 'latest': high, 'bounds': bounds,
             'reason': 'Publication date is outside the inclusive review range.' if excluded else 'Incomplete publication date overlaps a review boundary; retained for date review.' if uncertain else 'Publication date falls within the review range.'}

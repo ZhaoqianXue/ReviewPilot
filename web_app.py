@@ -45,13 +45,13 @@ from agents.lead_agent import LeadAgent
 from reviewpilot_core.agent_memory import CrossProjectMemoryService, MemoryStoreError
 from reviewpilot_core.model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
 from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
-from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, materially_changes_dependencies, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_revision, stale_replacement_stages, update_setup_transaction_target
+from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_stages, begin_setup_transaction, finish_setup_transaction, mark_setup_transaction_aborting, normalize_setup, promote_setup_transaction, reconcile_setup_transaction, setup_impacts, setup_revision, stale_replacement_stages, update_setup_transaction_target
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects, _history
 from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
 from reviewpilot_core.sub_agent_contracts import CollectionAgentContract
 from reviewpilot_core.project_store import read_json, read_jsonl
-from reviewpilot_core import record_review
+from reviewpilot_core import record_review, run_ledger
 from reviewpilot_core.demo_projects import is_example, require_mutable, copy_example
 from reviewpilot_core.evidence_support import local_pdf
 from reviewpilot_core.configuration_reuse import configuration_options, preview_configuration, apply_configuration, ReuseConflict
@@ -337,9 +337,10 @@ async def project_chat(request):
         if context_step not in {"search", "screening", "retrieval", "extraction", "categorize"}:
             context_step = None
         def respond():
-            return LeadAgent(OUTPUT_ROOT).handle_message(
-                project_id=project_id, message=message, context_step=context_step,
-                apply_setup=lambda setup: update_project_setup(OUTPUT_ROOT, project_id, setup, exclusive=False))
+            with run_ledger.activate(Path(OUTPUT_ROOT) / project_id, f"chat:{context_step or 'search'}"):
+                return LeadAgent(OUTPUT_ROOT).handle_message(
+                    project_id=project_id, message=message, context_step=context_step,
+                    apply_setup=lambda setup: update_project_setup(OUTPUT_ROOT, project_id, setup, exclusive=False))
         # Any chat can save messages or edit a draft schema. Keep deletion,
         # configuration changes and workflow tasks from racing that publication.
         result = await run_in_threadpool(task_runner.run_if_idle, project_id, respond)
@@ -390,6 +391,8 @@ async def task_status(request):
     task = task_runner.get(task_id)
     if task is None:
         raise HTTPException(status_code=404)
+    if task.get("status") == "running":
+        task["progress"] = run_ledger.progress(Path(OUTPUT_ROOT) / task["project_id"], task["action"])
     return JSONResponse(task)
 
 
@@ -451,6 +454,9 @@ async def project_export(request):
         from reviewpilot_core.fulltext_eligibility import prisma_counts
         return JSONResponse(prisma_counts(Path(OUTPUT_ROOT) / project_id),
                             headers={'Content-Disposition': 'attachment; filename="prisma_counts.json"'})
+    if export_key == 'run-report':
+        return JSONResponse(run_ledger.summary(Path(OUTPUT_ROOT) / project_id),
+                            headers={'Content-Disposition': 'attachment; filename="run_report.json"'})
     if export_key == 'workflow-decisions':
         from reviewpilot_core import workflow_decisions
         return JSONResponse({'current': workflow_decisions.projection(Path(OUTPUT_ROOT) / project_id),
@@ -535,7 +541,8 @@ def create_project(output_root: Path | str, payload: dict) -> dict:
             continue
         break
     try:
-        search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+        with run_ledger.activate(root / project_id, "create-project"):
+            search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
     except Exception:
         shutil.rmtree(root / project_id, ignore_errors=True)
         raise
@@ -568,7 +575,7 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
         current_revision = setup_revision(current)
         next_revision = setup_revision(config)
         changed = current_revision != next_revision
-        impacts = affected_stages(project_path) if changed and materially_changes_dependencies(current, config) else []
+        impacts = setup_impacts(project_path, current, config) if changed else []
         expected = confirmation.get("expected_revision")
         if expected is not None and expected != current_revision:
             raise SetupRevisionConflict("Setup confirmation revision is stale; refresh and review the new impact")
@@ -580,7 +587,8 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
         ledger_before = load_workflow_state(project_path)
         pending = begin_setup_transaction(project_path, current, config, impacts)
         try:
-            search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
+            with run_ledger.activate(project_path, "update-setup"):
+                search_conditions = _run_lead_agent_search_setup(output_root, project_id, config)
             persisted = {**normalize_setup(config), **search_conditions}
             persisted["setup_revision"] = setup_revision(persisted)
             persisted.setdefault("project_path", str(project_path))
@@ -757,7 +765,8 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     require_mutable(Path(output_root), project_id)
     record_review.recover(Path(output_root) / project_id)
     if action == "review-sample":
-        return task_runner.submit(project_id, action, lambda: record_review.run_sample(Path(output_root) / project_id, input_data or {}, llm_query=llm_query))
+        return task_runner.submit(project_id, action, lambda: record_review.run_sample(Path(output_root) / project_id, input_data or {}, llm_query=llm_query),
+                                  project_path=Path(output_root) / project_id)
     supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "generate-screening-guidance", "confirm-screening-guidance", "generate-coding-rules", "confirm-coding-rules", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
@@ -773,7 +782,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         if (input_data or {}).get("revision") != criteria_state(project_path)["revision"]:
             raise ValueError("Screening criteria changed. Refresh before saving.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
-            project_id=project_id, action=action, input_data=input_data).to_dict())
+            project_id=project_id, action=action, input_data=input_data).to_dict(), project_path=project_path)
     if action in {"generate-screening-guidance", "confirm-screening-guidance", "generate-coding-rules", "confirm-coding-rules"}:
         if action == "confirm-screening-guidance":
             from reviewpilot_core.screening_guidance import guidance_state
@@ -786,7 +795,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             if revision and revision != rules_state(project_path)["revision"]:
                 raise ValueError("The coding rules changed. Refresh before confirming.")
         return task_runner.submit(project_id, action, lambda: LeadAgent(Path(output_root), llm_query=llm_query).handle_message(
-            project_id=project_id, action=action, input_data=input_data).to_dict())
+            project_id=project_id, action=action, input_data=input_data).to_dict(), project_path=project_path)
     if action == "preview-extraction":
         index = (input_data or {}).get("paper_index") if isinstance(input_data, dict) else None
         if isinstance(index, bool) or not isinstance(index, int) or index < 0:
@@ -797,6 +806,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             action,
             lambda: run_project_preview(project_path, index, llm_query=llm_query),
             metadata={"paper_index": index},
+            project_path=project_path,
         )
     action_stage = {"collect": "collection", "screen": "screening", "download-pdfs": "retrieval", "generate-schema": "extraction", "regenerate-schema": "extraction", "finalize-schema": "extraction", "edit-schema": "extraction", "run-extraction": "extraction", "finalize-and-run-extraction": "extraction", "suggest-categories": "categorization", "categorize": "categorization"}[action]
     confirmation = input_data.get("overwrite_confirmation") if isinstance(input_data, dict) and isinstance(input_data.get("overwrite_confirmation"), dict) else {}
@@ -814,6 +824,11 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             retried_stats.append((read_json(project_path / "collected" / "summary.json", {}) or {}).get("platform_stats"))
         if action == "screen":
             require_finalized_criteria(project_path)
+        if action == "run-extraction" and isinstance(input_data, dict) and input_data.get("retry_failed_only"):
+            # Retrying only failed papers keeps the other rows, so it needs current results to keep.
+            extraction = load_workflow_state(project_path)["stages"]["extraction"]
+            if extraction["stale"] or extraction["status"] not in {"partial", "failed"}:
+                input_data.pop("retry_failed_only")
         if action in {'categorize', 'suggest-categories'} and (input_data or {}).get('decision_revision'):
             from reviewpilot_core import workflow_decisions
             if input_data['decision_revision'] != workflow_decisions.revision(project_path):
@@ -857,6 +872,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         run_action,
         prepare=prepare_action,
         rollback=rollback_action,
+        project_path=project_path,
     )
 
 
@@ -974,6 +990,7 @@ def _submit_retry_action(output_root: Path | str, project_id: str, input_data: d
         run_action,
         prepare=prepare_action,
         rollback=rollback_action,
+        project_path=project,
     )
 
 

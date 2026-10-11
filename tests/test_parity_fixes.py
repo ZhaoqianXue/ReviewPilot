@@ -47,6 +47,11 @@ class ParityFixTests(unittest.TestCase):
                 result=assess({'publication_date':raw},bounds)
                 self.assertEqual((result['excluded'],result['needs_review']),(excluded,review))
         self.assertTrue(assess({'year':2099},{})['excluded'])
+        # A source that filtered by these bounds in its own search already judged an incomplete date; only that review is skipped.
+        native=assess({'publication_date':'2025'},bounds,source_filtered=True)
+        self.assertEqual((native['excluded'],native['needs_review']),(False,False))
+        self.assertTrue(assess({'publication_date':'2024'},bounds,source_filtered=True)['excluded'])
+        self.assertTrue(assess({'publication_date':''},bounds,source_filtered=True)['needs_review'])
         self.assertEqual(resolve_range({})['end'],date.today().isoformat())
         self.assertEqual(resolve_range({'start':'2020','end':'2021'}),{'start':'2020-01-01','end':'2021-12-31'})
         for bounds in [{'start':'2025-02-30'},{'start':'2025-12-01','end':'2025-01-01'}]:
@@ -229,7 +234,7 @@ process.stdout.write(JSON.stringify({query, blocks, payload}));
     def test_finalized_extraction_action_state_matrix(self):
         script=r'''const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
 const src=fs.readFileSync('frontend/app.js','utf8');
-const ctx={state:{actionPending:''},D:{stageState:{retrieval:{status:'completed'}},codingRules:{status:'confirmed'}},buttonStyle:'',extractionSchemaAction:()=> 'regenerate-schema',fieldsTable:()=>'',previewTable:()=>'',codingRulesPanel:()=>'',reviewUI:{extraction:()=>''}};vm.createContext(ctx);
+const ctx={state:{actionPending:''},D:{stageState:{retrieval:{status:'completed'}},codingRules:{status:'confirmed'}},buttonStyle:'',formatCount:(n,s)=>`${n} ${n===1?s:s+'s'}`,extractionSchemaAction:()=> 'regenerate-schema',fieldsTable:()=>'',previewTable:()=>'',codingRulesPanel:()=>'',reviewUI:{extraction:()=>''}};vm.createContext(ctx);
 vm.runInContext(src.slice(src.indexOf('  function extractionCanvas('),src.indexOf('  function fieldsTable(')),ctx);
 for(const status of ['completed','failed','partial','ready']) {
  ctx.D.stageState.extraction={status};
@@ -237,6 +242,9 @@ for(const status of ['completed','failed','partial','ready']) {
  if(['failed','partial'].includes(status))assert.match(html,/Retry extraction with this schema/);
  ctx.D.stageState.extraction.stale=true;ctx.D.stageState.extraction.last_valid={status:'completed'};html=ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]});assert.match(html,/Rerun extraction with this schema/);
 }
+// Failed papers of current results are retried alone.
+ctx.D.stageState.extraction={status:'partial',stale:false,counts:{succeeded:47,failed:2}};let retry=ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]});
+assert.match(retry,/data-retry-failed/);assert.match(retry,/Retry 2 failed papers/);
 // A stale stage that never produced results has nothing to rerun.
 ctx.D.stageState.extraction={status:'ready',stale:true,last_valid:null};assert.match(ctx.extractionCanvas({schemaWorkbench:{status:'finalized'},allFields:[]}),/>Run Extraction</);
 // Extraction waits for confirmed coding rules.

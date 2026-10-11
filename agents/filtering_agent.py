@@ -199,6 +199,9 @@ class FilteringAgent(BaseAgent):
         """Load papers only from sources in the current collection summary."""
         papers = []
         summary = load_json(str(collected_folder / "summary.json")) or {}
+        # Sources that applied the collection's date range in their own search (see CollectionAgent coverage).
+        self._native_date_filter = ({source for source, how in ((summary.get("coverage") or {}).get("date_filter") or {}).items() if how == "source_native"},
+                                    summary.get("date_range") or {})
         platform_stats = summary.get("platform_stats")
         if not isinstance(platform_stats, dict):
             return papers
@@ -234,10 +237,15 @@ class FilteringAgent(BaseAgent):
 
     def _filter_by_date(self, papers: List[Dict], date_range: Dict) -> List[Dict]:
         """Filter papers by publication date."""
-        from reviewpilot_core.publication_dates import assess
+        from reviewpilot_core.publication_dates import assess, resolve_range
+        native_sources, collected_range = getattr(self, "_native_date_filter", (set(), {}))
+        try:
+            same_range = bool(collected_range) and resolve_range(collected_range) == resolve_range(date_range)
+        except ValueError:
+            same_range = False
         filtered = []
         for paper in papers:
-            assessment = assess(paper, date_range)
+            assessment = assess(paper, date_range, source_filtered=same_range and paper.get("source") in native_sources)
             paper['date_assessment'] = assessment
             if not assessment['excluded']:
                 filtered.append(paper)
@@ -334,6 +342,7 @@ class FilteringAgent(BaseAgent):
         """Screen each record with the LLM, several at a time; decisions and the log keep the input order."""
         from concurrent.futures import ThreadPoolExecutor
         import threading
+        from reviewpilot_core import run_ledger
         from utils.llm import query_llm
 
         system_prompt = prompt_config.get("system_prompt", "")
@@ -381,7 +390,8 @@ class FilteringAgent(BaseAgent):
 
         workers = max(1, min(self.SCREENING_WORKERS, total))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            entries = list(pool.map(screen, papers))
+            futures = [run_ledger.submit_in_context(pool, screen, paper) for paper in papers]
+            entries = [future.result() for future in futures]
         relevant_papers = [paper for paper in papers if paper.get("is_relevant") is not False]
         irrelevant_papers = [paper for paper in papers if paper.get("is_relevant") is False]
         for entry in entries:

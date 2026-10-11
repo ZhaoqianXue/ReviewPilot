@@ -4,7 +4,7 @@ Extracts information from downloaded PDFs using LLM prompts.
 Outputs results in JSONL format with real-time writing.
 """
 
-from reviewpilot_core import evidence_support, fulltext_eligibility, web_evidence
+from reviewpilot_core import evidence_support, fulltext_eligibility, run_ledger, web_evidence
 from reviewpilot_core.evidence_support import (
     ABSTRACT, FIELD_EVIDENCE_INSTRUCTION, FULL_TEXT, NOT_AVAILABLE, WEB, WEB_FIELD_EVIDENCE_INSTRUCTION, verify_field_evidence,
 )
@@ -197,9 +197,15 @@ class ExtractionAgent(BaseAgent):
         progress_lock = threading.Lock()
         done = [0]
         paper_prompt = {**extraction_prompt, "system_prompt": system_prompt, "user_prompt_template": user_template}
+        # A retry of failed papers keeps every successful row from the current results as it is.
+        kept = self._reusable_rows(output_file, papers) if input_data.get("retry_failed_only") else {}
 
         def extract(item):
             row_number, paper_meta = item
+            if self._paper_key(paper_meta) in kept:
+                with progress_lock:
+                    done[0] += 1
+                return kept[self._paper_key(paper_meta)]
             result = self.extract_one(
                 paper=paper_meta,
                 row_number=row_number,
@@ -218,7 +224,8 @@ class ExtractionAgent(BaseAgent):
 
         # Papers are extracted several at a time; results are written in the input order.
         with ThreadPoolExecutor(max_workers=max(1, min(self.EXTRACTION_WORKERS, len(papers)))) as pool:
-            results = list(pool.map(extract, enumerate(papers, start=1)))
+            futures = [run_ledger.submit_in_context(pool, extract, item) for item in enumerate(papers, start=1)]
+            results = [future.result() for future in futures]
         with atomic_output_path(output_file) as pending_output:
             for paper_meta, result in zip(papers, results):
                 append_jsonl(str(pending_output), result)
@@ -286,6 +293,20 @@ class ExtractionAgent(BaseAgent):
             "stats": stats
         }
 
+    @staticmethod
+    def _paper_key(paper: Dict[str, Any]) -> tuple:
+        return (str(paper.get("source") or ""), str(paper.get("id") or paper.get("paper_id") or ""), str(paper.get("title") or "").strip().lower())
+
+    def _reusable_rows(self, output_file: Path, papers: List[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any]]:
+        """Successful rows that still match their paper's evidence: a row made without full text is redone once a PDF exists."""
+        rows = {self._paper_key({**row, "id": row.get("paper_id")}): row for row in read_jsonl(str(output_file))} if Path(output_file).exists() else {}
+        kept = {}
+        for paper in papers:
+            row = rows.get(self._paper_key(paper))
+            if row and row.get("extraction_status") == "success" and (row.get("extraction_source") == "pdf" or lacks_full_text(paper)):
+                kept[self._paper_key(paper)] = row
+        return kept
+
     def _load_extraction_prompt(self) -> Dict[str, Any]:
         for path in [self.project_path / "prompts" / "extraction_prompt.json", self.project_path / "extraction" / "extraction_prompt.json"]:
             if path.exists():
@@ -350,8 +371,8 @@ class ExtractionAgent(BaseAgent):
                 system_prompt += "\n" + FIELD_EVIDENCE_INSTRUCTION
             extracted, cost = self._extract_with_llm(text, system_prompt, user_template, active_llm_query)
             extracted_data = self._parse_extracted_data(extracted)
-            supplied_evidence = extracted_data.pop("_field_evidence", {})
             schema_fields = (extraction_prompt.get("schema") or {}).get("fields", [])
+            supplied_evidence = self._pop_field_evidence(extracted_data, schema_fields)
             field_evidence = verify_field_evidence(supplied_evidence, schema_fields, self._sanitize_text_for_utf8(text)[:400000], tier=FULL_TEXT)
             extracted_data = self._validate_schema_data(extracted_data, extraction_prompt, set())
             return {
@@ -423,7 +444,7 @@ class ExtractionAgent(BaseAgent):
             extracted, step_cost = self._extract_with_llm(record_text, system_prompt, extraction_prompt.get("user_prompt_template"), llm_query)
             cost += step_cost
             data = self._parse_extracted_data(extracted)
-            supplied = data.pop("_field_evidence", {})
+            supplied = self._pop_field_evidence(data, fields)
             verified = verify_field_evidence(supplied, fields, record_text, tier=ABSTRACT)
             for field in fields:
                 name = field["name"]
@@ -456,8 +477,7 @@ class ExtractionAgent(BaseAgent):
                 web = {"status": "failed", "error": self._sanitize_text_for_utf8(exc)[:300]}
             else:
                 cost += self._usage_cost(usage)
-                supplied = data.pop("_field_evidence", {})
-                supplied = supplied if isinstance(supplied, dict) else {}
+                supplied = self._pop_field_evidence(data, missing)
                 fetcher = page_fetcher or (lambda url: web_evidence.fetch_page(url))
                 pages: Dict[str, Any] = {}
                 for field in missing:
@@ -561,6 +581,7 @@ class ExtractionAgent(BaseAgent):
         if not output_text:
             raise ValueError("Responses API web_search returned no output_text")
         usage = {**self._usage_dict(getattr(response, "usage", None)), "web_search_calls": self._web_search_call_count(response)}
+        run_ledger.record_llm_call(self.model, usage, cost_usd=self._usage_cost(usage), kind="web_search")
         return output_text, usage
 
     def _web_search_domains(self, paper: Dict[str, Any]) -> list[str]:
@@ -594,6 +615,20 @@ REQUESTED SCHEMA FIELDS (the abstract did not state these):
 
 Open the pages above, then search with the queries above. Use a page only when it is this paper's own page: the article landing page reached through its DOI, its trial registry entry, its PMC or Europe PMC record, a preprint of the same work, or its supplementary material. Article landing pages and registry entries often state registration, funding, data or code availability, study setting, design, participants and declarations; read the whole page, including its declarations and article information sections.
 Return ONLY valid JSON with each requested field you found by its field name and _field_evidence giving url and quote for each of them; return {{}} when no such page states any requested field."""
+
+    @staticmethod
+    def _pop_field_evidence(data: Dict[str, Any], fields: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Take the _field_evidence object out of a model answer. Evidence written as flat
+        "<field>_field_evidence" keys is folded in, so that layout costs nothing instead of failing the paper."""
+        supplied = data.pop("_field_evidence", {})
+        supplied = dict(supplied) if isinstance(supplied, dict) else {}
+        names = {field.get("name") for field in fields if isinstance(field, dict)}
+        for name in names:
+            key = f"{name}_field_evidence"
+            if key in data and key not in names:
+                flat = data.pop(key)
+                supplied.setdefault(name, {"quote": flat} if isinstance(flat, str) else flat)
+        return supplied
 
     def _usage_dict(self, usage: Any) -> Dict[str, Any]:
         if usage is None:
@@ -800,6 +835,7 @@ Return ONLY valid JSON with each requested field you found by its field name and
             output_tokens = response.usage.completion_tokens if response.usage else 0
 
             cost = self._usage_cost({"input_tokens": input_tokens, "output_tokens": output_tokens})
+            run_ledger.record_llm_call(self.model, {"input_tokens": input_tokens, "output_tokens": output_tokens}, cost_usd=cost)
 
             return extracted, cost
 

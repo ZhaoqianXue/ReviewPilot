@@ -38,7 +38,8 @@ The frontend calls:
 - `GET /projects/{project_id}/configuration-reuse` and `POST /projects/{project_id}/configuration-reuse/{operation}` to list, preview, and import configurations from other local projects.
 - `PATCH` / `DELETE /projects/{project_id}` to rename or delete a conversation (deletion moves it to `output/.trash`).
 - `POST /projects/{project_id}/actions/{action}` to run workflow stages.
-- `GET /tasks/{task_id}` to poll background task status.
+- `GET /tasks/{task_id}` to poll background task status; a running task also reports `progress` (items done of total), shown in the running banner.
+- `GET /projects/{project_id}/exports/run-report` for the run report: processing time, LLM calls and cost per stage, and human corrections, computed from `logs/run_ledger.jsonl` (every workflow action, chat turn and LLM call is recorded there).
 
 Errors return JSON with a `detail` field carrying the reason, which the workspace shows to the user.
 

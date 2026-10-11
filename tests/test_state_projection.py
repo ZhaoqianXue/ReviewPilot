@@ -1284,5 +1284,33 @@ class StateProjectionTests(unittest.TestCase):
         self.assertEqual(paper["evidence"], "")
 
 
+
+class ConversationAndRetrievalProjectionTests(unittest.TestCase):
+    def test_stage_outcomes_follow_earlier_steps_chat(self):
+        from reviewpilot_core.state_projection import _messages
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            (path / "chat").mkdir()
+            rows = [{"step": 1, "role": "u", "text": "Broaden the HCI concept."}, {"step": 1, "role": "a", "text": "Search setup saved."},
+                    {"step": 2, "role": "u", "text": "Tighten criterion 3."}]
+            (path / "chat" / "messages.jsonl").write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            notices = {"retrieval": {"status": "partial", "succeeded": 41, "failed": 8, "nextAction": "Information Extraction"}}
+            messages = _messages(path, {"description": "LLMs in HCI"}, {}, {}, [], {}, [], [], {}, workflow_notices=notices)
+        steps = [message["step"] for message in messages]
+        self.assertEqual(steps, sorted(steps))
+        texts = [message["text"] for message in messages]
+        self.assertLess(texts.index("Search setup saved."), texts.index("Tighten criterion 3."))
+        self.assertLess(texts.index("Tighten criterion 3."), next(i for i, text in enumerate(texts) if text.startswith("Full-Text Retrieval partially")))
+
+    def test_nothing_is_unavailable_before_retrieval_runs(self):
+        from reviewpilot_core.state_projection import _retrieval_summary
+        with tempfile.TemporaryDirectory() as tmp:
+            included = [{"title": f"Paper {i}"} for i in range(49)]
+            before = _retrieval_summary(Path(tmp), included, {})
+            after = _retrieval_summary(Path(tmp), included, {"success": 41, "failed": 8})
+        self.assertEqual((before["retrieved"], before["total"], before["unavailable"]), (0, 49, 0))
+        self.assertEqual(after["unavailable"], 8)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -141,6 +141,10 @@ def complete_action(project_path: Path | str, action: str, result: dict[str, Any
             # A structured terminal report is authoritative for this attempt even
             # when every item failed. Only outputs from later stages are obsolete.
             stage["stale"] = False
+        elif status == "ready" and previous is None:
+            # Drafting or finalizing a schema, or drafting coding rules or category suggestions, before the
+            # stage ever produced results leaves nothing to rerun.
+            stage["stale"] = False
         next_index = STAGE_NAMES.index(stage_name) + 1
         if action == "retry-failed-downloads":
             # Downstream outputs go stale only when the retry recovered new PDFs;

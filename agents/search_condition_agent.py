@@ -190,7 +190,14 @@ class SearchConditionAgent(BaseAgent):
         for key, block in new_blocks.items():
             kind = "required concept" if block["required_for_eligibility"] else "concept described, not searched"
             if key not in old_blocks:
-                changes.append(f'added {kind} "{block["label"]}"')
+                # A required block joining a row that already existed is an OR alternative, not a new AND concept.
+                row = next((other for other_key, other in new_blocks.items()
+                            if other_key in old_blocks and other["required_for_eligibility"]
+                            and other["eligibility_group"] == block["eligibility_group"]), None)
+                if block["required_for_eligibility"] and row is not None:
+                    changes.append(f'added "{block["label"]}" as an alternative to "{row["label"]}"')
+                else:
+                    changes.append(f'added {kind} "{block["label"]}"')
             elif block != old_blocks[key]:
                 old = old_blocks[key]
                 before_count = len(changes)

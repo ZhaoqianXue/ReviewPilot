@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .project_store import read_jsonl
+from .run_ledger import report_progress
 
 
 METADATA_FIELDS = {
@@ -108,7 +109,8 @@ class CategorizationAnalysis:
         descriptions = plan.get("category_descriptions", {})
         categorized: list[dict] = []
 
-        for row in rows:
+        for index, row in enumerate(rows, start=1):
+            report_progress(index - 1, len(rows))
             value = str(row.get(field) or row.get("title") or "")
             category = _assign_category(row, field, value, categories, llm_query, descriptions)
             if category not in categories:
@@ -128,7 +130,8 @@ class CategorizationAnalysis:
         llm_query = self.llm_query or _default_llm_query
         categorized: list[dict] = []
 
-        for row in rows:
+        for index, row in enumerate(rows, start=1):
+            report_progress(index - 1, len(rows))
             value = str(row.get(field) or "")
             if not value:
                 assigned: str | list[str] = NO_CATEGORY if mode == "single" else []
