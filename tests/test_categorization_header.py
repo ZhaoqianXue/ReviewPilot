@@ -151,6 +151,23 @@ assert.match(context.fullResultsTable({ ...table, total: 245 }), /Showing the fi
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_prisma_flow_opens_step_five_above_the_header_counts(self):
+        result = run_node(r"""
+context.prismaFlowPanel = () => 'PRISMA';
+context.runReportPanel = () => 'RUNREPORT';
+const workflow = { done: false, metrics: { papersExtracted: 20, papersInAnalysis: 20, fields: 5 } };
+const view = { isNewProject: false, categorizationWorkflow: workflow, categorizationSummary: { papers: 20, groups: 0 }, catDraft: {} };
+let html = context.categorizeCanvas(view);
+assert.ok(html.indexOf('Categorization & Analysis') < html.indexOf('PRISMA'));
+assert.ok(html.indexOf('PRISMA') < html.indexOf('data-ui="categorization-metrics"'));
+assert.ok(html.indexOf('data-ui="categorization-metrics"') < html.indexOf('SETUP'));
+assert.ok(html.indexOf('SETUP') < html.indexOf('RUNREPORT'));
+html = context.categorizeCanvas({ ...view, categorizationWorkflow: { ...workflow, done: true } });
+assert.ok(html.indexOf('PRISMA') < html.indexOf('SUMMARY'));
+assert.equal(html.split('PRISMA').length, 2);
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

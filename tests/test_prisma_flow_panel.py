@@ -79,7 +79,7 @@ class PrismaFlowRenderTests(unittest.TestCase):
         for absent in ("Eligibility undetermined", "No usable evidence", "Not extracted", "Retrieved but not extracted", "changed by a reviewer"):
             self.assertNotIn(absent, words)
         self.assertNotIn('data-ui="prisma-stale"', out["panel"])
-        self.assertIn("Excluded at Eligibility above", out["panel"])
+        self.assertIn("Excluded at Eligibility below", out["panel"])
         self.assertIn('data-act="prisma-download" data-format="svg"', out["panel"])
         self.assertIn('data-act="prisma-download" data-format="png"', out["panel"])
 
@@ -104,7 +104,7 @@ class PrismaFlowRenderTests(unittest.TestCase):
         flow["screening"]["not_retrieved_assessed_from_web_sources"] = 0
         flow["included"]["studies_included_from_web_sources"] = 0
         out = render(flow)
-        self.assertNotIn("Excluded at Eligibility above", out["panel"])
+        self.assertNotIn("Excluded at Eligibility below", out["panel"])
         self.assertIn("Studies included in review (n = 38)", text_of(out["svg"]))
         self.assertNotIn("Assessed from full text", text_of(out["svg"]))
 

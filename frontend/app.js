@@ -2774,8 +2774,9 @@ ${reviewUI.dialog()}
         </div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#eaf0f7;border:1px solid #d8e2f0;border-radius:999px;padding:5px 9px;">${formatCount(papersInAnalysis(workflow), 'paper')} · ${workflow.done ? formatCount(v.categorizationSummary.groups, 'category', 'categories') : formatCount(workflow.metrics.fields, 'field')}</div>
       </div>
+      ${prismaFlowPanel(v.prismaFlow)}
       ${categorizationMetrics(workflow)}
-      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${prismaFlowPanel(v.prismaFlow)}${runReportPanel(v.runReport)}`}`;
+      ${((workflow.done && !workflow.decisions?.editing) || v.catDraft.skipped) ? categorizationAnalysisSummary(v, workflow) : `${papersInAnalysis(workflow) ? categorizationSetupPanel(v, workflow) : noPapersToCategorize()}${runReportPanel(v.runReport)}`}`;
   }
 
   // The header counts the analysis set. Papers excluded at eligibility, from the PDF or from web sources, and papers
@@ -2892,7 +2893,6 @@ ${reviewUI.dialog()}
       ${workflow.done ? categoryBriefsPanel(v.categorizationAnalysis) : ''}
       <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:10px;">Full Results</div>
       ${fullResultsTable(workflow.fullResults)}
-      ${prismaFlowPanel(v.prismaFlow)}
       ${runReportPanel(v.runReport)}
       ${exportPackageSection(v.exportPackage)}
       <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button data-act="edit-categories" style="${buttonStyle};margin-right:8px;">Reopen categorization</button><button data-act="finalize-project" style="${buttonStyle}"><i class="ph ph-flag-checkered" style="font-size:13px;"></i>Finalize Project</button></div>
@@ -2901,21 +2901,22 @@ ${reviewUI.dialog()}
   }
 
   // PRISMA 2020 flow (Page et al. 2021), drawn from the PRISMA flow counts export so the diagram and the JSON agree.
-  // Breakdown counts the project does not report yet are left out, never derived here.
+  // Breakdown counts the project does not report yet are left out, never derived here. It covers the whole run, so it
+  // opens Step 5, above the header counts and the results.
   function prismaFlowPanel(flow) {
     if (!flow || !flow.screening) return '';
     const stageLabels = { collection: 'Search Setup', screening: 'Paper Screening', retrieval: 'Full-Text Retrieval', extraction: 'Information Extraction', categorization: 'Categorization & Analysis' };
     const stale = (flow.stale_stages || []).map((name) => stageLabels[name] || name);
     const fromWeb = Number(flow.screening.not_retrieved_assessed_from_web_sources) || 0;
     const download = (format) => `<button data-act="prisma-download" data-format="${format}" style="${buttonStyle}"><i class="ph ph-download-simple" style="font-size:13px;"></i>${format.toUpperCase()}</button>`;
-    return `<section data-ui="prisma-flow" aria-label="PRISMA 2020 flow diagram" style="border-top:1px solid #eef0ee;margin-top:18px;padding-top:14px;">
+    return `<section data-ui="prisma-flow" aria-label="PRISMA 2020 flow diagram" style="border-bottom:1px solid #eef0ee;margin-bottom:16px;padding-bottom:16px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;">PRISMA 2020 Flow</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">${download('svg')}${download('png')}</div>
       </div>
       ${stale.length ? `<div data-ui="prisma-stale" style="border:1px solid #f0dcc0;background:#fdf8f0;border-radius:9px;padding:9px 11px;margin-bottom:10px;font-size:12px;color:#7a4b12;line-height:1.45;">These counts predate changes to ${stale.join(', ')}. Rerun ${stale.length === 1 ? 'that step' : 'those steps'} to update the flow.</div>` : ''}
       <div style="border:1px solid #e5e7eb;border-radius:10px;background:#fffefc;padding:10px;overflow-x:auto;">${prismaFlowSvg(flow)}</div>
-      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">Counts match the PRISMA flow counts export.${fromWeb ? ' Papers assessed from abstract or web sources are counted under reports not retrieved, so reports excluded after full-text assessment can be fewer than Excluded at Eligibility above.' : ''}</div>
+      <div style="font-size:11px;color:#8a938b;line-height:1.45;margin-top:8px;">Counts match the PRISMA flow counts export.${fromWeb ? ' Papers assessed from abstract or web sources are counted under reports not retrieved, so reports excluded after full-text assessment can be fewer than Excluded at Eligibility below.' : ''}</div>
     </section>`;
   }
 
