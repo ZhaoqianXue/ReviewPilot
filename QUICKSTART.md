@@ -53,11 +53,6 @@ output/{project_name}/
 └── categorization/     # Category mapping and categorized rows
 ```
 
-## Prototype Reference
-
-The old Streamlit and CLI interfaces live only in local `ReviewPilot_prototype/`
-for historical comparison. The active migrated UI is served by `web_app.py`.
-
 ## Tips
 
 - Describe your research clearly in the initial prompt

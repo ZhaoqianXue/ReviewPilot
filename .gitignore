@@ -20,10 +20,6 @@ agent_skill/
 # Temporary downloads, manuscript renders, and local scratch artifacts
 /tmp/
 
-# Local handoff snapshot from the original project owner.
-# Kept on this machine for historical comparison only; do not commit or push.
-ReviewPilot_prototype/
-
 .benchmark_pdf_extraction/
 .benchmark_pdf_extraction_sample/
 .benchmark_step3_download/
@@ -51,5 +47,5 @@ venv/
 .venv-native/
 .worktrees/
 
-# Design reference: heavy regenerable artifact bundle (keep spec + source instead)
+# Heavy regenerable design bundle
 design/reviewpilot-ui.bundle.html

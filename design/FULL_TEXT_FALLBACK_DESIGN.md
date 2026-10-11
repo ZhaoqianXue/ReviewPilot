@@ -1,8 +1,8 @@
 # Full-text fallback: manual retrieval handoff and web-assisted extraction
 
-Status: agreed design, not implemented. Owner of the downloader (`utils/fast_pdf_downloader.py`,
-`utils/oa_sources.py`) is the PDF-retrieval work; the two features below are web-app work and belong to a
-separate implementation session.
+Status: implemented. The downloader (`utils/fast_pdf_downloader.py`, `utils/oa_sources.py`) is unchanged by
+these features; both live in the web app (`reviewpilot_core/manual_retrieval.py` and the Extraction Agent's
+abstract and web steps).
 
 ## Context
 
