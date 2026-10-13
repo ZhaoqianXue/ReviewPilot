@@ -284,7 +284,9 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     extraction_results = extraction_rows[:1]
     categorization = _unescape_strings(read_json(path / "categorization" / "categorization_mapping.json", {}) or {})
     categorization_suggestions = _unescape_strings(read_json(path / "categorization" / "suggested_categories.json", {}) or {})
-    categorized_rows = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl", limit=200))
+    # Distributions, category counts and briefs cover every categorized row; tables show the first 200.
+    categorized_all = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl"))
+    categorized_rows = categorized_all[:200]
 
     workflow_state = reconcile_orphaned_running(path, active_action=active_action)
     workflow_notices = _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_failed_items)
@@ -306,7 +308,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         extraction_summary = None
         analysis_keys = None
     if workflow_state["stages"]["categorization"]["stale"]:
-        categorization, categorized_rows = {}, []
+        categorization, categorized_rows, categorized_all = {}, [], []
         if not _fresh_ready_output(workflow_state["stages"]["categorization"]):
             categorization_suggestions = {}
     current_step = _current_step(workflow_state)
@@ -351,11 +353,11 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
-        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary, analysis_keys),
+        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_all, extraction_summary, analysis_keys),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"], extraction_summary=extraction_summary),
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "noFullText": _no_full_text(path, extraction_rows, stale=workflow_state["stages"]["extraction"]["stale"]),
-        "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows),
+        "categorizationAnalysis": _categorization_analysis(categorization, categorized_all, extraction_rows),
         "exportPackage": _export_package(path),
         "prismaFlow": _prisma_flow(path),
         "runReport": _run_report(path),
@@ -1126,9 +1128,10 @@ def _categorization_workflow(
     mode = str(categorization.get("mode") or suggestions.get("mode") or "multiple")
     eligible_rows = [row for row in extraction_rows if in_analysis(row)]
     rows_for_analysis = categorized_rows if categorized_rows else eligible_rows
-    field_profiles = {field: _field_profile(eligible_rows, field) for field in field_names}
+    # Categorized rows are the whole analysis set; extraction rows arrive capped at the display bound.
+    field_profiles = {field: _field_profile(rows_for_analysis, field) for field in field_names}
     categorized_field = f"{selected}_category" if selected else ""
-    full_results = _full_results(rows_for_analysis, field_names, categorized_field)
+    full_results = _full_results(rows_for_analysis[:200], field_names, categorized_field)
     full_results["total"] = max(full_results["total"], summary["included"])
     return {
         "done": bool(categorization),

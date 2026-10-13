@@ -241,7 +241,8 @@ function workflowNoticeForStep(notices, step, recoveryListed) {
 
 function workflowOutcomeBanner(notice) {
   if (!notice || !['partial', 'failed'].includes(notice.status)) return '';
-  const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  // Notices arrive already escaped with the rest of D; leave existing entities alone so they are not shown as text.
+  const escapeText = (value) => String(value ?? '').replace(/&(?!(?:amp|lt|gt|quot|#39);)|[<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   if (notice.kind === 'exception') {
     return `<div data-ui="workflow-outcome-error" style="border:1px solid;border-radius:9px;padding:10px 11px;margin-bottom:14px;line-height:1.45;border-color:#f4b4b4;background:#fff5f5;color:#8a1f1f;"><strong>Workflow action failed.</strong> ${escapeText(notice.error || 'The action stopped unexpectedly.')} Recovery is required before retrying this stage.</div>`;
   }
