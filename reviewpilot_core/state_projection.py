@@ -278,15 +278,13 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
     schema = _unescape_strings(load_schema_draft(path))
     schema_marker = read_json(path / "extraction/schema_finalized.json", {}) or {}
     schema_matches_setup = schema_marker.get("setup_revision") == setup_revision(config) and is_schema_finalized(path)
-    extraction_rows, extraction_failed_items, extraction_summary, analysis_keys = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl")
+    extraction_rows, extraction_failed_items, extraction_summary, analysis_keys, field_profiles = _extraction_snapshot(path / "extraction" / "extraction_results.jsonl", schema)
     extraction_rows = _unescape_strings(extraction_rows)
     extraction_failed_items = _unescape_strings(extraction_failed_items)
     extraction_results = extraction_rows[:1]
     categorization = _unescape_strings(read_json(path / "categorization" / "categorization_mapping.json", {}) or {})
     categorization_suggestions = _unescape_strings(read_json(path / "categorization" / "suggested_categories.json", {}) or {})
-    # Distributions, category counts and briefs cover every categorized row; tables show the first 200.
-    categorized_all = _unescape_strings(read_jsonl(path / "categorization" / "categorized_results.jsonl"))
-    categorized_rows = categorized_all[:200]
+    categorized_rows, categorized_values, category_briefs = _categorized_snapshot(path / "categorization" / "categorized_results.jsonl", categorization, schema)
 
     workflow_state = reconcile_orphaned_running(path, active_action=active_action)
     workflow_notices = _workflow_notices(path, workflow_state, collected_summary, download_report, extraction_failed_items)
@@ -307,8 +305,9 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         extraction_rows, extraction_results = [], []
         extraction_summary = None
         analysis_keys = None
+        field_profiles = None
     if workflow_state["stages"]["categorization"]["stale"]:
-        categorization, categorized_rows, categorized_all = {}, [], []
+        categorization, categorized_rows, categorized_values, category_briefs = {}, [], None, None
         if not _fresh_ready_output(workflow_state["stages"]["categorization"]):
             categorization_suggestions = {}
     current_step = _current_step(workflow_state)
@@ -353,11 +352,11 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "retrievalSummary": _retrieval_summary(path, included, download_report, allow_artifact_fallback=not workflow_state["stages"]["retrieval"]["stale"]),
         "retrievalRecovery": retrieval_recovery,
         "categorizationSummary": _categorization_summary(categorization),
-        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_all, extraction_summary, analysis_keys),
+        "categorizationWorkflow": _categorization_workflow(schema, extraction_rows, categorization, categorization_suggestions, categorized_rows, extraction_summary, analysis_keys, field_profiles, categorized_values),
         "resultOverview": _result_overview(path, config, collected_summary, screening_stats, included, download_report, extraction_rows, categorization, allow_retrieval_fallback=not workflow_state["stages"]["retrieval"]["stale"], extraction_summary=extraction_summary),
         "evidenceMatrix": _evidence_matrix(extraction_rows, [] if workflow_state["stages"]["extraction"]["stale"] else included, categorized_rows),
         "noFullText": _no_full_text(path, extraction_rows, stale=workflow_state["stages"]["extraction"]["stale"]),
-        "categorizationAnalysis": _categorization_analysis(categorization, categorized_all, extraction_rows),
+        "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows, category_briefs),
         "exportPackage": _export_package(path),
         "prismaFlow": _prisma_flow(path),
         "runReport": _run_report(path),
@@ -395,17 +394,19 @@ def _retrieval_recovery(path: Path, included: list[dict]) -> dict[str, Any]:
     return projection
 
 
-def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict, set[str]]:
+def _extraction_snapshot(path: Path, schema: dict | None = None) -> tuple[list[dict], list[str], dict, set[str], _FieldValues]:
     """Read extraction output once, bounding retained display and recovery data.
 
-    The analysis summary and the analysis-set keys (titles and ids) cover every row, so totals stay
-    exact past the display bound.
+    The analysis summary, the analysis-set keys (titles and ids) and the field values of the analysis
+    set cover every row, so totals stay exact past the display bound.
     """
     from .fulltext_eligibility import FIELD, analysis_summary, field_tiers, in_analysis, value
     rows: list[dict] = []
     failed_items: list[str] = []
     eligibility: list[dict] = []
     analysis_keys: set[str] = set()
+    profiles = _FieldValues()
+    schema_names = {field[0] for field in _schema_fields(schema or {})}
     try:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -426,9 +427,36 @@ def _extraction_snapshot(path: Path) -> tuple[list[dict], list[str], dict, set[s
                 eligibility.append(compact)
                 if in_analysis(compact):
                     analysis_keys.update(str(key) for key in (row.get("title"), row.get("paper_id"), row.get("id")) if key)
+                    profiles.add(_unescape_strings(_counted_fields(row, schema_names)))
     except OSError:
         pass
-    return rows, failed_items, analysis_summary(eligibility), analysis_keys
+    return rows, failed_items, analysis_summary(eligibility), analysis_keys, profiles
+
+
+def _categorized_snapshot(path: Path, categorization: dict, schema: dict | None = None) -> tuple[list[dict], _FieldValues, dict[str, dict]]:
+    """Read categorized results once: the first 200 rows for display, value counts and category briefs over every row."""
+    rows: list[dict] = []
+    values = _FieldValues()
+    briefs: dict[str, dict] = {}
+    schema_names = {field[0] for field in _schema_fields(schema or {})}
+    field = str(categorization.get("field") or "category")
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                row = _unescape_strings(row)
+                if len(rows) < 200:
+                    rows.append(row)
+                values.add(_counted_fields(row, schema_names))
+                _add_category_brief(briefs, categorization, field, row)
+    except OSError:
+        pass
+    return rows, values, briefs
 
 
 def _unescape_strings(value: Any) -> Any:
@@ -1040,30 +1068,31 @@ def _source_urls(value: Any) -> list[str]:
     return urls[:4]
 
 
-def _categorization_analysis(categorization: dict, categorized_rows: list[dict], extraction_rows: list[dict]) -> dict:
+def _categorization_analysis(categorization: dict, categorized_rows: list[dict], extraction_rows: list[dict],
+                             briefs: dict[str, dict] | None = None) -> dict:
+    """Category briefs. briefs, when given, counts every categorized row; the rows passed are only the displayed ones."""
     field = str(categorization.get("field") or "category")
     descriptions = categorization.get("category_descriptions") or {}
     categories = _populated_category_names(categorization)
-    rows = categorized_rows if categorized_rows else extraction_rows
+    if not categorized_rows or briefs is None:
+        briefs = {}
+        for row in categorized_rows or extraction_rows:
+            _add_category_brief(briefs, categorization, field, row)
     category_items = []
     for category in categories:
         name = str(category)
-        papers = [row for row in rows if name in _row_category_values(categorization, row)]
-        category_items.append(
-            {
-                "name": name,
-                "description": str(descriptions.get(name, "")),
-                "count": len(papers),
-                "papers": [
-                    {
-                        "title": str(paper.get("title") or "Untitled paper"),
-                        "evidence": _category_evidence(paper, field),
-                    }
-                    for paper in papers[:5]
-                ],
-            }
-        )
+        brief = briefs.get(name) or {"count": 0, "papers": []}
+        category_items.append({"name": name, "description": str(descriptions.get(name, "")), "count": brief["count"], "papers": brief["papers"]})
     return {"field": field, "categories": category_items}
+
+
+def _add_category_brief(briefs: dict[str, dict], categorization: dict, field: str, row: dict) -> None:
+    """Count the paper under each of its categories, keeping the first five as representative papers."""
+    for name in _row_category_values(categorization, row):
+        brief = briefs.setdefault(name, {"count": 0, "papers": []})
+        brief["count"] += 1
+        if len(brief["papers"]) < 5:
+            brief["papers"].append({"title": str(row.get("title") or "Untitled paper"), "evidence": _category_evidence(row, field)})
 
 
 def _row_category_values(categorization: dict, row: dict) -> list[str]:
@@ -1118,7 +1147,11 @@ def _categorization_workflow(
     categorized_rows: list[dict],
     extraction_summary: dict | None = None,
     analysis_keys: set[str] | None = None,
+    profiles: _FieldValues | None = None,
+    categorized_values: _FieldValues | None = None,
 ) -> dict[str, Any]:
+    """Step 5 content. Rows are the bounded display rows; profiles and categorized_values, when given,
+    count every row of the analysis set and of the categorized results."""
     from .categorization_analysis import NO_CATEGORY
     from .fulltext_eligibility import analysis_summary, in_analysis
     summary = extraction_summary or analysis_summary(extraction_rows)
@@ -1128,8 +1161,13 @@ def _categorization_workflow(
     mode = str(categorization.get("mode") or suggestions.get("mode") or "multiple")
     eligible_rows = [row for row in extraction_rows if in_analysis(row)]
     rows_for_analysis = categorized_rows if categorized_rows else eligible_rows
-    # Categorized rows are the whole analysis set; extraction rows arrive capped at the display bound.
-    field_profiles = {field: _field_profile(rows_for_analysis, field) for field in field_names}
+    if profiles is None:
+        profiles = _field_values(eligible_rows)
+    if categorized_rows:
+        analysis_values = categorized_values if categorized_values is not None else _field_values(categorized_rows)
+    else:
+        analysis_values = profiles
+    field_profiles = {field: profiles.profile(field) for field in field_names}
     categorized_field = f"{selected}_category" if selected else ""
     full_results = _full_results(rows_for_analysis[:200], field_names, categorized_field)
     full_results["total"] = max(full_results["total"], summary["included"])
@@ -1147,11 +1185,11 @@ def _categorization_workflow(
         "suggestedCategories": _category_names(categorization) or _category_names(suggestions),
         "categoryDescriptions": categorization.get("category_descriptions") or categorization.get("descriptions") or suggestions.get("category_descriptions") or suggestions.get("descriptions") or {},
         "fieldProfiles": field_profiles,
-        "analysisDistributions": [{"field": field, "values": _distribution(rows_for_analysis, field)} for field in field_names[:5]],
+        "analysisDistributions": [{"field": field, "values": analysis_values.distribution(field)} for field in field_names[:5]],
         "categorizedDistribution": {
             "field": categorized_field or "category",
-            "values": _distribution(rows_for_analysis, categorized_field if categorized_field and any(categorized_field in row for row in rows_for_analysis) else "category",
-                                    skip=frozenset() if NO_CATEGORY in _category_names(categorization) else frozenset({NO_CATEGORY})),
+            "values": analysis_values.distribution(categorized_field if categorized_field and categorized_field in analysis_values.keys else "category",
+                                                   skip=frozenset() if NO_CATEGORY in _category_names(categorization) else frozenset({NO_CATEGORY})),
         },
         "fullResults": full_results,
     }
@@ -1172,12 +1210,17 @@ def _categorization_field_names(schema: dict, rows: list[dict]) -> list[str]:
     names = [field[0] for field in _schema_fields(schema) if field[0] != FIELD]
     for row in rows:
         for key, value in row.items():
-            if key in METADATA_FIELDS or key.endswith("_category") or key in {"id", "row_number", "extracted_data", "source_urls", "confidence", "extraction_status", "extraction_model", "extraction_cost_usd", "extracted_at", "error_message"}:
-                continue
-            if value in (None, "") or key in names or key.startswith(FIELD):
+            if not _is_extra_field_key(key) or value in (None, "") or key in names:
                 continue
             names.append(str(key))
     return names
+
+
+def _is_extra_field_key(key: str) -> bool:
+    """Whether a result key outside the schema can still be a categorization field."""
+    from .fulltext_eligibility import FIELD
+    return not (key in METADATA_FIELDS or key.endswith("_category") or key.startswith(FIELD)
+                or key in {"id", "row_number", "extracted_data", "source_urls", "confidence", "extraction_status", "extraction_model", "extraction_cost_usd", "extracted_at", "error_message"})
 
 
 def _recommended_categorization_field(field_names: list[str]) -> str:
@@ -1200,25 +1243,62 @@ def _recommended_categorization_field(field_names: list[str]) -> str:
     return field_names[0] if field_names else ""
 
 
-def _field_profile(rows: list[dict], field: str) -> dict[str, Any]:
-    values = [_profile_value(row.get(field)) for row in rows]
-    values = [value for value in values if value]
-    seen = set()
-    sample_values = []
-    for value in values:
-        key = value.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        sample_values.append(value)
-        if len(sample_values) >= 10:
-            break
-    return {
-        "papersWithValue": len(values),
-        "uniqueValuesCount": len(set(value.casefold() for value in values)),
-        "sampleValues": sample_values,
-        "distribution": _distribution_from_values(values),
-    }
+class _FieldValues:
+    """Value counts per field, built one paper at a time so totals can cover rows past the display bound.
+
+    A profile counts each paper's whole value; a distribution counts list items one by one, so a paper
+    in two categories adds to both.
+    """
+
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+        self._papers: dict[str, int] = {}
+        self._values: dict[str, tuple[dict[str, int], dict[str, str]]] = {}
+        self._items: dict[str, tuple[dict[str, int], dict[str, str]]] = {}
+
+    def add(self, fields: dict[str, Any]) -> None:
+        for field, raw in fields.items():
+            self.keys.add(field)
+            value = _profile_value(raw)
+            if value:
+                self._papers[field] = self._papers.get(field, 0) + 1
+                _tally(self._values.setdefault(field, ({}, {})), value)
+            for item in ([_profile_value(item) for item in raw] if isinstance(raw, list) else [value]):
+                if item:
+                    _tally(self._items.setdefault(field, ({}, {})), item)
+
+    def profile(self, field: str) -> dict[str, Any]:
+        counts, labels = self._values.get(field, ({}, {}))
+        return {
+            "papersWithValue": self._papers.get(field, 0),
+            "uniqueValuesCount": len(counts),
+            "sampleValues": list(labels.values())[:10],
+            "distribution": _ranked_distribution(counts, labels),
+        }
+
+    def distribution(self, field: str, *, skip: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+        counts, labels = self._items.get(field, ({}, {}))
+        skipped = {value.casefold() for value in skip}
+        return _ranked_distribution({key: count for key, count in counts.items() if key not in skipped}, labels)
+
+
+def _field_values(rows: list[dict]) -> _FieldValues:
+    values = _FieldValues()
+    for row in rows:
+        values.add(row)
+    return values
+
+
+def _counted_fields(row: dict, schema_names: set[str]) -> dict[str, Any]:
+    """The row's possible categorization fields and category columns, the values Step 5 counts."""
+    return {key: item for key, item in row.items() if key in schema_names or key.endswith("_category") or _is_extra_field_key(key)}
+
+
+def _tally(bucket: tuple[dict[str, int], dict[str, str]], value: str) -> None:
+    counts, labels = bucket
+    key = value.casefold()
+    counts[key] = counts.get(key, 0) + 1
+    labels.setdefault(key, value)
 
 
 def _profile_value(value: Any) -> str:
@@ -1228,24 +1308,8 @@ def _profile_value(value: Any) -> str:
     return "" if text == "None" else text
 
 
-def _distribution(rows: list[dict], field: str, *, skip: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
-    values: list[str] = []
-    for row in rows:
-        value = row.get(field)
-        if isinstance(value, list):
-            values.extend(_profile_value(item) for item in value)
-        else:
-            values.append(_profile_value(value))
-    return _distribution_from_values([value for value in values if value and value not in skip])
-
-
-def _distribution_from_values(values: list[str]) -> list[dict[str, Any]]:
-    counts: dict[str, int] = {}
-    labels: dict[str, str] = {}
-    for value in values:
-        key = value.casefold()
-        counts[key] = counts.get(key, 0) + 1
-        labels.setdefault(key, value)
+def _ranked_distribution(counts: dict[str, int], labels: dict[str, str]) -> list[dict[str, Any]]:
+    """The ten most frequent values, each under the first spelling seen."""
     ordered = sorted(counts.items(), key=lambda item: (-item[1], labels[item[0]].casefold()))
     return [{"label": labels[key], "count": count} for key, count in ordered[:10]]
 

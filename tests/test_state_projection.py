@@ -369,6 +369,44 @@ class StateProjectionTests(unittest.TestCase):
         overview={item["label"]: item["value"] for item in data["resultOverview"]}
         self.assertEqual((overview["Extracted"], overview["Full-text excluded"], overview["Included in review"]), ("250", "5", "245"))
 
+    def test_step_five_field_profiles_cover_extraction_rows_past_the_display_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]}); initialize_workflow_state(project)
+            for action in ("collect","screen","download-pdfs"): start_action(project,action); complete_action(project,action,terminal_result(action))
+            rows=[{"title":f"S{i}","extraction_status":"success","extraction_source":"pdf",
+                   "methods":"Survey" if i < 200 else "Interview study","participant_count":str(i) if i % 2 else "",
+                   "full_text_eligibility":"Exclude — Off topic" if i % 50 == 0 else "Include"} for i in range(260)]
+            write_jsonl(project/"extraction"/"extraction_results.jsonl", rows); start_action(project,"run-extraction"); complete_action(project,"run-extraction", {"processed":260,"errors":0})
+            workflow=build_rp_data(root,"p")["categorizationWorkflow"]
+        methods, participants = workflow["fieldProfiles"]["methods"], workflow["fieldProfiles"]["participant_count"]
+        self.assertEqual((workflow["metrics"]["papersInAnalysis"], len(workflow["fullResults"]["rows"])), (254, 196))
+        self.assertEqual((methods["papersWithValue"], methods["uniqueValuesCount"]), (254, 2))
+        self.assertEqual(methods["sampleValues"], ["Survey", "Interview study"])
+        self.assertEqual(methods["distribution"], [{"label":"Survey","count":196}, {"label":"Interview study","count":58}])
+        self.assertEqual((participants["papersWithValue"], participants["uniqueValuesCount"]), (130, 130))
+        self.assertEqual(participants["sampleValues"], [str(i) for i in range(1, 20, 2)])
+        self.assertEqual(len(participants["distribution"]), 10)
+
+    def test_step_five_category_totals_cover_categorized_rows_past_the_display_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); project=root/"p"; project.mkdir(); write_json(project/"search_conditions.json", {"project_name":"p","platforms":["pubmed"]}); initialize_workflow_state(project)
+            rows=[{"title":f"S{i}","extraction_status":"success","extraction_source":"pdf","area":"Health" if i < 200 else "Education"} for i in range(260)]
+            assigned=[["Health"] if i < 200 else ([] if i == 259 else ["Education","Other"]) for i in range(260)]
+            write_jsonl(project/"extraction"/"extraction_results.jsonl", rows)
+            write_jsonl(project/"categorization"/"categorized_results.jsonl", [{**row,"category":value,"area_category":value} for row, value in zip(rows, assigned)])
+            write_json(project/"categorization"/"categorization_mapping.json", {"field":"area","mode":"multiple","categories":["Health","Education","Other"],
+                                                                               "mapping":{row["title"]: value for row, value in zip(rows, assigned)}})
+            for action in ("collect","screen","download-pdfs","run-extraction","categorize"): start_action(project,action); complete_action(project,action,terminal_result(action))
+            data=build_rp_data(root,"p")
+        workflow, briefs = data["categorizationWorkflow"], data["categorizationAnalysis"]["categories"]
+        self.assertEqual(workflow["categorizedDistribution"], {"field":"area_category","values":[{"label":"Health","count":200}, {"label":"Education","count":59}, {"label":"Other","count":59}]})
+        self.assertEqual(workflow["analysisDistributions"], [{"field":"area","values":[{"label":"Health","count":200}, {"label":"Education","count":60}]}])
+        self.assertEqual({brief["name"]: brief["count"] for brief in briefs}, {"Health":200, "Education":59, "Other":59})
+        self.assertEqual([paper["title"] for paper in briefs[1]["papers"]], ["S200","S201","S202","S203","S204"])
+        self.assertEqual((len(workflow["fullResults"]["rows"]), workflow["fullResults"]["total"]), (200, 260))
+        self.assertEqual(workflow["metrics"]["papersWithoutCategory"], 1)
+        self.assertEqual(data["prismaFlow"]["included"]["studies_categorized"], 260)
+
     def test_terminal_rerun_stale_policy_blocks_mismatched_current_and_downstream_exports(self):
         cases = [
             ("collect", "collection", "relevance-prompt", "included-papers", {"total":1,"platform_stats":{"pubmed":1,"arxiv":0},"platform_errors":{"arxiv":"503"}}),
