@@ -224,6 +224,33 @@ class CategorizationAnalysisTests(unittest.TestCase):
         self.assertEqual(rows[0]["methods_category"], "Qualitative studies")
         self.assertEqual(rows[1]["methods_category"], "Benchmark studies")
 
+    def test_parallel_assignment_keeps_paper_order(self):
+        import random
+        import threading
+        import time
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            extraction_dir = project_dir / "extraction"
+            extraction_dir.mkdir(parents=True)
+            atomic_write_jsonl(extraction_dir / "extraction_results.jsonl",
+                               [{"title": f"Paper {i}", "extraction_status": "success", "area": "even" if i % 2 == 0 else "odd"}
+                                for i in range(40)])
+            threads = set()
+
+            def fake_llm_query(*, text_prompt, system_prompt, **kwargs):
+                threads.add(threading.get_ident())
+                time.sleep(random.uniform(0, 0.01))
+                return (json.dumps({"categories": ["Even" if '"value": "even"' in text_prompt else "Odd"]}), {})
+
+            CategorizationAnalysis(project_dir, llm_query=fake_llm_query).run(
+                {"field": "area", "mode": "multiple", "categories": ["Even", "Odd"]})
+            rows = read_jsonl(project_dir / "categorization" / "categorized_results.jsonl")
+
+        self.assertGreater(len(threads), 1)
+        self.assertEqual([row["title"] for row in rows], [f"Paper {i}" for i in range(40)])
+        self.assertEqual([row["area_category"] for row in rows], [["Even"] if i % 2 == 0 else ["Odd"] for i in range(40)])
+
     def test_assign_category_requires_exact_json_contract(self):
         seen = []
 

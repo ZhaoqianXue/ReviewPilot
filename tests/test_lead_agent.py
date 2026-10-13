@@ -354,9 +354,16 @@ class LeadAgentTests(unittest.TestCase):
                 message="Add a country field, remove comparators and not_a_field",
             )
             draft = json.loads((project_dir / "extraction" / "extraction_schema_draft.json").read_text(encoding="utf-8"))
+            stored = [json.loads(line) for line in (project_dir / "chat" / "messages.jsonl").read_text(encoding="utf-8").splitlines()][-1]
 
         self.assertEqual([field["name"] for field in draft["fields"]], ["methods", "country"])
-        self.assertIn("Extraction schema updated: removed 1 field (comparators); added 1 field (country). The draft now has 2 fields.", result.reply)
+        self.assertIn("Extraction schema updated. The draft now has 2 fields.\nAdded: country\nRemoved: comparators", result.reply)
+        self.assertEqual(stored["schema_change"], {"added": ["country"], "modified": [], "removed": ["comparators"], "fields": 2})
+        # Replacing a drafted schema counts the removed fields instead of listing every one.
+        edits = [{"action": "remove_field", "status": "schema_updated", "field": f"old_{n}"} for n in range(11)]
+        edits += [{"action": "add_field", "status": "schema_updated", "field": name} for name in ("llm_models", "adaptation")]
+        replaced = LeadAgent(Path(tempfile.gettempdir()))._schema_replies(edits, {"fields": [{"name": "llm_models"}, {"name": "adaptation"}]})
+        self.assertEqual(replaced, "Extraction schema updated. The draft now has 2 fields.\nAdded: llm_models, adaptation\nRemoved: 11 fields")
         self.assertIn("Could not remove field not_a_field", result.reply)
 
     def test_extraction_schema_chat_answers_step_four_questions_without_mutating_schema(self):
@@ -929,7 +936,8 @@ class LeadAgentTests(unittest.TestCase):
         self.assertEqual(seen_prompts, [])
         self.assertEqual(result.status, "failed")
         self.assertIn("blocked", result.reply)
-        self.assertIn("extracted from their abstracts and allowed web sources", result.reply)
+        self.assertIn("left out of extraction; you can supply their PDFs first", result.reply)
+        self.assertNotIn("abstract", result.reply)
 
     def test_stage_reply_uses_deterministic_next_canvas_action_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1240,7 +1248,7 @@ class LeadAgentTests(unittest.TestCase):
                     "failed": 1,
                     "stats": {"web_search_fallback_candidates": [{"title": "A"}]},
                 },
-                "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. Papers still without full text when extraction runs will be extracted from their abstracts and allowed web sources; you can still supply their PDFs first.",
+                "Full-Text Retrieval completed: 2 available, 1 failed. Next action: Information Extraction. Papers still without full text when extraction runs are left out of extraction; you can supply their PDFs first.",
             ),
             (
                 "extraction",

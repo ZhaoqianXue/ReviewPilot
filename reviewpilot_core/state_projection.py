@@ -857,7 +857,7 @@ def _result_overview(
 
 
 def _empty_no_full_text() -> dict[str, Any]:
-    return {"papers": 0, "model": "", "webSearch": False, "perPaperUsd": 0.0, "totalUsd": 0.0, "notice": "",
+    return {"enabled": False, "papers": 0, "model": "", "webSearch": False, "perPaperUsd": 0.0, "totalUsd": 0.0, "notice": "",
             "fieldTiers": {tier: 0 for tier in EVIDENCE_TIERS}}
 
 
@@ -876,7 +876,7 @@ def _no_full_text(path: Path, extraction_rows: list[dict], *, stale: bool) -> di
             for value in (row.get("evidence_tiers") or {}).values():
                 if value in tiers:
                     tiers[value] += 1
-    return {"papers": current["papers"], "model": current["model"], "webSearch": current["web_search"],
+    return {"enabled": current["enabled"], "papers": current["papers"], "model": current["model"], "webSearch": current["web_search"],
             "perPaperUsd": current["per_paper_usd"], "totalUsd": current["total_usd"], "notice": current["notice"],
             "fieldTiers": tiers}
 
@@ -1535,9 +1535,21 @@ def _stored_chat_messages(path: Path) -> list[dict]:
             continue
         visible_text = safe_display_text(str(text), fallback="Message details hidden because they contained a local path.") if role == "a" else str(text)
         message = {"step": int(row.get("step") or 1), "role": role, "text": visible_text}
+        change = _schema_change_card(row.get("schema_change")) if role == "a" else None
+        if change:
+            message["schemaChange"] = change
         messages.append((index, message))
     messages.sort(key=lambda item: item[0])
     return [message for _, message in messages]
+
+
+def _schema_change_card(value: Any) -> dict[str, Any] | None:
+    """A schema chat turn's field edits for the chat card; only field-name identifiers are passed to the page."""
+    if not isinstance(value, dict) or not isinstance(value.get("fields"), int):
+        return None
+    names = lambda key: [name for name in value.get(key) or [] if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_]{1,80}", name)]
+    card = {"added": names("added"), "modified": names("modified"), "removed": names("removed"), "fields": value["fields"]}
+    return card if card["added"] or card["modified"] or card["removed"] else None
 
 
 def _canvas_action_message_key(row: dict[str, Any]) -> str:

@@ -19,6 +19,18 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 from reviewpilot_core.skill_runtime import SkillRegistry
 from tests.test_lead_agent import confirm_rules, ledger_through
 
+_SETTING_ON = patch.object(no_full_text, "enabled", return_value=True)
+
+
+def setUpModule():
+    # These tests cover the abstract and web route, an opt-in setting (off by default); SettingTests covers off.
+    _SETTING_ON.start()
+
+
+def tearDownModule():
+    _SETTING_ON.stop()
+
+
 DOI = "10.1000/rural.2024.17"
 TITLE = "Remote triage with a language model in rural clinics"
 ABSTRACT = "We enrolled 240 adults across six rural clinics. Triage accuracy improved after deployment."
@@ -616,6 +628,91 @@ class PromptPlacementTests(unittest.TestCase):
         self.assertEqual(row["sample_size"], 240)
         self.assertEqual(row["evidence_tiers"], {"sample_size": "abstract", "trial_registration": "not_available", "funding": "not_available"})
         self.assertEqual(row["field_evidence"]["trial_registration"]["rejected_sources"][0]["reason"], "value_type")
+
+
+class SettingTests(unittest.TestCase):
+    """The abstract and web route is an opt-in application setting, off by default."""
+
+    def test_setting_is_off_by_default_and_saved_as_a_boolean(self):
+        from reviewpilot_core import manual_retrieval
+        real_enabled = _SETTING_ON.temp_original
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "demo"
+            project.mkdir()
+            self.assertFalse(real_enabled(project))
+            self.assertFalse(manual_retrieval.settings_projection(root)["assessWithoutFullText"])
+            with self.assertRaises(manual_retrieval.ManualRetrievalError):
+                manual_retrieval.save_settings(root, {"assess_without_full_text": "yes"})
+            manual_retrieval.save_settings(root, {"assess_without_full_text": True})
+            self.assertTrue(real_enabled(project))
+            self.assertTrue(manual_retrieval.settings_projection(root)["assessWithoutFullText"])
+            self.assertEqual(manual_retrieval.load_settings(root)["download_folder"], "~/Downloads")
+            manual_retrieval.save_settings(root, {"watch_enabled": False})  # saving another setting keeps this one
+            self.assertTrue(real_enabled(project))
+
+    def test_settings_dialog_has_the_switch_and_saves_it(self):
+        app_js = (Path(__file__).resolve().parents[1] / "frontend" / "app.js").read_text(encoding="utf-8")
+        section = app_js[app_js.index("function retrievalSettingsSection("):app_js.index("function confirmedDecisionPreview(")]
+        self.assertIn('name="assess_without_full_text"', section)
+        self.assertIn("current.assessWithoutFullText === true ? 'checked' : ''", section)  # unchecked unless saved on
+        handler = app_js[app_js.index("act === 'save-retrieval-settings'"):]
+        self.assertIn("""assess_without_full_text: form.querySelector('[name="assess_without_full_text"]').checked""", handler[:900])
+
+    def test_off_leaves_papers_without_full_text_out_of_extraction_and_prisma(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(no_full_text, "enabled", return_value=False):
+            root, project = _extraction_project(self, tmp, model="gpt-6-luna", extra_user_pdf=True)
+            # The third paper's PDF is found by its row-number prefix, so row numbers must stay those of the included papers.
+            papers = read_jsonl(project / "filtered" / "included_papers.jsonl")
+            papers[2].pop("pdf_path")
+            (project / "filtered" / "included_papers.jsonl").write_text("".join(json.dumps(p) + "\n" for p in papers), encoding="utf-8")
+            from reviewpilot_core.state_projection import build_rp_data
+            shown = build_rp_data(root, "demo")["noFullText"]
+
+            def never(*args, **kwargs):
+                raise AssertionError("no abstract or web step while the setting is off")
+
+            with patch.object(ExtractionAgent, "_extract_without_full_text", never), \
+                    patch.object(ExtractionAgent, "_query_web_search_extraction", never), patch.object(web_evidence, "fetch_page", never):
+                result = LeadAgent(root, llm_query=_skill_llm()).handle_message(project_id="demo", action="run-extraction")
+            rows = read_jsonl(project / "extraction" / "extraction_results.jsonl")
+            stats = read_json(project / "extraction" / "extraction_stats.json")
+            counts = prisma_counts(project)
+
+        self.assertFalse(shown["enabled"])
+        self.assertEqual((shown["papers"], shown["totalUsd"]), (1, 0.0))
+        self.assertIn("leaves it out", shown["notice"])
+        for word in ("abstract", "web"):
+            self.assertNotIn(word, shown["notice"])
+            self.assertNotIn(word, result.reply)
+        self.assertEqual(result.status, "completed")
+        self.assertIn("left out", result.reply)
+        self.assertEqual([(row["paper_id"], row["row_number"], row["extraction_source"]) for row in rows],
+                         [("open", 1, "pdf"), ("user", 3, "pdf")])
+        self.assertEqual(rows[1]["pdf_file"], "row3_user_download.pdf")
+        self.assertEqual({key: stats["no_full_text"][key] for key in ("papers", "assessed", "left_out", "web_search")},
+                         {"papers": 1, "assessed": False, "left_out": 1, "web_search": "off"})
+        screening = counts["screening"]
+        self.assertFalse(screening["no_full_text_assessed"])
+        self.assertEqual((screening["reports_sought"], screening["reports_assessed"], screening["reports_not_retrieved"]), (3, 2, 1))
+        self.assertEqual(counts["included"]["studies_included_from_web_sources"], 0)
+
+    def test_off_preview_of_a_paper_without_full_text_asks_for_its_pdf(self):
+        calls = []
+        with patch.object(no_full_text, "enabled", return_value=False):
+            row = extract(llm=abstract_llm(calls))
+        self.assertEqual(row["extraction_status"], "error")
+        self.assertIn("supply the PDF", row["error_message"])
+        self.assertEqual(calls, [])
+
+    def test_download_reply_follows_the_setting(self):
+        agent = LeadAgent(Path(tempfile.gettempdir()) / "rp-no-full-text")
+        result = {"status": "download_done", "success": 2, "failed": 1, "stats": {"web_search_fallback_candidates": [{"title": "A"}]}}
+        self.assertIn("extracted from their abstracts and allowed web sources",
+                      agent._safe_stage_reply("download", {**result, "assess_without_full_text": True}))
+        off = agent._safe_stage_reply("download", {**result, "assess_without_full_text": False})
+        self.assertIn("left out of extraction", off)
+        self.assertNotIn("abstract", off)
 
 
 def _skill_llm():

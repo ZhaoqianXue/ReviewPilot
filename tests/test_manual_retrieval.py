@@ -129,6 +129,12 @@ class ReasonAndLinkTests(unittest.TestCase):
         self.assertEqual(links["library"], "https://login.ezproxy.example.edu/login?url=https%3A%2F%2Fdoi.org%2F10.1145%2F1")
         self.assertNotIn("library", {link["kind"] for link in mr.paper_links(acm, "")})
 
+        # Without a DOI the proxy wraps the paper's own landing page; an index page alone gets no library link.
+        ezproxy = "https://ezproxy.library.arizona.edu/login?url="
+        landing = {"title": "No DOI", "url": "https://openalex.org/W1", "landing_page_url": "https://ieeexplore.ieee.org/document/1"}
+        self.assertEqual(mr.library_link(landing, ezproxy), ezproxy + "https%3A%2F%2Fieeexplore.ieee.org%2Fdocument%2F1")
+        self.assertEqual(mr.library_link({"title": "Index only", "url": "https://openalex.org/W2"}, ezproxy), "")
+
     def test_settings_validate_and_never_store_credentials(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(mr.load_settings(tmp), mr.DEFAULT_SETTINGS)
@@ -362,6 +368,14 @@ class WebImportTests(unittest.TestCase):
         self.assertEqual(response.json()["result"]["outcome"], "not_watching")
         self.assertFalse(response.json()["state"]["manualRetrieval"]["awaiting"])
         self.assertEqual(self.client.put("/settings/retrieval", json={"library_resolver": "https://u:p@x.edu/?url="}).status_code, 400)
+
+    def test_assessing_papers_without_full_text_is_off_until_turned_on(self):
+        self.assertFalse(self.client.get("/settings/retrieval").json()["assessWithoutFullText"])
+        self.assertEqual(self.client.put("/settings/retrieval", json={"assess_without_full_text": "on"}).status_code, 400)
+        saved = self.client.put("/settings/retrieval", json={"assess_without_full_text": True})
+        self.assertEqual(saved.status_code, 200)
+        self.assertTrue(saved.json()["assessWithoutFullText"])
+        self.assertTrue(self.client.get("/projects/demo/state").json()["noFullText"]["enabled"])
 
     def test_malformed_json_is_a_plain_request_error(self):
         response = self.client.post("/projects/demo/manual-retrieval/awaiting", content=b"{not json",

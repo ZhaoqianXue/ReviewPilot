@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import re
+import time
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -337,6 +338,9 @@ class FilteringAgent(BaseAgent):
         return unique_papers, list(to_remove)
 
     SCREENING_WORKERS = 16
+    # Records whose LLM call failed (timeout, connection error, malformed reply) are tried again after the
+    # first pass, a few at a time, so a short network outage does not leave them undecided.
+    SCREENING_RETRY_PAUSES = (5, 30)
 
     def _check_relevance(self, papers: List[Dict], prompt_config: Dict, output_dir: Path) -> Tuple[List[Dict], List[Dict]]:
         """Screen each record with the LLM, several at a time; decisions and the log keep the input order."""
@@ -353,7 +357,7 @@ class FilteringAgent(BaseAgent):
         done = [0]
         total = len(papers)
 
-        def screen(paper: Dict) -> Dict:
+        def screen(paper: Dict, count: bool = True) -> Dict:
             title = paper.get("title", "")
             raw_abstract = str(paper.get("abstract") or "")
             abstract = raw_abstract if prompt_config.get("review_evidence") else raw_abstract[:1000]
@@ -375,6 +379,7 @@ class FilteringAgent(BaseAgent):
                     is_relevant = decision == "true"
                 paper["is_relevant"] = is_relevant
                 paper["relevance_response"] = response.strip()
+                paper.pop("relevance_error", None)
                 entry = {"paper_id": paper.get("id", ""), "title": title[:100], "timestamp": datetime.now().isoformat(),
                          "action": "kept" if is_relevant else "removed_irrelevant", "response": response.strip()}
             except Exception as e:
@@ -383,15 +388,26 @@ class FilteringAgent(BaseAgent):
                 paper["is_relevant"] = None
                 paper["relevance_error"] = str(e)
                 entry = None
-            with progress_lock:
-                done[0] += 1
-                show_progress(done[0], total, prefix="  Checking relevance")
+            if count:
+                with progress_lock:
+                    done[0] += 1
+                    show_progress(done[0], total, prefix="  Checking relevance")
             return entry
 
         workers = max(1, min(self.SCREENING_WORKERS, total))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [run_ledger.submit_in_context(pool, screen, paper) for paper in papers]
             entries = [future.result() for future in futures]
+        for pause in self.SCREENING_RETRY_PAUSES:
+            failed = [index for index, paper in enumerate(papers) if paper.get("relevance_error")]
+            if not failed:
+                break
+            self.log(f"Retrying {len(failed)} records whose screening call failed", "warning")
+            time.sleep(pause)
+            with ThreadPoolExecutor(max_workers=max(1, min(4, len(failed)))) as pool:
+                retried = {index: run_ledger.submit_in_context(pool, screen, papers[index], False) for index in failed}
+                for index, future in retried.items():
+                    entries[index] = future.result()
         relevant_papers = [paper for paper in papers if paper.get("is_relevant") is not False]
         irrelevant_papers = [paper for paper in papers if paper.get("is_relevant") is False]
         for entry in entries:

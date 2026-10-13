@@ -263,7 +263,13 @@ class CodingRulesContract:
         config = read_json(project_path / "search_conditions.json", {}) or {}
         # Rules are written for the finalized schema, the one extraction uses.
         schema = (read_json(project_path / "prompts" / "extraction_prompt.json", {}) or {}).get("schema") or load_schema_draft(project_path)
-        papers = [{**paper, "text": _paper_text(paper)} for paper in read_jsonl(project_path / "filtered" / "included_papers.jsonl")]
+        from .review_guidance import record_sample
+
+        included = read_jsonl(project_path / "filtered" / "included_papers.jsonl")
+        # The Prompt Agent reads the full text of a fixed 25-paper sample only, so only those PDFs are opened;
+        # reading every included PDF first took most of an hour on a 3,000-record run.
+        sampled = {item["title"] for item in record_sample(included, limit=25, abstract_chars=0)}
+        papers = [{**paper, "text": _paper_text(paper)} for paper in included if " ".join(str(paper.get("title") or "").split()) in sampled]
         skill_query = bind_skill_llm_query(project_path, self.action, self.agent_name, llm_query, model=self.model)
         rules = self.agent_cls(project_path, model=self.model, llm_query=skill_query).generate_coding_rules(
             {**config, **(input_data or {}), "schema": schema, "papers": papers})
@@ -542,6 +548,9 @@ class ExtractionAgentContract:
             "extraction_prompt": extraction_prompt,
             "download_report": read_json(project_path / "pdfs" / "download_report.json", {}) or {},
         }
+        if isinstance(requested.get("assess_without_full_text"), bool):
+            # The setting the Lead Agent read when extraction started; without it the agent reads the setting itself.
+            input_data["assess_without_full_text"] = requested["assess_without_full_text"]
         if isinstance(requested.get("web_search"), bool):
             # The Lead Agent's decision for papers without full text: run or skip the web step.
             input_data["web_search"] = requested["web_search"]

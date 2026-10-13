@@ -4,6 +4,11 @@ Status: implemented. The downloader (`utils/fast_pdf_downloader.py`, `utils/oa_s
 these features; both live in the web app (`reviewpilot_core/manual_retrieval.py` and the Extraction Agent's
 abstract and web steps).
 
+Since 2026-10-11 the abstract and web steps are an opt-in setting, off by default (Settings → Full-text
+retrieval → "Assess papers without full text from the abstract and web sources", stored as
+`assess_without_full_text` in `.app_settings/retrieval.json`). With it off, papers left without a PDF get no
+extraction row and stay under "reports not retrieved"; the PRISMA flow then shows that box without a breakdown.
+
 ## Context
 
 ReviewPilot is deployed locally: each user runs the backend on their own machine, with their own IP,

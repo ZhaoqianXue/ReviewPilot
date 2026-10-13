@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable
 from urllib.parse import quote, urlencode, urlparse
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
-from .paper_links import doi as _doi, paper_links as record_links, pmid as _pmid, web_url as _web_url
+from .paper_links import doi as _doi, paper_links as record_links, pmid as _pmid, publisher_url as _publisher_url
 from .project_store import read_json
 from .retrieval_retry import (
     USER_DOWNLOAD_METHOD, RetryPreparation, current_retry_snapshot, is_user_provided, prepare_retry_request,
@@ -37,7 +37,10 @@ SOURCE_LABELS = {"download_watch": "saved to your download folder", "upload": "a
 BASIS_LABELS = {"doi_on_page": "DOI on the first pages", "title": "title on the first page",
                 "user_choice": "your choice"}
 SETTINGS_FILE = Path(".app_settings") / "retrieval.json"
-DEFAULT_SETTINGS = {"download_folder": "~/Downloads", "watch_enabled": True, "library_resolver": ""}
+# assess_without_full_text: papers left without a PDF are extracted from their abstract and allowed web pages.
+# A minor, opt-in feature; off unless the user turns it on.
+DEFAULT_SETTINGS = {"download_folder": "~/Downloads", "watch_enabled": True, "library_resolver": "",
+                    "assess_without_full_text": False}
 STATE_DIR = "manual_retrieval"
 AWAIT_SECONDS = 30 * 60          # a link click waits this long for its download
 CLICK_SLACK_SECONDS = 2.0        # clock skew between the click request and the file system
@@ -62,6 +65,8 @@ def load_settings(output_root: Path | str) -> dict[str, Any]:
             settings["download_folder"] = stored["download_folder"].strip()
         if isinstance(stored.get("watch_enabled"), bool):
             settings["watch_enabled"] = stored["watch_enabled"]
+        if isinstance(stored.get("assess_without_full_text"), bool):
+            settings["assess_without_full_text"] = stored["assess_without_full_text"]
         if isinstance(stored.get("library_resolver"), str):
             try:
                 settings["library_resolver"] = _validate_resolver(stored["library_resolver"])
@@ -72,7 +77,7 @@ def load_settings(output_root: Path | str) -> dict[str, Any]:
 
 def save_settings(output_root: Path | str, payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload or set(payload) - set(DEFAULT_SETTINGS):
-        raise ManualRetrievalError("Settings must name download_folder, watch_enabled or library_resolver.")
+        raise ManualRetrievalError("Settings must name download_folder, watch_enabled, library_resolver or assess_without_full_text.")
     settings = load_settings(output_root)
     if "download_folder" in payload:
         folder = payload["download_folder"]
@@ -85,6 +90,10 @@ def save_settings(output_root: Path | str, payload: Any) -> dict[str, Any]:
         if not isinstance(payload["watch_enabled"], bool):
             raise ManualRetrievalError("Watching must be on or off.")
         settings["watch_enabled"] = payload["watch_enabled"]
+    if "assess_without_full_text" in payload:
+        if not isinstance(payload["assess_without_full_text"], bool):
+            raise ManualRetrievalError("Assessing papers without full text must be on or off.")
+        settings["assess_without_full_text"] = payload["assess_without_full_text"]
     if "library_resolver" in payload:
         if not isinstance(payload["library_resolver"], str):
             raise ManualRetrievalError("The library link must be a web address.")
@@ -100,6 +109,7 @@ def settings_projection(output_root: Path | str) -> dict[str, Any]:
         "downloadFolder": settings["download_folder"],
         "watchEnabled": settings["watch_enabled"],
         "libraryResolver": settings["library_resolver"],
+        "assessWithoutFullText": settings["assess_without_full_text"],
         "folderAvailable": folder.is_dir() and os.access(folder, os.R_OK),
     }
 
@@ -188,7 +198,8 @@ def library_link(row: dict[str, Any], resolver: str) -> str:
         return ""
     doi, pmid = _doi(row), _pmid(row)
     if re.search(r"(^|[?&])q?url=$", resolver, re.IGNORECASE):
-        target = f"https://doi.org/{doi}" if doi else _web_url(row.get("landing_page_url") or row.get("url"))
+        # Without a DOI only the paper's own landing page is worth proxying; an index page (OpenAlex, PubMed) is not.
+        target = f"https://doi.org/{doi}" if doi else _publisher_url(row)
         return resolver + quote(target, safe="") if target else ""
     params = {"url_ver": "Z39.88-2004", "rft_val_fmt": "info:ofi/fmt:kev:mtx:journal", "genre": "article"}
     if doi:

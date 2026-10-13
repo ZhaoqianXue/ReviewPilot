@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from .atomic_files import atomic_write_json, atomic_write_jsonl
 from .project_store import read_jsonl
-from .run_ledger import report_progress
+from .run_ledger import report_progress, submit_in_context
 
 
 METADATA_FIELDS = {
@@ -48,6 +51,9 @@ PLAN_VALUE_CHARS = 300
 
 class CategorizationAnalysis:
     """Groups extracted evidence into semantic categories for final review presentation."""
+
+    # Papers are assigned to the confirmed categories several at a time.
+    CATEGORIZATION_WORKERS = int(os.environ.get("REVIEWPILOT_CATEGORIZATION_WORKERS") or 8)
 
     def __init__(self, project_path: Path | str, llm_query: Callable | None = None):
         self.project_path = Path(project_path)
@@ -128,10 +134,10 @@ class CategorizationAnalysis:
         categories = _input_categories(payload)
         descriptions = _input_descriptions(payload)
         llm_query = self.llm_query or _default_llm_query
-        categorized: list[dict] = []
+        progress_lock = threading.Lock()
+        done = [0]
 
-        for index, row in enumerate(rows, start=1):
-            report_progress(index - 1, len(rows))
+        def assign(row: dict) -> dict:
             value = str(row.get(field) or "")
             if not value:
                 assigned: str | list[str] = NO_CATEGORY if mode == "single" else []
@@ -139,7 +145,15 @@ class CategorizationAnalysis:
                 assigned = _assign_multiple_categories(row, field, value, categories, llm_query, descriptions)
             else:
                 assigned = _assign_category(row, field, value, categories, llm_query, descriptions)
-            categorized.append({**row, "category": assigned, f"{field}_category": assigned})
+            with progress_lock:
+                done[0] += 1
+                report_progress(done[0], len(rows))
+            return {**row, "category": assigned, f"{field}_category": assigned}
+
+        # Results keep the input order.
+        with ThreadPoolExecutor(max_workers=max(1, min(self.CATEGORIZATION_WORKERS, len(rows) or 1))) as pool:
+            futures = [submit_in_context(pool, assign, row) for row in rows]
+            categorized = [future.result() for future in futures]
 
         populated_categories = _populated_categories(categories, categorized)
         populated_descriptions = {category: descriptions[category] for category in populated_categories if category in descriptions}

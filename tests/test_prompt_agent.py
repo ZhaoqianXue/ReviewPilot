@@ -26,6 +26,19 @@ class PromptAgentTests(unittest.TestCase):
         self.assertEqual(prompt["examples"], [])
         self.assertEqual(prompt["expected_output"], "True or False")
 
+    def test_loose_text_list_type_from_the_model_is_written_as_the_schema_label(self):
+        # A 2026-10-11 live run drafted "Text list", which validation rejected and Regenerate failed.
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = PromptAgent(Path(tmp) / "demo")
+            schema = agent._normalize_schema({"fields": [
+                {"name": "llm_models", "type": "Text list", "description": "Model names", "required": False, "example": "GPT-4"},
+                {"name": "notes", "type": "Long text", "description": "Notes", "required": False, "example": ""}]})
+        self.assertEqual([field["type"] for field in schema["fields"]], ["Text (list)", "Long text"])
+        from reviewpilot_core.extraction_schema import normalize_field
+        self.assertEqual(normalize_field({"name": "areas", "type": "list of strings"})["type"], "Text (list)")
+        with self.assertRaises(ValueError):  # an unknown type is still rejected
+            agent._normalize_schema({"fields": [{"name": "x", "type": "Table", "description": "x", "required": False, "example": ""}]})
+
     def test_generate_extraction_prompt_calls_llm_and_writes_stage_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

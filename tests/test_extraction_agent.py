@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agents.extraction_agent import ExtractionAgent
+from reviewpilot_core import no_full_text
 from reviewpilot_core.model_policy import EXTRACTION_MODEL
 from reviewpilot_core.project_store import read_json, read_jsonl
 
@@ -16,6 +17,12 @@ PMC_PAGE = {"url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1/", "declared_dois
 
 
 class ExtractionAgentTests(unittest.TestCase):
+    def setUp(self):
+        # Several tests here cover the abstract and web route, which is an opt-in setting (off by default).
+        patcher = patch.object(no_full_text, "enabled", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_extract_one_uses_production_pdf_path_without_writing_formal_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

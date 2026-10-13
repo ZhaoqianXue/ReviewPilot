@@ -54,6 +54,20 @@ def text_of(svg):
 
 
 class PrismaFlowRenderTests(unittest.TestCase):
+    def test_not_retrieved_stands_alone_when_no_paper_was_assessed_without_full_text(self):
+        flow = json.loads(json.dumps(LLM4HCI))
+        flow["screening"].update({"reports_not_retrieved": 8, "not_retrieved_assessed_from_web_sources": 0,
+                                  "not_retrieved_excluded_from_web_sources": 0, "not_retrieved_eligibility_undetermined": 0,
+                                  "not_retrieved_no_evidence": 0, "not_retrieved_not_extracted": 8, "no_full_text_assessed": False})
+        flow["included"].update({"studies_included_from_web_sources": 0, "studies_categorized": 38})
+        out = render(flow)
+        words = text_of(out["svg"])
+        self.assertIn("Reports not retrieved (n = 8)", words)
+        for absent in ("abstract", "web", "Not extracted", "Eligibility undetermined", "No usable evidence", "Assessed from full text"):
+            self.assertNotIn(absent, words)
+            self.assertNotIn(absent, out["panel"].split("<svg")[0] + out["panel"].split("</svg>")[-1])
+        self.assertIn("Studies included in review (n = 38)", words)
+
     def test_llm4hci_counts_appear_in_prisma_2020_order(self):
         out = render(LLM4HCI)
         words = text_of(out["svg"])  # parsing also proves the downloadable SVG is well-formed XML

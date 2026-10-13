@@ -9,11 +9,13 @@ from reviewpilot_core.evidence_support import (
     ABSTRACT, FIELD_EVIDENCE_INSTRUCTION, FULL_TEXT, NOT_AVAILABLE, WEB, WEB_FIELD_EVIDENCE_INSTRUCTION, verify_field_evidence,
 )
 from reviewpilot_core.field_values import coerce_value, validate_value
+from reviewpilot_core import no_full_text
 from reviewpilot_core.no_full_text import lacks_full_text
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
+import os
 import re
 
 import sys
@@ -52,6 +54,9 @@ WEB_EVIDENCE_RULES = (
 )
 
 
+NO_FULL_TEXT_MESSAGE = "No full text was retrieved; supply the PDF in Full-Text Retrieval to extract this paper."
+
+
 def _has_value(value: Any) -> bool:
     return value not in (None, "", [], {})
 
@@ -63,7 +68,8 @@ class ExtractionAgent(BaseAgent):
     Uses LLM to process PDF content based on extraction prompts.
     """
 
-    EXTRACTION_WORKERS = 8
+    # Raise it for large runs when the API account's rate limit allows; failed papers can be retried alone.
+    EXTRACTION_WORKERS = int(os.environ.get("REVIEWPILOT_EXTRACTION_WORKERS") or 8)
 
     def __init__(self, project_path: Path, model: str = EXTRACTION_MODEL, llm_query=None, pdf_reader=None, web_search_query=None,
                  page_fetcher=None, skill_augment=None):
@@ -128,6 +134,11 @@ class ExtractionAgent(BaseAgent):
         active_pdf_reader = input_data.get("pdf_reader") or self.pdf_reader
         active_llm_query = input_data.get("llm_query") or self.llm_query
         active_web_search_query = input_data.get("web_search_query") or self.web_search_query
+        # Papers without full text are extracted from the abstract and web sources only when the user turned the
+        # setting on; the Lead Agent passes the setting it read, and a direct run reads it here.
+        assess_without_full_text = input_data.get("assess_without_full_text")
+        if assess_without_full_text is None:
+            assess_without_full_text = no_full_text.enabled(self.project_path)
         # The Lead Agent decides whether the web step runs; without its decision the model's capability does.
         web_search = input_data.get("web_search")
         if web_search is None:
@@ -159,8 +170,12 @@ class ExtractionAgent(BaseAgent):
 
         pdf_files = sorted(pdf_folder.glob("*.pdf"))
         print(f"  Found {len(pdf_files)} PDFs to process\n")
+        # Row numbers stay those of the included papers, which name the downloaded PDFs; papers left out keep no row.
+        items = [(row_number, paper) for row_number, paper in enumerate(papers, start=1)
+                 if assess_without_full_text or not lacks_full_text(paper)]
+        left_out = len(papers) - len(items)
         needs_llm_client = active_llm_query is None and any(
-            not lacks_full_text(paper) or str(paper.get("abstract") or "").strip() for paper in papers
+            not lacks_full_text(paper) or str(paper.get("abstract") or "").strip() for _, paper in items
         )
         if needs_llm_client:
             self._init_client()
@@ -216,18 +231,19 @@ class ExtractionAgent(BaseAgent):
                 pdf_reader=active_pdf_reader,
                 web_search_query=active_web_search_query,
                 web_search=web_search,
+                assess_without_full_text=assess_without_full_text,
             )
             with progress_lock:
                 done[0] += 1
-                show_progress(done[0], len(papers), prefix="  Extracting")
+                show_progress(done[0], len(items), prefix="  Extracting")
             return result
 
         # Papers are extracted several at a time; results are written in the input order.
-        with ThreadPoolExecutor(max_workers=max(1, min(self.EXTRACTION_WORKERS, len(papers)))) as pool:
-            futures = [run_ledger.submit_in_context(pool, extract, item) for item in enumerate(papers, start=1)]
+        with ThreadPoolExecutor(max_workers=max(1, min(self.EXTRACTION_WORKERS, len(items)))) as pool:
+            futures = [run_ledger.submit_in_context(pool, extract, item) for item in items]
             results = [future.result() for future in futures]
         with atomic_output_path(output_file) as pending_output:
-            for paper_meta, result in zip(papers, results):
+            for (_, paper_meta), result in zip(items, results):
                 append_jsonl(str(pending_output), result)
                 if result["extraction_status"] == "success":
                     processed += 1
@@ -254,8 +270,10 @@ class ExtractionAgent(BaseAgent):
             "pending_web_search_fallback": pending_web_search_fallback,
             "no_full_text": {
                 "papers": sum(1 for paper in papers if lacks_full_text(paper)),
-                "web_search": "enabled" if web_search else "skipped",
-                "web_search_skipped_reason": "" if web_search else f"{self.model} has no web-search tool; abstract extraction ran alone.",
+                "assessed": bool(assess_without_full_text),
+                "left_out": left_out,
+                "web_search": ("enabled" if web_search else "skipped") if assess_without_full_text else "off",
+                "web_search_skipped_reason": "" if web_search or not assess_without_full_text else f"{self.model} has no web-search tool; abstract extraction ran alone.",
                 "web_search_failed": web_search_failed,
             },
             "field_evidence_tiers": tier_counts,
@@ -328,12 +346,17 @@ class ExtractionAgent(BaseAgent):
         pdf_reader=None,
         web_search_query=None,
         web_search: bool | None = None,
+        assess_without_full_text: bool | None = None,
     ) -> Dict[str, Any]:
         """Extract one paper without writing formal extraction artifacts."""
         active_llm_query = llm_query or self.llm_query
         active_pdf_reader = pdf_reader or self.pdf_reader
         active_web_search_query = web_search_query or self.web_search_query
         if lacks_full_text(paper):
+            if assess_without_full_text is None:
+                assess_without_full_text = no_full_text.enabled(self.project_path)
+            if not assess_without_full_text:
+                return self._error_record(paper, row_number, NO_FULL_TEXT_MESSAGE)
             if web_search is None:
                 web_search = active_web_search_query is not None or supports_web_search(self.model)
             try:

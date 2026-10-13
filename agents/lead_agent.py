@@ -474,7 +474,9 @@ Return ONLY valid JSON:
                 args = command.get("args") or {}
                 results.append({"action": action, "status": "failed", "error": str(exc), "field": args.get("field_name") or args.get("name")})
         result = results[-1]
-        reply = self._schema_replies(results, load_schema_draft(project_path))
+        draft = load_schema_draft(project_path)
+        reply = self._schema_replies(results, draft)
+        schema_change = self._schema_change(results, draft)
         now = datetime.now().isoformat()
         append_jsonl(str(project_path / "chat" / "messages.jsonl"), {"step": 4, "role": "u", "text": user_message, "created_at": now})
         append_jsonl(
@@ -488,6 +490,7 @@ Return ONLY valid JSON:
                 "source": "schema_chat",
                 "stage": "prompt_extraction",
                 "action": result.get("action"),
+                **({"schema_change": schema_change} if schema_change else {}),
             },
         )
         paths = schema_paths(project_path)
@@ -633,21 +636,32 @@ Field types: Text (one short text), Long text, Text (list) (several text values,
             return {"action": action, "status": "confirmation_required", "schema": load_schema_draft(project_path)}
         raise ValueError(f"Unsupported schema chat action: {action}")
 
-    def _schema_replies(self, results: list[dict[str, Any]], schema: dict[str, Any]) -> str:
-        """One summary of all field edits plus the draft's size now; other outcomes keep their own lines."""
-        edits: dict[str, list[str]] = {"add_field": [], "remove_field": [], "modify_field": []}
-        lines: list[str] = []
+    @staticmethod
+    def _schema_change(results: list[dict[str, Any]], schema: dict[str, Any]) -> dict[str, Any] | None:
+        """The field edits of one schema chat turn, for the chat's change card; None when no field changed."""
+        change: dict[str, Any] = {"added": [], "modified": [], "removed": []}
+        keys = {"add_field": "added", "modify_field": "modified", "remove_field": "removed"}
         for item in results:
-            if item.get("status") == "schema_updated" and item.get("action") in edits:
-                edits[item["action"]].append(str(item.get("field") or "field"))
-            else:
-                lines.append(self._schema_reply(item))
-        if any(edits.values()):
-            parts = [f"{verb} {len(names)} {'field' if len(names) == 1 else 'fields'} ({', '.join(names)})"
-                     for verb, names in (("removed", edits["remove_field"]), ("added", edits["add_field"]), ("modified", edits["modify_field"])) if names]
-            count = len(schema.get("fields") or [])
-            summary = f"Extraction schema updated: {'; '.join(parts)}. The draft now has {count} {'field' if count == 1 else 'fields'}."
-            lines.insert(0, summary[0].upper() + summary[1:])
+            if item.get("status") == "schema_updated" and item.get("action") in keys:
+                change[keys[item["action"]]].append(str(item.get("field") or "field"))
+        if not any(change.values()):
+            return None
+        return {**change, "fields": len(schema.get("fields") or [])}
+
+    def _schema_replies(self, results: list[dict[str, Any]], schema: dict[str, Any]) -> str:
+        """One short summary of all field edits, a line per kind of edit; other outcomes keep their own lines."""
+        lines = [self._schema_reply(item) for item in results
+                 if not (item.get("status") == "schema_updated" and item.get("action") in {"add_field", "remove_field", "modify_field"})]
+        change = self._schema_change(results, schema)
+        if change:
+            count = change["fields"]
+            summary = [f"Extraction schema updated. The draft now has {count} {'field' if count == 1 else 'fields'}."]
+            summary += [f"{label}: {', '.join(change[key])}" for label, key in (("Added", "added"), ("Modified", "modified")) if change[key]]
+            removed = change["removed"]
+            if removed:
+                # Replacing a drafted schema would otherwise list every old field.
+                summary.append(f"Removed: {', '.join(removed)}" if len(removed) <= 3 else f"Removed: {len(removed)} fields")
+            lines = summary + lines
         return "\n".join(dict.fromkeys(lines))
 
     def _schema_reply(self, result: dict[str, Any]) -> str:
@@ -745,17 +759,20 @@ Field types: Text (one short text), Long text, Text (list) (several text values,
             return save_guidance_failure(project_path, f"{type(exc).__name__}: {exc}")
 
     def _run_extraction(self, project_path: Path, project_id: str, *, retry_failed_only: bool = False) -> dict[str, Any]:
-        """Run extraction; papers still without full text go through abstract and web extraction.
+        """Run extraction; papers still without full text are left out unless the user turned on their assessment.
 
         The plan is read when extraction starts, so PDFs the user supplied after retrieval
-        count as full text. The Lead Agent decides whether the web step runs: it is skipped,
-        and the user told so, when the project's model has no web-search tool.
+        count as full text. With the setting on they go through abstract and web extraction, and
+        the Lead Agent decides whether the web step runs: it is skipped, and the user told so,
+        when the project's model has no web-search tool.
         """
         plan = no_full_text.plan(project_path)
-        input_data = {"web_search": plan["web_search"]} if plan["papers"] else {}
+        input_data: dict[str, Any] = {"assess_without_full_text": plan["enabled"]}
+        if plan["papers"] and plan["enabled"]:
+            input_data["web_search"] = plan["web_search"]
         if retry_failed_only:
             input_data["retry_failed_only"] = True
-        result = self._call_workflow_action("run-extraction", project_id, input_data=input_data or None)
+        result = self._call_workflow_action("run-extraction", project_id, input_data=input_data)
         return {**result, "no_full_text_plan": plan} if plan["papers"] else result
 
     def _call_workflow_action(self, action: str, project_id: str, input_data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -779,6 +796,8 @@ Field types: Text (one short text), Long text, Text (list) (several text values,
         data.setdefault("sub_agent", contract.agent_name)
         data.setdefault("contract_stage", contract.stage)
         data.setdefault("model", contract.model)
+        if stage == "download":
+            data.setdefault("assess_without_full_text", no_full_text.enabled(project_path))
         reply = self._stage_reply(stage, data, action=action)
         append_jsonl(
             str(project_path / "chat" / "messages.jsonl"),
@@ -929,9 +948,16 @@ Field types: Text (one short text), Long text, Text (list) (several text values,
             download_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
             fallback_candidates = result.get("web_search_fallback_candidates") or download_stats.get("web_search_fallback_candidates")
             if count("failed") and fallback_candidates:
-                reply += (" Papers still without full text when extraction runs will be extracted from their abstracts"
-                          " and allowed web sources; you can still supply their PDFs first.")
-        if stage == "extraction" and isinstance(result.get("no_full_text_plan"), dict):
+                if result.get("assess_without_full_text"):
+                    reply += (" Papers still without full text when extraction runs will be extracted from their abstracts"
+                              " and allowed web sources; you can still supply their PDFs first.")
+                else:
+                    reply += " Papers still without full text when extraction runs are left out of extraction; you can supply their PDFs first."
+        if stage == "extraction" and isinstance(result.get("no_full_text_plan"), dict) and not result["no_full_text_plan"].get("enabled", True):
+            papers = int(result["no_full_text_plan"].get("papers") or 0)
+            reply += (f" {papers} {'paper' if papers == 1 else 'papers'} without full text {'was' if papers == 1 else 'were'} left out;"
+                      " supply the PDFs in Full-Text Retrieval and rerun extraction to include them.")
+        elif stage == "extraction" and isinstance(result.get("no_full_text_plan"), dict):
             plan = result["no_full_text_plan"]
             papers = int(plan.get("papers") or 0)
             reply += (f" {papers} {'paper' if papers == 1 else 'papers'} without full text"

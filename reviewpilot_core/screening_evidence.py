@@ -90,6 +90,69 @@ def matched_rule(criterion: str, prompt: dict) -> str:
     return best if score >= RULE_OVERLAP else ''
 
 
+def _stem(word: str) -> str:
+    if len(word) > 4 and word.endswith(('ies', 'ied')):
+        return word[:-3] + 'y'
+    return word[:-1] if len(word) > 3 and word.endswith('s') and not word.endswith('ss') else word
+
+
+def _stems(text: str) -> set[str]:
+    return {_stem(word) for word in _content_words(text)}
+
+
+def _guidance_sections(prompt: dict) -> dict[str, set[str]]:
+    """Rule keys of the guidance's review-focus paragraph and of its domain rules (definitions)."""
+    sections: dict[str, set[str]] = {'focus': set(), 'domain': set()}
+    current = None
+    for line in str((prompt.get(GUIDANCE_KEY) or {}).get('text') or '').splitlines():
+        text = line.strip()
+        if text.endswith(':'):
+            lowered = text.lower()
+            current = 'focus' if lowered.startswith('review focus') else 'domain' if lowered.startswith('domain rules') else None
+        elif text and current:
+            sections[current].add(_rule_key(text))
+    return sections
+
+
+OTHER_REASON = 'Other or unrecorded rule'
+FOCUS_REASON = 'Outside the review focus'
+REASON_COVERAGE = 0.4
+
+
+def reason_label(criterion: str, prompt: dict) -> str:
+    """The criterion an exclusion's cited rule belongs to, worded as full-text eligibility words its reasons.
+
+    A cited exclusion criterion is itself and a cited inclusion criterion is "not met: ...". A domain definition
+    or an "exclude when" line of the guidance is traced to the criterion most of whose content words it repeats.
+    The review-focus paragraph is reported apart; any other cited line (an "include when" line, a procedural
+    instruction) or one close to no criterion is "other".
+    """
+    eligibility = prompt.get('eligibility') or prompt.get('criteria') or {}
+    exclusion = [str(rule) for rule in eligibility.get('exclusion') or []]
+    inclusion = [str(rule) for rule in eligibility.get('inclusion') or []]
+    labels = [(rule, rule) for rule in exclusion] + [(rule, 'not met: ' + rule) for rule in inclusion]
+    key = _rule_key(criterion)
+    if not key:
+        return OTHER_REASON
+    for rule, label in labels:
+        if _rule_key(rule) == key:
+            return label
+    sections = _guidance_sections(prompt)
+    if key in sections['focus']:
+        return FOCUS_REASON
+    exclude_when = {_rule_key(rule) for rule in (prompt.get(GUIDANCE_KEY) or {}).get('exclude_when') or []}
+    if key not in sections['domain'] and key not in exclude_when:
+        return OTHER_REASON
+    cited = _stems(criterion)
+    best, score = OTHER_REASON, 0.0
+    for rule, label in labels:  # exclusions first, so they win a tie
+        words = _stems(rule)
+        coverage = len(cited & words) / len(words) if words else 0.0
+        if coverage > score:
+            best, score = label, coverage
+    return best if score >= REASON_COVERAGE else OTHER_REASON
+
+
 def parse_screening_response(response: str, paper: dict, prompt: dict) -> tuple[bool, dict]:
     value = json.loads(response)
     if not isinstance(value, dict) or type(value.get('include')) is not bool:

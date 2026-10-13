@@ -1458,7 +1458,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   async function saveRetrievalSettings(payload) {
-    state.retrievalSettings = { ...(state.retrievalSettings || {}), ...{ downloadFolder: payload.download_folder, watchEnabled: payload.watch_enabled, libraryResolver: payload.library_resolver }, pending: true, error: '', saved: false };
+    state.retrievalSettings = { ...(state.retrievalSettings || {}), ...{ downloadFolder: payload.download_folder, watchEnabled: payload.watch_enabled, libraryResolver: payload.library_resolver, assessWithoutFullText: payload.assess_without_full_text }, pending: true, error: '', saved: false };
     paintWorkspace();
     try {
       const res = await fetch('/settings/retrieval', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
@@ -2728,11 +2728,12 @@ ${reviewUI.dialog()}
     </div>`;
   }
 
-  // Papers still without full text: the estimate is shown before running and is information, not a switch.
+  // Papers still without full text. With the opt-in setting on, the estimate is shown before running; with it off
+  // they are left out of extraction and the notice says so, without describing the abstract and web route.
   function noFullTextNotice(n) {
     if (!n || !n.papers) return '';
     const tiers = n.fieldTiers || {};
-    const counted = ['full_text', 'abstract', 'web', 'not_available'].some((tier) => tiers[tier]);
+    const counted = (n.enabled || tiers.abstract || tiers.web) && ['full_text', 'abstract', 'web', 'not_available'].some((tier) => tiers[tier]);
     const labels = { full_text: 'Full text', abstract: 'Abstract', web: 'Web source (needs human check)', not_available: 'Not available' };
     return `<div data-ui="no-full-text-notice" role="note" style="margin:12px 0 0;border:1px solid #f1d39b;background:#fff8e8;color:#5c3d00;border-radius:9px;padding:10px 12px;font-size:12px;line-height:1.5;">
       <strong>Papers without full text</strong> · ${n.notice}
@@ -2958,7 +2959,8 @@ ${reviewUI.dialog()}
     // Non-breaking spaces keep each count on one line when a box wraps its text.
     const n = (value) => `(n\u00a0=\u00a0${Number(value) || 0})`;
     const has = (key) => sc[key] !== undefined && sc[key] !== null;
-    const notRetrieved = [
+    // The breakdown applies only when papers went through abstract and web extraction (an opt-in setting).
+    const notRetrieved = sc.no_full_text_assessed === false ? [] : [
       ['not_retrieved_assessed_from_web_sources', 'Assessed from abstract or web sources'],
       ['not_retrieved_eligibility_undetermined', 'Eligibility undetermined'],
       ['not_retrieved_no_evidence', 'No usable evidence'],
@@ -2971,7 +2973,12 @@ ${reviewUI.dialog()}
         right: [['title', 'Records removed before screening'], ['item', `Duplicate records ${n(id.removed_duplicates)}`], ['item', `Outside the date range ${n(id.removed_outside_date_range)}`]] },
       { phase: 'Screening',
         left: [['title', `Records screened ${n(sc.records_screened)}`]],
-        right: [['title', `Records excluded ${n(sc.records_excluded)}`], ...(Number(sc.human_overrides) ? [['note', `Decisions changed by a reviewer: ${sc.human_overrides}`]] : [])] },
+        // PRISMA 2020: exclusions by the automation tool and by a human; the tool's are grouped by criterion.
+        right: [['title', `Records excluded ${n(sc.records_excluded)}`], ...(has('records_excluded_by_human')
+          ? [['item', `By ReviewPilot ${n(sc.records_excluded_by_reviewpilot)}`],
+             ...Object.entries(sc.records_excluded_by_reason || {}).map(([reason, count]) => ['sub', `${reason.charAt(0).toUpperCase()}${reason.slice(1)} ${n(count)}`]),
+             ['item', `By a human ${n(sc.records_excluded_by_human)}`]]
+          : (Number(sc.human_overrides) ? [['note', `Decisions changed by a reviewer: ${sc.human_overrides}`]] : []))] },
       { phase: 'Screening',
         left: [['title', `Reports sought for retrieval ${n(sc.reports_sought)}`]],
         right: [['title', `Reports not retrieved ${n(sc.reports_not_retrieved)}`], ...notRetrieved.flatMap(([key, label]) => [['item', `${label} ${n(sc[key])}`],
@@ -3166,10 +3173,29 @@ ${reviewUI.dialog()}
 
   function chatMessage(m) {
     if (m.isActivity) return activityMessage(m);
+    if (m.isAssistant && m.schemaChange) {
+      return `<div style="display:flex;gap:8px;align-items:flex-start;"><span style="flex:0 0 20px;margin-top:1px;">${logo(20)}</span><div style="background:#eef4fb;border:1px solid #e1e8f2;border-radius:3px 13px 13px 13px;padding:10px 12px;font-size:12.5px;color:#1f2937;line-height:1.5;letter-spacing:-0.01em;white-space:normal;min-width:0;">${schemaChangeCard(m.schemaChange)}</div></div>`;
+    }
     if (m.isAssistant) {
       return `<div style="display:flex;gap:8px;align-items:flex-start;"><span style="flex:0 0 20px;margin-top:1px;">${logo(20)}</span><div style="background:#eef4fb;border:1px solid #e1e8f2;border-radius:3px 13px 13px 13px;padding:10px 12px;font-size:12.5px;color:#1f2937;line-height:1.5;letter-spacing:-0.01em;white-space:pre-line;">${assistantMessageHtml(m.text)}</div></div>`;
     }
     return `<div style="display:flex;justify-content:flex-end;"><div style="background:#1a365d;color:#eaf0f7;border-radius:13px 13px 3px 13px;padding:10px 12px;font-size:12.5px;line-height:1.5;letter-spacing:-0.01em;max-width:230px;">${m.text}</div></div>`;
+  }
+
+  // A schema chat turn's field edits: what was added or modified by name, removed fields folded into a count.
+  // Field names come from the projection as plain identifiers.
+  function schemaChangeCard(c) {
+    const chip = (name, muted) => `<span style="display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.5;color:${muted ? '#8a938b' : '#1a365d'};background:#fffefc;border:1px solid ${muted ? '#e5e7eb' : '#d8e2f0'};border-radius:6px;padding:0 6px;margin:2px 4px 2px 0;">${name}</span>`;
+    const row = (label, dot, content) => `<div style="display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;align-items:baseline;padding:6px 0;border-top:1px solid rgba(26,54,93,.10);"><span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#4b5563;"><span style="width:6px;height:6px;border-radius:999px;background:${dot};flex:0 0 auto;"></span>${label}</span><span style="min-width:0;">${content}</span></div>`;
+    const removed = c.removed || [];
+    const removedContent = removed.length <= 3 ? removed.map((name) => chip(name, true)).join('')
+      : `<details><summary style="cursor:pointer;font-size:12px;color:#4b5563;">${formatCount(removed.length, 'field')}</summary><div style="margin-top:4px;">${removed.map((name) => chip(name, true)).join('')}</div></details>`;
+    const rows = [
+      (c.added || []).length ? row('Added', '#3f8f5a', c.added.map((name) => chip(name)).join('')) : '',
+      (c.modified || []).length ? row('Modified', '#3f6fae', c.modified.map((name) => chip(name)).join('')) : '',
+      removed.length ? row('Removed', '#b0574f', removedContent) : '',
+    ].join('');
+    return `<div data-ui="schema-change-card"><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px;"><span style="display:inline-flex;align-items:center;gap:6px;font-weight:600;color:#1a365d;"><i class="ph ph-table" style="font-size:14px;"></i>Extraction schema updated</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#1a365d;background:#fffefc;border:1px solid #d8e2f0;border-radius:999px;padding:1px 8px;white-space:nowrap;">${formatCount(Number(c.fields) || 0, 'field')}</span></div>${rows}</div>`;
   }
 
   function assistantMessageHtml(text) {
@@ -3330,6 +3356,7 @@ ${reviewUI.dialog()}
       <label style="${label}" for="rp-library-resolver">Library link (optional)</label>
       <input id="rp-library-resolver" name="library_resolver" placeholder="https://resolver.library.edu/openurl or https://login.ezproxy.edu/login?url=" value="${esc(unescapePayloadValue(current.libraryResolver || ''))}" style="${field}" ${current.pending ? 'disabled' : ''}>
       <p style="${help}">Your library's OpenURL resolver or EZproxy prefix adds an “Open with my library” link. Sign in on the library's own page; ReviewPilot never asks for or stores library credentials.</p>
+      <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:#1a1a1a;margin:12px 0 0;"><input type="checkbox" name="assess_without_full_text" aria-label="Assess papers without full text from the abstract and web sources" ${current.assessWithoutFullText === true ? 'checked' : ''} ${current.pending ? 'disabled' : ''} style="margin-top:3px;accent-color:#1a365d;"><span>Assess papers without full text from the abstract and web sources<span style="display:block;${help}">Off by default. When on, Information Extraction reads the abstract, then allowed web pages about the paper, for papers whose PDF could not be retrieved. Values found this way need checking and are counted apart from full-text assessments.</span></span></label>
       <div style="display:flex;gap:10px;align-items:center;margin-top:10px;"><button type="button" data-act="save-retrieval-settings" style="${buttonCss}" ${current.pending ? 'disabled' : ''}>Save retrieval settings</button>${current.saved ? '<span role="status" style="font-size:12px;color:#1a365d;">Saved.</span>' : ''}${current.error ? `<span role="alert" style="font-size:12px;color:#8a1f1f;">${esc(current.error)}</span>` : ''}</div>
     </section>`;
   }
@@ -3818,6 +3845,7 @@ ${reviewUI.dialog()}
           download_folder: form.querySelector('[name="download_folder"]').value,
           watch_enabled: form.querySelector('[name="watch_enabled"]').checked,
           library_resolver: form.querySelector('[name="library_resolver"]').value,
+          assess_without_full_text: form.querySelector('[name="assess_without_full_text"]').checked,
         };
         saveRetrievalSettings(payload);
         return;

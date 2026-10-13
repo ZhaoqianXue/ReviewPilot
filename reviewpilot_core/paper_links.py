@@ -37,18 +37,24 @@ def web_url(value: Any) -> str:
     return text if parsed.scheme in {"http", "https"} and parsed.hostname and not re.search(r"\s", text) else ""
 
 
+def publisher_url(row: dict[str, Any]) -> str:
+    """The paper's own landing page (publisher or arXiv), never an index or resolver page."""
+    for key in ("landing_page_url", "url"):
+        url = web_url(row.get(key))
+        if url and (urlparse(url).hostname or "").lower() not in _INDEX_HOSTS:
+            return url
+    return ""
+
+
 def paper_links(row: dict[str, Any]) -> list[dict[str, str]]:
     links: list[dict[str, str]] = []
     paper_doi = doi(row)
     if paper_doi:
         links.append({"kind": "doi", "label": "DOI", "url": f"https://doi.org/{quote(paper_doi, safe='/:;()._-<>[]')}"})
-    for key in ("landing_page_url", "url"):
-        url = web_url(row.get(key))
-        host = (urlparse(url).hostname or "").lower()
-        if url and host not in _INDEX_HOSTS:
-            label = "arXiv page" if host.endswith("arxiv.org") else "Publisher page"
-            links.append({"kind": "publisher", "label": label, "url": url})
-            break
+    url = publisher_url(row)
+    if url:
+        label = "arXiv page" if (urlparse(url).hostname or "").lower().endswith("arxiv.org") else "Publisher page"
+        links.append({"kind": "publisher", "label": label, "url": url})
     paper_pmid = pmid(row)
     if paper_pmid:
         links.append({"kind": "pubmed", "label": "PubMed", "url": f"https://pubmed.ncbi.nlm.nih.gov/{paper_pmid}/"})

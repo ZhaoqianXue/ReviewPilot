@@ -9,6 +9,48 @@ from reviewpilot_core.project_store import read_json, read_jsonl
 
 
 class FilteringAgentTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(FilteringAgent, "SCREENING_RETRY_PAUSES", (0, 0))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_failed_screening_calls_are_retried_before_records_stay_undecided(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            collected_dir = project_dir / "collected"
+            collected_dir.mkdir(parents=True)
+            names = ["Glacier melt rates", "Bird song dialects", "Soil microbe census", "Volcanic ash dispersal"]
+            rows = [{"id": f"p{i}", "title": name, "abstract": "Text", "year": 2024} for i, name in enumerate(names)]
+            (collected_dir / "openalex.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+            (collected_dir / "summary.json").write_text(json.dumps({"platform_stats": {"openalex": 4}}), encoding="utf-8")
+            calls = {}
+
+            def flaky_query_llm(text_prompt, system_prompt, model, provider):
+                title = text_prompt.split("\n")[0]
+                calls[title] = calls.get(title, 0) + 1
+                if title == "Bird song dialects" and calls[title] == 1:
+                    raise ConnectionError("Connection error.")
+                if title == "Soil microbe census":
+                    raise TimeoutError("Request timed out.")
+                return ("False" if title == "Volcanic ash dispersal" else "True", {"total_tokens": 1})
+
+            result = FilteringAgent(project_dir, llm_query=flaky_query_llm).run(
+                {"collected_folder": str(collected_dir),
+                 "relevance_prompt": {"system_prompt": "Screen.", "user_prompt_template": "{title}\n{abstract}"},
+                 "auto_approve": True})
+            included = {r["title"]: r for r in read_jsonl(project_dir / "filtered" / "included_papers.jsonl")}
+            excluded = [r["title"] for r in read_jsonl(project_dir / "filtered" / "excluded_papers.jsonl")]
+
+        self.assertEqual(calls["Bird song dialects"], 2)
+        self.assertTrue(included["Bird song dialects"]["is_relevant"])
+        self.assertNotIn("relevance_error", included["Bird song dialects"])
+        self.assertEqual(calls["Soil microbe census"], 3)
+        self.assertIsNone(included["Soil microbe census"]["is_relevant"])
+        self.assertIn("timed out", included["Soil microbe census"]["relevance_error"])
+        self.assertEqual(calls["Glacier melt rates"], 1)
+        self.assertEqual(excluded, ["Volcanic ash dispersal"])
+        self.assertEqual(result["included_count"], 3)
+
     def test_relevance_prompt_can_remain_plain_boolean_classification(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

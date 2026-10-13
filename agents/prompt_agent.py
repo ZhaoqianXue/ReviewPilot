@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.base_agent import BaseAgent
 from reviewpilot_core.extraction_schema import build_extraction_prompts, save_schema_draft
+from reviewpilot_core.field_values import field_type_label
 from reviewpilot_core import fulltext_eligibility
 from reviewpilot_core.model_policy import PROMPT_MODEL
 from utils.human_interaction import (
@@ -498,7 +499,8 @@ Generate 8-12 fields when the request is broad. Preserve user-requested concepts
             name = item["name"].strip()
             if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or not item["type"].strip() or not item["description"].strip():
                 raise ValueError("PromptAgent extraction schema field has invalid content")
-            fields.append({key: item[key].strip() if isinstance(item[key], str) else item[key] for key in ("name", "type", "description", "required", "example")})
+            field = {key: item[key].strip() if isinstance(item[key], str) else item[key] for key in ("name", "type", "description", "required", "example")}
+            fields.append({**field, "type": field_type_label(field["type"])})  # e.g. a model's "Text list" is "Text (list)"
         if len({field["name"] for field in fields}) != len(fields):
             raise ValueError("PromptAgent extraction schema field names must be unique")
         from reviewpilot_core.extraction_schema import validate_schema

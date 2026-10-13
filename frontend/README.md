@@ -43,7 +43,7 @@ The frontend calls:
 - `POST /projects/{project_id}/manual-retrieval/awaiting` (`{retry_id, awaiting}`) when a missing paper's link is opened; while a paper waits, the backend watches the download folder for new PDFs.
 - `POST /projects/{project_id}/manual-retrieval/files?name=…[&retry_id=…]` with the raw PDF as the body to add a file the user provides (matched to a paper, or assigned to `retry_id`).
 - `POST` / `DELETE /projects/{project_id}/manual-retrieval/pending/{pending_id}` to use a waiting file for the chosen paper (`{retry_id}`) or ignore it.
-- `GET` / `PUT /settings/retrieval` for the application-level download folder, folder watching and library link.
+- `GET` / `PUT /settings/retrieval` for the application-level download folder, folder watching, library link and the opt-in assessment of papers without full text (`assess_without_full_text`, off by default).
 
 Errors return JSON with a `detail` field carrying the reason, which the workspace shows to the user.
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .atomic_files import atomic_write_json
+from .field_values import field_type_label
 from .project_decisions import remember_confirmed, revision
 
 # These keys carry paper identity, execution status or evidence provenance.
@@ -144,7 +145,7 @@ def modify_schema_field(project_path: Path | str, field_name: str, updates: dict
         if new_name:
             field["name"] = new_name
         if updates.get("new_type"):
-            field["type"] = str(updates["new_type"]).strip() or field["type"]
+            field["type"] = field_type_label(updates["new_type"]) or field["type"]
         if updates.get("new_description"):
             field["description"] = str(updates["new_description"]).strip()
         if updates.get("new_example"):
@@ -249,7 +250,7 @@ def normalize_field(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         **{k: raw[k] for k in ("enum", "options", "items") if k in raw},
         "name": name,
-        "type": str(raw.get("type") or raw.get("new_type") or "Text").strip() or "Text",
+        "type": field_type_label(raw.get("type") or raw.get("new_type") or "Text") or "Text",
         "description": str(raw.get("description") or raw.get("new_description") or raw.get("example") or "").strip(),
         "required": _bool_value(raw.get("required", False)),
         "example": str(raw.get("example") or raw.get("new_example") or "").strip(),

@@ -15,6 +15,17 @@ def kind(field):
     return aliases.get(raw, raw)
 
 
+# Loose spellings of a list of short texts that models write for the schema type; the schema's own label is "Text (list)".
+_TEXT_LIST_SPELLINGS = {'text list', 'list of text', 'list of texts', 'text array', 'array of text', 'array of strings',
+                        'list of strings', 'string list', 'list (text)', 'text[]', 'list[text]'}
+
+
+def field_type_label(value):
+    """A schema type label, with loose spellings of a text list (e.g. "Text list") written as "Text (list)"."""
+    text = re.sub(r'\s+', ' ', str(value or '')).strip()
+    return 'Text (list)' if text.lower() in _TEXT_LIST_SPELLINGS else text
+
+
 def validate_value(field, value):
     try:
         json.dumps(value, allow_nan=False)

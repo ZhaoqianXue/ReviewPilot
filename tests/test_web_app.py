@@ -10,6 +10,7 @@ from unittest.mock import patch
 import web_app
 from starlette.testclient import TestClient
 from agents.extraction_agent import ExtractionAgent
+from agents.filtering_agent import FilteringAgent
 from reviewpilot_core.state_projection import build_rp_data
 from reviewpilot_core.task_runner import TaskRunner
 from reviewpilot_core.screening_criteria import criteria_state, save_criteria
@@ -1180,6 +1181,9 @@ class WebAppTests(unittest.TestCase):
                 output_root = Path(tmp)
                 web_app.OUTPUT_ROOT = output_root
                 web_app.task_runner = TaskRunner()
+                # This smoke run covers the abstract and web route, an opt-in application setting.
+                (output_root / ".app_settings").mkdir()
+                (output_root / ".app_settings" / "retrieval.json").write_text(json.dumps({"assess_without_full_text": True}), encoding="utf-8")
 
                 class FakeSearcher:
                     def search(self, **kwargs):
@@ -1340,7 +1344,7 @@ class WebAppTests(unittest.TestCase):
                     ExtractionAgent, "_read_pdf", lambda self, path: "This paper reports clinical triage support."
                 ), patch.object(ExtractionAgent, "_query_web_search_extraction", fake_web_search), patch(
                     "reviewpilot_core.web_evidence.fetch_page", fake_fetch_page
-                ):
+                ), patch.object(FilteringAgent, "SCREENING_RETRY_PAUSES", (0, 0)):
                     response = client.post(
                         "/projects",
                         json={

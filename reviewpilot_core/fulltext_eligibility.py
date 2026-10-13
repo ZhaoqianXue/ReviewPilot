@@ -217,6 +217,20 @@ def prisma_counts(project: Path) -> dict[str, Any]:
     for row in included + excluded:
         review = row.get("human_screening") or {}
         overrides += bool(review) and review.get("original_decision") != review.get("decision")
+    # PRISMA asks reviews that use automation tools to report exclusions by the tool and by a human. A record a
+    # reviewer changed to exclude is a human exclusion; ReviewPilot's own exclusions are grouped by the criterion
+    # their cited rule belongs to.
+    from .screening_evidence import reason_label
+    relevance = read_json(project / "prompts" / "relevance_prompt.json", {}) or {}
+    excluded_by_human = 0
+    screening_reasons: dict[str, int] = {}
+    for row in excluded:
+        review = row.get("human_screening") or {}
+        if review.get("decision") == "exclude" and review.get("original_decision", "exclude") != "exclude":
+            excluded_by_human += 1
+            continue
+        label = reason_label(str((row.get("screening_evidence") or {}).get("criterion") or ""), relevance)
+        screening_reasons[label] = screening_reasons.get(label, 0) + 1
     # Each paper counts once: assessed from its PDF, PDF obtained but its extraction failed, or no usable full text.
     not_extracted = sum(1 for row in extraction if row.get("pdf_file")
                         and str(row.get("extraction_status") or "success").lower() != "success")
@@ -234,6 +248,9 @@ def prisma_counts(project: Path) -> dict[str, Any]:
         "screening": {
             "records_screened": len(included) + len(excluded),
             "records_excluded": len(excluded),
+            "records_excluded_by_reviewpilot": len(excluded) - excluded_by_human,
+            "records_excluded_by_human": excluded_by_human,
+            "records_excluded_by_reason": dict(sorted(screening_reasons.items(), key=lambda item: -item[1])),
             "human_overrides": overrides,
             "reports_sought": len(included),
             # reports_sought = reports_assessed + reports_not_extracted + reports_not_retrieved.
@@ -246,6 +263,9 @@ def prisma_counts(project: Path) -> dict[str, Any]:
             "not_retrieved_eligibility_undetermined": undetermined,
             "not_retrieved_no_evidence": no_evidence,
             "not_retrieved_not_extracted": not_retrieved - len(web_rows) - undetermined - no_evidence,
+            # Whether any paper went through abstract and web extraction (an opt-in setting); without it the
+            # breakdown above says nothing and reports_not_retrieved stands alone, as in the PRISMA template.
+            "no_full_text_assessed": any(row.get("extraction_source") == "web_search_fallback" for row in extraction),
             "reports_not_extracted": not_extracted,
             "reports_assessed": len(assessed_rows),
             "full_text_eligibility_field": any(f.get("name") == FIELD for f in schema.get("fields") or []),
