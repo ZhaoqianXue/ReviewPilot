@@ -9,6 +9,7 @@ import secrets
 import shutil
 import sys
 import tempfile
+from contextlib import asynccontextmanager
 from html import unescape
 from pathlib import Path
 
@@ -50,6 +51,7 @@ from reviewpilot_core.setup_revision import abandon_setup_transaction, affected_
 from reviewpilot_core.state_projection import EXPORT_ARTIFACTS, build_new_project_data, build_rp_data, export_artifact_path, list_projects, _history
 from reviewpilot_core.extraction_preview import project_preview_projection, run_project_preview
 from reviewpilot_core.task_runner import TaskConflictError, TaskRunner
+from reviewpilot_core.collection_recovery import CollectionRetryScheduler
 from reviewpilot_core.sub_agent_contracts import CollectionAgentContract
 from reviewpilot_core.project_store import read_json, read_jsonl
 from reviewpilot_core import record_review, run_ledger
@@ -640,8 +642,19 @@ async def http_error(_request, exc: HTTPException) -> JSONResponse:
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
 
 
+@asynccontextmanager
+async def app_lifespan(app):
+    scheduler = CollectionRetryScheduler(OUTPUT_ROOT, submit_project_action, task_runner)
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
+
+
 def create_app() -> Starlette:
     return Starlette(
+        lifespan=app_lifespan,
         middleware=[Middleware(ProtectExamples)],
         exception_handlers={HTTPException: http_error},
         routes=[
@@ -918,7 +931,8 @@ def _positive_int(value, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None) -> str:
+def submit_project_action(output_root: Path | str, project_id: str, action: str, llm_query=None, input_data: dict | None = None,
+                          *, background: bool = False) -> str:
     require_mutable(Path(output_root), project_id)
     record_review.recover(Path(output_root) / project_id)
     if action == "review-sample":
@@ -971,14 +985,29 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         input_data = {key: value for key, value in input_data.items() if key != "overwrite_confirmation"}
     previous_state: list[dict] = []
     retried_stats: list = []
+    retried_records: list = []
+    collection_guard = []
+
+    def release_collection_guard():
+        if collection_guard:
+            collection_guard.pop().__exit__(None, None, None)
+
+    def source_records():
+        return {source: [{key: value for key, value in row.items() if key != "collected_at"}
+                         for row in read_jsonl(project_path / "collected" / f"{source}.jsonl")]
+                for source in retry_sources or []}
 
     def prepare_action():
         reconcile_setup_transaction(project_path)
+        if background and any(stage.get("attempt", 0) for name, stage in load_workflow_state(project_path)["stages"].items()
+                              if name != "collection"):
+            raise ValueError("Automatic arXiv recovery pauses after later review work starts.")
         if action == "collect" and (project_path / "memory/search_setup_draft.json").exists():
             raise ValueError("Review and save the imported search setup before running collection.")
         if retry_sources is not None:
             _require_retryable_sources(project_path, retry_sources)
             retried_stats.append((read_json(project_path / "collected" / "summary.json", {}) or {}).get("platform_stats"))
+            retried_records.append(source_records())
         if action == "screen":
             require_finalized_criteria(project_path)
         if action == "run-extraction" and isinstance(input_data, dict) and input_data.get("retry_failed_only"):
@@ -994,20 +1023,38 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         current_setup = json.loads((project_path / "search_conditions.json").read_text(encoding="utf-8"))
         if replacements and (confirmation.get("expected_revision") != setup_revision(current_setup) or confirmation.get("affected_stages") != replacements):
             raise ConfirmationRequired(setup_revision(current_setup), replacements)
-        previous_state.append(load_workflow_state(project_path))
-        start_action(project_path, action)
+        if action == "collect" and not background:
+            from searchers.arxiv_transport import file_lock
+            guard = file_lock(project_path / "collected/arxiv.retry.lock", blocking=False)
+            try:
+                guard.__enter__()
+            except BlockingIOError:
+                raise TaskConflictError({"action": "collect", "project_id": project_id}) from None
+            collection_guard.append(guard)
+        try:
+            previous_state.append(load_workflow_state(project_path))
+            start_action(project_path, action)
+        except Exception:
+            release_collection_guard()
+            raise
 
     def rollback_action():
         if previous_state:
             save_workflow_state(project_path, previous_state[0])
+        release_collection_guard()
 
-    def run_action():
+    def execute_action():
         try:
-            agent = LeadAgent(Path(output_root), llm_query=llm_query)
-            if input_data is None:
-                result = agent.handle_message(project_id=project_id, action=action).to_dict()
+            if background:
+                from reviewpilot_core.workflow_state import structured_action_outcome
+                data = CollectionAgentContract().run(output_root, project_id, input_data=input_data)
+                result = {"status": structured_action_outcome("collect", data)[0], "data": data}
             else:
-                result = agent.handle_message(project_id=project_id, action=action, input_data=input_data).to_dict()
+                agent = LeadAgent(Path(output_root), llm_query=llm_query)
+                if input_data is None:
+                    result = agent.handle_message(project_id=project_id, action=action).to_dict()
+                else:
+                    result = agent.handle_message(project_id=project_id, action=action, input_data=input_data).to_dict()
         except Exception as exc:
             fail_action(project_path, action, exc)
             raise
@@ -1016,12 +1063,19 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
             complete_action(project_path, action, data)
             # A source retry that fetched nothing new leaves the records exactly as they
             # were, so screening and later stages built on them stay valid.
-            if retried_stats and previous_state and data.get("platform_stats") == retried_stats[0]:
+            if (retried_stats and previous_state and data.get("platform_stats") == retried_stats[0]
+                    and source_records() == retried_records[0]):
                 restore_downstream_freshness(project_path, "collection", previous_state[0])
         except Exception as exc:
             fail_action(project_path, action, exc)
             raise
         return result
+
+    def run_action():
+        try:
+            return execute_action()
+        finally:
+            release_collection_guard()
 
     return task_runner.submit(
         project_id,
@@ -1029,6 +1083,7 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
         run_action,
         prepare=prepare_action,
         rollback=rollback_action,
+        metadata={"background": True} if background else None,
         project_path=project_path,
     )
 

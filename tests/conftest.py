@@ -9,6 +9,19 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def isolated_arxiv_transport(monkeypatch, tmp_path):
+    """No test shares a production cache or waits through real API cooldowns."""
+    import time
+    from searchers import arxiv_transport
+    current = [time.time()]
+    monkeypatch.setenv("REVIEWPILOT_ARXIV_STATE_DIR", str(tmp_path / "arxiv-state"))
+    monkeypatch.setattr(arxiv_transport, "_now", lambda: current[0])
+    monkeypatch.setattr(arxiv_transport, "_pause", lambda seconds: current.__setitem__(0, current[0] + seconds))
+    monkeypatch.setattr("reviewpilot_core.collection_recovery._now", lambda: current[0])
+    return current
+
+
+@pytest.fixture(autouse=True)
 def block_live_llm_calls(monkeypatch):
     def refuse(provider: str) -> str:
         raise RuntimeError(f"Test attempted a live {provider} LLM call; patch the LLM query instead.")

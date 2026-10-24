@@ -12,18 +12,16 @@ import json
 import os
 from typing import List, Dict, Optional
 
-from searchers.http_retry import get_with_retry
+from searchers.http_retry import TransientSourceError, get_with_retry
+from searchers.arxiv_transport import ARXIV_API_URL, arxiv_get, read_object, utc_day
 
 ARXIV_EPOCH = "1991-01-01"
 
 
 class ArxivSearcher:
-    BASE_URL = "https://export.arxiv.org/api/query"
-    # arXiv's export API is the least stable source (HTTP 429/500/503 and slow
-    # responses under load). Each page gets three attempts with 5 s and 20 s
-    # waits (longer if the server sends Retry-After, capped at 60 s). Worst case
-    # per page: 3 x (10 s connect + 30 s read) + 25 s of waiting, about 2.5 min;
-    # the Collection Agent may retry the whole source once more at the end.
+    BASE_URL = ARXIV_API_URL
+    # Network/5xx failures retain bounded retries. A 429 or server cooldown is
+    # persisted by the shared transport and deferred to a later collection run.
     RETRY_DELAYS = (5, 20)
     REQUEST_TIMEOUT = (10, 30)
 
@@ -31,6 +29,8 @@ class ArxivSearcher:
         """Initialize arXiv searcher."""
         self._last_status_code = None
         self.last_query = ""
+        self.partial_records = []
+        self.progress = {}
 
     def search(self, query: str, max_results: int = 100,
                categories: Optional[List[str]] = None,
@@ -63,19 +63,6 @@ class ArxivSearcher:
         seen_ids = set()
         self._last_status_code = None
 
-        # If output file exists, load existing IDs to avoid duplicates
-        if output_file and os.path.exists(output_file):
-            with open(output_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        article = json.loads(line.strip())
-                        seen_ids.add(article.get('id'))
-                        articles.append(article)
-                    except:
-                        pass
-            print(f"  Resuming: loaded {len(articles)} existing records")
-            start = len(articles)
-
         search_query = self._format_query(query)
 
         if categories:
@@ -93,6 +80,54 @@ class ArxivSearcher:
         self.last_query = search_query
         print(f"  arXiv query: {search_query[:80]}...")
 
+        from pathlib import Path
+        from reviewpilot_core.atomic_files import atomic_write_json, atomic_write_jsonl
+        checkpoint = Path(str(output_file) + ".checkpoint.json") if output_file else None
+        identity = {"query": search_query, "limit": max_results, "page_size": max_per_request,
+                    "sortBy": "relevance", "sortOrder": "descending"}
+        saved = read_object(checkpoint) if checkpoint else {}
+        if (saved.get("identity") == identity and isinstance(saved.get("records"), list)
+                and all(isinstance(row, dict) and row.get("id") for row in saved["records"])
+                and isinstance(saved.get("next_start"), int) and saved["next_start"] >= 0):
+            articles = saved["records"][:max_results]
+            start = saved.get("next_start", 0)
+            seen_ids = {self._record_key(row) for row in articles}
+        else:
+            saved = {}
+        self.partial_records = articles
+        self.progress = {"records": len(articles), "limit": max_results, "next_start": start,
+                         "complete": False, "snapshot_day": saved.get("day", utc_day())}
+        retained_count = len(articles) if saved and saved.get("day") != utc_day() else 0
+        revalidating = bool(saved and saved.get("day") != utc_day())
+
+        def persist(complete=False, last_page=None):
+            nonlocal revalidating
+            # Across a new day, rebuild the original ranked prefix. Until it is
+            # revalidated, retain the prior snapshot if another 429 interrupts us.
+            # Successful refreshed pages are already durable in the daily cache.
+            if revalidating and len(articles) < retained_count and not complete:
+                return
+            revalidating = False
+            self.partial_records = articles[:max_results]
+            self.progress.update(records=len(self.partial_records), next_start=start, complete=complete,
+                                 snapshot_day=utc_day(), revalidating=False)
+            if checkpoint:
+                atomic_write_json(checkpoint, {"identity": identity, "records": self.partial_records,
+                                  "next_start": start, "complete": complete, "day": utc_day(),
+                                  "last_page": last_page or saved.get("last_page")})
+                atomic_write_jsonl(output_file, self.partial_records)
+
+        # Refresh all saved pages after the daily snapshot expires. Checking
+        # only the boundary could miss changes nearer the top of the ranking.
+        if revalidating:
+            if checkpoint:
+                atomic_write_json(str(checkpoint) + ".previous", saved)
+            articles, start, seen_ids = [], 0, set()
+            self.progress["revalidating"] = True
+        elif saved.get("complete"):
+            self.progress["complete"] = True
+            return articles[:max_results]
+
         while len(articles) < max_results:
             params = {
                 "search_query": search_query,
@@ -104,44 +139,43 @@ class ArxivSearcher:
 
             # 429, 5xx, timeouts and dropped connections are retried with backoff
             # (see searchers/http_retry.py); anything else fails the source at once.
-            response = get_with_retry(self.BASE_URL, params=params, label="arXiv", delays=self.RETRY_DELAYS,
-                                      timeout=self.REQUEST_TIMEOUT)
-            self._last_status_code = response.status_code
-            if response.status_code >= 400:
-                detail = self._api_error(response.text)
-                raise RuntimeError(f"arXiv rejected the query (HTTP {response.status_code})" + (f": {detail}" if detail else "."))
-            detail = self._api_error(response.text)
-            if detail:
-                raise RuntimeError(f"arXiv rejected the query: {detail}")
-
-            new_articles = self._parse_response(response.text)
+            new_articles = self._request_page(params)
 
             if not new_articles:
+                persist(complete=True)
                 break
 
             # Filter duplicates and save incrementally
             new_unique = []
             for article in new_articles:
-                if article.get('id') not in seen_ids:
-                    seen_ids.add(article.get('id'))
+                if self._record_key(article) not in seen_ids:
+                    seen_ids.add(self._record_key(article))
                     new_unique.append(article)
-
-                    # Save immediately if output file is provided
-                    if output_file:
-                        with open(output_file, 'a', encoding='utf-8') as f:
-                            f.write(json.dumps(article, ensure_ascii=False) + '\n')
 
             articles.extend(new_unique)
             start += len(new_articles)
+            saved["last_page"] = {"params": params, "ids": [self._record_key(row) for row in new_articles]}
+            persist(complete=len(articles) >= max_results, last_page=saved["last_page"])
 
             if new_unique:
                 print(f"  Progress: {len(articles)} articles (saved {len(new_unique)} new)")
 
-            # arXiv asks clients to wait 3 seconds between consecutive requests.
-            if len(articles) < max_results:
-                time.sleep(3)
-
         return articles[:max_results]
+
+    @staticmethod
+    def _record_key(row):
+        return re.sub(r"v\d+$", "", str(row.get("id") or ""))
+
+    def _request_page(self, params):
+        response = get_with_retry(self.BASE_URL, params=params, label="arXiv", delays=self.RETRY_DELAYS,
+                                  timeout=self.REQUEST_TIMEOUT, requester=arxiv_get)
+        self._last_status_code = response.status_code
+        detail = self._api_error(response.text)
+        if response.status_code >= 400:
+            raise RuntimeError(f"arXiv rejected the query (HTTP {response.status_code})" + (f": {detail}" if detail else "."))
+        if detail:
+            raise RuntimeError(f"arXiv rejected the query: {detail}")
+        return self._parse_response(response.text)
 
     def _format_query(self, query: str) -> str:
         """Render the Boolean query for the arXiv API, matching each term in titles or abstracts."""
@@ -180,8 +214,9 @@ class ArxivSearcher:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError as e:
-            print(f"  XML parse error: {e}")
-            return []
+            raise TransientSourceError("arXiv returned an unreadable Atom feed; collection is incomplete.") from e
+        if root.tag != "{http://www.w3.org/2005/Atom}feed":
+            raise TransientSourceError("arXiv returned an unexpected response instead of an Atom feed; collection is incomplete.")
 
         for entry in root.findall("atom:entry", ns):
             try:

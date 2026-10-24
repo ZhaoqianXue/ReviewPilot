@@ -21,7 +21,10 @@ single deferred retry after the other sources finish.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Sequence
+import math
+from datetime import timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import requests
 
@@ -36,17 +39,19 @@ class TransientSourceError(RuntimeError):
 
 
 def get_with_retry(url: str, *, params: Dict[str, Any], label: str, delays: Sequence[float],
-                   timeout: Any, headers: Optional[Dict[str, str]] = None) -> requests.Response:
+                   timeout: Any, headers: Optional[Dict[str, str]] = None,
+                   requester: Optional[Callable[..., requests.Response]] = None) -> requests.Response:
     """GET ``url`` with bounded retries on transient failures.
 
     Returns the first non-transient response (callers still call
     ``raise_for_status`` for 4xx errors) and raises ``TransientSourceError``
-    once every attempt has failed transiently.
+    once every attempt has failed transiently. A source-specific ``requester``
+    may also raise it immediately to retain a server cooldown for a later run.
     """
     attempts = len(delays) + 1
     for attempt in range(attempts):
         try:
-            response = requests.get(url, params=params, timeout=timeout, headers=headers)
+            response = (requester or requests.get)(url, params=params, timeout=timeout, headers=headers)
         except requests.exceptions.Timeout as exc:
             problem, cause, wait = "timed out", exc, None
         except requests.exceptions.ConnectionError as exc:
@@ -67,6 +72,12 @@ def get_with_retry(url: str, *, params: Dict[str, Any], label: str, delays: Sequ
 
 
 def _retry_after(response: requests.Response) -> Optional[float]:
+    seconds = retry_after_seconds(response)
+    return min(seconds, MAX_RETRY_AFTER) if seconds is not None else None
+
+
+def retry_after_seconds(response: requests.Response) -> Optional[float]:
+    """Parse either Retry-After format; callers decide whether to wait or defer."""
     try:
         value = (getattr(response, "headers", None) or {}).get("Retry-After")
     except AttributeError:
@@ -74,8 +85,14 @@ def _retry_after(response: requests.Response) -> Optional[float]:
     try:
         seconds = float(value)
     except (TypeError, ValueError):
-        return None  # HTTP-date values are rare for these APIs; fall back to the scheduled delay
-    return min(max(seconds, 0.0), MAX_RETRY_AFTER)
+        if not isinstance(value, str):
+            return None
+        try:
+            date = parsedate_to_datetime(value)
+            seconds = date.replace(tzinfo=date.tzinfo or timezone.utc).timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return max(seconds, 0.0) if math.isfinite(seconds) else None
 
 
 def _json_message(response: requests.Response) -> str:

@@ -22,6 +22,8 @@ from urllib.parse import quote, urljoin, urlparse
 
 import requests
 
+from searchers.arxiv_transport import arxiv_get
+
 PMC_CLOUD_BASE = "https://pmc-oa-opendata.s3.amazonaws.com"
 IDCONV_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
@@ -918,9 +920,8 @@ def arxiv_title_matches(session, titles: List[str], headers: Dict, sleep_func=ti
             sleep_func(3.1)
         query = " OR ".join('ti:"%s"' % re.sub(r"[^\w\s-]", " ", t).strip()[:180] for t in chunk)
         try:
-            response = session.get("https://export.arxiv.org/api/query",
-                                   params={"search_query": query, "max_results": per_call * 3},
-                                   headers=headers, timeout=timeout)
+            response = arxiv_get(session=session, params={"search_query": query, "max_results": per_call * 3},
+                                 headers=headers, timeout=timeout)
             text = response.text if response.status_code == 200 else ""
         except Exception:
             text = ""

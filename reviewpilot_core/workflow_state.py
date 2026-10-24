@@ -211,8 +211,8 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
             raise ValueError("Collection total does not match platform_stats")
         if not set(errors).issubset(stats):
             raise ValueError("Collection errors must reference reported sources")
-        if any(stats[source] != 0 for source in errors):
-            raise ValueError("Failed collection sources must report zero rows")
+        if any(stats[source] != 0 and source != "arxiv" for source in errors):
+            raise ValueError("Failed collection sources must report zero rows unless arXiv retained a checkpoint")
         succeeded = len(set(stats) - set(errors))
         failed = len(errors)
         counts = {"succeeded": succeeded, "failed": failed, "collected": total}
@@ -230,7 +230,7 @@ def structured_action_outcome(action: str, result: dict[str, Any]) -> tuple[str,
         return "completed", {}
     if not failed:
         return "completed", counts
-    return ("partial" if counts["succeeded"] > 0 else "failed"), counts
+    return ("partial" if counts["succeeded"] > 0 or (action == "collect" and total > 0) else "failed"), counts
 
 
 def _consistent_value(primary: dict[str, Any], secondary: dict[str, Any], keys: tuple[str, ...], label: str) -> Any:

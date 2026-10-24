@@ -16,8 +16,10 @@ Failure handling, in two layers so total collection time stays bounded:
    window; a failure that survives it is reported, not retried again. Errors a
    retry cannot fix (a rejected query, a bad limit) are never retried.
 
-A source that fails is recorded with zero rows, its error, and the query the
-adapter attempted. The other sources still run. ``retry_sources`` re-runs only
+A source that fails records its error and attempted query. arXiv retains a
+query-bound checkpoint and any records already fetched, and schedules bounded
+background retries; a rate-limit cooldown never blocks the other sources.
+``retry_sources`` re-runs only
 failed sources of the latest collection while keeping the others' records; it
 is refused when the saved setup no longer matches that collection.
 """
@@ -63,6 +65,9 @@ def retryable_sources(summary: Any, input_data: Dict[str, Any]) -> List[str]:
     if not isinstance(summary, dict) or not isinstance(summary.get("platform_errors"), dict):
         return []
     plan = collection_plan(input_data)
+    if summary.get("requested_date_range") == (input_data.get("date_range") or {}) and summary.get("date_range"):
+        # A resumed run retains the original upper bound even after midnight.
+        plan["date_range"] = summary["date_range"]
     if not plan["query"] or (summary.get("query") or "").strip() != plan["query"]:
         return []
     if list(summary.get("platforms") or []) != plan["platforms"] or summary.get("date_range") != plan["date_range"]:
@@ -109,6 +114,7 @@ class CollectionAgent(BaseAgent):
             to_run = [source for source in platforms if source in set(requested_retry)]
             if not to_run or any(source not in allowed for source in to_run):
                 raise ValueError("Only failed sources of the current collection can be retried. Run the full collection again.")
+            plan["date_range"] = date_range = previous["date_range"]
             self.log(f"Retrying failed sources {', '.join(to_run)}; query: {query[:100]}")
         else:
             self.log(f"Collecting from {', '.join(platforms)}; query: {query[:100]}")
@@ -117,14 +123,18 @@ class CollectionAgent(BaseAgent):
         platform_errors: Dict[str, str] = {}
         executed: Dict[str, Dict[str, Any]] = {}
         deferred: Dict[str, float] = {}
+        failures = {}
         for source in platforms:
             if source not in to_run:
                 platform_stats[source] = int((previous.get("platform_stats") or {}).get(source, 0))
                 executed[source] = (previous.get("executed_queries") or {}).get(source) or {}
+                if source in (previous.get("platform_errors") or {}):
+                    platform_errors[source] = previous["platform_errors"][source]
                 continue
             failure = self._collect_source(source, query, plan["source_limits"][source], date_range, output_dir,
                                            platform_stats, platform_errors, executed, attempts=1)
-            if failure is not None and failure.transient:
+            failures[source] = failure
+            if failure is not None and failure.transient and failure.retry_at is None:
                 deferred[source] = time.monotonic()
 
         # One deferred retry per transiently failed source, after the others finished.
@@ -134,8 +144,8 @@ class CollectionAgent(BaseAgent):
                 time.sleep(wait)
             self.log(f"Retrying {source} once after earlier failure: {platform_errors[source]}", "warning")
             platform_errors.pop(source, None)
-            self._collect_source(source, query, plan["source_limits"][source], date_range, output_dir,
-                                 platform_stats, platform_errors, executed, attempts=2)
+            failures[source] = self._collect_source(source, query, plan["source_limits"][source], date_range, output_dir,
+                                                  platform_stats, platform_errors, executed, attempts=2)
 
         total = sum(platform_stats.values())
         summary = {
@@ -143,6 +153,7 @@ class CollectionAgent(BaseAgent):
             "query": query,
             "platforms": platforms,
             "date_range": date_range,
+            "requested_date_range": input_data.get("date_range") or {},
             "source_limits": plan["source_limits"],
             "executed_queries": executed,
             "coverage": {
@@ -157,6 +168,11 @@ class CollectionAgent(BaseAgent):
             "total_papers": total,
         }
         save_json(str(output_dir / "summary.json"), summary)
+        if "arxiv" in to_run:
+            from reviewpilot_core.collection_recovery import job_path, update_retry
+            prior_job = read_json(job_path(self.project_path), {}) or {}
+            update_retry(self.project_path, plan, failures.get("arxiv"),
+                         reset=requested_retry is None or prior_job.get("status") != "running")
         self.state = {"completed": True, "total_papers": total, "platform_stats": platform_stats,
                       "platform_errors": platform_errors, "output_dir": str(output_dir)}
         self.save_state()
@@ -176,14 +192,17 @@ class CollectionAgent(BaseAgent):
         searched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         failure: Optional[SourceSearchError] = None
         try:
-            result = search_source(source, query, max_results=limit, date_range=date_range)
+            kwargs = {"output_file": str(output_dir / ".arxiv" / "progress.jsonl")} if source == "arxiv" else {}
+            result = search_source(source, query, max_results=limit, date_range=date_range, **kwargs)
             records = result.records[:limit]
             executed_query = result.executed_query
+            progress = result.progress
         except Exception as exc:  # one failed source must not discard the others
             failure = exc if isinstance(exc, SourceSearchError) else SourceSearchError(str(exc) or exc.__class__.__name__)
             self.log(f"{source} search failed: {failure}", "error")
             platform_errors[source] = str(failure)
-            records, executed_query = [], failure.executed_query
+            records, executed_query = failure.records[:limit], failure.executed_query
+            progress = failure.progress
         collected_at = datetime.now().isoformat()
         for record in records:
             record["collected_at"] = collected_at
@@ -191,4 +210,6 @@ class CollectionAgent(BaseAgent):
         platform_stats[source] = len(records)
         executed[source] = {"query": executed_query, "searched_at": searched_at, "limit": limit,
                             "records": len(records), "error": platform_errors.get(source), "attempts": attempts}
+        if progress:
+            executed[source]["progress"] = progress
         return failure

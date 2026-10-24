@@ -7,6 +7,50 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FrontendBehaviorTests(unittest.TestCase):
+    def test_collection_recovery_labels_distinguish_pending_paused_and_exhausted(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const { collectionRecoveryMessage: message } = require('./frontend/app.js');
+assert.match(message({status:'waiting',retryAt:'2026-10-24T10:00:00Z'}), /Next automatic retry/);
+assert.match(message({status:'waiting',retryAt:'bad date'}), /pending/);
+assert.match(message({status:'running'}), /saved progress/);
+assert.match(message({status:'blocked'}), /paused/);
+assert.match(message({status:'exhausted'}), /Saved records remain/);
+assert.equal(message({status:'done'}), '');
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_collection_poll_updates_progress_without_losing_a_criteria_draft_or_focus(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const source = fs.readFileSync('./frontend/app.js', 'utf8');
+const code = source.slice(source.indexOf('var collectionPollTimer'), source.indexOf('function scheduleManualPoll'));
+const D = {project:{id:'p'},collectionRecovery:{status:'waiting'}};
+const state = {criteriaDraft:{inclusion:'unsaved'},actionPending:'',chatPending:false};
+let callback, paints = 0, focused = false, selection;
+const replacement = {focus(options){focused = options.preventScroll;},setSelectionRange(...range){selection = range;}};
+const document = {activeElement:{getAttribute:()=> 'inclusion',matches:()=>true,selectionStart:3,selectionEnd:7},querySelector:()=>replacement};
+const next = {activeTask:null,collectionRecovery:{status:'exhausted'},platforms:[['arXiv',700]]};
+const install = new Function('D','state','projectNavigation','fetchProjectState','setupDraftDirty','document','normalizeData','escapeData','syncActionState','paintWorkspace','setInterval','clearInterval',code + ';scheduleCollectionPoll();');
+install(D,state,{capture:()=>1,owns:()=>true},async()=>next,()=>false,document,x=>x,x=>x,()=>{},()=>{paints++;document.activeElement=null;},fn=>{callback=fn;return 1;},()=>{});
+(async()=>{
+  await callback();
+  assert.equal(D.collectionRecovery.status,'exhausted');
+  assert.equal(state.criteriaDraft.inclusion,'unsaved');
+  assert.equal(focused,true);
+  assert.deepEqual(selection,[3,7]);
+  assert.equal(paints,1);
+  D.collectionRecovery={status:'waiting'};
+  document.activeElement={getAttribute:()=>null,matches:()=>true};
+  await callback();
+  assert.equal(paints,1); // typing into another editor defers the repaint
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run(["node", "-e", script], cwd=ROOT, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_extraction_preview_navigation_and_schema_actions_are_deterministic(self):
         script = r"""
 const assert = require('node:assert/strict');

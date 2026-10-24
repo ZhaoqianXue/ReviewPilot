@@ -8,7 +8,7 @@ search can be reported and reproduced.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from searchers.arxiv_search import ArxivSearcher
@@ -29,6 +29,7 @@ SOURCE_LABELS = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
 class SourceResult:
     records: List[Dict[str, Any]]
     executed_query: str
+    progress: Dict[str, Any] = field(default_factory=dict)
 
 
 class SourceSearchError(RuntimeError):
@@ -38,10 +39,15 @@ class SourceSearchError(RuntimeError):
     server errors, timeouts) and False for ones it cannot (a rejected query).
     """
 
-    def __init__(self, message: str, executed_query: str = "", transient: bool = False):
+    def __init__(self, message: str, executed_query: str = "", transient: bool = False,
+                 records=None, progress=None, retry_at=None, request_sent=None):
         super().__init__(message)
         self.executed_query = executed_query
         self.transient = transient
+        self.records = records or []
+        self.progress = progress or {}
+        self.retry_at = retry_at
+        self.request_sent = request_sent
 
 
 def _setting(name: str) -> Optional[str]:
@@ -77,5 +83,8 @@ def search_source(source: str, query: str, *, max_results: int, date_range: Opti
         records = searcher.search(query, max_results=max_results, output_file=output_file, date_range=date_range)
     except Exception as exc:
         raise SourceSearchError(str(exc) or exc.__class__.__name__, getattr(searcher, "last_query", "") or "",
-                                transient=isinstance(exc, TransientSourceError)) from exc
-    return SourceResult(records, searcher.last_query)
+                                transient=isinstance(exc, TransientSourceError),
+                                records=getattr(searcher, "partial_records", []),
+                                progress=getattr(searcher, "progress", {}), retry_at=getattr(exc, "retry_at", None),
+                                request_sent=getattr(exc, "request_sent", None)) from exc
+    return SourceResult(records, searcher.last_query, getattr(searcher, "progress", {}))

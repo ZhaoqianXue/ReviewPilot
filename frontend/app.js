@@ -362,8 +362,19 @@ function schemaJsonForDisplay(value) {
   return JSON.stringify(decode(value), null, 2);
 }
 
+function collectionRecoveryMessage(recovery = {}) {
+  if (recovery.status === 'waiting') {
+    const due = new Date(recovery.retryAt || '');
+    return `arXiv records are saved. Next automatic retry: ${Number.isNaN(due.getTime()) ? 'pending' : due.toLocaleString()}.`;
+  }
+  if (recovery.status === 'running') return 'Resuming arXiv collection from saved progress…';
+  if (recovery.status === 'exhausted') return 'Automatic arXiv retries are exhausted. Saved records remain available; retry manually when ready.';
+  if (recovery.status === 'blocked') return 'arXiv collection is incomplete. Automatic recovery is paused; use the manual retry when ready.';
+  return '';
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, workflowNoticeForStep, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS, codingRulesDraftFromRules, codingRulesConfirmPayload };
+  module.exports = { collectionRecoveryMessage, stageListLabel, snapshotDataForStorage, formatCount, createTaskPollRegistry, ownsProjectGeneration, createProjectNavigationOwnership, shouldPaintUnboundClick, applySubmittedMaxToSourceLimits, sourceLimitProblem, confirmSetupImpact, confirmOverwriteImpact, normalizeRetrievalRecovery, reconcileRetrySelection, orderedRetryIds, confirmRetryImpact, materialSetupValues, workflowProgressIndexForSteps, workflowStepForAction, workflowActionLabel, autoAdvanceStepForTask, workflowOutcomeBanner, workflowNoticeForStep, resolveTaskAndRefresh, clampPreviewIndex, extractionSchemaAction, schemaJsonForDisplay, guidanceDraftFromGuidance, guidanceConfirmPayload, GUIDANCE_SECTIONS, codingRulesDraftFromRules, codingRulesConfirmPayload };
 }
 
 /* ReviewPilot workspace UI.
@@ -642,6 +653,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       platformIssues: data.platformIssues || [],
       executedQueries: data.executedQueries || {},
       collectionRetry: { sources: Array.isArray(data.collectionRetry?.sources) ? data.collectionRetry.sources : [] },
+      collectionRecovery: data.collectionRecovery || {},
       keywords: data.keywords || [],
       groups: data.groups || [],
       retrieved: data.retrieved || [],
@@ -983,6 +995,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     if (!sameProject) { state.chatFailure = null; state.manualNotice = null; }
     state.catDraft = categorizationDraftFromData(D);
     scheduleManualPoll();
+    scheduleCollectionPoll();
     state.chatInputFocus = false;
     state.quickStartOpen = false;
   }
@@ -1152,6 +1165,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   function monitorActiveTask() {
+    if (D.activeTask?.background) { scheduleCollectionPoll(); return; }
     const activeTask = D.activeTask;
     if (!activeTask || !activeTask.task_id) {
       activeTaskMonitor = { key: '', generation: activeTaskMonitor.generation + 1 };
@@ -1424,6 +1438,37 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
   }
 
   var manualPollTimer = null;
+  var collectionPollTimer = null;
+  function scheduleCollectionPoll() {
+    if (collectionPollTimer || (!['waiting', 'running'].includes(D.collectionRecovery?.status) && !D.activeTask?.background)) return;
+    collectionPollTimer = setInterval(async () => {
+      if (!['waiting', 'running'].includes(D.collectionRecovery?.status) && !D.activeTask?.background) {
+        clearInterval(collectionPollTimer); collectionPollTimer = null; return;
+      }
+      const projectId = D.project.id;
+      if (!projectId || (state.actionPending && !D.activeTask?.background) || state.chatPending || setupDraftDirty()) return;
+      const ownership = projectNavigation.capture(projectId);
+      try {
+        const data = await fetchProjectState(projectId);
+        if (!projectNavigation.owns(ownership) || D.project.id !== projectId) return;
+        const editor = document.activeElement;
+        const criteriaField = editor?.getAttribute?.('data-criteria');
+        const criteriaFocused = ['inclusion', 'exclusion'].includes(criteriaField);
+        if (editor?.matches?.('input, textarea, [contenteditable="true"]') && !criteriaFocused) return;
+        const selection = criteriaFocused ? [editor.selectionStart, editor.selectionEnd] : null;
+        const next = escapeData(normalizeData(data));
+        ['activeTask', 'platforms', 'platformIssues', 'executedQueries', 'collectionRetry', 'collectionRecovery',
+          'stageState', 'steps', 'workflowNotices', 'activityByStep', 'resultOverview'].forEach((key) => { D[key] = next[key]; });
+        syncActionState(D.activeTask);
+        paintWorkspace();
+        if (selection) {
+          const replacement = document.querySelector(`textarea[data-criteria="${criteriaField}"]`);
+          replacement?.focus({ preventScroll: true });
+          if (replacement) replacement.setSelectionRange(...selection);
+        }
+      } catch (_error) { /* The next poll can recover a transient connection failure. */ }
+    }, 10000);
+  }
   function scheduleManualPoll() {
     if (manualPollTimer || !D.manualRetrieval.awaiting) return;
     manualPollTimer = setInterval(() => {
@@ -1674,6 +1719,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       key: platformKey(p[0]),
       query: (D.executedQueries || {})[platformKey(p[0])]?.query || '',
       queryOpen: !!state.openQueries[`${D.project.id || ''}:${platformKey(p[0])}`],
+      progress: (D.executedQueries || {})[platformKey(p[0])]?.progress || null,
     }));
     const retrySources = (D.collectionRetry?.sources || []).filter((source) => typeof source === 'string' && source);
     const screeningStage = D.stageState?.screening || {};
@@ -1928,6 +1974,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       <div style="display:flex;align-items:center;gap:12px;"><span style="width:130px;flex:0 0 130px;font-size:12.5px;color:#1a1a1a;">${p.k}</span><span style="flex:1;height:5px;background:#eef0ee;border-radius:999px;overflow:hidden;"><span style="display:block;height:100%;width:${p.pct}%;background:${issue ? '#b45309' : '#1a365d'};"></span></span><span style="width:32px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6b746c;">${p.v}</span></div>
       ${p.query ? `<details data-ui="executed-query" data-source="${esc(p.key)}" ${p.queryOpen ? 'open' : ''} style="margin:5px 0 0 130px;font-size:11px;color:#68798c;"><summary style="cursor:pointer;">Query sent</summary><code style="display:block;margin-top:4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#3a4252;overflow-wrap:anywhere;white-space:pre-wrap;">${p.query}</code></details>` : ''}
       ${issue ? `<div data-ui="source-warning" style="margin:7px 0 0 130px;border:1px solid #f1d39b;background:#fff8e8;color:#7a4b00;border-radius:8px;padding:7px 9px;font-size:11.5px;line-height:1.35;"><strong>Platform issue</strong>: ${issue.message}</div>` : ''}
+      ${p.progress && !p.progress.complete ? `<div data-ui="source-progress" style="margin:5px 0 0 130px;font-size:11.5px;color:#7a4b00;">${Number(p.v) || 0} of up to ${Number(p.progress.limit) || 0} records saved · collection incomplete</div>` : ''}
     </div>`;
   };
 
@@ -2324,9 +2371,12 @@ ${reviewUI.dialog()}
 
   function collectionRetryControl(v) {
     const retry = v.collectionRetry;
+    const recovery = D.collectionRecovery || {};
+    const recoveryNotice = collectionRecoveryMessage(recovery);
     if (!retry.sources.length || D.readOnlyExample) return '';
     const busy = v.workflowRunning || v.chatPending ? 'disabled' : '';
     return `<div data-ui="collection-retry" style="margin-top:12px;padding-top:12px;border-top:1px solid #eef0ee;display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;">
+      ${recoveryNotice ? `<div data-ui="collection-recovery" role="status" style="flex-basis:100%;font-size:11.5px;color:#7a4b00;">${esc(recoveryNotice)}</div>` : ''}
       <button type="button" data-act="retry-sources" ${busy} style="${buttonStyle}"><i class="ph ph-arrow-clockwise" aria-hidden="true"></i>Retry ${esc(retry.label)}</button>
       <span style="font-size:11px;color:#68798c;line-height:1.4;">${retry.sources.length < v.platforms.length ? `Runs the same query on ${retry.sources.length === 1 ? 'this source' : 'these sources'} only; other sources keep their records.` : 'Runs the same query on every source again.'}${retry.staleNotice ? ' If new records arrive, screening and later steps will need to be rerun.' : ''}</span>
     </div>`;
@@ -4197,6 +4247,7 @@ ${reviewUI.dialog()}
       sessionUrl('', true);
     }
     paint();
+    scheduleCollectionPoll();
     if (restoredProjectStateId) {
       const projectId = restoredProjectStateId;
       restoredProjectStateId = '';

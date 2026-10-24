@@ -29,6 +29,8 @@ from urllib.parse import quote, urljoin, urlparse
 
 from lxml import html as lxml_html
 
+from searchers.arxiv_transport import arxiv_get
+
 from utils.oa_sources import (
     OAMetadataIndex,
     api_user_agent,
@@ -158,9 +160,6 @@ MDPI_JOURNAL_SLUGS = {
     "en": "energies",
 }
 MDPI_PROCEEDINGS_CODES = {"engproc", "proceedings", "csmf", "asec", "ecsa", "iocag", "cmsf", "environsciproc"}
-
-_ARXIV_API_LOCK = threading.Lock()
-_ARXIV_API_LAST_CALL = [0.0]
 
 ARTICLE_PRINT_PAYWALL_MARKERS = (
     "get full access to this article",
@@ -2096,22 +2095,14 @@ class FastCascadePDFDownloader(CascadePDFDownloader):
             return None
         clean_title = re.sub(r"[\"():]", " ", title or "")
         clean_title = re.sub(r"\s+", " ", clean_title).strip()[:200]
-        with _ARXIV_API_LOCK:
-            wait = 3.0 - (time.monotonic() - _ARXIV_API_LAST_CALL[0])
-            if wait > 0:
-                time.sleep(wait)
-            _ARXIV_API_LAST_CALL[0] = time.monotonic()
-            try:
-                response = self.session.get(
-                    "https://export.arxiv.org/api/query",
-                    params={"search_query": f'ti:"{clean_title}"', "max_results": 5},
-                    headers=self._api_headers(),
-                    timeout=self.request_timeout,
-                )
-            except Exception as exc:
-                self._last_failure_class = "metadata_api_error"
-                self._last_failure_detail = f"arXiv API: {type(exc).__name__}"
-                return None
+        try:
+            response = arxiv_get(session=self.session,
+                                 params={"search_query": f'ti:"{clean_title}"', "max_results": 5},
+                                 headers=self._api_headers(), timeout=self.request_timeout)
+        except Exception as exc:
+            self._last_failure_class = "metadata_api_error"
+            self._last_failure_detail = f"arXiv API: {type(exc).__name__}"
+            return None
         if response.status_code != 200:
             self._last_failure_class = "metadata_api_429" if response.status_code == 429 else "metadata_api_error"
             self._last_failure_detail = f"arXiv API HTTP {response.status_code}"

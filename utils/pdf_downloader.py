@@ -15,6 +15,7 @@ from typing import Optional, Dict, Tuple, List
 from urllib.parse import quote, urlparse
 
 from reviewpilot_core.model_policy import DOWNLOAD_MODEL
+from searchers.arxiv_transport import arxiv_get
 
 # Optional Selenium imports for Cloudflare bypass
 try:
@@ -1357,12 +1358,9 @@ Return exactly one allowed lowercase label."""
             return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
         if title:
-            self._rate_limit()
-            search_query = quote(f'ti:"{title}"')
-            url = f"http://export.arxiv.org/api/query?search_query={search_query}&max_results=1"
-
             try:
-                response = self.session.get(url, timeout=15)
+                response = arxiv_get(session=self.session,
+                                     params={"search_query": f'ti:"{title}"', "max_results": 1}, timeout=15)
                 if response.status_code == 200:
                     content = response.text
                     match = re.search(r'<id>http://arxiv.org/abs/([^<]+)</id>', content)

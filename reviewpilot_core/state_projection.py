@@ -342,6 +342,7 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "platformIssues": _platform_issues(collected_summary.get("platform_errors") or {}),
         "executedQueries": collected_summary.get("executed_queries") or {},
         "collectionRetry": _collection_retry(path, workflow_state),
+        "collectionRecovery": _collection_recovery(path, workflow_state),
         "keywords": _keywords(config),
         "groups": _groups(categorization),
         "retrieved": _retrieved(path, included, download_report),
@@ -574,6 +575,13 @@ def _collection_retry(path: Path, workflow_state: dict) -> dict[str, list[str]]:
         return {"sources": retryable_sources(read_json(path / "collected" / "summary.json", {}), config)}
     except (OSError, TypeError, ValueError):
         return {"sources": []}
+
+
+def _collection_recovery(path, workflow_state):
+    if workflow_state["stages"]["collection"]["stale"]:
+        return {}
+    from .collection_recovery import retry_projection
+    return retry_projection(path)
 
 
 def _platform_issues(platform_errors: dict) -> list[dict[str, str]]:

@@ -12,7 +12,7 @@ class ArxivSearcherTests(unittest.TestCase):
         with patch("searchers.arxiv_search.requests.get", return_value=response) as get, patch("searchers.arxiv_search.time.sleep"):
             with self.assertRaisesRegex(RuntimeError, "HTTP 429"):
                 ArxivSearcher().search('LLM AND urban', max_results=5)
-        self.assertEqual(get.call_count, 3)
+        self.assertEqual(get.call_count, 1)  # 429 is persisted and deferred, not immediately repeated
 
     def test_transient_server_error_is_retried(self):
         failed = Mock(status_code=500)

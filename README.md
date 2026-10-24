@@ -64,6 +64,12 @@ The tools make no model calls, so the same inputs always produce the same action
 | Literature Search Tool (`CollectionAgent`) | Runs the saved query on PubMed, arXiv, and OpenAlex (titles and abstracts) up to each source's result limit, and records the exact query each source received. Temporary source failures are retried automatically; a source that still fails can be retried on its own from Records by source. |
 | PDF Download Tool (`DownloadAgent`) | Retrieves PDFs and records papers whose full text could not be obtained. |
 
+arXiv keeps its native title/abstract Boolean query, relevance order, 100-record pages, and configured source limit. Successful pages are cached for the current UTC day. Collection saves a query/limit-bound checkpoint after each page; a failed source retains its saved records and remains explicitly incomplete. Retries resume saved pages on the same day. Across a new day, they refresh the saved prefix before continuing so changed rankings are not appended to older pages; the prior snapshot remains recoverable if that refresh fails.
+
+HTTP 429 and server `Retry-After` deadlines create a persisted cooldown. While the web server is running, arXiv alone gets at most three automatic retries, after 1, 5, and 15 minutes (or later when the server requires it). Jobs survive restarts. Automatic recovery pauses after screening or later work starts, or when an unconfirmed setup draft exists; **Records by source** retains the explicit manual retry. Other sources keep their results and limits. Background recovery makes no LLM calls.
+
+All arXiv search and PDF metadata requests share one connection and wait at least three seconds after a response completes. The gate, cooldown and page cache live in `.cache/arxiv/` by default; set `REVIEWPILOT_ARXIV_STATE_DIR` to use another directory. Every process must use the same directory. Multiple servers require a shared filesystem with working advisory locks or an external coordinator; separate directories do not enforce [arXiv's aggregate rate limit](https://info.arxiv.org/help/api/tou.html). This prevents local request bursts but cannot guarantee upstream availability.
+
 ### How the Sub Agents and Tools Work Together
 
 ```text
