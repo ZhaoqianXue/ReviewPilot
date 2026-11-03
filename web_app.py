@@ -61,7 +61,7 @@ from reviewpilot_core.configuration_reuse import configuration_options, preview_
 from reviewpilot_core.screening_criteria import require_finalized_criteria, validate_criteria, criteria_state
 from reviewpilot_core.workflow_state import complete_action, fail_action, initialize_workflow_state, load_workflow_state, mark_stages_stale, restore_downstream_freshness, save_workflow_state, start_action
 from reviewpilot_core.workflow_adapter import WorkflowActionAdapter
-from reviewpilot_core import manual_retrieval
+from reviewpilot_core import manual_retrieval, paper_import
 from reviewpilot_core.manual_retrieval import ManualRetrievalError
 from reviewpilot_core.retrieval_retry import ConfirmationRequired as RetryConfirmationRequired, InvalidRetryRequest, RetryRequestError, RevisionConflict, merge_staged_retry_facts, prepare_retry_publication, prepare_retry_request
 from reviewpilot_core.retrieval_retry_transaction import abandon_retry_transaction, abort_retry_transaction, apply_retry_transaction, begin_retry_transaction, publish_retry_transaction_pdfs, reconcile_retry_transaction, record_retry_transaction_target, retry_target_is_committed, run_retry_transaction_staging
@@ -346,6 +346,8 @@ async def project_chat(request):
         context_step = str(payload.get("step") or "").strip()
         if context_step not in {"search", "screening", "retrieval", "extraction", "categorize"}:
             context_step = None
+        if context_step in {None, "search", "screening", "retrieval"} and paper_import.is_imported_project(Path(OUTPUT_ROOT) / project_id):
+            raise ValueError(paper_import.REFUSAL)
         def respond():
             with run_ledger.activate(Path(OUTPUT_ROOT) / project_id, f"chat:{context_step or 'search'}"):
                 return LeadAgent(OUTPUT_ROOT).handle_message(
@@ -489,6 +491,69 @@ async def create_project_api(request):
     except Exception as exc:  # provider and network failures would otherwise surface as a bare 500
         return JSONResponse({"detail": _model_failure(exc)}, status_code=502)
     return JSONResponse(project, status_code=201, headers={"Location": "/workspace"})
+
+
+async def paper_import_api(request):
+    """New project from the researcher's own PDFs: open an upload, add or remove files, then create the project."""
+    import_id = request.path_params.get("import_id")
+    operation = request.path_params.get("operation")
+    file_id = request.path_params.get("file_id")
+    try:
+        if import_id is None:
+            return JSONResponse(await run_in_threadpool(paper_import.begin_import, OUTPUT_ROOT), status_code=201)
+        if file_id is not None:
+            return JSONResponse(await run_in_threadpool(paper_import.remove_file, OUTPUT_ROOT, import_id, file_id))
+        if operation == "files":
+            content = await _read_capped_body(request, paper_import.MAX_PDF_BYTES)
+            name = Path(str(request.query_params.get("name") or "paper.pdf")).name[:200] or "paper.pdf"
+            entry = await run_in_threadpool(paper_import.add_file, OUTPUT_ROOT, import_id, name, content)
+            return JSONResponse({"file": entry, "files": paper_import.staged_files(OUTPUT_ROOT, import_id)})
+        if operation == "finish":
+            payload = await _optional_json(request) or {}
+            project = await run_in_threadpool(create_imported_project, OUTPUT_ROOT, import_id, payload)
+            return JSONResponse(project, status_code=201)
+        raise HTTPException(status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc), "code": getattr(exc, "code", "")}, status_code=400)
+
+
+async def _read_capped_body(request, limit: int) -> bytes:
+    """The request body, refused as soon as it is known to exceed `limit` bytes (never buffered past it)."""
+    too_large = paper_import.PaperImportError("The file is larger than 200 MB.")
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise too_large
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise too_large
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def create_imported_project(output_root: Path | str, import_id: str, payload: dict) -> dict:
+    """Create a project from staged PDFs; no search strategy is derived, because nothing will be searched."""
+    title = _payload_text(payload, "project_name", "title")
+    description = _payload_text(payload, "description", "research_question")
+    if not title:
+        raise ValueError("Give the project a name.")
+    if not description:
+        raise ValueError("Describe the research question; extraction fields are drafted from it.")
+    config = _setup_config({"project_name": title, "description": description, "platforms": [paper_import.SOURCE],
+                            "model": _payload_text(payload, "model"), "derive_search_terms": True})
+    root = Path(output_root)
+
+    def reserve() -> str:
+        while True:
+            project_id = _unique_project_id(root, _slugify(title))
+            try:
+                (root / project_id).mkdir()
+            except FileExistsError:
+                continue
+            return project_id
+
+    return paper_import.finish_import(output_root, import_id, config, reserve)
 
 
 async def retrieval_settings_api(request):
@@ -665,6 +730,9 @@ def create_app() -> Starlette:
             Route("/sessions", session_history, methods=["GET"]),
             Route("/projects/{project_id}", manage_session, methods=["PATCH", "DELETE"]),
             Route("/projects", create_project_api, methods=["POST"]),
+            Route("/imports", paper_import_api, methods=["POST"]),
+            Route("/imports/{import_id}/files/{file_id}", paper_import_api, methods=["DELETE"]),
+            Route("/imports/{import_id}/{operation}", paper_import_api, methods=["POST"]),
             Route("/projects/{project_id}/configuration-reuse", project_configuration_reuse, methods=["GET"]),
             Route("/projects/{project_id}/configuration-reuse/{operation}", project_configuration_reuse, methods=["POST"]),
             Route("/memory/settings", memory_settings, methods=["GET", "PUT"]),
@@ -732,6 +800,8 @@ def update_project_setup(output_root: Path | str, project_id: str, payload: dict
     require_mutable(Path(output_root), project_id)
     if not known_project(output_root, project_id):
         raise ValueError("project not found")
+    if paper_import.is_imported_project(Path(output_root) / project_id):
+        raise ValueError(paper_import.REFUSAL)
     active = task_runner.active_for_project(project_id)
     if active:
         raise TaskConflictError(active)
@@ -941,6 +1011,8 @@ def submit_project_action(output_root: Path | str, project_id: str, action: str,
     supported_actions = {"edit-criteria", "save-criteria", "finalize-criteria", "generate-screening-guidance", "confirm-screening-guidance", "generate-coding-rules", "confirm-coding-rules", "collect", "screen", "download-pdfs", "retry-failed-downloads", "generate-schema", "regenerate-schema", "finalize-schema", "edit-schema", "run-extraction", "finalize-and-run-extraction", "preview-extraction", "suggest-categories", "categorize"}
     if action not in supported_actions:
         raise ValueError(f"Unsupported action: {action}")
+    if action in paper_import.REFUSED_ACTIONS and paper_import.is_imported_project(Path(output_root) / project_id):
+        raise ValueError(paper_import.REFUSAL)
 
     if action == "retry-failed-downloads":
         return _submit_retry_action(output_root, project_id, input_data, llm_query)

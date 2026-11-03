@@ -31,6 +31,7 @@ only a design/demo fallback for direct file viewing.
 The frontend calls:
 
 - `POST /projects` to create a project.
+- `POST /imports`, then `POST /imports/{import_id}/files?name=…` with each raw PDF as the body (`DELETE /imports/{import_id}/files/{file_id}` removes one), then `POST /imports/{import_id}/finish` (`{project_name, description}`) to start a project from the researcher's own PDFs. The project opens at Information Extraction; search, screening and retrieval are marked complete and their actions are refused.
 - `GET /projects/{project_id}/state` to refresh state.
 - `PUT /projects/{project_id}/setup` to save the search setup (concept blocks, sources, limits, dates); a change that makes results stale first returns the affected stages for confirmation.
 - `DELETE /projects/{project_id}/setup/draft` to discard an imported or chat-proposed search setup draft.

@@ -6,11 +6,14 @@ import re
 
 from .atomic_files import atomic_write_json
 from .project_store import read_json
+from .fulltext_eligibility import with_field
+from .paper_import import REFUSAL, is_imported_project
 from .project_decisions import KINDS, confirmed_decisions, remember_confirmed, project_decision_revision
 from .screening_criteria import criteria_state, save_criteria, validate_criteria
 from .extraction_schema import normalize_schema, save_schema_draft, build_extraction_prompts
 from .workflow_state import load_workflow_state, start_action, complete_action, fail_action
 
+IMPORT_PLACEHOLDER_KINDS = {'search_setup', 'screening_profile'}
 LABELS = {'search_setup': 'Search setup', 'screening_profile': 'Inclusion / exclusion criteria',
           'extraction_schema': 'Extraction fields', 'categorization_profile': 'Categories'}
 STEPS = dict(zip(KINDS, ('search', 'screening', 'extraction', 'categorize')))
@@ -47,7 +50,7 @@ def project_title(project: Path) -> str:
 
 
 def configuration_options(root: Path, target_id: str, *, busy=None) -> list[dict]:
-    safe_project(root, target_id)
+    target_imported = is_imported_project(safe_project(root, target_id))
     result = []
     for path in sorted(root.iterdir(), key=lambda p: p.name):
         if path.name == target_id or (busy and busy(path.name)):
@@ -58,8 +61,10 @@ def configuration_options(root: Path, target_id: str, *, busy=None) -> list[dict
         except (ValueError, OSError, TypeError, AttributeError):
             continue
         title = project_title(project)
+        imported = is_imported_project(project)
         for kind, decision in decisions.items():
-            if not decision['stale']:
+            # An imported project's search setup and criteria are placeholders, not configurations to reuse.
+            if not decision['stale'] and not ((imported or target_imported) and kind in IMPORT_PLACEHOLDER_KINDS):
                 result.append({'source_project_id': path.name, 'source_title': title,
                                'kind': kind, 'label': LABELS[kind]})
     return result
@@ -71,6 +76,8 @@ def preview_configuration(root: Path, target_id: str, selection: dict) -> dict:
         raise ValueError('Select a configuration from another project')
     source, target = safe_project(root, source_id), safe_project(root, target_id)
     decision = confirmed_decisions(source).get(kind)
+    if kind in IMPORT_PLACEHOLDER_KINDS and is_imported_project(source):
+        decision = None
     if not decision or decision['stale']:
         raise ValueError('This source has no current confirmed configuration of that type')
     # Initialize a legacy target ledger before binding the preview revision.
@@ -87,6 +94,8 @@ def apply_configuration(root: Path, target_id: str, request: dict) -> dict:
         raise ReuseConflict('Source or current project changed. Preview the configuration again before importing.')
     target = safe_project(root, target_id)
     kind, config = preview['kind'], preview['configuration']
+    if kind in IMPORT_PLACEHOLDER_KINDS and is_imported_project(target):
+        raise ValueError(REFUSAL)
     stages = load_workflow_state(target)['stages']
     prerequisite = {'screening_profile': 'collection', 'extraction_schema': 'screening', 'categorization_profile': 'extraction'}.get(kind)
     if prerequisite and (stages[prerequisite]['status'] not in {'completed', 'partial'} or stages[prerequisite]['stale']):
@@ -98,6 +107,9 @@ def apply_configuration(root: Path, target_id: str, request: dict) -> dict:
         save_criteria(target, {**config, 'revision': criteria_state(target)['revision']})
     elif kind == 'extraction_schema':
         schema = normalize_schema(config)
+        if is_imported_project(target):
+            # No screening criteria exist here, so the source's full-text eligibility field has nothing to judge against.
+            schema = with_field(target, schema)
         if not schema['fields']:
             raise ValueError('Source extraction schema is empty')
         remember_confirmed(target, kind)

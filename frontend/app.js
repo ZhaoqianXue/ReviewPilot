@@ -415,6 +415,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     navigationPending: '',
     chatDrafts: {},
     dialog: '',
+    importDraft: emptyImportDraft(),
     actionError: '',
     activeProjectId: D.project.id || '',
     setupDraft: setupDraftFromData(D),
@@ -682,6 +683,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       categorizationAnalysis: data.categorizationAnalysis || { field: '', categories: [] },
       exportPackage: data.exportPackage || [],
       prismaFlow: data.prismaFlow || null,
+      paperImport: data.paperImport || null,
       runReport: data.runReport || null,
     };
   }
@@ -924,8 +926,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
     return String(label || '').toLowerCase().replace(/\s+/g, '').replace('openalex', 'openalex').replace('arxiv', 'arxiv');
   }
 
+  const IMPORT_SKIPPED_STEPS = ['search', 'screening', 'retrieval'];
+
   function platformLabel(key) {
-    const labels = { pubmed: 'PubMed', openalex: 'OpenAlex', arxiv: 'arXiv', ieee: 'IEEE', acm: 'ACM DL', semantic: 'Semantic Scholar' };
+    const labels = { pubmed: 'PubMed', openalex: 'OpenAlex', arxiv: 'arXiv', ieee: 'IEEE', acm: 'ACM DL', semantic: 'Semantic Scholar', user_import: 'Your PDFs' };
     return labels[key] || key.replace(/[_-]/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
@@ -1821,6 +1825,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       chatPending: state.chatPending,
       setupDirty: setupDraftDirty(),
       chatBusyLabel: state.actionPending && !D.isNewProject ? workflowActionLabel(state.actionPending) : '',
+      chatLockedText: D.paperImport && IMPORT_SKIPPED_STEPS.includes(step) ? 'Chat opens at Information Extraction' : '',
       setupLocked: !!state.actionPending || state.chatPending || state.setupSaving || D.readOnlyExample,
       quickStartOpen: state.quickStartOpen,
       assistantContext: D.ctxLabels[step] || '',
@@ -1829,6 +1834,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') (function 
       isPreviewTab: state.tab === 'preview',
       notPreviewTab: state.tab !== 'preview',
       showCanvasAction: !D.isNewProject
+        && !(D.paperImport && IMPORT_SKIPPED_STEPS.includes(step))
         && step !== 'categorize'
         && !GUIDANCE_PANEL_ACTIONS.includes(activeAction)
         && step !== 'extraction'
@@ -2089,6 +2095,7 @@ ${v.showSetupDialog ? setupDialog(v) : ''}
 ${v.showConceptDialog ? conceptDialog(v) : ''}
 ${v.showMemoryDialog ? memoryDialog(v) : ''}
 ${state.dialog === 'help' ? helpDialog() : ''}
+${state.dialog === 'import' ? importDialog() : ''}
 ${v.schemaJsonOpen ? schemaJsonDialog(v) : ''}
 ${state.sessionDialog ? sessionManagementDialog() : ''}
 ${reviewUI.dialog()}
@@ -2241,8 +2248,13 @@ ${reviewUI.dialog()}
         <div style="font-size:12.5px;color:#6b746c;margin-top:8px;max-width:520px;margin-left:auto;margin-right:auto;line-height:1.5;">ReviewPilot helps you turn a research topic into a literature review.</div>
         <div style="font-size:12.5px;color:#1a365d;margin-top:14px;line-height:1.45;">To get started, describe your research topic in the chat.</div>
         ${starterTopicButtons()}
+        <div data-ui="import-entry" style="margin-top:16px;padding-top:14px;border-top:1px solid #e3ebf5;max-width:620px;margin-left:auto;margin-right:auto;">
+          <div style="font-size:12px;color:#6b746c;line-height:1.45;">Already have the papers? Skip search, screening and retrieval.</div>
+          <button type="button" data-act="open-import" style="${buttonStyle}margin-top:8px;"><i class="ph ph-file-arrow-up" style="font-size:14px;"></i>Start from your own PDFs</button>
+        </div>
       </div>`;
     }
+    if (D.paperImport) return importedSetupCard(v);
     // An imported or chat-proposed draft can carry a different research question; show the one that saving would apply.
     const draftQuestion = v.searchReuseDraft && v.setupDraft.description && esc(v.setupDraft.description) !== v.researchQuestion ? esc(v.setupDraft.description) : '';
     return `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
@@ -2295,6 +2307,172 @@ ${reviewUI.dialog()}
       <button type="button" data-act="edit-concept" data-index="${index}" ${lock} title="${esc(block.query_terms.join(' · '))}" aria-label="Edit concept ${esc(block.label)}" style="border:none;background:transparent;color:inherit;font:inherit;font-size:11.5px;padding:4px 4px 4px 9px;cursor:pointer;display:inline-flex;align-items:baseline;gap:6px;min-width:0;"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(block.label)}</span><span style="font-size:10px;color:#68798c;flex:0 0 auto;">${terms} term${terms === 1 ? '' : 's'}</span></button>
       <button type="button" data-act="remove-concept" data-index="${index}" ${lock} aria-label="Remove concept ${esc(block.label)}" style="border:none;background:transparent;color:#1a365d;padding:0 7px 0 3px;cursor:pointer;opacity:.7;display:inline-flex;align-items:center;"><i class="ph ph-x" style="font-size:10px;"></i></button>
     </span>`;
+  }
+
+  function importedSetupCard(v) {
+    const when = D.paperImport.importedAt ? new Date(D.paperImport.importedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+    return `<div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+        <div style="font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:#9aa39b;margin-bottom:7px;">Research question</div>
+        <div style="font-size:15px;color:#1a1a1a;line-height:1.45;letter-spacing:-0.01em;">${v.researchQuestion || 'Review project'}</div>
+      </div>
+      ${importedStepNotice('No search was run', `This project started from ${formatCount(D.paperImport.papers, 'PDF')} you provided${when ? ` on ${esc(when)}` : ''}, so there is no search setup. Go to Information Extraction to continue.`, 'ph-file-arrow-up')}`;
+  }
+
+  function importedStepNotice(title, text, icon) {
+    return `<div data-ui="imported-step-notice" style="border:1px solid #d8e2f0;border-radius:12px;padding:14px 16px;margin-bottom:16px;background:#f8fbff;display:flex;gap:12px;align-items:flex-start;">
+      <span aria-hidden="true" style="width:32px;height:32px;flex:0 0 32px;border-radius:9px;background:#eaf0f7;color:#1a365d;display:inline-flex;align-items:center;justify-content:center;"><i class="ph ${icon}" style="font-size:17px;"></i></span>
+      <div style="min-width:0;"><div style="font-size:13.5px;color:#1a365d;">${title}</div><div style="font-size:12px;color:#6b746c;margin-top:4px;line-height:1.5;">${text}</div></div>
+    </div>`;
+  }
+
+  function importDialog() {
+    const d = state.importDraft;
+    const field = 'width:100%;box-sizing:border-box;border:1px solid #d8ddd6;border-radius:9px;background:#fffefc;padding:9px 10px;font:inherit;font-size:13px;color:#1a1a1a;';
+    const busy = importBusy(d);
+    const noText = d.files.filter((file) => !file.hasText).length;
+    const sourceNote = { crossref: 'from Crossref', pdf_metadata: 'from the PDF', first_page: 'from the first page', file_name: 'from the file name' };
+    const rows = d.files.map((file) => `<li data-ui="import-file" style="display:flex;align-items:flex-start;gap:9px;padding:8px 0;border-top:1px solid #f0f2ef;">
+        <i class="ph ph-file-pdf" aria-hidden="true" style="font-size:16px;color:#1a365d;margin-top:1px;flex:0 0 auto;"></i>
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:12.5px;color:#1a1a1a;line-height:1.35;overflow-wrap:anywhere;">${esc(file.title || file.fileName)}</div>
+          <div style="font-size:11px;color:#8a938b;margin-top:2px;overflow-wrap:anywhere;">${esc(file.fileName)} · title ${sourceNote[file.titleSource] || ''}${file.year ? ` · ${esc(String(file.year))}` : ''}${file.doi ? ` · ${esc(file.doi)}` : ''}</div>
+          ${file.hasText ? '' : '<div style="font-size:11px;color:#b45309;margin-top:2px;">Little extractable text (possibly scanned pages). Extraction may find little in this PDF.</div>'}
+        </div>
+        <button type="button" data-act="import-remove" data-file="${esc(file.id)}" ${busy ? 'disabled' : ''} aria-label="Remove ${esc(file.fileName)}" style="border:none;background:none;color:#6b746c;cursor:pointer;padding:2px;"><i class="ph ph-x" style="font-size:13px;"></i></button>
+      </li>`).join('');
+    return `<div style="position:fixed;inset:0;background:rgba(17,24,39,.34);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;">
+      <form id="rp-import-form" role="dialog" aria-modal="true" aria-labelledby="rp-import-title" style="width:min(620px,100%);max-height:calc(100vh - 32px);overflow:auto;box-sizing:border-box;background:#fffefc;border:1px solid #d8e2f0;border-radius:12px;box-shadow:0 24px 70px rgba(26,54,93,.20);padding:18px 20px 16px;font-family:'Hanken Grotesk',system-ui,sans-serif;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;"><div style="display:flex;align-items:center;gap:9px;min-width:0;">${logo(24)}<h2 id="rp-import-title" style="margin:0;font-weight:400;font-family:Newsreader,Georgia,serif;font-size:20px;color:#1a1a1a;">Start from your own PDFs</h2></div><button type="button" data-act="close-dialog" ${d.creating ? 'disabled' : ''} aria-label="Close" style="width:30px;height:30px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-x" style="font-size:15px;"></i></button></div>
+        <div style="font-size:12px;color:#6b746c;line-height:1.5;margin-bottom:6px;">ReviewPilot skips search, screening and retrieval and opens the project at Information Extraction. Every PDF you add is included. When a PDF shows a DOI, ReviewPilot looks it up on Crossref to complete the title, authors and year.</div>
+        ${d.error ? `<div role="alert" style="border:1px solid #f4b4b4;background:#fff5f5;color:#8a1f1f;border-radius:8px;padding:8px 10px;font-size:12px;margin:10px 0;white-space:pre-line;">${esc(d.error)}${d.createdId ? ` <button type="button" data-act="import-open-created" style="border:none;background:none;color:#1a365d;text-decoration:underline;font:inherit;font-size:12px;padding:0;cursor:pointer;">Open the project</button>` : ''}</div>` : ''}
+        <label for="rp-import-name" style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Project name</label>
+        <input id="rp-import-name" data-ui="import-name" data-import-field="title" ${d.creating ? 'disabled' : ''} required maxlength="120" value="${esc(d.title)}" style="${field}" placeholder="LLM evaluation in patient counseling">
+        <label for="rp-import-question" style="display:block;font-size:11px;color:#6b746c;margin:10px 0 5px;">Research question</label>
+        <textarea id="rp-import-question" data-ui="import-question" data-import-field="description" ${d.creating ? 'disabled' : ''} required rows="3" style="${field}resize:vertical;" placeholder="What evaluation methods are used for LLMs in patient counseling?">${esc(d.description)}</textarea>
+        <div style="font-size:11px;color:#8a938b;margin-top:4px;">The extraction fields are drafted from this question.</div>
+        <div data-ui="import-dropzone" style="margin-top:14px;border:1px dashed ${d.dropActive ? '#1a365d' : '#c8d8e8'};background:${d.dropActive ? '#eef4fb' : '#f8fbff'};border-radius:10px;padding:16px;text-align:center;">
+          <div style="font-size:12.5px;color:#1a365d;">Drop PDFs here, or</div>
+          <label style="${buttonStyle}position:relative;margin-top:8px;display:inline-flex;align-items:center;gap:6px;cursor:${busy ? 'wait' : 'pointer'};"><i class="ph ph-folder-open" style="font-size:14px;"></i>Choose PDFs<input type="file" data-import-files accept="application/pdf,.pdf" multiple ${busy ? 'disabled' : ''} style="position:absolute;width:1px;height:1px;opacity:0;"></label>
+          <div role="status" aria-live="polite" style="font-size:11px;color:#6b746c;margin-top:8px;">${d.uploading ? `Reading ${formatCount(d.uploading, 'PDF')}…` : d.removing ? 'Removing…' : `${formatCount(d.files.length, 'PDF')} added`}${noText ? ` · ${noText} with little extractable text` : ''}</div>
+        </div>
+        ${rows ? `<ul style="list-style:none;margin:10px 0 0;padding:0;max-height:260px;overflow:auto;">${rows}</ul>` : ''}
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:9px;margin-top:16px;"><button type="button" data-act="close-dialog" ${d.creating ? 'disabled' : ''} style="${buttonStyle}">Cancel</button><button type="submit" ${busy || !d.files.length ? 'disabled' : ''} style="border:none;background:${busy || !d.files.length ? '#9aa8b8' : '#1a365d'};color:#fffefc;border-radius:9px;padding:10px 14px;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;"><i class="ph ph-check-circle" style="font-size:15px;"></i>${d.creating ? 'Creating…' : 'Create project'}</button></div>
+      </form>
+    </div>`;
+  }
+
+  function emptyImportDraft() {
+    return { importId: '', files: [], uploading: 0, removing: 0, error: '', title: '', description: '', creating: false, dropActive: false, createdId: '' };
+  }
+
+  function importBusy(d) {
+    return d.uploading > 0 || d.removing > 0 || d.creating;
+  }
+
+  async function importRequest(path, options = {}) {
+    const res = await fetch(path, options);
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(body.detail || `Request failed: ${res.status}`);
+      err.code = body.code || '';
+      // An expired or already used upload cannot change any more: keep the typed name and question, start over with files.
+      if (['import_expired', 'import_used'].includes(err.code)) { state.importDraft.importId = ''; state.importDraft.files = []; }
+      throw err;
+    }
+    return body;
+  }
+
+  async function addImportFiles(files) {
+    const d = state.importDraft;
+    if (importBusy(d)) return;
+    const pdfs = files.filter((file) => /\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+    const problems = files.filter((file) => !pdfs.includes(file)).map((file) => `${file.name} is not a PDF.`);
+    d.uploading = pdfs.length;
+    d.error = '';
+    paintWorkspace();
+    try {
+      if (!d.importId && pdfs.length) d.importId = (await importRequest('/imports', { method: 'POST' })).importId;
+      for (const file of pdfs) {
+        try {
+          const body = await importRequest(`/imports/${d.importId}/files?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: file });
+          d.files = body.files;
+          if (body.file?.duplicateOf) problems.push(`${file.name} is the same file as ${body.file.duplicateOf}; it was added once.`);
+        } catch (err) {
+          problems.push(err.message || `${file.name} could not be added.`);
+          if (['import_expired', 'import_used'].includes(err.code)) break;
+        }
+        d.uploading -= 1;
+        paintWorkspace();
+      }
+    } catch (err) {
+      problems.push(err.message || String(err));
+    } finally {
+      d.uploading = 0;
+      d.error = problems.join('\n');
+      paintWorkspace();
+    }
+  }
+
+  async function removeImportFile(fileId) {
+    const d = state.importDraft;
+    if (importBusy(d) || !d.importId) return;
+    d.removing += 1;
+    paintWorkspace();
+    try {
+      d.files = (await importRequest(`/imports/${d.importId}/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' })).files;
+      d.error = '';
+    } catch (err) {
+      d.error = err.message || String(err);
+    } finally {
+      d.removing -= 1;
+      paintWorkspace();
+    }
+  }
+
+  async function finishImport() {
+    const d = state.importDraft;
+    if (importBusy(d)) return;
+    if (d.createdId) { await openImportedProject(d.createdId); return; }
+    if (!d.importId || !d.files.length) { d.error = 'Add at least one PDF.'; paintWorkspace(); return; }
+    if (!d.title.trim() || !d.description.trim()) { d.error = 'Give the project a name and a research question.'; paintWorkspace(); return; }
+    d.creating = true;
+    d.error = '';
+    paintWorkspace();
+    let project;
+    try {
+      project = await importRequest(`/imports/${d.importId}/finish`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_name: d.title, description: d.description, model: state.setupDraft.model || '' }),
+      });
+    } catch (err) {
+      d.creating = false;
+      d.error = err.message || String(err);
+      paintWorkspace();
+      return;
+    }
+    d.creating = false;
+    d.createdId = project.id;
+    await openImportedProject(project.id);
+  }
+
+  async function openImportedProject(projectId) {
+    const d = state.importDraft;
+    const ownership = projectNavigation.capture(D.project.id || '');
+    let data;
+    try {
+      data = await fetchProjectState(projectId);
+    } catch (err) {
+      d.error = `The project was created, but ReviewPilot could not open it (${err.message || err}).`;
+      paintWorkspace();
+      return;
+    }
+    // The upload is used up either way; only the dialog that started it is closed.
+    if (state.importDraft === d) state.importDraft = emptyImportDraft();
+    if (!projectNavigation.owns(ownership)) { await refreshHistory(); paintWorkspace(); return; }
+    if (state.dialog === 'import') state.dialog = '';
+    setData(data);
+    sessionUrl(projectId);
+    paintWorkspace();
   }
 
   function starterTopicButtons() {
@@ -2354,6 +2532,7 @@ ${reviewUI.dialog()}
     // Stale screening results describe an older collection, so show them as pending.
     const screeningPending = (Boolean(screeningStatus) && !['completed', 'partial'].includes(screeningStatus)) || !!D.stageState.screening?.stale;
     const screenedCount = (value) => (screeningPending && !value ? '—' : value);
+    if (D.paperImport) return importedStepNotice('Screening was skipped', `Every paper you provided is included (${formatCount(D.paperImport.papers, 'paper')}). To leave a paper out, start a new project without it.`, 'ph-funnel');
     return `${v.isNewProject ? gate('Paper Screening starts after collection', 'Create the Search Setup first, then run collection before screening records.', 'ph-funnel') : ''}
       ${!v.isNewProject ? screeningCriteriaPanel(v) : ''}
       ${!v.isNewProject ? screeningGuidancePanel(v) : ''}
@@ -2528,8 +2707,8 @@ ${reviewUI.dialog()}
           <div style="display:flex;justify-content:space-between;font-size:12.5px;"><span style="color:#1a1a1a;">Unavailable</span><span style="font-family:'IBM Plex Mono',monospace;color:#6b746c;">${v.retrievalSummary.unavailable}</span></div>
         </div>
       </div>
-      ${retrievalRecoveryPanel(v)}
-      ${manualRetrievalPanel(v)}`;
+      ${D.paperImport ? importedStepNotice('Full texts came from you', 'No download was needed: each paper below is the PDF you uploaded.', 'ph-file-arrow-up') : `${retrievalRecoveryPanel(v)}
+      ${manualRetrievalPanel(v)}`}`;
   }
 
   function paperLinkChips(links) {
@@ -3320,14 +3499,14 @@ ${reviewUI.dialog()}
 
   function assistantPanel(v) {
     return `<aside ${state.navigationPending ? 'inert' : ''} class="rp-assistant" style="width:407px;flex:0 0 407px;border-left:1px solid #e5e7eb;display:flex;flex-direction:column;min-height:0;">
-      <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div><button type="button" data-act="open-setup" aria-label="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" title="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button></div>
+      <div style="display:flex;align-items:center;gap:9px;padding:13px 15px;border-bottom:1px solid #eef0ee;flex:0 0 auto;">${logo(24)}<div style="flex:1;min-width:0;"><div style="font-size:13.5px;color:#1a1a1a;letter-spacing:-0.01em;">ReviewPilot</div><div style="font-size:10.5px;color:#9aa39b;letter-spacing:-0.01em;">${v.assistantContext}</div></div>${D.paperImport ? '' : `<button type="button" data-act="open-setup" aria-label="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" title="${v.isNewProject ? 'Set up a new review with a form' : 'Edit research question'}" style="width:28px;height:28px;border-radius:8px;border:1px solid #e0e4df;background:none;color:#6b746c;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s ease;" data-hover="background:#eef4fb;color:#1a365d;"><i class="ph ph-plus" style="font-size:15px;"></i></button>`}</div>
       <div class="rp-scroll" id="rp-conv" style="flex:1;min-height:0;overflow-y:auto;padding:16px 15px;display:flex;flex-direction:column;gap:13px;">
         ${v.chat.map(chatMessage).join('')}
         ${v.chatFailure ? failedChatMessage(v.chatFailure) : ''}
         ${extractionDecisionCard(v)}
         ${v.chatPending ? thinkingBubble() : ''}
       </div>
-      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic' : 'Reply to ReviewPilot'}" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" placeholder="${v.chatBusyLabel ? `Chat resumes when ${esc(v.chatBusyLabel.toLowerCase())} finishes` : (v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...')}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" aria-label="Send message" ${v.chatBusyLabel ? 'disabled' : ''} style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:${v.chatBusyLabel ? '#9aa8b8' : '#1a365d'};color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
+      <div data-ui="assistant-chat-input-area" style="position:relative;flex:0 0 auto;padding:12px 14px;border-top:1px solid #eef0ee;">${v.quickStartOpen ? chatQuickStartPopover() : ''}<form id="rp-chat-form" style="display:flex;align-items:center;gap:9px;background:#fffefc;border:1px solid #d8ddd6;border-radius:14px;padding:8px 8px 8px 12px;transition:border-color .15s ease;" data-hover="border-color:#b9c3b6;"><span style="flex:0 0 auto;display:flex;align-items:center;">${logo(20)}</span><input data-ui="research-topic-input" aria-label="${v.isNewProject && !v.setupDraft.description ? 'Describe your research topic' : 'Reply to ReviewPilot'}" name="message" value="${esc(state.chatDrafts[D.project.id || ''] || '')}" ${v.chatLockedText ? 'disabled' : ''} placeholder="${v.chatLockedText ? v.chatLockedText : v.chatBusyLabel ? `Chat resumes when ${esc(v.chatBusyLabel.toLowerCase())} finishes` : (v.isNewProject && !v.setupDraft.description ? 'Describe your research topic...' : 'Reply to ReviewPilot...')}" autocomplete="off" style="flex:1;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:#1a1a1a;letter-spacing:-0.01em;"><button type="submit" aria-label="Send message" ${v.chatBusyLabel || v.chatLockedText ? 'disabled' : ''} style="width:30px;height:30px;flex:0 0 30px;border-radius:9px;border:none;background:${v.chatBusyLabel || v.chatLockedText ? '#9aa8b8' : '#1a365d'};color:#fffefc;display:flex;align-items:center;justify-content:center;cursor:pointer;"><i class="ph ph-arrow-up" style="font-size:15px;"></i></button></form><div style="font-size:10px;color:#aab1a9;margin-top:7px;text-align:center;letter-spacing:-0.01em;">ReviewPilot can make mistakes. Verify important results.</div></div>
     </aside>`;
   }
 
@@ -3763,6 +3942,9 @@ ${reviewUI.dialog()}
       }
       else if (act === 'session-cancel') { state.sessionDialog = null; state.sessionError = ''; }
       else if (act === 'open-setup') { state.dialog = 'setup'; state.returnFocus = focusSelectorFor(t); }
+      else if (act === 'open-import') { state.dialog = 'import'; state.returnFocus = focusSelectorFor(t); }
+      else if (act === 'import-remove') { removeImportFile(t.getAttribute('data-file') || ''); return; }
+      else if (act === 'import-open-created') { openImportedProject(state.importDraft.createdId); return; }
       else if (act === 'open-memory') {
         state.dialog = 'memory';
         state.returnFocus = focusSelectorFor(t);
@@ -4087,6 +4269,10 @@ ${reviewUI.dialog()}
         else if (state.guidanceDraft[key]) state.guidanceDraft[key][Number(e.target.getAttribute('data-guidance-index'))] = e.target.value;
         return;
       }
+      if (e.target.matches('[data-import-field]')) {
+        state.importDraft[e.target.getAttribute('data-import-field')] = e.target.value;
+        return;
+      }
       if (e.target.matches('[data-criteria]')) {
         state.criteriaDraft = {projectId: D.project.id, revision: D.screeningCriteria.revision,
           ...Object.fromEntries(['inclusion', 'exclusion'].map(key => [key, root.querySelector(`[data-criteria="${key}"]`)?.value || '']))};
@@ -4123,6 +4309,12 @@ ${reviewUI.dialog()}
 
     root.addEventListener('change', (e) => {
       if (reviewUI.input(e.target,e)) return;
+      if (e.target.hasAttribute('data-import-files')) {
+        const files = [...(e.target.files || [])];
+        e.target.value = '';
+        if (files.length) addImportFiles(files);
+        return;
+      }
       const manualFile = e.target.getAttribute('data-manual-file');
       if (manualFile) {
         const files = [...(e.target.files || [])];
@@ -4154,7 +4346,7 @@ ${reviewUI.dialog()}
       if (reviewUI.keydown(e)) return;
       if (e.key === 'Escape') {
         if (state.quickStartOpen) { state.quickStartOpen = false; state.quickStartDismissed = true; paint(); return; }
-        if (['help', 'concept', 'setup', 'memory'].includes(state.dialog) && !(state.dialog === 'setup' && state.setupSaving)) { state.dialog = ''; state.reusePreview = null; }
+        if (['help', 'concept', 'setup', 'memory', 'import'].includes(state.dialog) && !(state.dialog === 'setup' && state.setupSaving) && !(state.dialog === 'import' && state.importDraft.creating)) { state.dialog = ''; state.reusePreview = null; }
         if (state.schemaJsonOpen) { state.schemaJsonOpen = false; state.schemaJsonReturnFocus = true; }
         state.sidebarOpen = false; if (!state.sessionBusy) state.sessionDialog = null; state.sessionMenu = ''; paint(); return;
       }
@@ -4188,6 +4380,11 @@ ${reviewUI.dialog()}
         submitChatForm(e.target).then(paint).catch((err) => { state.actionError = err.message || String(err); paint(); });
         return;
       }
+      if (e.target.id === 'rp-import-form') {
+        e.preventDefault();
+        finishImport();
+        return;
+      }
       if (e.target.id === 'rp-concept-dialog-form') {
         e.preventDefault();
         if (saveConceptFromForm(e.target)) state.dialog = '';
@@ -4213,20 +4410,38 @@ ${reviewUI.dialog()}
 
     const dropZone = (event) => event.target.closest && event.target.closest('[data-ui="manual-dropzone"]');
     const carriesFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+    const importZone = (event) => event.target.closest && event.target.closest('[data-ui="import-dropzone"]');
     root.addEventListener('dragover', (e) => {
       if (!carriesFiles(e)) return;
       e.preventDefault();
+      if (state.dialog === 'import') {
+        const over = !!importZone(e) && !importBusy(state.importDraft);
+        if (e.dataTransfer) e.dataTransfer.dropEffect = over ? 'copy' : 'none';
+        if (over !== state.importDraft.dropActive) { state.importDraft.dropActive = over; paint(); }
+        return;
+      }
       const active = !!dropZone(e) && D.manualRetrieval.enabled;
       if (e.dataTransfer) e.dataTransfer.dropEffect = active ? 'copy' : 'none';
       if (active !== state.manualDropActive) { state.manualDropActive = active; paint(); }
     });
     root.addEventListener('dragleave', (e) => {
+      if (state.dialog === 'import') {
+        if (state.importDraft.dropActive && importZone(e) && !importZone({ target: e.relatedTarget || document.body })) { state.importDraft.dropActive = false; paint(); }
+        return;
+      }
       if (state.manualDropActive && dropZone(e) && !dropZone({ target: e.relatedTarget || document.body })) { state.manualDropActive = false; paint(); }
     });
     root.addEventListener('drop', (e) => {
       if (!carriesFiles(e)) return;
       // A PDF dropped anywhere else must not replace the workspace with the file.
       e.preventDefault();
+      if (state.dialog === 'import') {
+        const files = [...(e.dataTransfer?.files || [])];
+        const accept = !!importZone(e) && !importBusy(state.importDraft);
+        state.importDraft.dropActive = false;
+        if (accept && files.length) addImportFiles(files); else paint();
+        return;
+      }
       const inZone = !!dropZone(e);
       state.manualDropActive = false;
       const files = [...(e.dataTransfer?.files || [])];

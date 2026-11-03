@@ -19,6 +19,7 @@ from .coding_rules import rules_state as coding_rules_state
 from .project_decisions import confirmed_decisions
 from .evidence_support import EVIDENCE_TIERS, local_pdf
 from .paper_links import paper_links
+from .paper_import import projection as paper_import_projection
 from .record_review import key as record_key
 from .extraction_preview import empty_preview_projection, project_preview_projection
 from .model_policy import DEFAULT_MAX_RESULTS_PER_PLATFORM, LEAD_AGENT_DEV_MODEL
@@ -181,6 +182,7 @@ def list_projects(output_root: Path | str = Path("output")) -> list[dict]:
 def build_new_project_data(output_root: Path | str) -> dict:
     return {
         "isNewProject": True,
+        "paperImport": None,
         "project": {
             "id": "",
             "title": "Untitled review",
@@ -359,7 +361,8 @@ def build_rp_data(output_root: Path | str, project_id: str, active_action: str |
         "noFullText": _no_full_text(path, extraction_rows, stale=workflow_state["stages"]["extraction"]["stale"]),
         "categorizationAnalysis": _categorization_analysis(categorization, categorized_rows, extraction_rows, category_briefs),
         "exportPackage": _export_package(path),
-        "prismaFlow": _prisma_flow(path),
+        "prismaFlow": None if paper_import_projection(path) else _prisma_flow(path),
+        "paperImport": paper_import_projection(path),
         "runReport": _run_report(path),
         "extractionPreview": project_preview_projection(path, 0) if included else empty_preview_projection(),
         "schemaJson": schema if isinstance(schema, dict) else {"fields": []},
@@ -506,6 +509,8 @@ def _steps(
         "extraction": f"{len(fields)} fields",
         "categorize": f"{_categorization_summary(categorization)['groups']} groups",
     }
+    if paper_import_projection(path):
+        subs.update(search="Skipped", screening="Skipped", retrieval=f"{len(included)} PDFs provided")
     steps = []
     for index, (key, label, fallback_sub) in enumerate(STEP_DEFS, start=1):
         stage_name = STAGE_NAMES[index - 1]
@@ -558,7 +563,7 @@ def _platform_stats(path: Path, config: dict, collected_summary: dict, *, allow_
 def _platform_label(key: str) -> str:
     if contains_absolute_path(str(key)):
         return "Unknown source"
-    labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex"}
+    labels = {"pubmed": "PubMed", "arxiv": "arXiv", "openalex": "OpenAlex", "user_import": "Your PDFs"}
     return labels.get(key, str(key).replace("_", " ").title())
 
 
@@ -811,6 +816,7 @@ def _retrieved(path: Path, included: list[dict], download_report: dict) -> list[
     for index, paper in enumerate(papers, start=1):
         title = paper.get("title") or f"Paper {index}"
         source = paper.get("source") or paper.get("platform") or "paper"
+        source = _platform_label(source) if source == "user_import" else source
         year = paper.get("year") or paper.get("publication_year") or ""
         has_pdf = local_pdf(path, {}, paper) is not None
         origin = {"user_download": " · provided by you", "other_version": " · other version"}.get(paper.get("pdf_method"), "")
@@ -1512,7 +1518,8 @@ def _messages(
     extraction_status: str = "not_started",
 ) -> list[dict]:
     initial = [row for row in read_jsonl(path / "chat/messages.jsonl") if row.get("source") == "initial_setup" and row.get("role") in {"u", "a"} and row.get("text")]
-    messages = [{"step": 1, "role": "a", "text": NEW_REVIEW_WELCOME}]
+    # A project started from the researcher's PDFs skips the search, so the search walkthrough does not apply.
+    messages = [] if paper_import_projection(path) else [{"step": 1, "role": "a", "text": NEW_REVIEW_WELCOME}]
     if initial:
         messages.extend({"step": 1, "role": row["role"], "text": safe_display_text(str(row["text"]), fallback="Message details hidden because they contained a local path.") if row["role"] == "a" else str(row["text"])} for row in initial)
     else:
@@ -1669,6 +1676,10 @@ def _activity_by_step(
         "extraction": [{"t": "--:--:--", "tag": "schema", "msg": f"{len(fields)} fields"}],
         "categorize": [{"t": "--:--:--", "tag": "categorize", "msg": f"{_categorization_summary(categorization)['groups']} groups"}],
     }
+    if paper_import_projection(path):
+        activity.update(search=[{"t": "--:--:--", "tag": "import", "msg": f"search skipped · {len(included)} PDFs imported"}],
+                        screening=[{"t": "--:--:--", "tag": "screening", "msg": f"skipped · {len(included)} included"}],
+                        retrieval=[{"t": "--:--:--", "tag": "retrieval", "msg": f"{len(included)} PDFs provided by you"}])
     for stage_name, notice in notices.items():
         step_key = {"collection": "search", "screening": "screening", "retrieval": "retrieval", "extraction": "extraction", "categorization": "categorize"}[stage_name]
         if notice.get("kind") == "exception":
