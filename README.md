@@ -1,5 +1,13 @@
 # ReviewPilot
 
+[![arXiv](https://img.shields.io/badge/arXiv-2610.21042-b31b1b.svg)](https://arxiv.org/abs/2610.21042)
+
+**Paper:** [ReviewPilot: A Multi-Agent System for Screening and Data Extraction in Systematic Reviews](https://arxiv.org/abs/2610.21042)
+
+![Manual and ReviewPilot-assisted systematic review workflows](docs/figures/reviewpilot-overview.png)
+
+*Manual and ReviewPilot-assisted review workflows, aligned with the PRISMA 2020 stages. The researcher can inspect and revise every stage.*
+
 ReviewPilot is a multi-agent research assistant for systematic reviews. It helps researchers search for papers, screen them, retrieve full text, extract evidence, and organize the results for analysis.
 
 A Lead Agent coordinates four specialized Sub Agents and two tools, checks the result of each stage, and keeps the researcher in control of the review. Steps that need judgment (designing the search, screening, designing the extraction form, extracting evidence) are done by Sub Agents, each an LLM with its own Agent Skill and a validated output format. Steps that must be reproducible (running the database search, retrieving full text) are done by deterministic tools.
@@ -19,6 +27,10 @@ The final project contains the search strategy, collected papers, screening deci
 In Search Setup, chat creates the project and can then revise its concepts, sources, limits, and dates. Every reply ends with a summary of what was actually saved: a "Search settings: …" line when the project is created, a list of changes after a revision, or "The search setup was not changed." Databases ReviewPilot cannot search, such as Scopus or Web of Science, are named in the reply rather than silently dropped. A revision that would make existing results stale is kept as a draft for you to review on the canvas.
 
 ## Lead Agent, Four Sub Agents, and Two Tools
+
+![ReviewPilot architecture and workflow](docs/figures/reviewpilot-architecture.png)
+
+*The Lead Agent hands each review stage to a Sub Agent or tool and checks its output. Every screening decision carries a reason, and every extracted value carries a quote located in the PDF.*
 
 ### Overall Structure
 
@@ -202,3 +214,17 @@ http://127.0.0.1:5602
 7. Run Information Extraction.
 8. Categorize and summarize the extracted evidence.
 9. Review and export the final results.
+
+## Citation
+
+```bibtex
+@misc{xue2026reviewpilot,
+  title         = {ReviewPilot: A Multi-Agent System for Screening and Data Extraction in Systematic Reviews},
+  author        = {Xue, Zhaoqian and Zhou, Shaoze and Li, Xuexin and Mu, Junting and Liu, Haozheng and Wang, Zhongyin and He, Yichun and Ma, Renkai and Zhou, Hao and Bratt, Sarah and Ma, Siyuan and Chen, Chen and Li, Lingyao},
+  year          = {2026},
+  eprint        = {2610.21042},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  url           = {https://arxiv.org/abs/2610.21042}
+}
+```
